@@ -2221,7 +2221,7 @@ export function parse_term_tup(p: Parse, beg: Loc, n0: number): LTerm {
   return out;
 }
 
-const NUMBER = /(\d+)(n|d|\.\d+([eE][+-]?\d+)?d?)?/y;
+const NUMBER = /(\d+)(n|d|\.\d+([eE][+-]?\d+)?d?|[eE][+-]?\d+d)?/y;
 
 export function parse_term_num(p: Parse): LTerm {
   const beg = p.pos;
