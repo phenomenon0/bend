@@ -485,6 +485,8 @@ INLINE U32 f32_to_u32(U32 a) {
   return v >= 0.0f && v < 4294967296.0f ? (u32)v : 0;
 }
 
+#ifndef __METAL_VERSION__
+
 INLINE f64 f64_unbox(u64 x) {
   union { u64 u; f64 f; } p = { x };
   return p.f;
@@ -499,6 +501,8 @@ INLINE U32 f64_to_u32(U32 a) {
   f64 v = f64_unbox(a);
   return v >= 0.0 && v < 4294967296.0 ? (u32)v : 0;
 }
+
+#endif
 
 INLINE Nat nat_chk(Env e, Nat n) {
   if (n > NAT_IMM) {
@@ -3476,7 +3480,8 @@ typedef ulong u64;
 typedef uint  u32;
 typedef uchar u8;
 typedef float f32;
-typedef double f64;
+// Metal Shading Language has no fp64: F64 is a host and CUDA type, and the
+// helpers below are guarded so an F32 program compiles for Metal unchanged
 #elif defined(__CUDACC_RTC__)
 typedef unsigned long long u64;
 typedef long long          int64_t;
