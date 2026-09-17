@@ -32,11 +32,17 @@ to the upstream repo's own standards after studying it.
    `#|` convention; `tests/run.sh` (four lanes, local reduction);
    `tests/caps.sh` (ttok ledger: +1,078 base / +1,656 comp → land with caps
    25k/63k); README; this log.
-8. **fable lane**: independent verification session (in flight at writing).
+8. **fable lane**: independent verification session — verified show/conversion/
+   read/literal behavior byte-identical across lanes and digit-identical to
+   Python repr, and zero F32 regression (byte-identical vs baseline across
+   JS+native). Found one real bug: **Metal has no fp64** and the added
+   `typedef double f64;` would have broken every Metal build — fixed the same
+   hour (typedef dropped from the Metal block, helpers guarded
+   `#ifndef __METAL_VERSION__`), gates re-run green.
 
-**State at end of day.** All lanes green; 12 commits; quirks documented
-(MANUAL §7). Open: Metal double paths unverified (no Apple GPU here);
-`F64.bits` Nat-immediate boundary documented by design.
+**State at end of day.** All lanes green; fable review folded in (one real
+Metal bug found and fixed); quirks documented (MANUAL §7). F64 is a host +
+CUDA type by construction (Metal has no fp64).
 
 **Files worth keeping:** SPEC.md (design), MANUAL.md (standards),
 study/index.html (browsable evidence), tests/codex/README.md (suite), plus

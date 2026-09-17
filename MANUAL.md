@@ -183,4 +183,8 @@ bash tests/caps.sh                       # the ttok ledger
 - C-lane `F64.read` shares `strtod`'s behavior with F32: it accepts C99 hex
   floats and truncates at an embedded NUL. Verified F32-identical; the JS lane
   rejects both. Pinned in `tests/codex/expected.py` as parity quirks.
-- Metal double paths are mirrored but unverified (no Apple GPU on this box).
+- Metal has **no fp64 at all** (Apple GPUs lack double precision): F64 is a
+  host + CUDA type by construction — the Metal typedef block carries no
+  `double`, and the f64 helpers are `#ifndef __METAL_VERSION__`-guarded, so a
+  program that never uses F64 compiles for Metal exactly as before (found in
+  the fable review pass, fixed same day; no Metal hardware here to re-verify).

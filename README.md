@@ -53,8 +53,10 @@ Green: `tests/run.sh` (all four lanes, identical output everywhere; GPU receipt:
 100% utilization on the 3090 during the F64 device run), `tests/caps.sh`
 (24,968/40,399/62,244 tok against the landing caps 25k/41k/63k), and the
 161-case adversarial suite (`tests/codex/run.sh`). F32 behavior byte-identical
-to the stock compiler (regression-checked). Quirks and non-goals: see
-`MANUAL.md` §7.
+to the stock compiler (regression-checked). Metal note: Apple GPUs have no
+fp64, so F64 is a host + CUDA type by construction (guarded; F32-only programs
+compile for Metal unchanged — fable review finding, fixed). Quirks and
+non-goals: see `MANUAL.md` §7.
 
 ## Landing notes (upstream shape)
 
