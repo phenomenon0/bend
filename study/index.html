@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<title>The Bend 2.0.4 study</title><link rel="stylesheet" href="style.css"></head>
+<body><div class="wrap">
+<nav><a class="on" href="index.html">overview</a> · <a class="" href="agents.html">AGENTS.md</a> · <a class="" href="gates.html">the gates</a> · <a class="" href="tests.html">test doctrine</a> · <a class="" href="manual.html">the manual</a> · <a class="" href="status.html">fork status</a></nav>
+<h1>The Bend 2.0.4 study</h1>
+<p>What this is: everything under the F64 fork was built against the standards of
+Taelin's actual repo (<strong>bendlang/bend</strong> — the public home of this compiler,
+20k stars, Apache-2.0). The clone at <code>~/Documents/Project/bend-upstream</code> is
+<strong>byte-identical to the 2.0.4 release we forked</strong>, so every claim below is
+checkable in a local file. These pages are the material, not a summary.</p>
+<div class="cards">
+  <a class="card" href="agents.html"><b>AGENTS.md</b><span>his doctrine for AI agents, verbatim — what is human-written, what agents may edit</span></a>
+  <a class="card" href="gates.html"><b>The gates</b><span>repo caps · the four-lane test gate · perf pins · the ping gate — how review actually happens</span></a>
+  <a class="card" href="tests.html"><b>Test doctrine</b><span>every test is a .bend file ending in its <code>#|</code> expected output — 1,302 specimens</span></a>
+  <a class="card" href="manual.html"><b>The manual</b><span>testing / review / refactoring distilled into rules, with witnesses</span></a>
+  <a class="card" href="status.html"><b>Fork status</b><span>where the F64 patch stands against every one of these standards</span></a>
+  <a class="card" href="../MANUAL.md"><b>MANUAL.md</b><span>the source document of the manual page (markdown)</span></a>
+</div>
+<div class="panel">
+<h3 style="margin-top:0">One-page orientation</h3>
+<ol>
+<li><b>Repo shape is gated.</b> <code>gates/repo.ts</code>: every tracked file matches an allow line and stays under a <b>ttok token cap</b>. Growing past a cap fails the build.</li>
+<li><b>Tests are specimens.</b> 1,302 files under <code>tests/&lt;ns&gt;/</code>; each ends in the exact lines its run must print; a pass needs <b>four lanes</b> (check · interpret · JS · C) to all agree.</li>
+<li><b>Numbers are measured, never typed.</b> <code>gen_pins.ts</code>: "writes nothing it did not measure in the same run".</li>
+<li><b>Agents build, humans check the core.</b> <code>bend.ts</code> (the checker) is hand-written; the rest is built for delegation under the gates.</li>
+<li><b>Refactoring is the standing price of the caps</b> — compression is policy, not taste.</li>
+</ol>
+</div>
+
+<footer>study of <a href="https://github.com/bendlang/bend">bendlang/bend</a> (cloned 2026-09-17, main == our 2.0.4 baseline, file-for-file) ·
+raw reference checkout: <code>~/Documents/Project/bend-upstream</code> ·
+fork working tree: <code>~/Documents/Project/bend-f64</code></footer>
+</div></body></html>

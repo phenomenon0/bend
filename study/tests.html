@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<title>Test doctrine</title><link rel="stylesheet" href="style.css"></head>
+<body><div class="wrap">
+<nav><a class="" href="index.html">overview</a> · <a class="" href="agents.html">AGENTS.md</a> · <a class="" href="gates.html">the gates</a> · <a class="on" href="tests.html">test doctrine</a> · <a class="" href="manual.html">the manual</a> · <a class="" href="status.html">fork status</a></nav>
+<h1>Test doctrine — self-contained specimens</h1>
+<p><strong>Every test is a Bend file that ends in the <code>#|</code> lines its run must print.</strong>
+No external harness, no fixtures outside the file: the expected output lives at
+the bottom of the file being tested, whole-lines byte-exact — including the
+compiler's error text and <code>exit 1</code> for tests that must <em>fail</em>.</p>
+<h2>Specimen 1 — a value test</h2>
+<pre># a Char past ASCII shows as its quoted literal, one code point
+import Base
+
+law main:
+  Char
+
+def main():
+  Chr{233}
+
+#|&#x27;é&#x27;
+</pre>
+<h2>Specimen 2 — a negative test (the error IS the output)</h2>
+<pre># bend3&#x27;s slab bounds laws (total over u32 keys, defaults at unwritten
+# slots); bend&#x27;s Array&lt;T&gt; is a 2^d tree with wrapping bit-walk
+# indexing and no literal -- the slab literal&#x27;s spelling is the
+# refusal (the in-range reads are covered by the ported array tests)
+import Base
+
+law main:
+  U32
+
+def main():
+  m : [:U32] = ![0:10, 1:20, 3:7, _:0; 4]
+  m[0]
+
+#|Error:
+#|- expected : &#x27;def&#x27;, &#x27;type&#x27; or &#x27;law&#x27;
+#|- observed : &#x27;:&#x27;
+#|Location:
+#|10 | def main():
+#|11&gt;|   m : [:U32] = ![0:10, 1:20, 3:7, _:0; 4]
+#|12 |   m[0]
+#|exit 1
+</pre>
+<h2>Specimen 3 — arithmetic with a helper law pair and a printed result</h2>
+<pre># wrap-around arithmetic chains: xorshift32, a modular-inverse round trip,
+# a 31x hash chain and a wrapped fibonacci loop all land on pinned words
+# ported from bend3: shift counts become Nat (U32.shln/shrn), loop
+# counters become Nat, shared words become +U32 binders
+import Base
+
+law bu:
+  for b: Bool
+  U32
+
+def bu(b):
+  match b:
+    case False{}:
+      0
+    case True{}:
+      1
+
+law xorshift:
+  for +x: U32
+  U32
+
+def xorshift(x):
+  +a = {U32.xor(x, U32.shln(x, 13n)) : U32}
+  +b = {U32.xor(a, U32.shrn(a, 17n)) : U32}
+  U32.xor(b, U32.shln(b, 5n))
+
+law hash_go:
+  for  n: Nat
+  for +i: U32
+  for  h: U32
+… (expected output at the end: `#|4`)</pre>
+<h2>Rules, observed across all 1,302</h2>
+<ul>
+<li><b>law/def pairs.</b> A <code>law</code> declares the type first; the
+<code>def</code> body is checked against it. <code>main</code> gets its own
+<code>law main:</code>.</li>
+<li><b>Four lanes</b> (check · interpret via <code>--checkup</code> · JS via
+bun · C via clang -O3): all must print the <code>#|</code> lines; lane drops
+are explicit and conditional (no IO → not runnable; foreign def without the
+lane's twin → that lane drops).</li>
+<li><b>Provenance headers.</b> "ported from bend3:" style comments say where a
+test came from and what changed on the way.</li>
+<li><b>Namespaces are the taxonomy</b> — <code>run</code>, <code>reg</code>,
+<code>spec</code>, <code>proof</code>, <code>state</code>, <code>show</code>,
+<code>parse</code>, <code>io</code>, <code>import</code>, <code>stuck</code>,
+<code>stats</code>, <code>cost</code>, <code>grade</code>, <code>gfx</code>, …
+(dirs under <code>tests/</code>), numbered variants (<code>_000</code>,
+<code>_001</code>).</li>
+<li><b>≤ 16,000 ttok per test.</b> If it grows bigger than that, it is cut up
+or cut down.</li>
+</ul>
+
+<footer>study of <a href="https://github.com/bendlang/bend">bendlang/bend</a> (cloned 2026-09-17, main == our 2.0.4 baseline, file-for-file) ·
+raw reference checkout: <code>~/Documents/Project/bend-upstream</code> ·
+fork working tree: <code>~/Documents/Project/bend-f64</code></footer>
+</div></body></html>

@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<title>Fork status</title><link rel="stylesheet" href="style.css"></head>
+<body><div class="wrap">
+<nav><a class="" href="index.html">overview</a> · <a class="" href="agents.html">AGENTS.md</a> · <a class="" href="gates.html">the gates</a> · <a class="" href="tests.html">test doctrine</a> · <a class="" href="manual.html">the manual</a> · <a class="on" href="status.html">fork status</a></nav>
+<h1>F64 fork — status against these standards</h1>
+<p>The patch adds first-class <code>F64</code> (type, laws, literals, all three lanes,
+show/read, conversions) to the 2.0.4 compiler. Held to the checklist in
+MANUAL.md §5.</p>
+<div class="panel">
+<table>
+<tr><th>standard</th><th>state</th></tr>
+<tr><td>mirrored rows/blocks (base laws, op tables, runtimes, natives)</td><td class="ok">done</td></tr>
+<tr><td>four-lane-clean behavior (interpret · JS · C agree; GPU verified on the 3090)</td><td class="ok">done — 161-case adversarial suite green; F32 regression identical</td></tr>
+<tr><td>grammar comment for the literals in <code>bend.ts</code></td><td class="ok">next edit this session</td></tr>
+<tr><td><code>tests/f64/</code> in the <code>#|</code> convention</td><td class="ok">being written now</td></tr>
+<tr><td>token ledger vs upstream caps (24k/61k fit → bump 25k/63k)</td><td class="ok">measured; <code>tests/caps.sh</code> lands with it</td></tr>
+<tr><td>independent review lanes (codex suite; fable verification)</td><td class="ok">codex done · fable running</td></tr>
+<tr><td>quirks documented (C-lane read parity; bits/Nat cap)</td><td class="ok">done</td></tr>
+</table>
+</div>
+<p class="lead">Evidence trail: <code>SPEC.md</code> (design), commits
+<code>82cb989..HEAD</code> (baseline→today), <code>tests/codex/</code>
+(161-case suite), benchmark page <code>benchmarks.html</code> in
+bend-experiments for the F32 runs.</p>
+
+<footer>study of <a href="https://github.com/bendlang/bend">bendlang/bend</a> (cloned 2026-09-17, main == our 2.0.4 baseline, file-for-file) ·
+raw reference checkout: <code>~/Documents/Project/bend-upstream</code> ·
+fork working tree: <code>~/Documents/Project/bend-f64</code></footer>
+</div></body></html>

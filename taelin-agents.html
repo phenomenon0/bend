@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>AGENTS.md — bendlang/bend (Taelin's agent doctrine)</title>
+<style>
+  :root{
+    --bg:#0e1116; --panel:#151a22; --line:#222a36; --ink:#e8edf4; --dim:#8b93a7;
+    --accent:#7aa2ff; --good:#3ecf8e; --warn:#e0a458;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+       font:15px/1.55 ui-sans-serif,system-ui,"Inter","Segoe UI",Roboto,sans-serif}
+  .wrap{max-width:1080px;margin:0 auto;padding:40px 28px 64px}
+  header{border-bottom:1px solid var(--line);padding-bottom:18px;margin-bottom:20px}
+  h1{font-size:24px;margin:0 0 6px;letter-spacing:.2px}
+  h1 .v{color:var(--accent)}
+  .sub{color:var(--dim);font-size:13.5px}
+  .sub a{color:var(--accent)}
+  .panel{background:var(--panel);border:1px solid var(--line);border-radius:14px;
+         padding:22px 24px;margin:0 0 18px}
+  .panel h2{margin:0 0 10px;font-size:16px;font-weight:600}
+  pre{white-space:pre-wrap;word-break:break-word;margin:0;
+      font:13.5px/1.5 ui-monospace,"JetBrains Mono",Menlo,Consolas,monospace;
+      color:#dbe4f0}
+  pre .c{color:var(--dim)}          /* comments */
+  .kv{width:100%;border-collapse:collapse;font-size:13.5px}
+  .kv td{padding:6px 10px;border-top:1px solid var(--line);vertical-align:top}
+  .kv tr:first-child td{border-top:0}
+  .kv td:first-child{white-space:nowrap;color:var(--accent);
+      font:600 12.5px ui-monospace,Menlo,Consolas,monospace}
+  .num{color:var(--good);font-weight:600;font:600 12.5px ui-monospace,Menlo,Consolas,monospace}
+  .na{color:var(--warn);font:600 12.5px ui-monospace,Menlo,Consolas,monospace}
+  footer{color:var(--dim);font-size:12.5px;border-top:1px solid var(--line);
+         margin-top:26px;padding-top:14px}
+  code{background:#1b2230;border:1px solid var(--line);border-radius:5px;padding:1px 6px;
+       font:12.5px ui-monospace,Menlo,Consolas,monospace;color:#cfe1ff}
+  .lead{color:var(--dim);font-size:13.5px;margin:0 0 14px}
+  ul{margin:6px 0 0;padding-left:18px}
+  li{margin:5px 0}
+  .hl{color:var(--good);font-weight:600}
+  b.k{font:600 12.5px ui-monospace,Menlo,Consolas,monospace;color:#cfe1ff}
+</style>
+</head>
+<body><div class="wrap">
+<header>
+  <h1><span class="v">AGENTS.md</span> — bendlang/bend</h1>
+  <div class="sub">Victor Taelin's doctrine for AI agents working on the Bend compiler · verbatim, from
+    <a href="https://github.com/bendlang/bend">github.com/bendlang/bend</a> · cloned 2026-09-17</div>
+</header>
+
+<div class="panel">
+  <h2>The document (verbatim)</h2>
+<pre># AGENTS
+
+Bend is a dependently typed, affine language that checks in one linear
+bidirectional pass and runs massively parallel on CPU threads and GPUs.
+bend2/bend.ts is the language (parser, theory, checker) and is human-written:
+<span class="c">do not edit it.</span> bend2/comp.ts is the one compiler: the C runtime (host and
+device from one source), the C emitter and the JS emitter; base.bend is the
+prelude; main.ts is the CLI. Every test is a Bend file that ends in the `#|`
+lines its run must print, and the gates run on the mini cluster.
+
+    bend2/bend.ts       the language: parser, theory, checker
+    bend2/comp.ts       the compiler and the runtimes (C, Metal, CUDA, JS)
+    bend2/main.ts       the CLI; imported, the .bend loader for bun and node
+    bend2/base.bend     the base library
+    bend2/bend.lean     the core, mechanized in Lean
+    bend2/effs/         one file per IO effect, per backend
+    bend2/pack/         package.json, tsconfig.json, bun.lock
+    bend2/docs/         the papers' Typst sources, the film, gen_pins.ts (the
+                        record pins on this Mac), gen_charts.ts (the landing
+                        page's and the film's numbers), gen_gifs.ts (the images)
+    bench/runtime/      one dir per bench: main.bend and its twins (C, TS, Lean)
+    bench/checker/      one dir per bench: main.bend and its rivals
+    bench/*/_pin_/      the pins, one file per hardware: apple_m4 the gate's,
+                        apple_m4_max the record
+    tests/&lt;ns&gt;/         the tests by namespace, with their foreign .c/.js
+    gates/test.ts       every test, one shard per live mini, PASS: n / n
+    gates/perf.ts       the benches on 48 minis against the pins (--pin writes
+                        the medians of three runs)
+    gates/repo.ts       the allow list of files and their ttok caps
+    gates/ping.ts       the installer, the launcher, a release and the ping,
+                        on a localhost hub
+    gates/_run.ts       the four gates with --gate
+    demos/              one dir per demo
+    guide/              GUIDE.md
+    paper/              BendTT.pdf, BendRT.pdf
+    media/              the film and the charts
+    .github/            ISSUE_TEMPLATE/bug.yml, the bug report form, and
+                        config.yml, which points questions at Discord
+    ../bend-lang.com    the site repo (bendlang/bend-lang.com), a sibling
+                        checkout: the sites, install.sh, the launcher, the hub,
+                        release.ts and the droplet ops; gates/ping.ts and
+                        gen_charts.ts read it there (or at $SITE_REPO)</pre>
+</div>
+
+<div class="panel">
+  <h2>How it's enforced — the gates (from the repo itself)</h2>
+  <ul>
+    <li><b class="k">gates/test.ts</b> — the <span class="hl">four-lane doctrine</span>: a test passes only when
+      its <b>check</b>, its <b>interpreted run</b> (<code>--checkup</code>), its <b>JS run</b> (bun) and its <b>C run</b>
+      (clang -O3, Metal) <em>all</em> print the file's <code>#|</code> lines. 1,302 tests, sharded one-per-mini
+      across the cluster, 5 s alarm per run.</li>
+    <li><b class="k">gates/repo.ts</b> — every tracked file must match an allow line, and <span class="hl">every
+      text file has a ttok token cap</span> (a binary a byte cap). A file that grows past its cap fails
+      the gate — compression of the source is literally a CI requirement.</li>
+    <li><b class="k">gates/perf.ts</b> — runtime benches, "the medians of three runs", against per-hardware
+      pins; <b class="k">gen_pins.ts</b> "writes nothing it did not measure in the same run".</li>
+    <li><b class="k">gates/ping.ts</b> — the installer, launcher, a release and the ping, on a localhost hub:
+      the whole delivery path is testable end-to-end.</li>
+  </ul>
+  <h2 style="margin-top:18px">The caps that matter (ttok, verbatim from gates/repo.ts)</h2>
+  <table class="kv">
+    <tr><td>bend2/base.bend</td><td><span class="num">24,000</span> tok</td><td class="lead" style="margin:0">the prelude — our F64 adds ~1,078 → a feature bumps its cap</td></tr>
+    <tr><td>bend2/bend.ts</td><td><span class="num">41,000</span> tok</td><td class="lead" style="margin:0">human-written, do-not-edit-by-agents</td></tr>
+    <tr><td>bend2/comp.ts</td><td><span class="num">61,000</span> tok</td><td class="lead" style="margin:0">the one compiler (C+JS+Metal+CUDA runtimes)</td></tr>
+    <tr><td>bend2/main.ts</td><td><span class="num">10,000</span> tok</td><td class="lead" style="margin:0">the CLI</td></tr>
+    <tr><td>tests/&lt;ns&gt;/*.bend</td><td><span class="num">16,000</span> tok</td><td class="lead" style="margin:0">each test self-contained, <code>#|</code> = expected output</td></tr>
+  </table>
+</div>
+
+<footer>
+  Read for the F64 fork's final polish pass — full study notes and the maintenance manual live in
+  <code>~/Documents/Project/bend-f64/MANUAL.md</code> · source: bendlang/bend @ 2026-09-17 · 20,079 stars, Apache-2.0
+</footer>
+</div></body></html>

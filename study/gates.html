@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<title>The gates</title><link rel="stylesheet" href="style.css"></head>
+<body><div class="wrap">
+<nav><a class="" href="index.html">overview</a> · <a class="" href="agents.html">AGENTS.md</a> · <a class="on" href="gates.html">the gates</a> · <a class="" href="tests.html">test doctrine</a> · <a class="" href="manual.html">the manual</a> · <a class="" href="status.html">fork status</a></nav>
+<h1>The gates — how review actually happens</h1>
+<p>There is no CI config, no PR template, no CONTRIBUTING. Review is <strong>four
+gate programs</strong> run on his mini cluster (<code>gates/_run.ts --gate</code>), plus the
+issue form for outside bug reports. The gates <em>are</em> the reviewer.</p>
+<h2>1 · repo.ts — the shape of the repo</h2>
+<p class="lead">Every tracked file must match one allow line; text files carry
+ttok token caps; binaries byte caps. <code>evals/</code> is exempt ("the
+models' arena, not the repo's shape").</p>
+<pre>#!/usr/bin/env bun
+// The shape of the repo: every tracked file must match one allow line,
+// and a textual file must stay under its ttok cap (a binary under its
+// byte cap). Anything else in the tree is a failure. evals/ is not
+// counted: it is the models&#x27; arena, not the repo&#x27;s shape.
+
+import * as child from &quot;node:child_process&quot;;
+import * as fs from &quot;node:fs&quot;;
+import * as path from &quot;node:path&quot;;
+…
+
+function allow(at: string | RegExp, cap: number, bytes = false): void {
+  RULES.push({ at: typeof at === &quot;string&quot; ? new RegExp(&quot;^&quot; + at
+    .replace(/[.]/g, &quot;\\.&quot;) + &quot;$&quot;) : at, cap, bytes });
+}
+
+allow(/^\.github\/ISSUE_TEMPLATE\/(bug|config)\.yml$/, 600);
+allow(&quot;.gitattributes&quot;, 200);
+allow(&quot;.gitignore&quot;, 100);
+allow(&quot;AGENTS.md&quot;, 2000);
+allow(&quot;README.md&quot;, 3000);
+allow(&quot;LICENSE&quot;, 4000);
+allow(&quot;bend2/base.bend&quot;, 24000);
+allow(&quot;bend2/bend.lean&quot;, 400000);
+allow(&quot;bend2/bend.ts&quot;, 41000);
+allow(&quot;bend2/comp.ts&quot;, 61000);
+allow(&quot;bend2/main.ts&quot;, 10000);
+allow(/^bend2\/effs\/[a-z_]+\.(c|js)$/, 4000);
+allow(/^bend2\/pack\/(\.gitignore|package\.json|tsconfig\.json|bun\.lock)$/, 1000);
+allow(/^bend2\/docs\/(BendRT|BendTT)\/(main\.typ|refs\.bib)$/, 60000);
+allow(&quot;bend2/docs/bend.sublime-syntax&quot;, 1000);
+allow(&quot;bend2/docs/gen_anim.ts&quot;, 7500);
+allow(&quot;bend2/docs/gen_charts.ts&quot;, 4000);
+allow(&quot;bend2/docs/gen_gifs.ts&quot;, 4000);
+allow(&quot;bend2/docs/gen_pins.ts&quot;, 4100);
+allow(/^bend2\/docs\/intro\/[a-z.]+$/, 20000);
+allow(/^bench\/checker\/[a-z]+_[0-9]+\/main\.(bend|agda|lean|thy|v)$/, 3000000);
+allow(/^bench\/checker\/_pin_\/[a-z0-9_]+\.txt$/, 2000);</pre>
+<h2>2 · test.ts — the four-lane doctrine</h2>
+<p class="lead">Header of the test gate, verbatim:</p>
+<pre>#!/usr/bin/env bun
+// Runs every test under tests/ on the cluster. The tests split into one
+// shard per live mini; each shard is an aggregator that imports its tests,
+// sent to its mini, which checks and interprets every module through `bend
+// main.bend --checkup`, builds each runnable test alone (`bend t.bend -o t.js
+// -o t`: clang -O3, Metal; ten at a time), runs each binary with a `!` once
+// untimed (the first launch compiles its Metal shader, which the node then
+// caches by source), then runs each program once natively and once under
+// bun, each under a 5 s alarm. A test passes when its check, its interpreted
+// run, its JS run and its C run all print its `#|` lines; a test whose main
+// the compiler refuses to print (a function, a Type, an erased or dependent
+// field) is checked and interpreted only; a foreign def with no twin for a
+// lane drops that lane; any other build failure fails its lanes.
+</pre>
+<p>1,302 tests, sharded one-per-mini across the cluster; a 5 s alarm per run;
+the first <code>!</code> run is untimed (the Metal shader gets compiled and
+cached by source, then natively and under bun).</p>
+<h2>3 · perf.ts + gen_pins.ts — numbers you can trust</h2>
+<pre>#!/usr/bin/env bun
+// The record pins, measured on this machine: bench/runtime/_pin_/&lt;hw&gt;.txt and
+// bench/checker/_pin_/&lt;hw&gt;.txt (hw from the CPU&#x27;s brand string, so apple_m4_max
+// on the MacBook), raw seconds that gen_charts.ts draws and the landing page
+// and the film quote. The gate pins on the minis are gates/perf.ts --pin; this
+// script writes nothing it did not measure in the same run, and every Bend run
+// must print the output the gate pins hold. Every timed cell runs alone on a
+// quiet machine; only the builds run pooled, one per performance core. A
+// runtime row: the Bend binary built as the gate builds it (the cc lines of
+// gates/perf.ts) in each of its three modes, one warm run then the timed one
+// under /usr/bin/time -l (a fresh binary&#x27;s first GPU run compiles its shader);
+// then the twins, warm then timed: main.c under the same cc line (an f32 sum is
+// not checked: -O3 fuses a*b+c), main.ts under bun and node (the faster),
+// main.lean under lean -c and leanc -O3. A checker row: one cold check under
+// Isabelle, Agda, Lean, Rocq and Bend, 300 s each, a timeout written as &gt;300s.
+// Run it whole or one file at a time; --keep &lt;lang&gt; carries a checker column
+// forward from the file as it is, unmeasured (a prover this machine cannot run
+// today), and the stamp says so:
+//
+//   bun bend2/docs/gen_pins.ts [runtime] [checker] [--keep &lt;lang&gt;]
+
+import * as child from &quot;node:child_process&quot;;
+import * as fs from &quot;node:fs&quot;;
+import * as os from &quot;node:os&quot;;</pre>
+<p>Perf pins ride "the medians of three runs", timed cells run alone on a quiet
+machine, benches have <b>twins</b> (C, TypeScript, Lean) to compare against real
+competitors, and <code>--keep</code> carries an unmeasurable column forward
+with "the stamp says so".</p>
+<h2>4 · ping.ts — the delivery path</h2>
+<p>The installer, the launcher, a release and the ping, all tested on a
+localhost hub. The thing that ships is the thing the gate exercised.</p>
+<h2>The caps, annotated</h2>
+<table>
+<tr><th>file</th><th>cap (ttok)</th><th>actual upstream</th><th>note</th></tr>
+<tr><td>bend2/base.bend</td><td>24,000</td><td>23,890</td><td>rides ~0.5% under; F64 adds +1,078</td></tr>
+<tr><td>bend2/bend.ts</td><td>41,000</td><td>40,050</td><td>human-written core</td></tr>
+<tr><td>bend2/comp.ts</td><td>61,000</td><td>60,588</td><td>F64 adds +1,656</td></tr>
+<tr><td>bend2/main.ts</td><td>10,000</td><td>—</td><td>the CLI</td></tr>
+<tr><td>tests/*/name.bend</td><td>16,000</td><td>—</td><td>specimens, not suites</td></tr>
+</table>
+
+<footer>study of <a href="https://github.com/bendlang/bend">bendlang/bend</a> (cloned 2026-09-17, main == our 2.0.4 baseline, file-for-file) ·
+raw reference checkout: <code>~/Documents/Project/bend-upstream</code> ·
+fork working tree: <code>~/Documents/Project/bend-f64</code></footer>
+</div></body></html>
