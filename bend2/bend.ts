@@ -69,6 +69,7 @@
 // Nat    | NUMBER "n" ("+" T)?        | Succ{..Zero{}}, Succ{..T}
 // U32    | NUMBER                     | U32{WCon{b, ..WNil{}}}
 // F32    | NUMBER "." NUMBER [EXP]    | F32{WCon{b, ..WNil{}}}
+// F64    | NUMBER ["." NUMBER] [EXP] "d" | F64{WCon{b, ..WNil{}}}
 // Chr    | "'" CHAR "'"               | Chr{U32}
 // Str    | "\"" [CHAR] "\""           | SCon{Chr, ..SNil{}}
 // Index  | x "[" i "]" ("<-" v)?      | Array.get(U32, x, i), ..set(..)
