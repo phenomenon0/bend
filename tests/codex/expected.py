@@ -280,15 +280,10 @@ def text_cases():
         ("roundtrip_inf", div(1.0, 0.0)),
         ("roundtrip_nan", div(0.0, 0.0)),
     ]
-    # Parity quirks: the C lane uses strtod, so it accepts C99 hex floats and
-    # truncates at an embedded NUL -- identical to F32's shipped behavior
-    # (verified: F32.read("0x1p0") == F32.read("1\0junk") == Some(1)).
-    # The JS lane rejects both; this suite pins the native (C) lane.
-    def read_case(name, value):
-        return (name, "Some(1)" if name in ("read_embedded_nul", "read_hex")
-                else read(value))
-
-    return (values + [read_case(name, value) for name, value in inputs]
+    # Both lanes validate the whole extent with one grammar: an embedded NUL
+    # is a character, not an end, and strtod's hex floats are not spellings
+    # (tests/strings/numeric_text.bend pairs these for F32 and F64).
+    return (values + [(name, read(value)) for name, value in inputs]
             + [(name, read(show(value))) for name, value in roundtrips])
 
 

@@ -622,12 +622,45 @@ static Term f32_show(Env e, Term x) {
   return io_str(e, buf, f32_text(buf, f32_unbox(x)));
 }
 
+// F32.read/F64.read accept one grammar on both lanes, over the whole
+// extent: ASCII space, a sign, digits with a point and an exponent, or
+// inf/infinity/nan, any case. A NUL is a character, not an end, and the
+// strtod extras (hex floats, nan(...)) are not spellings.
+static bool io_word(const char* p, u64 n, const char* w) {
+  for (u64 i = 0; i < n; i++) {
+    if ((p[i] | 32) != w[i]) { return false; }
+  }
+  return w[n] == 0;
+}
+
+static bool io_num(const char* p, u64 n) {
+  u64 i = 0, d = 0;
+  while (i < n && (p[i] == ' ' || (p[i] >= 9 && p[i] <= 13))) { i++; }
+  if (i < n && (p[i] == '+' || p[i] == '-')) { i++; }
+  if (io_word(p + i, n - i, "inf") || io_word(p + i, n - i, "infinity")
+    || io_word(p + i, n - i, "nan")) {
+    return true;
+  }
+  while (i < n && p[i] >= '0' && p[i] <= '9') { i++; d++; }
+  if (i < n && p[i] == '.') {
+    i++;
+    while (i < n && p[i] >= '0' && p[i] <= '9') { i++; d++; }
+  }
+  if (d == 0) { return false; }
+  if (i < n && (p[i] == 'e' || p[i] == 'E')) {
+    i++;
+    if (i < n && (p[i] == '+' || p[i] == '-')) { i++; }
+    d = 0;
+    while (i < n && p[i] >= '0' && p[i] <= '9') { i++; d++; }
+    if (d == 0) { return false; }
+  }
+  return i == n;
+}
+
 static Term f32_read(Env e, Term s) {
   u64 n = 0;
   char* text = io_cstr(e, s, &n);
-  char* end;
-  f32 v = strtof(text, &end);
-  Term out = n > 0 && *end == 0 ? io_box(e, CID_SOME, f32_rewrap(v), 0)
+  Term out = io_num(text, n) ? io_box(e, CID_SOME, f32_rewrap(strtof(text, NULL)), 0)
     : term_pak(CID_NONE, 0);
   free(text);
   return out;
@@ -671,9 +704,7 @@ static Term f64_show(Env e, Term x) {
 static Term f64_read(Env e, Term s) {
   u64 n = 0;
   char* text = io_cstr(e, s, &n);
-  char* end;
-  f64 v = strtod(text, &end);
-  Term out = n > 0 && *end == 0 ? io_box(e, CID_SOME, f64_rewrap(v), 0)
+  Term out = io_num(text, n) ? io_box(e, CID_SOME, f64_rewrap(strtod(text, NULL)), 0)
     : term_pak(CID_NONE, 0);
   free(text);
   return out;
