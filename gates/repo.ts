@@ -34,10 +34,10 @@ allow(".gitignore", 100);
 allow("AGENTS.md", 2000);
 allow("README.md", 3000);
 allow("LICENSE", 4000);
-allow("bend2/base.bend", 24000);
+allow("bend2/base.bend", 28000);
 allow("bend2/bend.lean", 400000);
 allow("bend2/bend.ts", 41000);
-allow("bend2/comp.ts", 61000);
+allow("bend2/comp.ts", 75000);
 allow("bend2/main.ts", 10000);
 allow(/^bend2\/effs\/[a-z_]+\.(c|js)$/, 4000);
 allow(/^bend2\/pack\/(\.gitignore|package\.json|tsconfig\.json|bun\.lock)$/, 1000);
@@ -66,6 +66,10 @@ allow(/^media\/slash_boss_3d\/[a-z_]+\.wav$/, 400000, true);
 allow(/^gates\/(_lib|_run|perf|ping|repo|test)\.ts$/, 6000);
 allow(/^tests\/[a-z]+\/[a-z0-9_]+\.bend$/, 16000);
 allow(/^tests\/[a-z]+\/[a-z0-9_]+\.(c|js)$/, 8000);
+allow(/^tests\/(f64|strings|codex)\/[a-zA-Z0-9_.-]+$/, 16000);
+allow(/^tests\/strings\/utf8\.bin$/, 200000, true);
+allow(/^tests\/(run|caps)\.sh$/, 4000);
+allow(/^tests\/[a-z0-9_]+\.bend$/, 4000);
 
 // Gate
 // ====
