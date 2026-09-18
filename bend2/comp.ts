@@ -7186,7 +7186,12 @@ function io_bytes(text) {
 
 // One replacement per ill-formed byte, including truncated sequences; BOM
 // is a normal U+FEFF element. Each IO chunk is decoded independently.
+// Well-formed input takes the native decoder (fatal rejects exactly the
+// ill-formed chunks; the byte walk below then keeps the per-byte contract).
 function io_text(b, n) {
+  try {
+    return new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(b.subarray(0, n));
+  } catch (_) {}
   const out = [];
   for (let i = 0; i < n;) {
     const h = b[i];
