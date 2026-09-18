@@ -3069,6 +3069,410 @@ def Regex.parse.re(r: Regex.parse.Tree()) -> Result<&2, &2, Regex.Error, Re>:
 def Regex.parse(p: String) -> Result<&2, &2, Regex.Error, Re>:
   Regex.parse.re(Regex.parse.run(p))
 
+# Flags: (i, (m, s))
+def Regex.Flags() -> Data:
+  Sigma<&2, &2, Bool, _ => Sigma<&2, &2, Bool, _ => Bool>>
+
+def Regex.flags.kind(s: String) -> Nat:
+  match s:
+    case SNil{}:
+      0n
+    case SCon{Chr{+x}, t}:
+      Regex.parse.index(x, [105, 109, 115], 1n)
+
+# `kind` classifies the head of `f`: 0 unknown, 1 i, 2 m, 3 s
+def Regex.flags(f: String, kind: Nat, fl: Regex.Flags()) -> Result<&2, &2, Regex.Error, Regex.Flags()>:
+  match f kind fl:
+    case SNil{}, _, fl:
+      Done{fl}
+    case SCon{c, t}, 0n, _:
+      Fail{RErr{0n, "unknown flag"}}
+    case SCon{c, +t}, 1n, (False{}, r):
+      Regex.flags(t, Regex.flags.kind(t), (True{}, r))
+    case SCon{c, +t}, 2n, (i, (False{}, s)):
+      Regex.flags(t, Regex.flags.kind(t), (i, (True{}, s)))
+    case SCon{c, +t}, 3n+_, (i, (m, False{})):
+      Regex.flags(t, Regex.flags.kind(t), (i, (m, True{})))
+    case SCon{c, t}, _, _:
+      Fail{RErr{0n, "duplicate flag"}}
+
+# Program size of a tree, saturating just past max_prog
+def Regex.size.rep(+s: Nat, +lo: Nat, hi: Maybe<&2, Nat>) -> Nat:
+  match hi:
+    case None{}:
+      Nat.add(Nat.mul(lo, s), 2n+s)
+    case Some{h}:
+      Nat.add(Nat.mul(lo, s), Nat.mul(Nat.sub(h, lo), 1n+s))
+
+def Regex.size(r: Re) -> Nat:
+  match r:
+    case RCat{a, b}:
+      Nat.add(Regex.size(a), Regex.size(b))
+    case RAlt{a, b}:
+      2n+Nat.add(Regex.size(a), Regex.size(b))
+    case RRep{r, lo, hi, g}:
+      Nat.min(1n+Regex.max_prog(), Regex.size.rep(Regex.size(r), lo, hi))
+    case RCap{n, r}:
+      2n+Regex.size(r)
+    case REmpty{}:
+      0n
+    case _:
+      1n
+
+# Bounded repeats unfold into copies: `x{2,4}` = `x x (x (x)?)?`, `x{2,}` =
+# `x x x*`. After this only `x*` and `x?` remain (lo = 0)
+def Regex.expand.opt(+e: Re, k: Nat, +g: Bool) -> Re:
+  match k:
+    case 0n:
+      REmpty{}
+    case 1n+p:
+      RRep{RCat{e, Regex.expand.opt(e, p, g)}, 0n, Some{1n}, g}
+
+def Regex.expand.times(n: Nat, +e: Re, acc: Re) -> Re:
+  match n:
+    case 0n:
+      acc
+    case 1n+p:
+      Regex.expand.times(p, e, RCat{e, acc})
+
+def Regex.expand.rep(+e: Re, +lo: Nat, hi: Maybe<&2, Nat>, +g: Bool) -> Re:
+  match hi:
+    case None{}:
+      Regex.expand.times(lo, e, RRep{e, 0n, None{}, g})
+    case Some{h}:
+      Regex.expand.times(lo, e, Regex.expand.opt(e, Nat.sub(h, lo), g))
+
+def Regex.expand(r: Re) -> Re:
+  match r:
+    case RCat{a, b}:
+      RCat{Regex.expand(a), Regex.expand(b)}
+    case RAlt{a, b}:
+      RAlt{Regex.expand(a), Regex.expand(b)}
+    case RRep{r, lo, hi, g}:
+      Regex.expand.rep(Regex.expand(r), lo, hi, g)
+    case RCap{n, r}:
+      RCap{n, Regex.expand(r)}
+    case other:
+      other
+
+# Case folding (flag i): add the ASCII letters of the other case
+def Regex.emit.swap(+a: U32, +b: U32, lo: U32, hi: U32, acc: Regex.Ranges()) -> Regex.Ranges():
+  +x = U32.max(a, lo)
+  +y = U32.min(b, hi)
+  List.filter.put(Regex.Range(), (U32.xor(x, 32), U32.xor(y, 32)), acc, U32.is_le(x, y))
+
+def Regex.emit.fold(rs: Regex.Ranges()) -> Regex.Ranges():
+  match rs:
+    case Nil{}:
+      []
+    case (+a, +b) <> rest:
+      (a, b) <> Regex.emit.swap(a, b, 65, 90, Regex.emit.swap(a, b, 97, 122, Regex.emit.fold(rest)))
+
+def Regex.emit.ranges(fl: Regex.Flags(), rs: Regex.Ranges()) -> Regex.Ranges():
+  (i, r) = fl
+  match i:
+    case True{}:
+      Regex.emit.fold(rs)
+    case False{}:
+      rs
+
+def Regex.emit.lit(fl: Regex.Flags(), +c: U32) -> Inst:
+  (i, r) = fl
+  match i:
+    case True{}:
+      ISet{False{}, Regex.emit.fold([(c, c)])}
+    case False{}:
+      IChr{c}
+
+def Regex.emit.any(fl: Regex.Flags()) -> Inst:
+  (i, (m, s)) = fl
+  match s:
+    case True{}:
+      ISet{True{}, []}
+    case False{}:
+      IAny{}
+
+def Regex.emit.multi(fl: Regex.Flags()) -> Bool:
+  (i, (m, s)) = fl
+  m
+
+def Regex.emit.split(g: Bool, x: Nat, y: Nat) -> Inst:
+  match g:
+    case True{}:
+      ISplit{x, y}
+    case False{}:
+      ISplit{y, x}
+
+# Code for an expanded tree placed at address `pc`
+def Regex.emit(r: Re, +fl: Regex.Flags(), +pc: Nat) -> List<&2, Inst>:
+  match r:
+    case RLit{Chr{c}}:
+      [Regex.emit.lit(fl, c)]
+    case RAny{}:
+      [Regex.emit.any(fl)]
+    case RSet{neg, rs}:
+      [ISet{neg, Regex.emit.ranges(fl, rs)}]
+    case RCat{+a, b}:
+      List.append(&2, Inst, Regex.emit(a, fl, pc), Regex.emit(b, fl, Nat.add(pc, Regex.size(a))))
+    case RAlt{+a, +b}:
+      +q = Nat.add(2n+pc, Regex.size(a))
+      ISplit{1n+pc, q} <> List.append(&2, Inst, Regex.emit(a, fl, 1n+pc), IJmp{Nat.add(q, Regex.size(b))} <> Regex.emit(b, fl, q))
+    case RRep{+r, lo, None{}, g}:
+      Regex.emit.split(g, 1n+pc, Nat.add(2n+pc, Regex.size(r))) <> List.append(&2, Inst, Regex.emit(r, fl, 1n+pc), [IJmp{pc}])
+    case RRep{+r, lo, Some{h}, g}:
+      Regex.emit.split(g, 1n+pc, Nat.add(1n+pc, Regex.size(r))) <> Regex.emit(r, fl, 1n+pc)
+    case RCap{+n, r}:
+      ISave{Nat.mul(2n, n)} <> List.append(&2, Inst, Regex.emit(r, fl, 1n+pc), [ISave{1n+Nat.mul(2n, n)}])
+    case RBol{}:
+      [IBol{Regex.emit.multi(fl)}]
+    case REol{}:
+      [IEol{Regex.emit.multi(fl)}]
+    case RWordB{neg}:
+      [IWordB{neg}]
+    case REmpty{}:
+      []
+
+def Regex.compile.prog(fl: Regex.Flags(), re: Re, n: Nat, big: Bool) -> Result<&2, &2, Regex.Error, Regex>:
+  match big:
+    case True{}:
+      Fail{RErr{0n, "program exceeds max_prog"}}
+    case False{}:
+      Done{Regex{ISave{0n} <> List.append(&2, Inst, Regex.emit(Regex.expand(re), fl, 1n), [ISave{1n}, IMatch{}]), n}}
+
+def Regex.compile.tree(fr: Result<&2, &2, Regex.Error, Regex.Flags()>, t: Regex.parse.Tree()) -> Result<&2, &2, Regex.Error, Regex>:
+  match fr t:
+    case Fail{e} _:
+      Fail{e}
+    case Done{fl} Fail{e}:
+      Fail{e}
+    case Done{fl} Done{(+re, n)}:
+      Regex.compile.prog(fl, re, n, Nat.is_gt(3n+Regex.size(re), Regex.max_prog()))
+
+# Flags: any of `i` (ASCII case fold) `m` (multiline anchors) `s` (dot
+# matches newline), each at most once
+def Regex.compile(p: String, +f: String) -> Result<&2, &2, Regex.Error, Regex>:
+  Regex.compile.tree(Regex.flags(f, Regex.flags.kind(f), (False{}, (False{}, False{}))), Regex.parse.run(p))
+
+# Reference Pike VM. A thread is a pc and its capture slots; at each
+# position the live threads are kept in priority order, so the first
+# thread to reach IMatch is the leftmost-first answer and cuts every
+# thread below it. Slow but total: O(n·m²) on every lane
+def Regex.exec.Caps() -> Data:
+  List<&2, Maybe<&2, Nat>>
+
+def Regex.exec.Thread() -> Data:
+  Sigma<&2, &2, Nat, _ => Regex.exec.Caps()>
+
+def Regex.exec.Threads() -> Data:
+  List<&2, Regex.exec.Thread()>
+
+# Where the VM stands: (position, (previous char, subject from here))
+def Regex.exec.Ctx() -> Data:
+  Sigma<&2, &2, Nat, _ => Sigma<&2, &2, Maybe<&2, U32>, _ => String>>
+
+# Closure state: (work stack, (pcs seen at this position, live threads reversed))
+def Regex.exec.CState() -> Data:
+  Sigma<&2, &2, Regex.exec.Threads(), _ => Sigma<&2, &2, List<&2, Nat>, _ => Regex.exec.Threads()>>
+
+# Run state: (threads to close at the next position, best match so far)
+def Regex.exec.State() -> Data:
+  Sigma<&2, &2, Regex.exec.Threads(), _ => Maybe<&2, Regex.exec.Caps()>>
+
+def Regex.exec.inset(+y: U32, rs: Regex.Ranges()) -> Bool:
+  match rs:
+    case Nil{}:
+      False{}
+    case (a, b) <> rest:
+      Bool.or(Bool.and(U32.is_le(a, y), U32.is_le(y, b)), Regex.exec.inset(y, rest))
+
+def Regex.exec.peek(s: String) -> Maybe<&2, U32>:
+  match s:
+    case SNil{}:
+      None{}
+    case SCon{Chr{x}, t}:
+      Some{x}
+
+def Regex.exec.is_word(m: Maybe<&2, U32>) -> Bool:
+  match m:
+    case None{}:
+      False{}
+    case Some{x}:
+      Regex.exec.inset(x, Regex.words())
+
+def Regex.exec.is_nl(m: Maybe<&2, U32>) -> Bool:
+  match m:
+    case None{}:
+      False{}
+    case Some{x}:
+      U32.is_eq(x, 10)
+
+def Regex.exec.bol(multi: Bool, ctx: Regex.exec.Ctx()) -> Bool:
+  match ctx:
+    case (0n, r):
+      True{}
+    case (i, (prev, tail)):
+      Bool.and(multi, Regex.exec.is_nl(prev))
+
+# `$`: at the end, before a final newline, or (multiline) before any newline
+def Regex.exec.eol(multi: Bool, ctx: Regex.exec.Ctx()) -> Bool:
+  match ctx:
+    case (i, (prev, SNil{})):
+      True{}
+    case (i, (prev, SCon{Chr{x}, SNil{}})):
+      U32.is_eq(x, 10)
+    case (i, (prev, SCon{Chr{x}, t})):
+      Bool.and(multi, U32.is_eq(x, 10))
+
+def Regex.exec.wordb(neg: Bool, ctx: Regex.exec.Ctx()) -> Bool:
+  (i, (prev, tail)) = ctx
+  Bool.xor(neg, Bool.xor(Regex.exec.is_word(prev), Regex.exec.is_word(Regex.exec.peek(tail))))
+
+def Regex.exec.pos(ctx: Regex.exec.Ctx()) -> Nat:
+  (i, r) = ctx
+  i
+
+def Regex.exec.save(caps: Regex.exec.Caps(), slot: Nat, +i: Nat) -> Regex.exec.Caps():
+  match caps slot:
+    case Nil{} _:
+      Nil{}
+    case h <> t 0n:
+      Some{i} <> t
+    case h <> t 1n+p:
+      h <> Regex.exec.save(t, p, i)
+
+# One closure step at `pc`: `dup` = already seen here, `inst` = prog[pc]
+def Regex.exec.step(ctx: Regex.exec.Ctx(), +pc: Nat, +caps: Regex.exec.Caps(), work: Regex.exec.Threads(), seen: List<&2, Nat>, acc: Regex.exec.Threads(), dup: Bool, inst: Maybe<&2, Inst>) -> Regex.exec.CState():
+  match dup inst:
+    case True{} _:
+      (work, (seen, acc))
+    case False{} Some{ISplit{x, y}}:
+      ((x, caps) <> ((y, caps) <> work), (pc <> seen, acc))
+    case False{} Some{IJmp{x}}:
+      ((x, caps) <> work, (pc <> seen, acc))
+    case False{} Some{ISave{+slot}}:
+      (List.filter.put(Regex.exec.Thread(), (1n+pc, Regex.exec.save(caps, slot, Regex.exec.pos(ctx))), work, Nat.is_lt(slot, List.length(&2, Maybe<&2, Nat>, caps))), (pc <> seen, acc))
+    case False{} Some{IBol{multi}}:
+      (List.filter.put(Regex.exec.Thread(), (1n+pc, caps), work, Regex.exec.bol(multi, ctx)), (pc <> seen, acc))
+    case False{} Some{IEol{multi}}:
+      (List.filter.put(Regex.exec.Thread(), (1n+pc, caps), work, Regex.exec.eol(multi, ctx)), (pc <> seen, acc))
+    case False{} Some{IWordB{neg}}:
+      (List.filter.put(Regex.exec.Thread(), (1n+pc, caps), work, Regex.exec.wordb(neg, ctx)), (pc <> seen, acc))
+    case False{} Some{i}:
+      (work, (pc <> seen, (pc, caps) <> acc))
+    case False{} None{}:
+      (work, (pc <> seen, acc))
+
+# ε-closure over a work stack; each pc is expanded at most once per
+# position, so 3·(1+|prog|) steps always drain the stack
+def Regex.exec.close(fuel: Nat, +prog: List<&2, Inst>, +ctx: Regex.exec.Ctx(), st: Regex.exec.CState()) -> Regex.exec.CState():
+  match fuel st:
+    case 0n, st:
+      st
+    case 1n+f, (Nil{}, r):
+      (Nil{}, r)
+    case 1n+f, ((+pc, caps) <> work, (+seen, acc)):
+      Regex.exec.close(f, prog, ctx, Regex.exec.step(ctx, pc, caps, work, seen, acc, List.contains(~Nat, ~Nat.is_eq, seen, pc), List.get(&2, Inst, prog, pc)))
+
+def Regex.exec.closed(st: Regex.exec.CState()) -> Regex.exec.Threads():
+  (work, (seen, acc)) = st
+  List.reverse(&2, Regex.exec.Thread(), acc)
+
+# Threads alive at this position, in priority order: the closure of the
+# survivors plus, while no match is known, a fresh thread at the bottom
+def Regex.exec.alive(+prog: List<&2, Inst>, ctx: Regex.exec.Ctx(), work: Regex.exec.Threads(), start: Regex.exec.Threads(), best: Bool) -> Regex.exec.Threads():
+  Regex.exec.closed(Regex.exec.close(Nat.mul(3n, 1n+List.length(&2, Inst, prog)), prog, ctx, (List.append(&2, Regex.exec.Thread(), work, Bool.pick(Regex.exec.Threads(), best, [], start)), ([], []))))
+
+def Regex.exec.eat(inst: Inst, c: Maybe<&2, U32>) -> Bool:
+  match inst c:
+    case IChr{x} Some{y}:
+      U32.is_eq(x, y)
+    case IAny{} Some{y}:
+      Bool.not(U32.is_eq(y, 10))
+    case ISet{neg, rs} Some{+y}:
+      Bool.xor(neg, Regex.exec.inset(y, rs))
+    case _ _:
+      False{}
+
+def Regex.exec.fetch(+prog: List<&2, Inst>, ts: Regex.exec.Threads()) -> Maybe<&2, Inst>:
+  match ts:
+    case Nil{}:
+      None{}
+    case (pc, caps) <> rest:
+      List.get(&2, Inst, prog, pc)
+
+# Feed the char to the live threads in priority order. IMatch wins and cuts
+# the rest, unless `cut` is off (fullmatch before the end); `inst` = prog[head pc]
+def Regex.exec.adv(clist: Regex.exec.Threads(), +prog: List<&2, Inst>, cut: Bool, +c: Maybe<&2, U32>, inst: Maybe<&2, Inst>, work: Regex.exec.Threads()) -> Maybe<&2, Regex.exec.Caps()> & Regex.exec.Threads():
+  match clist cut inst:
+    case Nil{}, _, _:
+      (None{}, work)
+    case (pc, caps) <> +rest, False{}, Some{IMatch{}}:
+      Regex.exec.adv(rest, prog, False{}, c, Regex.exec.fetch(prog, rest), work)
+    case (pc, caps) <> rest, _, Some{IMatch{}}:
+      (Some{caps}, work)
+    case (pc, caps) <> +rest, k, Some{i}:
+      Regex.exec.adv(rest, prog, k, c, Regex.exec.fetch(prog, rest), List.filter.put(Regex.exec.Thread(), (1n+pc, caps), work, Regex.exec.eat(i, c)))
+    case (pc, caps) <> +rest, k, None{}:
+      Regex.exec.adv(rest, prog, k, c, Regex.exec.fetch(prog, rest), work)
+
+def Regex.exec.feed(+prog: List<&2, Inst>, full: Bool, +c: Maybe<&2, U32>, +clist: Regex.exec.Threads()) -> Maybe<&2, Regex.exec.Caps()> & Regex.exec.Threads():
+  Regex.exec.adv(clist, prog, Bool.or(Bool.not(full), Maybe.is_none(&2, U32, c)), c, Regex.exec.fetch(prog, clist), [])
+
+def Regex.exec.post(best: Maybe<&2, Regex.exec.Caps()>, r: Maybe<&2, Regex.exec.Caps()> & Regex.exec.Threads()) -> Regex.exec.State():
+  (found, acc) = r
+  (List.reverse(&2, Regex.exec.Thread(), acc), Maybe.or(&2, Regex.exec.Caps(), found, best))
+
+def Regex.exec.groups(caps: Regex.exec.Caps()) -> List<&2, Maybe<&2, Regex.Span()>>:
+  match caps:
+    case Some{a} <> (Some{b} <> gs):
+      Some{(a, b)} <> Regex.exec.groups(gs)
+    case x <> (y <> gs):
+      None{} <> Regex.exec.groups(gs)
+    case _:
+      []
+
+def Regex.exec.match(caps: Regex.exec.Caps()) -> Maybe<&2, Match>:
+  match caps:
+    case Some{a} <> (Some{b} <> gs):
+      Some{Match{a, b, Regex.exec.groups(gs)}}
+    case _:
+      None{}
+
+def Regex.exec.fin(st: Regex.exec.State()) -> Maybe<&2, Match>:
+  match st:
+    case (work, Some{caps}):
+      Regex.exec.match(caps)
+    case (work, None{}):
+      None{}
+
+# Walks the subject; the first `at` chars are skipped (they still set
+# `prev` for `^` `\b`). `anchored` drops the fresh thread after position `at`
+def Regex.exec.run(s: String, at: Nat, +prog: List<&2, Inst>, +full: Bool, +anchored: Bool, +start: Regex.exec.Threads(), +i: Nat, prev: Maybe<&2, U32>, st: Regex.exec.State()) -> Maybe<&2, Match>:
+  match s at st:
+    case SCon{Chr{x}, t}, 1n+a, st:
+      Regex.exec.run(t, a, prog, full, anchored, start, 1n+i, Some{x}, st)
+    case SCon{Chr{+x}, +t}, 0n, (work, +best):
+      Regex.exec.run(t, 0n, prog, full, anchored, Bool.pick(Regex.exec.Threads(), anchored, [], start), 1n+i, Some{x}, Regex.exec.post(best, Regex.exec.feed(prog, full, Some{x}, Regex.exec.alive(prog, (i, (prev, SCon{Chr{x}, t})), work, start, Maybe.is_some(&2, Regex.exec.Caps(), best)))))
+    case SNil{}, _, (work, +best):
+      Regex.exec.fin(Regex.exec.post(best, Regex.exec.feed(prog, full, None{}, Regex.exec.alive(prog, (i, (prev, SNil{})), work, start, Maybe.is_some(&2, Regex.exec.Caps(), best)))))
+
+def Regex.exec.go(re: Regex, s: String, at: Nat, full: Bool, anchored: Bool) -> Maybe<&2, Match>:
+  match re:
+    case Regex{prog, n}:
+      Regex.exec.run(s, at, prog, full, anchored, [(0n, List.replicate(Maybe<&2, Nat>, Nat.mul(2n, 1n+n), None{}))], 0n, None{}, ([], None{}))
+
+# First match starting at or after `at` (code-point offset)
+def Regex.exec(re: Regex, s: String, at: Nat) -> Maybe<&2, Match>:
+  Regex.exec.go(re, s, at, False{}, False{})
+
+# Match starting exactly at `at`
+def Regex.match_at(re: Regex, s: String, at: Nat) -> Maybe<&2, Match>:
+  Regex.exec.go(re, s, at, False{}, True{})
+
+# Match covering the whole subject
+def Regex.fullmatch(re: Regex, s: String) -> Maybe<&2, Match>:
+  Regex.exec.go(re, s, 0n, True{}, True{})
+
 # Text
 # ----
 
