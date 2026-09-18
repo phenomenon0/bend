@@ -2,6 +2,7 @@
 from normalize import ROOT, OUT, pin, intake, oracle, normalize, split, differences, supported
 import argparse
 import copy
+import fcntl
 import hashlib
 import json
 import os
@@ -10,6 +11,7 @@ import subprocess
 import time
 from pathlib import Path
 from manifest import manifest
+from fixtures import EXPRESSIONS, STATEMENTS
 
 FIXTURES = ["", "pass\n", "x = 1\n", "x += 2\n", "-2**2\n", "2**-2\n",
             "not a in b\n", "a is not b\n", "a < b <= c\n", "a if b else c\n",
@@ -22,11 +24,18 @@ def build():
     sources = sorted((ROOT / "demos/python").glob("*.bend")) + [ROOT / "bend2" / f for f in ("bend.ts", "comp.ts", "base.bend", "main.ts")]
     digest = hashlib.sha256(b"".join(p.read_bytes() for p in sources)).hexdigest()
     stamp = OUT / "build.sha256"
-    if stamp.exists() and stamp.read_text() == digest and all((OUT / f).exists() for f in ("parser", "parser.js")):
-        return
-    for name in ("parser", "parser.js"):
-        subprocess.run(["bun", "bend2/main.ts", "demos/python/main.bend", "-o", str(OUT / name)], cwd=ROOT, check=True, capture_output=True, timeout=180)
-    stamp.write_text(digest)
+    with (OUT / "build.lock").open("w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        if stamp.exists() and stamp.read_text() == digest and all((OUT / f).exists() for f in ("parser", "parser.js")):
+            return
+        for name in ("parser", "parser.js"):
+            pending = OUT / ("building-" + name)
+            p = subprocess.run(["bun", "bend2/main.ts", "demos/python/main.bend", "-o", str(pending)], cwd=ROOT,
+                               text=True, capture_output=True, timeout=180)
+            if p.returncode:
+                raise RuntimeError(p.stdout + p.stderr)
+            pending.replace(OUT / name)
+        stamp.write_text(digest)
 
 
 def run(path, lane="c", mode="parse", timeout=30):
@@ -113,7 +122,7 @@ def evaluate(rows, label):
         source = intake(Path(row["path"]).read_bytes())
         try:
             want, tree = oracle(source)
-            rec["supported"] = supported(tree)
+            rec["supported"] = supported(tree, source)
         except (SyntaxError, RecursionError, MemoryError) as exc:
             rec.update(status="oracle-failure", message=str(exc))
             records.append(rec)
@@ -137,6 +146,9 @@ def evaluate(rows, label):
                   location_diffs=sum(len(r.get("location_diffs", [])) for r in records),
                   supported_refusals=sum(r.get("supported", False) and r["status"] != "parsed" for r in records))
     times = sorted(r["ms"] for r in records if "ms" in r)
+    counts["error"] = counts["syntax"]
+    counts["supported_parsed"] = sum(r.get("supported", False) and r["status"] == "parsed" for r in records)
+    counts["supported_exact"] = sum(r.get("supported", False) and r.get("exact", False) for r in records)
     counts["p50_ms"] = statistics.median(times) if times else None
     counts["p95_ms"] = times[min(len(times) - 1, int(len(times) * .95))] if times else None
     counts["parse_pct_eligible"] = 100 * counts["parsed"] / max(1, counts["eligible"])
@@ -160,7 +172,7 @@ if __name__ == "__main__":
         raise SystemExit(0 if evaluate(manifest(a.corpus), "tier-" + a.corpus) else 1)
     else:
         rows = []
-        for i, source in enumerate(FIXTURES):
+        for i, source in enumerate(EXPRESSIONS if a.fixtures == "expressions" else STATEMENTS if a.fixtures == "statements" else FIXTURES + EXPRESSIONS + STATEMENTS):
             path = OUT / f"fixture-{i:02}.py"
             path.write_text(source)
             rows.append({"path": str(path), "exclusion": None})

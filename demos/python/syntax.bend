@@ -33,8 +33,11 @@ type Json is Data:
   JItem{value: Json, rest: Json}
   JEnd{}
 
+type Span is Data:
+  Span{start: Pos, end: Pos}
+
 type Expr is Data:
-  Expr{tag: String, fields: Json, start: Pos, end: Pos}
+  Expr{tag: String, fields: Json, start: Pos, end: Pos, cover: Span, grouped: Bool}
 
 type Stmt is Data:
   Stmt{node: Expr}
@@ -75,15 +78,17 @@ def escape_char(+c: Char) -> String:
     choose(String, U32.is_eq(n, 34) || U32.is_eq(n, 92), u =>
       "\\" ++ SCon{c, ""}, u => SCon{c, ""}))
 
-def escape(s: String) -> String:
+# Append into a uniquely owned buffer. Constructing child strings first makes
+# a long left-associated AST quadratic in the C runtime's flat strings.
+def escape_into(s: String, acc: String) -> String:
   match s:
     case SNil{}:
-      ""
+      acc
     case SCon{h, t}:
-      escape_char(h) ++ escape(t)
+      escape_into(t, acc ++ escape_char(h))
 
 def quote(s: String) -> String:
-  "\"" ++ escape(s) ++ "\""
+  escape_into(s, "\"") ++ "\""
 
 def comma(j: Json) -> String:
   match j:
@@ -92,26 +97,31 @@ def comma(j: Json) -> String:
     case _:
       ","
 
-def json(j: Json) -> String:
+# The encoder continuation is always called in tail position. This is solely
+# an output traversal, not a parser continuation/frame machine.
+def json_k(j: Json, acc: String, k: String -> String) -> String:
   match j:
     case JNull{}:
-      "null"
+      k(acc ++ "null")
     case JStr{s}:
-      quote(s)
+      k(escape_into(s, acc ++ "\"") ++ "\"")
     case JNum{n}:
-      Nat.show(n)
+      k(acc ++ Nat.show(n))
     case JBool{b}:
-      Bool.pick(String, b, "true", "false")
+      k(acc ++ Bool.pick(String, b, "true", "false"))
     case JObj{fs}:
-      "{" ++ json(fs) ++ "}"
+      json_k(fs, acc ++ "{", out => k(out ++ "}"))
     case JArr{xs}:
-      "[" ++ json(xs) ++ "]"
-    case JField{k, v, +rest}:
-      quote(k) ++ ":" ++ json(v) ++ comma(rest) ++ json(rest)
+      json_k(xs, acc ++ "[", out => k(out ++ "]"))
+    case JField{name, v, +rest}:
+      json_k(v, acc ++ quote(name) ++ ":", out => json_k(rest, out ++ comma(rest), k))
     case JItem{v, +rest}:
-      json(v) ++ comma(rest) ++ json(rest)
+      json_k(v, acc, out => json_k(rest, out ++ comma(rest), k))
     case JEnd{}:
-      ""
+      k(acc)
+
+def json(j: Json) -> String:
+  json_k(j, "", out => out)
 
 def fields_append(a: Json, b: Json) -> Json:
   match a:
@@ -127,7 +137,7 @@ def pos(p: Pos) -> Json:
   JItem{JNum{ln}, JItem{JNum{col}, JEnd{}}}
 
 def expr(e: Expr) -> Json:
-  Expr{tag, fs, lo, hi} = e
+  Expr{tag, fs, lo, hi, cover, grouped} = e
   JObj{JField{"tag", JStr{tag}, fields_append(fs,
     JField{"_loc", JArr{fields_append(pos(lo), pos(hi))}, JEnd{}})}}
 
@@ -160,3 +170,12 @@ def context(c: Ctx) -> Json:
       JObj{JField{"tag", JStr{"Store"}, JEnd{}}}
     case Del{}:
       JObj{JField{"tag", JStr{"Del"}, JEnd{}}}
+
+# Base.List.length is non-tail-recursive on emitted JS. Corpus token lists
+# use this structurally decreasing accumulator instead.
+def token_count(ts: List<&2, Tok>, count: Nat) -> Nat:
+  match ts:
+    case Nil{}:
+      count
+    case Con{h, tail}:
+      token_count(tail, 1n+count)

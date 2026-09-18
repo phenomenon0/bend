@@ -4,8 +4,10 @@ import sys
 
 ORACLE = "/home/omen/.hermes/hermes-agent/venv/bin/python3"
 VERSION = (3, 11, 15)
-if sys.version_info[:3] != VERSION or os.path.abspath(sys.executable) != ORACLE:
+if os.path.abspath(sys.executable) != ORACLE:
     os.execv(ORACLE, [ORACLE, *sys.argv])
+if sys.version_info[:3] != VERSION or sys.implementation.name != "cpython":
+    raise SystemExit(f"Pinned oracle changed: {ORACLE}: {sys.version}")
 
 import ast
 import hashlib
@@ -37,6 +39,7 @@ def pin():
             "RecursionError/MemoryError/timeouts are oracle failures, never parser verdicts",
             "Constant value = repr(literal_eval(raw)); implicit strings wrapped in parentheses",
             "type_comments=False; trivia and incidental parentheses are omitted",
+            "P2 does not support f-strings; oracle JoinedStr text Constant segments use repr(node.value) because their source spans cover the whole f-string",
         ],
     }
     (OUT / "oracle.json").write_text(json.dumps(data, indent=2) + "\n")
@@ -53,7 +56,7 @@ def intake(raw):
 
 def boundaries(source):
     result = []
-    for line in source.splitlines(keepends=True):
+    for line in source.split("\n"):
         mapping, byte = {0: 0}, 0
         for col, char in enumerate(line, 1):
             byte += len(char.encode("utf-8"))
@@ -71,20 +74,20 @@ def oracle(source):
     tree = ast.parse(source, feature_version=(3, 11), type_comments=False)
     maps = boundaries(source)
 
-    def convert(node):
+    def convert(node, in_fstring=False):
         if isinstance(node, ast.AST):
             d = {"tag": type(node).__name__}
             for field, value in ast.iter_fields(node):
                 if isinstance(node, ast.Constant) and field == "value":
-                    d[field] = literal(ast.get_source_segment(source, node))
+                    d[field] = repr(node.value) if in_fstring else literal(ast.get_source_segment(source, node))
                 else:
-                    d[field] = convert(value)
+                    d[field] = convert(value, isinstance(node, ast.JoinedStr))
             if hasattr(node, "lineno"):
                 d["_loc"] = [node.lineno, maps[node.lineno - 1][node.col_offset],
                              node.end_lineno, maps[node.end_lineno - 1][node.end_col_offset]]
             return d
         if isinstance(node, list):
-            return [convert(x) for x in node]
+            return [convert(x, in_fstring) for x in node]
         return node
 
     return convert(tree), tree
@@ -140,5 +143,11 @@ LShift RShift BitOr BitXor BitAnd BoolOp And Or Compare Eq NotEq Lt LtE Gt GtE I
 IfExp Call keyword Assign AugAssign Expr If While Return Pass Break Continue""".split())
 
 
-def supported(tree):
-    return all(type(node).__name__ in SUPPORTED for node in ast.walk(tree))
+def supported(tree, source=None):
+    if source is not None and any(t.type == tokenize.NAME and not t.string.isascii()
+                                  for t in tokenize.generate_tokens(io.StringIO(source).readline)):
+        return False
+    return all(type(node).__name__ in SUPPORTED and
+               not (isinstance(node, ast.Name) and not node.id.isascii()) and
+               not (isinstance(node, ast.Attribute) and not node.attr.isascii())
+               for node in ast.walk(tree))

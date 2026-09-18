@@ -10,6 +10,6 @@ def main() -> Bool:
     bad("x = '''unclosed") &&
     bad("if x:\n\tpass\n        pass\n") &&
     bad("x = \\ \n") &&
-    bad("\0")
+    bad("\0") && bad("\"\0\"") && bad("#\0")
 
 #|True{}

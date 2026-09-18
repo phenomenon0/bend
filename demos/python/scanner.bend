@@ -33,7 +33,7 @@ def accepts(mode: Nat, +c: Char) -> Bool:
     case 1n:
       ws(c)
     case _:
-      Bool.not(Char.is_eq(c, '\n') || Char.is_eq(c, '\r'))
+      Bool.not(Char.is_eq(c, '\n') || Char.is_eq(c, '\r') || Char.is_eq(c, Chr{0}))
 
 def span(s: String, +mode: Nat, +pos: S.Pos, acc: String) -> Scan:
   match s:
@@ -72,9 +72,9 @@ def quoted(s: String, +delim: String, +triple: Bool, +escaped: Bool,
       +a = acc
       S.choose(Result<&2, &2, S.Error, Scan>, Bool.not(escaped) && String.starts_with(SCon{h, t}, delim), u =>
         Done{take(SCon{h, t}, String.length(delim), pos, a)}, u =>
-        S.choose(Result<&2, &2, S.Error, Scan>, Bool.not(triple) && Bool.not(escaped) && Char.is_eq(h, '\n'), u =>
-          Fail{S.PErr{S.Syntax{}, pos, "newline in string"}}, u =>
-          quoted(t, delim, triple, Bool.not(escaped) && Char.is_eq(h, Chr{92}),
+        S.choose(Result<&2, &2, S.Error, Scan>, Char.is_eq(h, Chr{0}) || (Bool.not(triple) && Bool.not(escaped) && Char.is_eq(h, '\n')), u =>
+          Fail{S.PErr{S.Syntax{}, pos, "invalid character in string"}}, u =>
+          quoted(t, delim, triple, (Bool.not(escaped) && Char.is_eq(h, Chr{92})) || (escaped && Char.is_eq(h, '\r') && Char.is_eq(head(t), '\n')),
             advance(pos, h), SCon{h, a})))
 
 def pos_line(p: S.Pos) -> Nat:
@@ -110,7 +110,7 @@ def number_next(state: Nat, +c: Char) -> Nat:
     case 0n:
       Bool.pick(Nat, Char.is_eq(c, '0'), 1n, Bool.pick(Nat, digit(c), 2n, Bool.pick(Nat, Char.is_eq(c, '.'), 10n, 0n)))
     case 1n:
-      Bool.pick(Nat, Char.is_eq(c, '0'), 1n, Bool.pick(Nat, digit(c), 3n, Bool.pick(Nat, Char.is_eq(c, '_'), 16n, Bool.pick(Nat, Char.is_eq(c, '.'), 10n, Bool.pick(Nat, Char.is_eq(c, 'e') || Char.is_eq(c, 'E'), 12n, Bool.pick(Nat, Char.is_eq(c, 'j') || Char.is_eq(c, 'J'), 15n, Bool.pick(Nat, Char.is_eq(c, 'x') || Char.is_eq(c, 'X'), 4n, Bool.pick(Nat, Char.is_eq(c, 'o') || Char.is_eq(c, 'O'), 6n, Bool.pick(Nat, Char.is_eq(c, 'b') || Char.is_eq(c, 'B'), 8n, 0n)))))))))
+      Bool.pick(Nat, Char.is_eq(c, '0'), 24n, Bool.pick(Nat, digit(c), 3n, Bool.pick(Nat, Char.is_eq(c, '_'), 16n, Bool.pick(Nat, Char.is_eq(c, '.'), 10n, Bool.pick(Nat, Char.is_eq(c, 'e') || Char.is_eq(c, 'E'), 12n, Bool.pick(Nat, Char.is_eq(c, 'j') || Char.is_eq(c, 'J'), 15n, Bool.pick(Nat, Char.is_eq(c, 'x') || Char.is_eq(c, 'X'), 4n, Bool.pick(Nat, Char.is_eq(c, 'o') || Char.is_eq(c, 'O'), 6n, Bool.pick(Nat, Char.is_eq(c, 'b') || Char.is_eq(c, 'B'), 8n, 0n)))))))))
     case 2n:
       Bool.pick(Nat, digit(c), 2n, Bool.pick(Nat, Char.is_eq(c, '_'), 17n, Bool.pick(Nat, Char.is_eq(c, '.'), 10n, Bool.pick(Nat, Char.is_eq(c, 'e') || Char.is_eq(c, 'E'), 12n, Bool.pick(Nat, Char.is_eq(c, 'j') || Char.is_eq(c, 'J'), 15n, 0n)))))
     case 3n:
@@ -140,7 +140,7 @@ def number_next(state: Nat, +c: Char) -> Nat:
     case 15n:
       0n
     case 16n:
-      Bool.pick(Nat, Char.is_eq(c, '0'), 1n, Bool.pick(Nat, digit(c), 3n, 0n))
+      Bool.pick(Nat, Char.is_eq(c, '0'), 24n, Bool.pick(Nat, digit(c), 3n, 0n))
     case 17n:
       Bool.pick(Nat, digit(c), 2n, 0n)
     case 18n:
@@ -155,11 +155,16 @@ def number_next(state: Nat, +c: Char) -> Nat:
       Bool.pick(Nat, digit(c), 11n, 0n)
     case 23n:
       Bool.pick(Nat, digit(c), 14n, 0n)
+    case 24n:
+      Bool.pick(Nat, Char.is_eq(c, '0'), 24n, Bool.pick(Nat, digit(c), 3n,
+        Bool.pick(Nat, Char.is_eq(c, '_'), 16n, Bool.pick(Nat, Char.is_eq(c, '.'), 10n,
+          Bool.pick(Nat, Char.is_eq(c, 'e') || Char.is_eq(c, 'E'), 12n,
+            Bool.pick(Nat, Char.is_eq(c, 'j') || Char.is_eq(c, 'J'), 15n, 0n))))))
     case _:
       0n
 
 def number_accept(+state: Nat) -> Bool:
-  Nat.is_eq(state, 1n) || Nat.is_eq(state, 2n) || Nat.is_eq(state, 5n) || Nat.is_eq(state, 7n) || Nat.is_eq(state, 9n) || Nat.is_eq(state, 10n) || Nat.is_eq(state, 11n) || Nat.is_eq(state, 14n) || Nat.is_eq(state, 15n)
+  Nat.is_eq(state, 24n) || Nat.is_eq(state, 1n) || Nat.is_eq(state, 2n) || Nat.is_eq(state, 5n) || Nat.is_eq(state, 7n) || Nat.is_eq(state, 9n) || Nat.is_eq(state, 10n) || Nat.is_eq(state, 11n) || Nat.is_eq(state, 14n) || Nat.is_eq(state, 15n)
 
 def number(s: String, +state: Nat, +pos: S.Pos, acc: String, +best: Scan) -> Scan:
   match s:

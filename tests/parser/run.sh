@@ -46,7 +46,7 @@ name=wrong_fixture_control
 sed -n 's/^#|//p' tests/parser/_out/wrong.bend > "$work/wrong-expected"
 before=$fail
 run interpret "$work/wrong-expected" bun bend2/main.ts tests/parser/_out/wrong.bend > "$work/control"
-if [ "$fail" -eq "$((before + 1))" ]; then
+if [ "$fail" -eq "$((before + 1))" ] && [ "$(cat "$work/actual")" = "1n" ]; then
   fail=$before
   printf 'ok   wrong #| fixture detected as failing\n'
 else
@@ -95,5 +95,11 @@ for t in tests/parser/*.bend; do
   done
 done
 python3 tests/parser/probe.py || fail=$((fail + 1))
+if [ -z "${1:-}" ] && [ -f tests/parser/fuzz.py ]; then
+  python3 tests/parser/diff.py --fixtures all || fail=$((fail + 1))
+  python3 tests/parser/fuzz.py || fail=$((fail + 1))
+  python3 tests/parser/adversarial.py || fail=$((fail + 1))
+  python3 tests/parser/diff.py --corpus 1 || fail=$((fail + 1))
+fi
 printf '\nParser PASS: %d, FAIL: %d\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

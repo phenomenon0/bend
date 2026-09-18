@@ -10,6 +10,7 @@ import tokenize
 from pathlib import Path
 
 CASES = [
+    "00x1 0_0x1 00e5 0_0.2\n", "'a\\\r\nb'\n",
     "", "# comment\n", "if x:\n\tpass\n\t# ignored\npass\n",
     "x = (1 +\n 2) # comment\n", "x = 1 + \\\n 2\n", "if x:\r\n\tpass\r\n",
     "if x:\n \f  pass\n", "r'a\\\\b' b'abc' u'é' f'{x}' br'hi' RF'''a\nb'''\n",
