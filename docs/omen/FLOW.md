@@ -17,6 +17,11 @@ pushed to upstream; `our` remote = `phenomenon0/bend`.
 
 ## Our flow
 
+0. **HARD RULE (operator, 2026-09-18): anything written by codex gets a fable
+   review/rewrite pass before it merges. Fable is the continuing builder for
+   all workstreams; codex output is never final.** Streams keep their own
+   branches (`lane-strings`, `lane-regex`, `lane-parser`, …) off `omen`.
+
 1. **Update**: `git fetch origin` (upstream); new snapshot lands on `main`.
 2. **Port**: generate a patch from the source of truth and 3-way apply —
    - from a workshop branch: `git diff --binary <base> <branch> -- bend2/ tests/`;
