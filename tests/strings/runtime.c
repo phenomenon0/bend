@@ -77,6 +77,23 @@ static void ownership(Env e) {
   term_sink(e, s);
   assert(track_live == 0);
 
+  // A unique descriptor advances in place: a token walk allocates nothing.
+  // A shared one must not: the alias still reads the whole text.
+  s = io_str(e, "abcd", 4);
+  u64 walk = track_allocs;
+  str_uncons(e, s, fields);
+  assert(fields[0] == 'a' && fields[1] == s && track_allocs == walk);
+  alias = term_keep(e, fields[1]);
+  str_uncons(e, fields[1], fields);
+  assert(fields[0] == 'b' && fields[1] != alias);
+  expect_text(e, alias, "bcd");
+  expect_text(e, fields[1], "cd");
+  // The last cell releases descriptor and payload.
+  s = io_str(e, "z", 1);
+  str_uncons(e, s, fields);
+  assert(fields[0] == 'z' && fields[1] == term_pak(CID_SNIL, 0));
+  assert(track_live == 0);
+
   // Growth copies O(n) total payload cells on a unique one-direction chain.
   for (u32 front = 0; front < 2; front++) {
     s = term_pak(CID_SNIL, 0);

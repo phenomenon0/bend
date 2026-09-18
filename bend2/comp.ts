@@ -4730,6 +4730,19 @@ INLINE Term str_slice_take(Env e, Term s, u64 lo, u64 hi) {
 }
 
 INLINE void str_uncons(Env e, Term s, THR Term* out) {
+  // A heap descriptor with a count of one advances in place: the walk
+  // over a token then frees and allocates no descriptor/count pair.
+  if (!term_triv(s) && term_rfc(s)) {
+    u64 cell = rfc_view(e, term_loc(s));
+    Loc l = cell >> 24;
+    if ((cell & RFC_CNT) == 1 && (u32)e.mem[l + 1] > 1) {
+      StrParts p = {e.mem[l], (u32)(e.mem[l + 1] >> 32), (u32)e.mem[l + 1]};
+      out[0] = str_at_peek(e, p, 0);
+      e.mem[l + 1] = ((u64)(p.off + 1) << 32) | (p.len - 1);
+      out[1] = s;
+      return;
+    }
+  }
   StrParts p = str_take(e, s);
   if (err_seen(e.mem)) { out[0] = 0; out[1] = term_pak(CID_SNIL, 0); return; }
   out[0] = str_at_peek(e, p, 0);
