@@ -382,6 +382,9 @@ const OPERATIONS: Record<string, Intr> = Object.setPrototypeOf({
   string_pad_start: { C: "str_pad_take(e, $0, $1, $2, 0)", JS: "str_pad($0, $1, $2, 0)" },
   string_pad_end: { C: "str_pad_take(e, $0, $1, $2, 1)", JS: "str_pad($0, $1, $2, 1)" },
   string_hash: { C: "str_hash_take(e, $0)", JS: "str_hash($0)" },
+  // Map.bit borrows the key and returns it: the tree order and the 33-bit key
+  // protocol of the reference definition, O(1) on C, an endpoint scan on JS.
+  map_bit: { C: ["$0", "str_bit_peek(e, $0, $1)"], JS: "map_bit($0, $1)" },
   array_new: {
     call: true,
     JS:   "array_new($0, $1)",
@@ -819,6 +822,12 @@ function str_end(s, n, take) {
 function str_get_end(s, n) {
   const len = str_length(s);
   return n === 0n || n > len ? {$: "None"} : str_get(s, len - n);
+}
+function map_bit(s, pos) {
+  const i = str_offset(s, pos / 33n), off = Number(pos % 33n);
+  const b = i < s.length
+    && (off === 0 || ((s.codePointAt(i) >>> (32 - off)) & 1) === 1);
+  return {$: "Tuple", fst: s, snd: b};
 }
 function str_order(a, b) {
   let i = 0, j = 0;
@@ -4728,6 +4737,16 @@ INLINE Term str_get_take(Env e, Term s, Nat n, bool end) {
   if (err_seen(e.mem)) { return term_pak(CID_NONE, 0); }
   e.mem[l] = c;
   return term_ctr(CID_SOME, l);
+}
+
+// Map.bit's 33-bit key protocol: position 33*i says whether cell i exists;
+// positions 33*i+1..33*i+32 are its U32 bits, high first. Borrows the key;
+// the row hands the original owned key back beside the Bool.
+INLINE bool str_bit_peek(Env e, Term s, Nat pos) {
+  StrParts p = str_peek(e, s);
+  u64 ci = pos / 33, off = pos % 33;
+  if (ci >= p.len) { return false; }
+  return off == 0 || ((str_at_peek(e, p, (u32)ci) >> (32 - off)) & 1) != 0;
 }
 
 INLINE Term str_end_take(Env e, Term s, Nat n, bool take) {
