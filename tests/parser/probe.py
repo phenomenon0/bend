@@ -18,6 +18,13 @@ def main():
             got = run(path, lane)
             records.append({"case": name, "lane": lane, **got})
             assert got["status"] == expected, records[-1]
+    # Place a two-byte scalar across the 64 KiB File.read_bytes boundary.
+    boundary = OUT / "intake-boundary.py"
+    boundary.write_bytes(b"#" + b" " * 65534 + "é\n".encode())
+    for lane in ("c", "js"):
+        got = run(boundary, lane, "lex")
+        assert got["status"] == "parsed", got
+        records.append({"case": "chunk-boundary", "lane": lane, **got})
     (OUT / "intake.json").write_text(json.dumps(records, indent=2) + "\n")
     print(f"Intake/exit-1: {len(records)}/{len(records)} C/JS checks")
 

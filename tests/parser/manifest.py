@@ -20,7 +20,11 @@ def paths(tier):
         dirs[:] = sorted(d for d in dirs if d not in {".git", ".venv", "venv", "node_modules", "site-packages", "_out", "__pycache__"}
                          and not (Path(root) / d).is_symlink() and Path(root) / d != FORBIDDEN)
         found.extend(Path(root) / f for f in sorted(files) if f.endswith(".py"))
-    return sorted(set(found))
+    ordered = sorted(set(found))
+    if tier == "lex":
+        tools = sorted(TOOLS.glob("*.py"))
+        return tools + [p for p in ordered if p not in tools]
+    return ordered
 
 
 def manifest(tier="1", limit=None):
