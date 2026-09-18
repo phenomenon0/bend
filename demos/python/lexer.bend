@@ -127,7 +127,7 @@ def op(+st: State, +scan: C.Scan) -> Result<&2, &2, S.Error, State>:
       S.choose(Result<&2, &2, S.Error, State>, String.contains("+-*/%@&|^~<>=:;,.!", SCon{c, ""}) && Bool.not(String.eq(raw, "!")), u =>
         Done{emit(st, "OP", scan)}, u => fail(lo, "invalid character"))))
 
-def step(+st: State) -> Result<&2, &2, S.Error, State>:
+def step_with(+st: State, names: String -> S.Pos -> C.Scan, numbers: String -> S.Pos -> C.Scan) -> Result<&2, &2, S.Error, State>:
   State{+rest, +pos, levels, +brackets, +bol, logical, out, done} = st
   +h = C.head(rest)
   S.choose(Result<&2, &2, S.Error, State>, String.is_empty(rest), u => eof(st), u =>
@@ -148,10 +148,18 @@ def step(+st: State) -> Result<&2, &2, S.Error, State>:
                   token : C.Scan <- C.quoted_start(rest, pos, "")
                   return emit(st, "STRING", token), u =>
                 S.choose(Result<&2, &2, S.Error, State>, Char.is_digit(h) || (Char.is_eq(h, '.') && Char.is_digit(C.head(String.drop(rest, 1n)))), u =>
-                  Done{emit(st, "NUMBER", C.number(rest, 0n, pos, "", C.Scan{"", rest, pos}))}, u =>
+                  Done{emit(st, "NUMBER", numbers(rest, pos))}, u =>
                   S.choose(Result<&2, &2, S.Error, State>, C.word(h), u =>
-                    name(st, C.span(rest, 0n, pos, "")), u =>
+                    name(st, names(rest, pos)), u =>
                     op(st, C.take(rest, String.length(op_text(rest)), pos, "")))))))))))
+
+# The default remains the independent hand scanner. P3 injects recognizers
+# only from the measurement harness; layout/string/operator logic is shared.
+def hand_number(+s: String, +p: S.Pos) -> C.Scan:
+  C.number(s, 0n, p, "", C.Scan{"", s, p})
+
+def step(st: State) -> Result<&2, &2, S.Error, State>:
+  step_with(st, s => p => C.span(s, 0n, p, ""), s => p => hand_number(s, p))
 
 def finished(s: State) -> Bool:
   State{rest, pos, levels, brackets, bol, logical, out, done} = s
