@@ -6,6 +6,10 @@
 # gives it, then a timed one. A lane that cannot build fails that lane only.
 set -u
 cd "$(dirname "$0")/.."
+# Keep the 16-result f64 gate stable; strings have their own four-lane suite.
+if [ "${1:-}" = "--strings" ]; then
+  exec bash tests/strings/run.sh
+fi
 BEND="bun bend2/main.ts"
 pass=0
 fail=0
