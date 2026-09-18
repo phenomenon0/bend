@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # The ttok ledger. Upstream caps (gates/repo.ts): base.bend 24000, bend.ts
-# 41000, comp.ts 61000, main.ts 10000, each test 16000. The F64 patch adds
-# +1,078 to base and +1,656 to comp, so it lands with those two caps bumped
-# to the next round thousand -- the numbers checked here.
+# 41000, comp.ts 61000, main.ts 10000, each test 16000. First-class strings
+# land at 27,844 base tokens and 74,981 compiler tokens; their caps are the
+# next round thousand. The benchmark oracle also has its planned 1,200 cap.
 set -u
 cd "$(dirname "$0")/.."
 export PYTHONWARNINGS=ignore
@@ -18,11 +18,15 @@ check() {
     rc=1
   fi
 }
-check bend2/base.bend 25000
+check bend2/base.bend 28000
 check bend2/bend.ts 41000
-check bend2/comp.ts 63000
+check bend2/comp.ts 75000
 check bend2/main.ts 10000
-for t in tests/f64/*.bend; do
+for t in tests/f64/*.bend tests/strings/*.bend; do
+  if [ "$t" = tests/strings/bench_words.bend ]; then
+    check "$t" 1200
+    continue
+  fi
   check "$t" 16000
 done
 exit $rc
