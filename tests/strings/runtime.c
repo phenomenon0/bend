@@ -324,6 +324,66 @@ static void fault(Env e, const char* op, int after) {
   }
 }
 
+// Structural acceptance at the benchmark's input sizes. Live block counts
+// include payload/count/list allocations, so bounding all blocks also bounds
+// descriptors. This probe does not substitute for the compiled Bend timings.
+static void acceptance(Env e) {
+  const char unit[] = "  alpha beta\n gamma\t\n";
+  for (u32 scale = 0; scale < 3; scale++) {
+    u32 n = 1u << (20 + 3 * scale);
+    u64 allocs = track_allocs;
+    StrParts p = str_alloc(e, n);
+    for (u32 i = 0; i < n; i++) { str_put(e, p, i, unit[i % 21]); }
+    Term s = str_view_owned(e, p);
+    u64 source_allocs = track_allocs - allocs;
+    assert(source_allocs <= 4 && track_live <= 4);
+
+    u64 reads = track_str_reads, copies = track_copy_cells;
+    allocs = track_allocs;
+    assert(str_length_take(e, term_keep(e, s)) == n);
+    Term c = str_get_take(e, term_keep(e, s), n - 1, false);
+    term_sink(e, c);
+    Term view = str_slice_take(e, term_keep(e, s), n - 3, n);
+    assert(str_peek(e, view).data == p.data);
+    term_sink(e, view);
+    u64 access_allocs = track_allocs - allocs;
+    assert(track_str_reads - reads == 1 && track_copy_cells == copies);
+    assert(access_allocs <= 4);
+
+    u64 payloads = track_payload_words;
+    track_peak_live = track_live;
+    while (str_peek(e, s).len) {
+      Term block = str_slice_take(e, term_keep(e, s), 0, 21 * 256);
+      s = str_slice_take(e, s, 21 * 256, STR_LIMIT);
+      Term fields = str_split_take(e, block, '\n', false);
+      while (term_aux(fields) == CID_CON) {
+        Term f[2]; spare_free(e, 1, ctr_take(e, fields, 2, f));
+        fields = f[1];
+        Term trimmed = str_trim_take(e, f[0], 3);
+        StrParts t = str_peek(e, trimmed);
+        assert(!t.len || t.data == p.data);
+        Term words = str_split_take(e, trimmed, 0, true);
+        while (term_aux(words) == CID_CON) {
+          Term w[2]; spare_free(e, 1, ctr_take(e, words, 2, w));
+          words = w[1];
+          assert(str_peek(e, w[0]).data == p.data);
+          term_sink(e, w[0]);
+        }
+        term_sink(e, words);
+      }
+      term_sink(e, fields);
+    }
+    term_sink(e, s);
+    assert(track_live == 0 && track_peak_live < 2100);
+    assert(track_payload_words == payloads && track_copy_cells == copies);
+    printf("Structural %u cells: source allocations=%llu; length/get/slice "
+      "reads=%llu allocations=%llu; scan peak live blocks=%llu; payload copies=0\n",
+      n, (unsigned long long)source_allocs,
+      (unsigned long long)(track_str_reads - reads),
+      (unsigned long long)access_allocs, (unsigned long long)track_peak_live);
+  }
+}
+
 int main(int argc, char** argv) {
   Corpus h = corpus_setup(false, 1, 0);
   Env e = {h, ALC[0]};
@@ -347,6 +407,7 @@ int main(int argc, char** argv) {
   adversarial(e);
   new_ownership(e);
   bulk_builders(e);
+  acceptance(e);
   roundtrip(e);
   utf8_cases(e);
   assert(!err_seen(h) && track_live == 0);

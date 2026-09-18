@@ -39,6 +39,7 @@ TRACK = r'''
 #define TRACK_SIZE (1u << 18)
 static struct { Loc loc; Cls cls; bool live; } tracked[TRACK_SIZE];
 static u64 track_live, track_bytes, track_allocs, track_payload_words;
+static u64 track_peak_live, track_copy_cells;
 static u64 track_str_reads, track_kmp_builds, track_kmp_live;
 static int track_fail_after = -1;
 static u32 track_slot(Loc l) {
@@ -55,6 +56,7 @@ INLINE Loc heap_alloc(Env e, Cls cls) {
     assert(!tracked[i].live);
     tracked[i].loc = l; tracked[i].cls = cls; tracked[i].live = true;
     track_live++; track_bytes += 8ull << cls; track_allocs++;
+    if (track_live > track_peak_live) { track_peak_live = track_live; }
   }
   return l;
 }
@@ -109,6 +111,8 @@ with tempfile.TemporaryDirectory(prefix="bend-strings-runtime-") as temp:
     c = c.replace("Loc l = heap_alloc(e, buf_wcls(c));", "track_payload_words += 1ull << buf_wcls(c);\n  Loc l = heap_alloc(e, buf_wcls(c));")
     c = c.replace("INLINE u32 str_at_peek(Env e, StrParts p, u32 i) {",
                   "INLINE u32 str_at_peek(Env e, StrParts p, u32 i) { track_str_reads++;")
+    c = c.replace("INLINE void str_copy_cells(Env e, StrParts dst, u32 at, StrParts src) {",
+                  "INLINE void str_copy_cells(Env e, StrParts dst, u32 at, StrParts src) { track_copy_cells += src.len;")
     c = c.replace("k.table = table;", "k.table = table; track_kmp_builds++; track_kmp_live++;")
     c = c.replace("k->table = 0;", "track_kmp_live--; k->table = 0;")
     # Scratch is reclaimed even with a sticky error; account for its direct
