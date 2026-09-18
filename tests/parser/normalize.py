@@ -140,7 +140,8 @@ def differences(want, got, path="$"):
 SUPPORTED = set("""Module Constant Name Load Store Del Attribute Subscript Tuple List Starred
 Set Dict UnaryOp UAdd USub Invert Not BinOp Add Sub Mult MatMult Div FloorDiv Mod Pow
 LShift RShift BitOr BitXor BitAnd BoolOp And Or Compare Eq NotEq Lt LtE Gt GtE Is IsNot In NotIn
-IfExp Call keyword Assign AugAssign Expr If While Return Pass Break Continue""".split())
+IfExp Call keyword Assign AugAssign Expr If While Return Pass Break Continue
+Lambda arguments arg FunctionDef For Global Nonlocal Delete Assert Raise Try ExceptHandler With withitem""".split())
 
 
 def supported(tree, source=None):

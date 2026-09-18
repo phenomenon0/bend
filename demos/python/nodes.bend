@@ -106,43 +106,67 @@ def dict(keys: S.Json, values: S.Json, lo: S.Pos, hi: S.Pos) -> S.Expr:
 
 # Only target containers and Starred recurse. Attribute.value and Subscript's
 # value/slice stay Load; blindly rewriting every descendant ctx is incorrect.
-def target_ok(j: S.Json, +mode: String) -> Bool:
+def target_ok(j: S.Json, +mode: String, +star: Bool) -> Bool:
   match j:
     case S.JObj{+fs}:
       +tag = string(get(fs, "tag"))
       (String.eq(tag, "Name") || String.eq(tag, "Attribute") || String.eq(tag, "Subscript") ||
-        String.eq(tag, "List") || String.eq(tag, "Tuple") || String.eq(tag, "Starred")) && target_ok(fs, tag)
+        String.eq(tag, "List") || String.eq(tag, "Tuple") || (star && String.eq(tag, "Starred"))) && target_ok(fs, tag, star)
     case S.JField{+key, value, rest}:
       S.choose(Bool, (String.eq(key, "elts") && (String.eq(mode, "Tuple") || String.eq(mode, "List"))) ||
-        (String.eq(key, "value") && String.eq(mode, "Starred")), u => target_ok(value, ""), u => True{}) && target_ok(rest, mode)
+        (String.eq(key, "value") && String.eq(mode, "Starred")), u => target_ok(value, "", star), u => True{}) && target_ok(rest, mode, star)
     case S.JArr{items}:
-      target_ok(items, "")
+      target_ok(items, "", star)
     case S.JItem{h, t}:
-      target_ok(h, "") && target_ok(t, "")
+      target_ok(h, "", star) && target_ok(t, "", star)
     case _:
       True{}
 
-def target_ctx(j: S.Json, +mode: String) -> S.Json:
+def target_ctx(j: S.Json, +mode: String, +ctx: S.Json) -> S.Json:
   match j:
     case S.JObj{+fs}:
-      S.JObj{target_ctx(fs, string(get(fs, "tag")))}
+      S.JObj{target_ctx(fs, string(get(fs, "tag")), ctx)}
     case S.JField{+key, +value, rest}:
-      S.JField{key, S.choose(S.Json, String.eq(key, "ctx"), u => S.context(S.Store{}), u =>
+      S.JField{key, S.choose(S.Json, String.eq(key, "ctx"), u => ctx, u =>
         S.choose(S.Json, (String.eq(key, "elts") && (String.eq(mode, "Tuple") || String.eq(mode, "List"))) ||
-          (String.eq(key, "value") && String.eq(mode, "Starred")), u => target_ctx(value, ""), u => value)), target_ctx(rest, mode)}
+          (String.eq(key, "value") && String.eq(mode, "Starred")), u => target_ctx(value, "", ctx), u => value)), target_ctx(rest, mode, ctx)}
     case S.JArr{items}:
-      S.JArr{target_ctx(items, "")}
+      S.JArr{target_ctx(items, "", ctx)}
     case S.JItem{h, t}:
-      S.JItem{target_ctx(h, ""), target_ctx(t, "")}
+      S.JItem{target_ctx(h, "", ctx), target_ctx(t, "", ctx)}
     case _:
       j
 
-def target(+e: S.Expr, +aug: Bool) -> Result<&2, &2, S.Error, S.Json>:
+# `del` targets are assignment targets minus Starred, in Del context. A bare
+# top-level `*a = b` is the compiler's error, not ast.parse's: accepted here.
+def target_with(+e: S.Expr, +aug: Bool, +del: Bool) -> Result<&2, &2, S.Error, S.Json>:
   +j = S.expr(e)
   +t = get_tag(e)
-  S.choose(Result<&2, &2, S.Error, S.Json>, target_ok(j, "") && Bool.not(String.eq(t, "Starred")) &&
+  S.choose(Result<&2, &2, S.Error, S.Json>, target_ok(j, "", Bool.not(del)) &&
     (Bool.not(aug) || String.eq(t, "Name") || String.eq(t, "Attribute") || String.eq(t, "Subscript")), u =>
-    Done{target_ctx(j, "")}, u => Fail{S.PErr{S.Syntax{}, get_begin(e), "invalid assignment target"}})
+    Done{target_ctx(j, "", S.context(Bool.pick(S.Ctx, del, S.Del{}, S.Store{})))}, u =>
+    Fail{S.PErr{S.Syntax{}, get_begin(e), Bool.pick(String, del, "invalid del target", "invalid assignment target")}})
+
+def target(e: S.Expr, aug: Bool) -> Result<&2, &2, S.Error, S.Json>:
+  target_with(e, aug, False{})
+
+def is_grouped(e: S.Expr) -> Bool:
+  S.Expr{tag, fs, lo, hi, cover, grouped} = e
+  grouped
+
+def elts(j: S.Json) -> S.Json:
+  match j:
+    case S.JObj{fs}:
+      get(fs, "elts")
+    case _:
+      S.JArr{S.JEnd{}}
+
+# `del a, b` deletes two targets; `del (a, b)` deletes one Tuple.
+def del_targets(+e: S.Expr) -> Result<&2, &2, S.Error, S.Json>:
+  +bare = String.eq(get_tag(e), "Tuple") && Bool.not(is_grouped(e))
+  do Result<&2, &2, S.Error, S.Json>:
+    +j : S.Json <- target_with(e, False{}, True{})
+    return S.choose(S.Json, bare, u => elts(j), u => S.JArr{S.JItem{j, S.JEnd{}}})
 
 def block(items: S.Json, +end: S.Pos) -> S.Expr:
   node("$block", items, end, end)
@@ -180,3 +204,92 @@ def has_unpack(xs: S.Json) -> Bool:
       null(get(fs, "arg")) || has_unpack(tail)
     case _:
       False{}
+
+# P4 builders. `$json` and `$none` carry location-free values (arguments,
+# withitem lists, an absent optional) through the S.Expr-typed parser result.
+def plain(tag: String, fields: S.Json) -> S.Json:
+  S.JObj{S.JField{"tag", S.JStr{tag}, fields}}
+
+def carry(j: S.Json) -> S.Expr:
+  node("$json", S.JField{"value", j, S.JEnd{}}, S.Pos{1n, 0n}, S.Pos{1n, 0n})
+
+def carried(e: S.Expr) -> S.Json:
+  get(get_fields(e), "value")
+
+def none() -> S.Expr:
+  node("$none", S.JEnd{}, S.Pos{1n, 0n}, S.Pos{1n, 0n})
+
+def is_none(e: S.Expr) -> Bool:
+  String.eq(get_tag(e), "$none")
+
+def opt(+e: S.Expr) -> S.Json:
+  S.choose(S.Json, is_none(e), u => S.JNull{}, u => S.expr(e))
+
+def empty(j: S.Json) -> Bool:
+  match j:
+    case S.JEnd{}:
+      True{}
+    case _:
+      False{}
+
+def arg(+id: S.Tok, note: S.Expr, end: S.Pos) -> S.Json:
+  S.expr(node("arg", S.JField{"arg", S.JStr{P.tok_text(id)}, S.JField{"annotation", opt(note), S.JField{"type_comment", S.JNull{}, S.JEnd{}}}}, P.tok_start(id), end))
+
+# Parameter lists accumulate reversed; the parser's phase decides the slot.
+type Sig is Data:
+  Sig{posonly: S.Json, args: S.Json, vararg: S.Json, kwonly: S.Json, kwdefs: S.Json, kwarg: S.Json, defaults: S.Json}
+
+def sig_new() -> Sig:
+  Sig{S.JEnd{}, S.JEnd{}, S.JNull{}, S.JEnd{}, S.JEnd{}, S.JNull{}, S.JEnd{}}
+
+def sig_has_args(sig: Sig) -> Bool:
+  Sig{po, args, va, ko, kd, kr, ds} = sig
+  Bool.not(empty(args))
+
+def sig_slash(sig: Sig) -> Sig:
+  Sig{po, args, va, ko, kd, kr, ds} = sig
+  Sig{args, S.JEnd{}, va, ko, kd, kr, ds}
+
+def sig_vararg(sig: Sig, a: S.Json) -> Sig:
+  Sig{po, args, va, ko, kd, kr, ds} = sig
+  Sig{po, args, a, ko, kd, kr, ds}
+
+def sig_kwarg(sig: Sig, a: S.Json) -> Sig:
+  Sig{po, args, va, ko, kd, kr, ds} = sig
+  Sig{po, args, va, ko, kd, a, ds}
+
+def sig_add(sig: Sig, +a: S.Json, +dflt: S.Expr, kwonly: Bool, pos: S.Pos) -> Result<&2, &2, S.Error, Sig>:
+  Sig{+po, +args, +va, +ko, +kd, +kr, +ds} = sig
+  S.choose(Result<&2, &2, S.Error, Sig>, kwonly, u => Done{Sig{po, args, va, S.JItem{a, ko}, S.JItem{opt(dflt), kd}, kr, ds}}, u =>
+    S.choose(Result<&2, &2, S.Error, Sig>, Bool.not(is_none(dflt)), u => Done{Sig{po, S.JItem{a, args}, va, ko, kd, kr, S.JItem{S.expr(dflt), ds}}}, u =>
+      S.choose(Result<&2, &2, S.Error, Sig>, empty(ds), u => Done{Sig{po, S.JItem{a, args}, va, ko, kd, kr, ds}}, u =>
+        Fail{S.PErr{S.Syntax{}, pos, "non-default argument follows default argument"}})))
+
+def arguments(sig: Sig) -> S.Json:
+  Sig{po, args, va, ko, kd, kr, ds} = sig
+  plain("arguments", S.JField{"posonlyargs", arr(po), S.JField{"args", arr(args), S.JField{"vararg", va, S.JField{"kwonlyargs", arr(ko),
+    S.JField{"kw_defaults", arr(kd), S.JField{"kwarg", kr, S.JField{"defaults", arr(ds), S.JEnd{}}}}}}}})
+
+def lambda(start: S.Pos, args: S.Json, +body: S.Expr) -> S.Expr:
+  node("Lambda", S.JField{"args", args, S.JField{"body", S.expr(body), S.JEnd{}}}, start, get_finish(body))
+
+def function(id: S.Tok, args: S.Json, +body: S.Expr, decorators: S.Json, returns: S.Expr, start: S.Pos) -> S.Expr:
+  node("FunctionDef", S.JField{"name", S.JStr{P.tok_text(id)}, S.JField{"args", args, S.JField{"body", S.JArr{get_fields(body)},
+    S.JField{"decorator_list", decorators, S.JField{"returns", opt(returns), S.JField{"type_comment", S.JNull{}, S.JEnd{}}}}}}}, start, get_finish(body))
+
+def loop(target: S.Json, iter: S.Expr, body: S.Expr, +other: S.Expr, start: S.Pos) -> S.Expr:
+  node("For", S.JField{"target", target, S.JField{"iter", S.expr(iter), S.JField{"body", S.JArr{get_fields(body)},
+    S.JField{"orelse", S.JArr{get_fields(other)}, S.JField{"type_comment", S.JNull{}, S.JEnd{}}}}}}, start, get_finish(other))
+
+def handler(kind: S.Expr, name: S.Json, +body: S.Expr, start: S.Pos) -> S.Expr:
+  node("ExceptHandler", S.JField{"type", opt(kind), S.JField{"name", name, S.JField{"body", S.JArr{get_fields(body)}, S.JEnd{}}}}, start, get_finish(body))
+
+def attempt(body: S.Expr, handlers: S.Json, other: S.Expr, +final: S.Expr, start: S.Pos) -> S.Expr:
+  node("Try", S.JField{"body", S.JArr{get_fields(body)}, S.JField{"handlers", arr(handlers), S.JField{"orelse", S.JArr{get_fields(other)},
+    S.JField{"finalbody", S.JArr{get_fields(final)}, S.JEnd{}}}}}, start, get_finish(final))
+
+def withitem(ctx: S.Expr, vars: S.Json) -> S.Json:
+  plain("withitem", S.JField{"context_expr", S.expr(ctx), S.JField{"optional_vars", vars, S.JEnd{}}})
+
+def context(items: S.Json, +body: S.Expr, start: S.Pos) -> S.Expr:
+  node("With", S.JField{"items", items, S.JField{"body", S.JArr{get_fields(body)}, S.JField{"type_comment", S.JNull{}, S.JEnd{}}}}, start, get_finish(body))

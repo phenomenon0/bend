@@ -46,7 +46,11 @@ def main():
         value = expression(rng, rng.randrange(1, 5))
         sources.append(rng.choice([value, "x = " + value, "x += " + value,
                                   "if " + value + ":\n    pass\nelse:\n    return x\n",
-                                  "while " + value + ":\n    break\n"]))
+                                  "while " + value + ":\n    break\n",
+                                  "def f(a, b=" + value + ", *c, d: " + value + " = 1, **e) -> " + value + ":\n    return lambda x, y=" + value + ": x;\n",
+                                  "@" + value + "\ndef f():\n    for a, *b in " + value + ", c:\n        del a, b[" + value + "]\n    else:\n        assert " + value + ", a\n",
+                                  "try:\n    raise " + value + " from " + value + "\nexcept " + value + " as e:\n    global g\nelse:\n    pass\nfinally:\n    x = 1\n",
+                                  "with (" + value + ") as a, " + value + ":\n    pass\nwith (" + value + " as b, c):\n    nonlocal n\n"]))
     # Long lists/chains and nesting deliberately exercise non-consuming transitions.
     for n in [1, 2, 10, 50, 100, 200]:
         sources += ["(" * n + "a" + ")" * n, "[" * n + "a" + "]" * n,

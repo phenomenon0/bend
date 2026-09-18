@@ -85,7 +85,7 @@ def unsupported(-A: Data, msg: String) -> M(A):
 
 def expect_token(+tok: S.Tok, +word: String) -> M(S.Tok):
   S.choose(M(S.Tok), is_text(tok, word) || is_kind(tok, word), u => take, u =>
-    S.choose(M(S.Tok), is_text(tok, "for") || is_text(tok, "async") || is_text(tok, ":=") || is_text(tok, ":"),
+    S.choose(M(S.Tok), is_text(tok, "for") || is_text(tok, "async") || is_text(tok, ":="),
       u => unsupported(S.Tok, "production " ++ tok_text(tok)), u => syntax(S.Tok, "expected " ++ word)))
 
 def expect(word: String) -> M(S.Tok):
@@ -109,3 +109,19 @@ def lift(-A: Data, r: Result<&2, &2, S.Error, A>, s: State) -> Result<&2, &2, S.
       Done{Reply{x, s}}
     case Fail{e}:
       Fail{e}
+
+# One-statement backtracking (parenthesized `with` items): the saved state also
+# restores fuel, so a failed first alternative costs nothing on the second.
+def or_else(-A: Data, r: Result<&2, &2, S.Error, Reply<A>>, other: M(A), s: State) -> Result<&2, &2, S.Error, Reply<A>>:
+  match r:
+    case Done{x}:
+      Done{x}
+    case Fail{e}:
+      other(s)
+
+def either_go(-A: Data, first: M(A), other: M(A), s: State) -> Result<&2, &2, S.Error, Reply<A>>:
+  State{+ts, +last, +fuel} = s
+  or_else(A, first(State{ts, last, fuel}), other, State{ts, last, fuel})
+
+def either(-A: Data, first: M(A), other: M(A)) -> M(A):
+  either_go(A, first, other)

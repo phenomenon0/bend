@@ -109,6 +109,48 @@ def literal_control():
     return bool(compare(a, b)[0])
 
 
+def segments(rows, label):
+    # Imports and classes refuse nearly every real file whole, so the evidence is per statement:
+    # every top-level or class-body statement the oracle tags supported, whole lines verbatim
+    # (class members under an `if 1:` header, columns kept), one synthetic file per source file.
+    import ast
+    out = []
+    for n, row in enumerate(rows):
+        if row.get("exclusion"):
+            continue
+        source = intake(Path(row["path"]).read_bytes())
+        try:
+            tree = ast.parse(source)
+        except (SyntaxError, RecursionError, MemoryError, ValueError):
+            continue
+        lines, parts = source.splitlines(True), []
+
+        def walk(body, floor, wrapped):
+            spans = [(min([s.lineno] + [d.lineno for d in getattr(s, "decorator_list", [])]), s.end_lineno) for s in body]
+            for i, (stmt, (lo, hi)) in enumerate(zip(body, spans)):
+                alone = lo > (spans[i - 1][1] if i else floor) and (i + 1 == len(body) or hi < spans[i + 1][0])
+                if isinstance(stmt, ast.ClassDef):
+                    head = max([stmt.lineno] + [x.end_lineno for x in stmt.bases + stmt.keywords])
+                    walk(stmt.body, head, True)
+                elif alone:
+                    text = "".join(lines[lo - 1:hi])
+                    text += "" if text.endswith("\n") else "\n"
+                    try:
+                        ok = supported(stmt, text)
+                    except Exception:
+                        ok = False
+                    if ok:
+                        parts.append(("if 1:\n" if wrapped else "") + text)
+
+        walk(tree.body, 0, False)
+        if parts:
+            path = OUT / f"seg-{label}-{n:04}.py"
+            path.write_text("".join(parts))
+            out.append({"path": str(path), "origin": row["path"], "exclusion": None, "segments": len(parts),
+                        "bytes": len("".join(parts).encode())})
+    return out
+
+
 def evaluate(rows, label):
     build()
     pin()
@@ -145,6 +187,8 @@ def evaluate(rows, label):
                   structural_diffs=sum(len(r.get("structural_diffs", [])) for r in records),
                   location_diffs=sum(len(r.get("location_diffs", [])) for r in records),
                   supported_refusals=sum(r.get("supported", False) and r["status"] != "parsed" for r in records))
+    if any("segments" in r for r in records):
+        counts.update(segments=sum(r.get("segments", 0) for r in records), bytes=sum(r.get("bytes", 0) for r in records))
     times = sorted(r["ms"] for r in records if "ms" in r)
     counts["error"] = counts["syntax"]
     counts["supported_parsed"] = sum(r.get("supported", False) and r["status"] == "parsed" for r in records)
@@ -164,12 +208,20 @@ if __name__ == "__main__":
     p = argparse.ArgumentParser()
     p.add_argument("--self-test", action="store_true")
     p.add_argument("--corpus", choices=["1", "2", "3"])
+    p.add_argument("--segments", action="store_true", help="per-statement evidence: the supported statements of each corpus file")
+    p.add_argument("--skip", type=int, default=0)
+    p.add_argument("--files", type=int)
     p.add_argument("--fixtures", choices=["schema", "expressions", "statements", "all"])
     a = p.parse_args()
     if a.self_test or a.fixtures == "schema":
         self_test()
     elif a.corpus:
-        raise SystemExit(0 if evaluate(manifest(a.corpus), "tier-" + a.corpus) else 1)
+        rows, label = manifest(a.corpus), "tier-" + a.corpus
+        if a.skip or a.files:
+            rows, label = rows[a.skip:a.skip + a.files if a.files else None], f"{label}-{a.skip}"
+        if a.segments:
+            rows, label = segments(rows, label), label + "-segments"
+        raise SystemExit(0 if evaluate(rows, label) else 1)
     else:
         rows = []
         for i, source in enumerate(EXPRESSIONS if a.fixtures == "expressions" else STATEMENTS if a.fixtures == "statements" else FIXTURES + EXPRESSIONS + STATEMENTS):
