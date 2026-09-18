@@ -90,3 +90,14 @@ So: deterministic pass on HEAD, non-deterministic on R2, no correlation with CPU
 literal. The overflow is a JS stack-depth limit in the checker's recursion that the larger book makes likelier to hit;
 I could not pin the mechanism further without instrumenting `bend2/bend.ts`, which is prohibited for this lane.
 Reported as-is, not masked: the strings battery is **81/85**, not 85/85, on this branch.
+
+## Orchestrator amendments (post-report)
+
+- `gates/repo.ts`: base cap 28,000 → 41,000 (measured 40,017). Module split deferred to the R6
+  review — natives bind by name through base definitions; a non-base module would need a new
+  compiler mechanism (not worth it for layout alone).
+- `tests/strings/deep.bend`: repeat counts rewritten as `Nat.mul(64n, 64n)` — value-identical,
+  payload unchanged (44 cp × 4096 = 180,224 bytes). Root cause of the checker flake: the `4096n`
+  literal is a 4,096-deep node chain against the JS stack limit — non-deterministic, load- and
+  book-size-dependent; class already tracked upstream as #779/#791 (evidence comment added to
+  #779). The rewritten fixture passed 5/5 deterministically (123–135 s each, full workload).
