@@ -1,4 +1,4 @@
-# Python syntax service: P0–P2
+# Python syntax service: P0–P4
 
 `main.bend` reads the path in `PY_SOURCE`. `PY_MODE=lex` prints tokens;
 `PY_MODE=stats` reports tokens and consumed parser fuel; the default prints
@@ -26,11 +26,15 @@ are frozen from the pinned CPython 3.11.15 Unicode database. The parser defers
 Unicode identifier normalization and f-strings to later slices.
 
 The parser supports expressions, calls, attributes, subscripts without slices,
-tuple/list/set/dict displays and unpacking, assignment and augmented assignment,
-expression statements, `if/elif/else`, `while/else`, `return`, `pass`, `break`,
-and `continue`. It follows `ast.parse`'s syntax acceptance rather than Python
-compilation's additional scope checks. Functions, imports, classes, loops over
-iterables, comprehensions, annotations, slices, walrus, and other later-slice
+tuple/list/set/dict displays and unpacking, `lambda`, assignment and augmented
+assignment, expression statements, `if/elif/else`, `while/else`, `for/else`,
+`def` with the full parameter grammar, annotations and decorators,
+`try/except/else/finally`, `with` (both item-list forms), `global`, `nonlocal`,
+`del`, `assert`, `raise`, `return`, `pass`, `break`, and `continue`. It follows
+`ast.parse`'s syntax acceptance rather than Python compilation's additional
+scope checks (`*a = 1` parses). Imports, classes, `async`/`await`, `yield`,
+`except*`, comprehensions, annotated assignment, slices, walrus, non-ASCII
+identifiers, and other later-slice
 productions report `Unsupported`. Syntax failures and limits have distinct
 `Syntax` and `Limit` kinds. Failure prints `error KIND LINE COL MESSAGE` and
 exits 1. Bracket nesting is bounded at the oracle's 200; 201 is `Limit`.
@@ -50,14 +54,17 @@ conversion in Bend. `normalize.py` separates every location from structural
 comparison and maps CPython UTF-8 byte columns to code points per LF-delimited
 physical line. Trivia is dropped; there is no span sampling.
 
-One directly recursive `go` dispatches 20 grammar modes with precedence
+One directly recursive `go` dispatches 32 grammar modes with precedence
 climbing. Every mode entry decrements a residual global budget. The first
 structurally decreasing Nat proves termination independently of the residual
-budget. Sequential parses thread the residual state, never replenish it.
-The default is `32 * (token_count + 1)`: a conservative bound for the 20-mode
+budget. Sequential parses thread the residual state, never replenish it
+(except the `with (` header retry below).
+The default is `32 * (token_count + 1)`: a conservative bound for the
 dispatch graph plus its repeated Rest/collection exits. Every cycle consumes
-a token; a path between token consumptions enters at most the 20 modes plus
-their closing Rest/collection dispatches, fewer than 32. The EOF allowance
+a token, and no chain of modes between two token consumptions reaches 32
+dispatches (measured highwater: 3.25 per token). The one backtracking point,
+the `with (` header, restarts its second alternative from the saved budget, so
+a header is metered at most twice; bodies are outside the choice. The EOF allowance
 covers the final Block entry. The deterministic fuzz harness measures actual
 consumption and rejects any `Limit` on an oracle-accepted generated input.
 This is an implementation bound with regression evidence, not a mechanized

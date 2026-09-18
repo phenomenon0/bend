@@ -39,7 +39,7 @@ def pin():
             "RecursionError/MemoryError/timeouts are oracle failures, never parser verdicts",
             "Constant value = repr(literal_eval(raw)); implicit strings wrapped in parentheses",
             "type_comments=False; trivia and incidental parentheses are omitted",
-            "P2 does not support f-strings; oracle JoinedStr text Constant segments use repr(node.value) because their source spans cover the whole f-string",
+            "f-strings are unsupported (P4); oracle JoinedStr text Constant segments use repr(node.value) because their source spans cover the whole f-string",
         ],
     }
     (OUT / "oracle.json").write_text(json.dumps(data, indent=2) + "\n")
