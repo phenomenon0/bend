@@ -34,6 +34,10 @@ pushed to upstream; `our` remote = `phenomenon0/bend`.
    - Benchmarks: `tests/strings/bench.sh` (frozen-cons baseline vs ours).
 5. **Push** (when asked): `git push our omen`; workshop history kept under
    `refs/heads/archive/*` (`archive/strings`, `archive/f64`).
+   **Fork mirror:** keep the fork's `main` equal to upstream after each fetch —
+   `git push our refs/remotes/origin/main:refs/heads/main` (add
+   `--force-with-lease=refs/heads/main:<old>` when his lineage was rewritten).
+   The GitHub "behind" banner concerns only this mirror; our line is `omen`.
 6. **Publish upstream** (deliberate, user-approved only): his pipeline is
    close-and-fold — the artifact here is shaped so a hand-port or a
    "Reported by" fix is mechanical.
