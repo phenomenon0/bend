@@ -24,27 +24,30 @@ def table() -> Map<&2, Nat>:
     Map.set(&2, Nat, Map.set(&2, Nat, Map.new(&2, Nat), p ++ "x", 1n),
     p ++ "y", 2n), p, 3n), "", 4n), "a\0b", 5n), "😀", 6n)
 
-def probe.pop(ks: List<&2, String>, x: Nat, y: Nat, h1: Bool, h2: Bool, r: Map<&2, Nat> & Maybe<&2, Nat>) -> List<&2, String> & (Nat & (Nat & (Bool & (Bool & (Maybe<&2, Nat> & List<&2, String>))))):
+def Probe() -> Type:
+  List<&2, String> & (Nat & (Nat & (Bool & (Bool & (Maybe<&2, Nat> & List<&2, String>)))))
+
+def probe.pop(ks: List<&2, String>, x: Nat, y: Nat, h1: Bool, h2: Bool, r: Map<&2, Nat> & Maybe<&2, Nat>) -> Probe():
   (m, q) = r
   (ks, (x, (y, (h1, (h2, (q, Map.keys(&2, Nat, m)))))))
 
-def probe.has2(ks: List<&2, String>, x: Nat, y: Nat, h1: Bool, r: Map<&2, Nat> & Bool) -> List<&2, String> & (Nat & (Nat & (Bool & (Bool & (Maybe<&2, Nat> & List<&2, String>))))):
+def probe.has2(ks: List<&2, String>, x: Nat, y: Nat, h1: Bool, r: Map<&2, Nat> & Bool) -> Probe():
   (m, h2) = r
   probe.pop(ks, x, y, h1, h2, Map.pop(&2, Nat, m, "a\0b"))
 
-def probe.has1(ks: List<&2, String>, x: Nat, y: Nat, r: Map<&2, Nat> & Bool) -> List<&2, String> & (Nat & (Nat & (Bool & (Bool & (Maybe<&2, Nat> & List<&2, String>))))):
+def probe.has1(ks: List<&2, String>, x: Nat, y: Nat, r: Map<&2, Nat> & Bool) -> Probe():
   (m, h1) = r
   probe.has2(ks, x, y, h1, Map.has(&2, Nat, m, "😀😀"))
 
-def probe.get2(ks: List<&2, String>, x: Nat, r: Map<&2, Nat> & Nat) -> List<&2, String> & (Nat & (Nat & (Bool & (Bool & (Maybe<&2, Nat> & List<&2, String>))))):
+def probe.get2(ks: List<&2, String>, x: Nat, r: Map<&2, Nat> & Nat) -> Probe():
   (m, y) = r
   probe.has1(ks, x, y, Map.has(&2, Nat, m, ""))
 
-def probe.get1(ks: List<&2, String>, r: Map<&2, Nat> & Nat) -> List<&2, String> & (Nat & (Nat & (Bool & (Bool & (Maybe<&2, Nat> & List<&2, String>))))):
+def probe.get1(ks: List<&2, String>, r: Map<&2, Nat> & Nat) -> Probe():
   (m, x) = r
   probe.get2(ks, x, Map.get(Nat, 0n, m, long() ++ "z"))
 
-def probe(+m: Map<&2, Nat>) -> List<&2, String> & (Nat & (Nat & (Bool & (Bool & (Maybe<&2, Nat> & List<&2, String>))))):
+def probe(+m: Map<&2, Nat>) -> Probe():
   probe.get1(Map.keys(&2, Nat, m), Map.get(Nat, 0n, m, long() ++ "y"))
 
 def main() -> (List<&2, Bool> & (List<&2, Bool> & (List<&2, Bool> & List<&2, Bool>))) & (List<&1, String & Bool> & (List<&2, String> & (Nat & (Nat & (Bool & (Bool & (Maybe<&2, Nat> & List<&2, String>))))))):
