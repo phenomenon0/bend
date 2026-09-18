@@ -2116,22 +2116,58 @@ def String.split.fin(c: Char, r: List<&2, String>, cut: Bool) ->
     case True{}:
       SNil{} <> r
 
-def String.split(s: String, +sep: Char) -> List<&2, String>:
+# Accumulators keep the reference split stack bounded on large input.
+# The current field and completed fields are reversed independently.
+law String.split.acc:
+  for s: String
+  for +sep: Char
+  for +space: Bool
+  for word: String
+  for words: List<&2, String>
+  List<&2, String>
+
+def String.split.test(c: Char, sep: Char, space: Bool) -> Bool:
+  match space:
+    case False{}:
+      Char.is_eq(c, sep)
+    case True{}:
+      Char.is_space(c)
+
+def String.split.step(t: String, sep: Char, space: Bool, h: Char,
+  word: String, words: List<&2, String>, cut: Bool) -> List<&2, String>:
+  match cut:
+    case False{}:
+      String.split.acc(t, sep, space, SCon{h, word}, words)
+    case True{}:
+      String.split.acc(t, sep, space, "", String.reverse(word) <> words)
+
+def String.split.acc(s, sep, space, word, words):
   match s:
     case SNil{}:
-      [SNil{}]
+      List.reverse(&2, String, String.reverse(word) <> words)
     case SCon{+h, t}:
-      String.split.fin(h, String.split(t, sep), Char.is_eq(h, sep))
+      String.split.step(t, sep, space, h, word, words,
+        String.split.test(h, sep, space))
+
+def String.split(s: String, +sep: Char) -> List<&2, String>:
+  String.split.acc(s, sep, False{}, "", [])
 
 def String.lines(s: String) -> List<&2, String>:
   String.split(s, '\n')
 
-def String.repeat(+s: String, n: Nat) -> String:
+def String.repeat.go(n: Nat, +s: String) -> String:
   match n:
     case 0n:
       SNil{}
     case 1n+p:
-      String.append(s, String.repeat(s, p))
+      String.append(s, String.repeat.go(p, s))
+
+def String.repeat(+s: String, n: Nat) -> String:
+  match s:
+    case SNil{}:
+      SNil{}
+    case SCon{h, t}:
+      String.repeat.go(n, SCon{h, t})
 
 def String.to_upper(s: String) -> String:
   match s:
@@ -2340,11 +2376,7 @@ def String.split_on(s: String, +sep: String) -> List<&2, String>:
   String.split_on.start(s, sep, String.is_empty(sep))
 
 def String.words.cut(s: String) -> List<&2, String>:
-  match s:
-    case SNil{}:
-      [SNil{}]
-    case SCon{+h, t}:
-      String.split.fin(h, String.words.cut(t), Char.is_space(h))
+  String.split.acc(s, ' ', True{}, "", [])
 
 def String.words.keep(w: String) -> Bool:
   Bool.not(String.is_empty(w))
