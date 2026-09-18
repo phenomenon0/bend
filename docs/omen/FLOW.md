@@ -58,3 +58,6 @@ pushed to upstream; `our` remote = `phenomenon0/bend`.
 - Verification must not share a worktree with an active builder.
 - Upstream force-pushes rewrite `main`; never merge, always port.
 - ttok caps: the sizes above are *this tree's*; re-measure after every port.
+- **Proofs:** when law/proof entries enter, gate them per
+  `docs/omen/PROOF-GATE.md` — dedicated proof entry bound to shipped sources,
+  dependency-closure check for `@unsafe`, exit code ≠ verdict (audit P05–P08).
