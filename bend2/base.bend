@@ -2596,7 +2596,7 @@ def Regex.nullable(r: Re) -> Bool:
     case _:
       True{}
 
-# Anchors take no quantifier
+# Anchors take no quantifier (a group around one does, as in CPython)
 def Regex.parse.q(r: Re) -> Nat:
   match r:
     case RBol{}:
@@ -2667,12 +2667,15 @@ def Regex.parse.fin(fr: Regex.Frame) -> Re:
     case Frame{cap, alts, cat, q}:
       Regex.parse.wrap(cap, List.foldl(~&2, ~Re, ~Re, ~Regex.parse.ralt, alts, Regex.parse.cat(cat)))
 
-def Regex.parse.push(t: String, n: Nat, stack: Regex.parse.Stack(), +r: Re) -> Regex.parse.State():
+def Regex.parse.push.q(t: String, n: Nat, stack: Regex.parse.Stack(), r: Re, q2: Nat) -> Regex.parse.State():
   match stack:
     case Frame{cap, alts, cat, q} <> rest:
-      Done{(t, (n, Frame{cap, alts, r <> cat, Regex.parse.q(r)} <> rest))}
+      Done{(t, (n, Frame{cap, alts, r <> cat, q2} <> rest))}
     case Nil{}:
       Fail{RErr{String.length(t), "unbalanced parenthesis"}}
+
+def Regex.parse.push(t: String, n: Nat, stack: Regex.parse.Stack(), +r: Re) -> Regex.parse.State():
+  Regex.parse.push.q(t, n, stack, r, Regex.parse.q(r))
 
 def Regex.parse.atom(n: Nat, stack: Regex.parse.Stack(), r: Regex.parse.Item()) -> Regex.parse.State():
   match r:
@@ -2708,7 +2711,7 @@ def Regex.parse.close(+t: String, n: Nat, stack: Regex.parse.Stack()) -> Regex.p
     case fr <> Nil{}:
       Fail{RErr{1n+String.length(t), "unbalanced parenthesis"}}
     case fr <> rest:
-      Regex.parse.push(t, n, rest, Regex.parse.fin(fr))
+      Regex.parse.push.q(t, n, rest, Regex.parse.fin(fr), 1n)
     case Nil{}:
       Fail{RErr{1n+String.length(t), "unbalanced parenthesis"}}
 
@@ -3323,9 +3326,13 @@ def Regex.exec.eol(multi: Bool, ctx: Regex.exec.Ctx()) -> Bool:
     case (i, (prev, SCon{Chr{x}, t})):
       Bool.and(multi, U32.is_eq(x, 10))
 
+# CPython: on the empty string neither `\b` nor `\B` holds
 def Regex.exec.wordb(neg: Bool, ctx: Regex.exec.Ctx()) -> Bool:
-  (i, (prev, tail)) = ctx
-  Bool.xor(neg, Bool.xor(Regex.exec.is_word(prev), Regex.exec.is_word(Regex.exec.peek(tail))))
+  match ctx:
+    case (0n, (prev, SNil{})):
+      False{}
+    case (i, (prev, tail)):
+      Bool.xor(neg, Bool.xor(Regex.exec.is_word(prev), Regex.exec.is_word(Regex.exec.peek(tail))))
 
 def Regex.exec.pos(ctx: Regex.exec.Ctx()) -> Nat:
   (i, r) = ctx
@@ -3415,8 +3422,8 @@ def Regex.exec.adv(clist: Regex.exec.Threads(), +prog: List<&2, Inst>, cut: Bool
     case (pc, caps) <> +rest, k, None{}:
       Regex.exec.adv(rest, prog, k, c, Regex.exec.fetch(prog, rest), work)
 
-def Regex.exec.feed(+prog: List<&2, Inst>, full: Bool, +c: Maybe<&2, U32>, +clist: Regex.exec.Threads()) -> Maybe<&2, Regex.exec.Caps()> & Regex.exec.Threads():
-  Regex.exec.adv(clist, prog, Bool.or(Bool.not(full), Maybe.is_none(&2, U32, c)), c, Regex.exec.fetch(prog, clist), [])
+def Regex.exec.feed(+prog: List<&2, Inst>, full: Bool, ne: Bool, +c: Maybe<&2, U32>, +clist: Regex.exec.Threads()) -> Maybe<&2, Regex.exec.Caps()> & Regex.exec.Threads():
+  Regex.exec.adv(clist, prog, Bool.and(Bool.not(ne), Bool.or(Bool.not(full), Maybe.is_none(&2, U32, c))), c, Regex.exec.fetch(prog, clist), [])
 
 def Regex.exec.post(best: Maybe<&2, Regex.exec.Caps()>, r: Maybe<&2, Regex.exec.Caps()> & Regex.exec.Threads()) -> Regex.exec.State():
   (found, acc) = r
@@ -3446,32 +3453,185 @@ def Regex.exec.fin(st: Regex.exec.State()) -> Maybe<&2, Match>:
       None{}
 
 # Walks the subject; the first `at` chars are skipped (they still set
-# `prev` for `^` `\b`). `anchored` drops the fresh thread after position `at`
-def Regex.exec.run(s: String, at: Nat, +prog: List<&2, Inst>, +full: Bool, +anchored: Bool, +start: Regex.exec.Threads(), +i: Nat, prev: Maybe<&2, U32>, st: Regex.exec.State()) -> Maybe<&2, Match>:
+# `prev` for `^` `\b`). `anchored` drops the fresh thread after position `at`;
+# `ne` refuses an empty match at `at` without cutting the threads below it
+def Regex.exec.run(s: String, at: Nat, +prog: List<&2, Inst>, +full: Bool, +anchored: Bool, ne: Bool, +start: Regex.exec.Threads(), +i: Nat, prev: Maybe<&2, U32>, st: Regex.exec.State()) -> Maybe<&2, Match>:
   match s at st:
     case SCon{Chr{x}, t}, 1n+a, st:
-      Regex.exec.run(t, a, prog, full, anchored, start, 1n+i, Some{x}, st)
+      Regex.exec.run(t, a, prog, full, anchored, ne, start, 1n+i, Some{x}, st)
     case SCon{Chr{+x}, +t}, 0n, (work, +best):
-      Regex.exec.run(t, 0n, prog, full, anchored, Bool.pick(Regex.exec.Threads(), anchored, [], start), 1n+i, Some{x}, Regex.exec.post(best, Regex.exec.feed(prog, full, Some{x}, Regex.exec.alive(prog, (i, (prev, SCon{Chr{x}, t})), work, start, Maybe.is_some(&2, Regex.exec.Caps(), best)))))
+      Regex.exec.run(t, 0n, prog, full, anchored, False{}, Bool.pick(Regex.exec.Threads(), anchored, [], start), 1n+i, Some{x}, Regex.exec.post(best, Regex.exec.feed(prog, full, ne, Some{x}, Regex.exec.alive(prog, (i, (prev, SCon{Chr{x}, t})), work, start, Maybe.is_some(&2, Regex.exec.Caps(), best)))))
     case SNil{}, _, (work, +best):
-      Regex.exec.fin(Regex.exec.post(best, Regex.exec.feed(prog, full, None{}, Regex.exec.alive(prog, (i, (prev, SNil{})), work, start, Maybe.is_some(&2, Regex.exec.Caps(), best)))))
+      Regex.exec.fin(Regex.exec.post(best, Regex.exec.feed(prog, full, ne, None{}, Regex.exec.alive(prog, (i, (prev, SNil{})), work, start, Maybe.is_some(&2, Regex.exec.Caps(), best)))))
 
-def Regex.exec.go(re: Regex, s: String, at: Nat, full: Bool, anchored: Bool) -> Maybe<&2, Match>:
+def Regex.exec.go(re: Regex, s: String, at: Nat, full: Bool, anchored: Bool, ne: Bool) -> Maybe<&2, Match>:
   match re:
     case Regex{prog, n}:
-      Regex.exec.run(s, at, prog, full, anchored, [(0n, List.replicate(Maybe<&2, Nat>, Nat.mul(2n, 1n+n), None{}))], 0n, None{}, ([], None{}))
+      Regex.exec.run(s, at, prog, full, anchored, ne, [(0n, List.replicate(Maybe<&2, Nat>, Nat.mul(2n, 1n+n), None{}))], 0n, None{}, ([], None{}))
 
 # First match starting at or after `at` (code-point offset)
 def Regex.exec(re: Regex, s: String, at: Nat) -> Maybe<&2, Match>:
-  Regex.exec.go(re, s, at, False{}, False{})
+  Regex.exec.go(re, s, at, False{}, False{}, False{})
 
 # Match starting exactly at `at`
 def Regex.match_at(re: Regex, s: String, at: Nat) -> Maybe<&2, Match>:
-  Regex.exec.go(re, s, at, False{}, True{})
+  Regex.exec.go(re, s, at, False{}, True{}, False{})
 
 # Match covering the whole subject
 def Regex.fullmatch(re: Regex, s: String) -> Maybe<&2, Match>:
-  Regex.exec.go(re, s, 0n, True{}, True{})
+  Regex.exec.go(re, s, 0n, True{}, True{}, False{})
+
+# Derived API. `find_all` `split` `replace` run on one budget, never reset
+# per result: a search from `at` pays (1 + length - at) * weight up front,
+# the worst case of one exec whatever the lane, and the output is paid from
+# what is left before it is built. Out of budget is an error, never a
+# partial answer
+def Regex.find(re: Regex, s: String) -> Maybe<&2, Match>:
+  Regex.exec(re, s, 0n)
+
+def Regex.is_match(re: Regex, s: String) -> Bool:
+  Maybe.is_some(&2, Match, Regex.find(re, s))
+
+def Regex.group.get(s: String, g: Maybe<&2, Maybe<&2, Regex.Span()>>) -> Maybe<&2, String>:
+  match g:
+    case Some{Some{(+a, b)}}:
+      Some{String.slice(s, a, b)}
+    case _:
+      None{}
+
+# Group k of a match as text (0 = the whole match); None if it took no
+# part. A Match keeps no source: `s` must be the subject it came from
+def Regex.group(s: String, m: Match, k: Nat) -> Maybe<&2, String>:
+  match m k:
+    case Match{+a, b, gs} 0n:
+      Some{String.slice(s, a, b)}
+    case Match{a, b, gs} 1n+p:
+      Regex.group.get(s, List.get(&2, Maybe<&2, Regex.Span()>, gs, p))
+
+# Steps one position can cost: every inst once, each with a capture copy
+# and its class probes
+def Regex.weight.go(prog: List<&2, Inst>, +k: U32, acc: U32) -> U32:
+  match prog:
+    case Nil{}:
+      acc
+    case ISet{neg, rs} <> t:
+      Regex.weight.go(t, k, U32.add(acc, U32.add(k, U32.from_nat(List.length(&2, Regex.Range(), rs)))))
+    case i <> t:
+      Regex.weight.go(t, k, U32.add(acc, k))
+
+def Regex.weight(re: Regex) -> U32:
+  match re:
+    case Regex{prog, n}:
+      Regex.weight.go(prog, U32.from_nat(3n+Nat.double(n)), 1)
+
+# a * b, saturating so a cost never wraps under the budget
+def Regex.cost(+a: U32, +b: U32) -> U32:
+  Bool.pick(U32, Bool.and(U32.is_gt(b, 0), U32.is_gt(a, U32.div(4294967295, b))), 4294967295, U32.mul(a, b))
+
+def Regex.scan.Out() -> Data:
+  Sigma<&2, &2, U32, _ => List<&2, Match>>
+
+# Scan state: (the next search (at, ne), None once done; (budget left, matches reversed))
+def Regex.scan.St() -> Data:
+  Sigma<&2, &2, Maybe<&2, Sigma<&2, &2, Nat, _ => Bool>>, _ => Regex.scan.Out()>
+
+def Regex.scan.got(left: U32, acc: List<&2, Match>, m: Maybe<&2, Match>) -> Result<&2, &2, Regex.Error, Regex.scan.St()>:
+  match m:
+    case None{}:
+      Done{(None{}, (left, acc))}
+    case Some{Match{+a, +b, gs}}:
+      Done{(Some{(b, Nat.is_eq(a, b))}, (left, Match{a, b, gs} <> acc))}
+
+def Regex.scan.pay(re: Regex, s: String, at: Nat, ne: Bool, left: U32, acc: List<&2, Match>, short: Bool) -> Result<&2, &2, Regex.Error, Regex.scan.St()>:
+  match short:
+    case True{}:
+      Fail{RErr{at, "budget exhausted"}}
+    case False{}:
+      Regex.scan.got(left, acc, Regex.exec.go(re, s, at, False{}, False{}, ne))
+
+# Python finditer order: after a match search on from its end; after an
+# empty one search at the same place with `ne`, so the empty match is
+# refused there. Each search ends further right or sets `ne`, so
+# 3 + 2 * length of them always reach the end
+def Regex.scan.go(fuel: Nat, +re: Regex, +s: String, +len: Nat, +w: U32, st: Result<&2, &2, Regex.Error, Regex.scan.St()>) -> Result<&2, &2, Regex.Error, Regex.scan.Out()>:
+  match fuel st:
+    case _, Fail{e}:
+      Fail{e}
+    case 1n+f, Done{(Some{(+at, ne)}, (+left, acc))}:
+      +cost = Regex.cost(U32.from_nat(Nat.sub(1n+len, at)), w)
+      Regex.scan.go(f, re, s, len, w, Regex.scan.pay(re, s, at, ne, U32.sub(left, cost), acc, U32.is_lt(left, cost)))
+    case _, Done{(nx, (left, acc))}:
+      Done{(left, List.reverse(&2, Match, acc))}
+
+# Every match in order, and the budget left to pay for the output
+def Regex.scan(+re: Regex, +s: String, limit: U32) -> Result<&2, &2, Regex.Error, Regex.scan.Out()>:
+  +len = String.length(s)
+  Regex.scan.go(3n+Nat.double(len), re, s, len, Regex.weight(re), Done{(Some{(0n, False{})}, (limit, []))})
+
+def Regex.scan.matched(ms: List<&2, Match>) -> Nat:
+  match ms:
+    case Nil{}:
+      0n
+    case Match{a, b, gs} <> t:
+      Nat.add(Nat.sub(b, a), Regex.scan.matched(t))
+
+def Regex.scan.paid.if(ms: List<&2, Match>, short: Bool, len: Nat) -> Result<&2, &2, Regex.Error, List<&2, Match>>:
+  match short:
+    case True{}:
+      Fail{RErr{len, "budget exhausted"}}
+    case False{}:
+      Done{ms}
+
+# Pays for the output before it is built: `per` for each match, plus one
+# for each unmatched code point when `gaps`
+def Regex.scan.paid(r: Result<&2, &2, Regex.Error, Regex.scan.Out()>, gaps: Bool, per: Nat, +len: Nat) -> Result<&2, &2, Regex.Error, List<&2, Match>>:
+  match r:
+    case Fail{e}:
+      Fail{e}
+    case Done{(+left, +ms)}:
+      +c = Regex.cost(U32.from_nat(List.length(&2, Match, ms)), U32.from_nat(per))
+      Regex.scan.paid.if(ms, Bool.or(U32.is_lt(left, c), U32.is_lt(U32.sub(left, c), U32.from_nat(Bool.pick(Nat, gaps, Nat.sub(len, Regex.scan.matched(ms)), 0n)))), len)
+
+def Regex.ngroups(re: Regex) -> Nat:
+  match re:
+    case Regex{prog, n}:
+      n
+
+# Every match as a Match record (Python `findall` gives strings instead);
+# a record costs 1 + ngroups
+def Regex.find_all(+re: Regex, +s: String, limit: U32) -> Result<&2, &2, Regex.Error, List<&2, Match>>:
+  Regex.scan.paid(Regex.scan(re, s, limit), False{}, 1n+Regex.ngroups(re), String.length(s))
+
+# The unmatched gaps around the matches, empty ones kept
+def Regex.split.gaps(ms: List<&2, Match>, +s: String, +prev: Nat) -> List<&2, String>:
+  match ms:
+    case Nil{}:
+      [String.drop(s, prev)]
+    case Match{a, b, gs} <> t:
+      String.slice(s, prev, a) <> Regex.split.gaps(t, s, b)
+
+def Regex.split.fin(r: Result<&2, &2, Regex.Error, List<&2, Match>>, s: String) -> Result<&2, &2, Regex.Error, List<&2, String>>:
+  match r:
+    case Fail{e}:
+      Fail{e}
+    case Done{ms}:
+      Done{Regex.split.gaps(ms, s, 0n)}
+
+# The gaps only: separators and their groups are left out (Python `split`
+# keeps the groups); an output code point costs 1
+def Regex.split(+re: Regex, +s: String, limit: U32) -> Result<&2, &2, Regex.Error, List<&2, String>>:
+  Regex.split.fin(Regex.scan.paid(Regex.scan(re, s, limit), True{}, 0n, String.length(s)), s)
+
+def Regex.replace.fin(r: Result<&2, &2, Regex.Error, List<&2, Match>>, s: String, by: String) -> Result<&2, &2, Regex.Error, String>:
+  match r:
+    case Fail{e}:
+      Fail{e}
+    case Done{ms}:
+      Done{String.join(Regex.split.gaps(ms, s, 0n), by)}
+
+# Every match replaced by the literal text `by`; an output code point costs 1
+def Regex.replace(+re: Regex, +s: String, +by: String, limit: U32) -> Result<&2, &2, Regex.Error, String>:
+  Regex.replace.fin(Regex.scan.paid(Regex.scan(re, s, limit), True{}, String.length(by), String.length(s)), s, by)
 
 # Text
 # ----
