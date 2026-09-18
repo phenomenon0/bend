@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Regex lane: check/interpret/JS/C on every tests/regex/*.bend (GPU out of scope).
+# Regex lane: check/interpret/JS/C on every tests/regex/*.bend; a test with a
+# call bang also runs on the GPU (as tests/strings/run.sh).
 # `--selftest` runs the harness on a fixture whose #| block is deliberately wrong
 # and passes only if that fixture is DETECTED as failing.
 set -uo pipefail
@@ -59,6 +60,9 @@ for t in "${REGEX_DIR:-tests/regex}"/*.bend; do
   fi
   if timeout 120 bun bend2/main.ts "$t" -o "$work/$name" > "$work/build" 2>&1; then
     run c "$work/expected" "$work/$name" --gpu off
+    if grep -qE '[A-Za-z0-9_]!\(' "$t"; then
+      run gpu "$work/expected" "$work/$name" --gpu 4GB
+    fi
   else
     printf 'FAIL %-14s [c build]\n' "$name"; cat "$work/build"
     fail=$((fail + 1))
