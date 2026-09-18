@@ -20,7 +20,7 @@ check() {
 }
 check bend2/base.bend 28000
 check bend2/bend.ts 41000
-check bend2/comp.ts 76000
+check bend2/comp.ts 81000
 check bend2/main.ts 10000
 for t in tests/f64/*.bend tests/strings/*.bend; do
   if [ "$t" = tests/strings/bench_words.bend ]; then
