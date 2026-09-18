@@ -1,4 +1,6 @@
 # \b \B are ASCII word boundaries, also at the ends and at `at`.
+# CPython 3.11: neither holds on the empty string (oracle-found, R4);
+# a bare anchor takes no quantifier, a group around one does.
 import Base
 
 def go(r: Result<&2, &2, Regex.Error, Regex>, s: String, at: Nat) -> Maybe<&2, Match>:
@@ -14,6 +16,7 @@ def m(p: String, s: String, at: Nat) -> Maybe<&2, Match>:
 def main() -> List<&2, Maybe<&2, Match>>:
   [m("\\bfoo\\b", "a foo b", 0n), m("\\bfoo\\b", "afoo", 0n), m("\\Bo", "foo", 0n), m("\\b", "", 0n), m("\\b", "a", 0n),
    m("a\\b", "a", 0n), m("x\\B", "x", 0n), m("\\Bx", "x", 0n), m("\\b\\w+\\b", "hi there", 0n), m("\\w+\\b", "héllo", 0n),
-   m("\\b_\\b", " _ ", 0n), m("\\bab", "xab", 1n), m("\\bab", "x ab", 1n)]
+   m("\\b_\\b", " _ ", 0n), m("\\bab", "xab", 1n), m("\\bab", "x ab", 1n),
+   m("\\B", "", 0n), m("\\B", "-", 0n), m("a(?:\\b){2}", "xa", 0n)]
 
-#|[Some{Match{2n, 5n, []}}, None{}, Some{Match{1n, 2n, []}}, None{}, Some{Match{0n, 0n, []}}, Some{Match{0n, 1n, []}}, None{}, None{}, Some{Match{0n, 2n, []}}, Some{Match{0n, 1n, []}}, Some{Match{1n, 2n, []}}, None{}, Some{Match{2n, 4n, []}}]
+#|[Some{Match{2n, 5n, []}}, None{}, Some{Match{1n, 2n, []}}, None{}, Some{Match{0n, 0n, []}}, Some{Match{0n, 1n, []}}, None{}, None{}, Some{Match{0n, 2n, []}}, Some{Match{0n, 1n, []}}, Some{Match{1n, 2n, []}}, None{}, Some{Match{2n, 4n, []}}, None{}, Some{Match{0n, 0n, []}}, Some{Match{1n, 2n, []}}]

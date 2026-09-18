@@ -2596,7 +2596,7 @@ def Regex.nullable(r: Re) -> Bool:
     case _:
       True{}
 
-# Anchors take no quantifier
+# Anchors take no quantifier (a group around one does, as in CPython)
 def Regex.parse.q(r: Re) -> Nat:
   match r:
     case RBol{}:
@@ -2667,12 +2667,15 @@ def Regex.parse.fin(fr: Regex.Frame) -> Re:
     case Frame{cap, alts, cat, q}:
       Regex.parse.wrap(cap, List.foldl(~&2, ~Re, ~Re, ~Regex.parse.ralt, alts, Regex.parse.cat(cat)))
 
-def Regex.parse.push(t: String, n: Nat, stack: Regex.parse.Stack(), +r: Re) -> Regex.parse.State():
+def Regex.parse.push.q(t: String, n: Nat, stack: Regex.parse.Stack(), r: Re, q2: Nat) -> Regex.parse.State():
   match stack:
     case Frame{cap, alts, cat, q} <> rest:
-      Done{(t, (n, Frame{cap, alts, r <> cat, Regex.parse.q(r)} <> rest))}
+      Done{(t, (n, Frame{cap, alts, r <> cat, q2} <> rest))}
     case Nil{}:
       Fail{RErr{String.length(t), "unbalanced parenthesis"}}
+
+def Regex.parse.push(t: String, n: Nat, stack: Regex.parse.Stack(), +r: Re) -> Regex.parse.State():
+  Regex.parse.push.q(t, n, stack, r, Regex.parse.q(r))
 
 def Regex.parse.atom(n: Nat, stack: Regex.parse.Stack(), r: Regex.parse.Item()) -> Regex.parse.State():
   match r:
@@ -2708,7 +2711,7 @@ def Regex.parse.close(+t: String, n: Nat, stack: Regex.parse.Stack()) -> Regex.p
     case fr <> Nil{}:
       Fail{RErr{1n+String.length(t), "unbalanced parenthesis"}}
     case fr <> rest:
-      Regex.parse.push(t, n, rest, Regex.parse.fin(fr))
+      Regex.parse.push.q(t, n, rest, Regex.parse.fin(fr), 1n)
     case Nil{}:
       Fail{RErr{1n+String.length(t), "unbalanced parenthesis"}}
 
@@ -3323,9 +3326,13 @@ def Regex.exec.eol(multi: Bool, ctx: Regex.exec.Ctx()) -> Bool:
     case (i, (prev, SCon{Chr{x}, t})):
       Bool.and(multi, U32.is_eq(x, 10))
 
+# CPython: on the empty string neither `\b` nor `\B` holds
 def Regex.exec.wordb(neg: Bool, ctx: Regex.exec.Ctx()) -> Bool:
-  (i, (prev, tail)) = ctx
-  Bool.xor(neg, Bool.xor(Regex.exec.is_word(prev), Regex.exec.is_word(Regex.exec.peek(tail))))
+  match ctx:
+    case (0n, (prev, SNil{})):
+      False{}
+    case (i, (prev, tail)):
+      Bool.xor(neg, Bool.xor(Regex.exec.is_word(prev), Regex.exec.is_word(Regex.exec.peek(tail))))
 
 def Regex.exec.pos(ctx: Regex.exec.Ctx()) -> Nat:
   (i, r) = ctx
