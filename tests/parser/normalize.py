@@ -39,7 +39,7 @@ def pin():
             "RecursionError/MemoryError/timeouts are oracle failures, never parser verdicts",
             "Constant value = repr(literal_eval(raw)); implicit strings wrapped in parentheses",
             "type_comments=False; trivia and incidental parentheses are omitted",
-            "P2 does not support f-strings; oracle JoinedStr text Constant segments use repr(node.value) because their source spans cover the whole f-string",
+            "f-strings are unsupported (P4); oracle JoinedStr text Constant segments use repr(node.value) because their source spans cover the whole f-string",
         ],
     }
     (OUT / "oracle.json").write_text(json.dumps(data, indent=2) + "\n")
@@ -140,7 +140,8 @@ def differences(want, got, path="$"):
 SUPPORTED = set("""Module Constant Name Load Store Del Attribute Subscript Tuple List Starred
 Set Dict UnaryOp UAdd USub Invert Not BinOp Add Sub Mult MatMult Div FloorDiv Mod Pow
 LShift RShift BitOr BitXor BitAnd BoolOp And Or Compare Eq NotEq Lt LtE Gt GtE Is IsNot In NotIn
-IfExp Call keyword Assign AugAssign Expr If While Return Pass Break Continue""".split())
+IfExp Call keyword Assign AugAssign Expr If While Return Pass Break Continue
+Lambda arguments arg FunctionDef For Global Nonlocal Delete Assert Raise Try ExceptHandler With withitem""".split())
 
 
 def supported(tree, source=None):

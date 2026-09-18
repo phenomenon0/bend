@@ -65,10 +65,10 @@ def comparison() -> P.M(String):
 
 def is_end(+t: S.Tok) -> Bool:
   P.is_kind(t, "NEWLINE") || P.is_kind(t, "ENDMARKER") || P.is_kind(t, "DEDENT") ||
-    String.contains("|)|]|}|;|:|=|+=|-=|*=|/=|//=|%=|**=|@=|&=||=|^=|<<=|>>=|", "|" ++ P.tok_text(t) ++ "|")
+    String.contains("|)|]|}|;|:|in|=|+=|-=|*=|/=|//=|%=|**=|@=|&=||=|^=|<<=|>>=|", "|" ++ P.tok_text(t) ++ "|")
 
 def augmented(+raw: String) -> Bool:
   String.contains("|+=|-=|*=|/=|//=|%=|**=|@=|&=||=|^=|<<=|>>=|", "|" ++ raw ++ "|") && Nat.is_ge(String.length(raw), 2n)
 
 def unsupported(+t: S.Tok) -> Bool:
-  String.contains("|def|class|import|from|for|async|await|lambda|yield|global|nonlocal|del|assert|raise|try|with|@|:=|", "|" ++ P.tok_text(t) ++ "|") && Bool.not(String.is_empty(P.tok_text(t)))
+  String.contains("|def|class|import|from|for|async|await|yield|try|with|@|:=|", "|" ++ P.tok_text(t) ++ "|") && Bool.not(String.is_empty(P.tok_text(t)))

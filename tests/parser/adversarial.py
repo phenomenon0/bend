@@ -21,6 +21,8 @@ CASES = [
     ("invalid_utf8", b"x='\xff'\n", "syntax"),
     ("triple", b"'''unfinished", "syntax"),
     ("dedent", b"if x:\n    pass\n  pass\n", "syntax"),
+    # Header-only backtracking: a body inside the `with (` choice reparsed 2^depth times.
+    ("with_paren60", b"".join(b" " * i + b"with (a, b):\n" for i in range(60)) + b" " * 60 + b"x = )\n", "syntax"),
     ("soup", b"+ * : ; = ? )) }", "syntax"),
 ]
 
