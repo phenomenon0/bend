@@ -68,6 +68,7 @@ allow(/^tests\/[a-z]+\/[a-z0-9_]+\.bend$/, 16000);
 allow(/^tests\/[a-z]+\/[a-z0-9_]+\.(c|js)$/, 8000);
 allow(/^tests\/(f64|strings|codex)\/[a-zA-Z0-9_.-]+$/, 16000);
 allow(/^tests\/(regex|parser|lint|translate)\/[A-Za-z0-9_\/.-]+$/, 16000);
+allow(/^docs\/omen\/[A-Za-z0-9_\/.-]+$/, 16000);
 allow(/^tests\/strings\/utf8\.bin$/, 200000, true);
 allow(/^tests\/(run|caps)\.sh$/, 4000);
 allow(/^tests\/[a-z0-9_]+\.bend$/, 4000);
