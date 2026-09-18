@@ -2,3 +2,7 @@
 .claude/
 node_modules/
 *.tgz
+tests/regex/_out/
+tests/parser/_out/
+tests/lint/_out/
+tests/translate/_out/
