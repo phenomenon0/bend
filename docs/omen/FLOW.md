@@ -22,6 +22,14 @@ pushed to upstream; `our` remote = `phenomenon0/bend`.
    all workstreams; codex output is never final.** Streams keep their own
    branches (`lane-strings`, `lane-regex`, `lane-parser`, …) off `omen`.
 
+0b. **Battery carve-out (2026-09-18):** `strings deep` may fail in `[interpret]`
+   or `[js build]` with a bun-frontend stack overflow ("the machine stack
+   overflowed"). That exact signature is a known, measured upstream fragility
+   (11–16/60 build failures, rates in `docs/omen/lanes/strings-cont.md`); it
+   does not block integration when every other lane/test is green. Any other
+   failure blocks. Owner: orchestrator — fixture-headroom rework or upstream
+   issue (stats available).
+
 1. **Update**: `git fetch origin` (upstream); new snapshot lands on `main`.
 2. **Port**: generate a patch from the source of truth and 3-way apply —
    - from a workshop branch: `git diff --binary <base> <branch> -- bend2/ tests/`;
