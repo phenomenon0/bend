@@ -86,6 +86,52 @@ type Map<a, -V: Kind(a)> is Kind(a):
   MLeaf{key: String, val: V}
   MNode{pos: Nat, lo: Map<a, V>, hi: Map<a, V>}
 
+type Re is Data:
+  RLit{c: Char}
+  RAny{}
+  RSet{neg: Bool, rs: List<&2, Sigma<&2, &2, U32, _ => U32>>}
+  RCat{a: Re, b: Re}
+  RAlt{a: Re, b: Re}
+  RRep{r: Re, lo: Nat, hi: Maybe<&2, Nat>, greedy: Bool}
+  RCap{n: Nat, r: Re}
+  RBol{}
+  REol{}
+  RWordB{neg: Bool}
+  REmpty{}
+
+type Inst is Data:
+  IChr{c: U32}
+  IAny{}
+  ISet{neg: Bool, rs: List<&2, Sigma<&2, &2, U32, _ => U32>>}
+  ISplit{x: Nat, y: Nat}
+  IJmp{x: Nat}
+  ISave{slot: Nat}
+  IBol{multi: Bool}
+  IEol{multi: Bool}
+  IWordB{neg: Bool}
+  IMatch{}
+
+type Regex is Data:
+  Regex{prog: List<&2, Inst>, ngroups: Nat}
+
+type Match is Data:
+  Match{start: Nat, end: Nat, groups: List<&2, Maybe<&2, Sigma<&2, &2, Nat, _ => Nat>>>}
+
+type Regex.Error is Data:
+  RErr{pos: Nat, msg: String}
+
+# Parser scratch: one frame per open group (cap = its number), the finished
+# alternatives and the current one both newest-first, q = what the last
+# item was (0 nothing to repeat, 1 an atom, 2 a fresh greedy repeat)
+type Regex.Frame is Data:
+  Frame{cap: Maybe<&2, Nat>, alts: List<&2, Re>, cat: List<&2, Re>, q: Nat}
+
+# Class scan: the unread tail, the last single char (a pending range low),
+# whether a `-` follows it, the ranges so far; CDone once `]` is read
+type Regex.Cls is Data:
+  CScan{s: String, pend: Maybe<&2, U32>, dash: Bool, rs: List<&2, Sigma<&2, &2, U32, _ => U32>>}
+  CDone{rs: List<&2, Sigma<&2, &2, U32, _ => U32>>, rest: String}
+
 # Effects
 # -------
 
@@ -2489,6 +2535,539 @@ def String.hash.go(s: String, h: U32) -> U32:
 # Bend spec, not Python's hash
 def String.hash(s: String) -> U32:
   String.hash.go(s, 2166136261)
+
+# Regex
+# -----
+
+# CPython 3.11 `re.ASCII` is the pin: leftmost-first alternation, greedy and
+# lazy repeats, a capture keeps its last value, `$` also matches before a
+# final newline, `.` skips only newline. Offsets are code-point indices.
+# An unbounded repeat of a nullable body is rejected at parse (NullableRepeat).
+# Errors carry `pos`: the code-point offset where the parser gave up.
+
+def Regex.max_rep() -> Nat:
+  256n
+
+def Regex.max_prog() -> Nat:
+  4096n
+
+def Regex.Range() -> Data:
+  Sigma<&2, &2, U32, _ => U32>
+
+def Regex.Ranges() -> Data:
+  List<&2, Regex.Range()>
+
+def Regex.Span() -> Data:
+  Sigma<&2, &2, Nat, _ => Nat>
+
+def Regex.digits() -> Regex.Ranges():
+  [(48, 57)]
+
+def Regex.words() -> Regex.Ranges():
+  [(48, 57), (65, 90), (95, 95), (97, 122)]
+
+def Regex.spaces() -> Regex.Ranges():
+  [(9, 13), (32, 32)]
+
+# Complement of an ascending, disjoint range list over the code points
+def Regex.ranges.not(rs: Regex.Ranges(), lo: U32) -> Regex.Ranges():
+  match rs:
+    case Nil{}:
+      [(lo, 1114111)]
+    case (a, b) <> rest:
+      (lo, U32.sub(a, 1)) <> Regex.ranges.not(rest, U32.add(b, 1))
+
+def Regex.nullable(r: Re) -> Bool:
+  match r:
+    case RLit{c}:
+      False{}
+    case RAny{}:
+      False{}
+    case RSet{neg, rs}:
+      False{}
+    case RCat{a, b}:
+      Bool.and(Regex.nullable(a), Regex.nullable(b))
+    case RAlt{a, b}:
+      Bool.or(Regex.nullable(a), Regex.nullable(b))
+    case RRep{r, lo, hi, g}:
+      Bool.or(Nat.is_eq(lo, 0n), Regex.nullable(r))
+    case RCap{n, r}:
+      Regex.nullable(r)
+    case _:
+      True{}
+
+# Anchors take no quantifier
+def Regex.parse.q(r: Re) -> Nat:
+  match r:
+    case RBol{}:
+      0n
+    case REol{}:
+      0n
+    case RWordB{neg}:
+      0n
+    case _:
+      1n
+
+# The parser is a stack machine over the pattern: every step reads one
+# char, so the fuel is the pattern length. State = unread tail, groups
+# opened so far, open frames (the root frame at the bottom). An error
+# carries the unread length; `Regex.parse.run` turns it into an offset
+def Regex.parse.Stack() -> Data:
+  List<&2, Regex.Frame>
+
+def Regex.parse.State() -> Data:
+  Result<&2, &2, Regex.Error, Sigma<&2, &2, String, _ => Sigma<&2, &2, Nat, _ => Regex.parse.Stack()>>>
+
+def Regex.parse.Item() -> Data:
+  Result<&2, &2, Regex.Error, Sigma<&2, &2, Re, _ => String>>
+
+def Regex.parse.Tree() -> Data:
+  Result<&2, &2, Regex.Error, Sigma<&2, &2, Re, _ => Nat>>
+
+def Regex.parse.Scan() -> Data:
+  Result<&2, &2, Regex.Error, Regex.Cls>
+
+def Regex.parse.Num() -> Data:
+  Sigma<&2, &2, Nat, _ => Sigma<&2, &2, Nat, _ => String>>
+
+def Regex.parse.Code() -> Data:
+  Result<&2, &2, Regex.Error, Sigma<&2, &2, U32, _ => String>>
+
+# Index of x in ks, from i; 0 when absent
+def Regex.parse.index(+x: U32, ks: List<&2, U32>, +i: Nat) -> Nat:
+  match ks:
+    case Nil{}:
+      0n
+    case k <> rest:
+      Bool.pick(Nat, U32.is_eq(x, k), i, Regex.parse.index(x, rest, 1n+i))
+
+# Newest-first items fold into source order: [c, b, a] -> RCat{a, RCat{b, c}}
+def Regex.parse.rcat(acc: Re, x: Re) -> Re:
+  RCat{x, acc}
+
+def Regex.parse.ralt(acc: Re, x: Re) -> Re:
+  RAlt{x, acc}
+
+def Regex.parse.cat(rs: List<&2, Re>) -> Re:
+  match rs:
+    case Nil{}:
+      REmpty{}
+    case x <> rest:
+      List.foldl(~&2, ~Re, ~Re, ~Regex.parse.rcat, rest, x)
+
+def Regex.parse.wrap(cap: Maybe<&2, Nat>, r: Re) -> Re:
+  match cap:
+    case None{}:
+      r
+    case Some{k}:
+      RCap{k, r}
+
+def Regex.parse.fin(fr: Regex.Frame) -> Re:
+  match fr:
+    case Frame{cap, alts, cat, q}:
+      Regex.parse.wrap(cap, List.foldl(~&2, ~Re, ~Re, ~Regex.parse.ralt, alts, Regex.parse.cat(cat)))
+
+def Regex.parse.push(t: String, n: Nat, stack: Regex.parse.Stack(), +r: Re) -> Regex.parse.State():
+  match stack:
+    case Frame{cap, alts, cat, q} <> rest:
+      Done{(t, (n, Frame{cap, alts, r <> cat, Regex.parse.q(r)} <> rest))}
+    case Nil{}:
+      Fail{RErr{String.length(t), "unbalanced parenthesis"}}
+
+def Regex.parse.atom(n: Nat, stack: Regex.parse.Stack(), r: Regex.parse.Item()) -> Regex.parse.State():
+  match r:
+    case Fail{e}:
+      Fail{e}
+    case Done{(re, t)}:
+      Regex.parse.push(t, n, stack, re)
+
+def Regex.parse.open.cap(t: String, +n: Nat, stack: Regex.parse.Stack()) -> Regex.parse.State():
+  Done{(t, (1n+n, Frame{Some{1n+n}, [], [], 0n} <> stack))}
+
+# `(?:` opens a plain group; any other `(?` extension is out of scope
+def Regex.parse.open.ext(+k: Nat, t: String, n: Nat, stack: Regex.parse.Stack()) -> Regex.parse.State():
+  match t:
+    case SCon{Chr{+x}, t2}:
+      Bool.pick(Regex.parse.State(), U32.is_eq(x, 58),
+        Done{(t2, (n, Frame{None{}, [], [], 0n} <> stack))},
+        Fail{RErr{k, "unsupported group extension"}})
+    case SNil{}:
+      Fail{RErr{k, "unsupported group extension"}}
+
+def Regex.parse.open(t: String, +n: Nat, +stack: Regex.parse.Stack()) -> Regex.parse.State():
+  match t:
+    case SCon{Chr{+x}, +t2}:
+      Bool.pick(Regex.parse.State(), U32.is_eq(x, 63),
+        Regex.parse.open.ext(Nat.add(2n, String.length(t2)), t2, n, stack),
+        Regex.parse.open.cap(SCon{Chr{x}, t2}, n, stack))
+    case SNil{}:
+      Regex.parse.open.cap(SNil{}, n, stack)
+
+def Regex.parse.close(+t: String, n: Nat, stack: Regex.parse.Stack()) -> Regex.parse.State():
+  match stack:
+    case fr <> Nil{}:
+      Fail{RErr{1n+String.length(t), "unbalanced parenthesis"}}
+    case fr <> rest:
+      Regex.parse.push(t, n, rest, Regex.parse.fin(fr))
+    case Nil{}:
+      Fail{RErr{1n+String.length(t), "unbalanced parenthesis"}}
+
+def Regex.parse.bar(t: String, n: Nat, stack: Regex.parse.Stack()) -> Regex.parse.State():
+  match stack:
+    case Frame{cap, alts, cat, q} <> rest:
+      Done{(t, (n, Frame{cap, Regex.parse.cat(cat) <> alts, [], 0n} <> rest))}
+    case Nil{}:
+      Fail{RErr{String.length(t), "unbalanced parenthesis"}}
+
+def Regex.parse.rep.if(k: Nat, st: Regex.parse.State(), bad: Bool) -> Regex.parse.State():
+  match bad:
+    case True{}:
+      Fail{RErr{k, "NullableRepeat"}}
+    case False{}:
+      st
+
+# Repeat the last atom; an unbounded repeat needs a body that eats
+def Regex.parse.rep(+t: String, n: Nat, stack: Regex.parse.Stack(), lo: Nat, +hi: Maybe<&2, Nat>) -> Regex.parse.State():
+  match stack:
+    case Frame{cap, alts, +r <> cat, 1n} <> rest:
+      Regex.parse.rep.if(1n+String.length(t),
+        Done{(t, (n, Frame{cap, alts, RRep{r, lo, hi, True{}} <> cat, 2n} <> rest))},
+        Bool.and(Bool.not(Maybe.is_some(&2, Nat, hi)), Regex.nullable(r)))
+    case Frame{cap, alts, cat, 2n} <> rest:
+      Fail{RErr{1n+String.length(t), "multiple repeat"}}
+    case _:
+      Fail{RErr{1n+String.length(t), "nothing to repeat"}}
+
+# `?` after a fresh repeat makes it lazy, else it is the {0,1} repeat
+def Regex.parse.opt(t: String, n: Nat, stack: Regex.parse.Stack()) -> Regex.parse.State():
+  match stack:
+    case Frame{cap, alts, RRep{r, lo, hi, g} <> cat, 2n} <> rest:
+      Done{(t, (n, Frame{cap, alts, RRep{r, lo, hi, False{}} <> cat, 0n} <> rest))}
+    case other:
+      Regex.parse.rep(t, n, other, 0n, Some{1n})
+
+def Regex.parse.Bounds() -> Data:
+  Result<&2, &2, Regex.Error, Sigma<&2, &2, Sigma<&2, &2, Nat, _ => Maybe<&2, Nat>>, _ => String>>
+
+# Decimal digits, capped at 1000 so a silly count costs nothing
+def Regex.parse.num(t: String, +acc: Nat, +cnt: Nat) -> Regex.parse.Num():
+  match t:
+    case SNil{}:
+      (acc, (cnt, SNil{}))
+    case SCon{Chr{+x}, +t2}:
+      Bool.pick(Regex.parse.Num(), Char.is_digit(Chr{x}),
+        Regex.parse.num(t2, Nat.min(1000n, Nat.add(Nat.mul(acc, 10n), U32.to_nat(U32.sub(x, 48)))), 1n+cnt),
+        (acc, (cnt, SCon{Chr{x}, t2})))
+
+def Regex.parse.bounds.ok(+k: Nat, +lo: Nat, +hi: Maybe<&2, Nat>, t: String) -> Regex.parse.Bounds():
+  Bool.pick(Regex.parse.Bounds(), Nat.is_gt(Nat.max(lo, Maybe.default(&2, Nat, hi, 0n)), Regex.max_rep()),
+    Fail{RErr{k, "repeat count exceeds max_rep"}},
+    Bool.pick(Regex.parse.Bounds(), Nat.is_gt(lo, Maybe.default(&2, Nat, hi, lo)),
+      Fail{RErr{k, "min repeat greater than max repeat"}},
+      Done{((lo, hi), t)}))
+
+def Regex.parse.bounds.hi(+k: Nat, lo: Nat, r: Regex.parse.Num()) -> Regex.parse.Bounds():
+  match r:
+    case (hi, (cnt, SCon{Chr{+y}, t2})):
+      Bool.pick(Regex.parse.Bounds(), U32.is_eq(y, 125),
+        Regex.parse.bounds.ok(k, lo, Bool.pick(Maybe<&2, Nat>, Nat.is_eq(cnt, 0n), None{}, Some{hi}), t2),
+        Fail{RErr{k, "bad repeat"}})
+    case (hi, (cnt, SNil{})):
+      Fail{RErr{k, "bad repeat"}}
+
+def Regex.parse.bounds.lo(+k: Nat, r: Regex.parse.Num()) -> Regex.parse.Bounds():
+  match r:
+    case (lo, (0n, rest)):
+      Fail{RErr{k, "bad repeat"}}
+    case (+lo, (cnt, SCon{Chr{+y}, +t2})):
+      Bool.pick(Regex.parse.Bounds(), U32.is_eq(y, 125),
+        Regex.parse.bounds.ok(k, lo, Some{lo}, t2),
+        Bool.pick(Regex.parse.Bounds(), U32.is_eq(y, 44),
+          Regex.parse.bounds.hi(k, lo, Regex.parse.num(t2, 0n, 0n)),
+          Fail{RErr{k, "bad repeat"}}))
+    case (lo, (cnt, SNil{})):
+      Fail{RErr{k, "bad repeat"}}
+
+# `{m}` `{m,}` `{m,n}`; anything else (so `{,n}`) is a bad repeat
+def Regex.parse.bounds(+t: String) -> Regex.parse.Bounds():
+  Regex.parse.bounds.lo(1n+String.length(t), Regex.parse.num(t, 0n, 0n))
+
+def Regex.parse.braces(n: Nat, stack: Regex.parse.Stack(), b: Regex.parse.Bounds()) -> Regex.parse.State():
+  match b:
+    case Fail{e}:
+      Fail{e}
+    case Done{((lo, hi), t)}:
+      Regex.parse.rep(t, n, stack, lo, hi)
+
+def Regex.parse.hexval(+x: U32) -> U32:
+  Bool.pick(U32, Char.is_digit(Chr{x}), U32.sub(x, 48),
+    Bool.pick(U32, Bool.and(U32.is_ge(x, 97), U32.is_le(x, 102)), U32.sub(x, 87),
+      Bool.pick(U32, Bool.and(U32.is_ge(x, 65), U32.is_le(x, 70)), U32.sub(x, 55), 16)))
+
+def Regex.parse.hex.if(k: Nat, v: U32, r: Regex.parse.Code()) -> Regex.parse.Code():
+  Bool.pick(Regex.parse.Code(), U32.is_lt(v, 16), r, Fail{RErr{k, "bad escape"}})
+
+# Exactly d hex digits
+def Regex.parse.hex(+k: Nat, d: Nat, t: String, acc: U32) -> Regex.parse.Code():
+  match d:
+    case 0n:
+      Done{(acc, t)}
+    case 1n+e:
+      match t:
+        case SNil{}:
+          Fail{RErr{k, "bad escape"}}
+        case SCon{Chr{+x}, t2}:
+          Regex.parse.hex.if(k, Regex.parse.hexval(x),
+            Regex.parse.hex(k, e, t2, U32.add(U32.mul(acc, 16), Regex.parse.hexval(x))))
+
+# A code point escape must be a scalar value
+def Regex.parse.esc.code(k: Nat, r: Regex.parse.Code()) -> Regex.parse.Item():
+  match r:
+    case Fail{e}:
+      Fail{e}
+    case Done{(+c, t)}:
+      Bool.pick(Regex.parse.Item(),
+        Bool.or(U32.is_gt(c, 1114111), Bool.and(U32.is_ge(c, 55296), U32.is_le(c, 57343))),
+        Fail{RErr{k, "bad escape"}}, Done{(RLit{Chr{c}}, t)})
+
+def Regex.parse.esc.table() -> List<&2, Sigma<&2, &2, U32, _ => Re>>:
+  [(110, RLit{Chr{10}}), (114, RLit{Chr{13}}), (116, RLit{Chr{9}}), (102, RLit{Chr{12}}),
+   (118, RLit{Chr{11}}), (48, RLit{Chr{0}}), (98, RWordB{False{}}), (66, RWordB{True{}}),
+   (100, RSet{False{}, Regex.digits()}), (68, RSet{True{}, Regex.digits()}),
+   (119, RSet{False{}, Regex.words()}), (87, RSet{True{}, Regex.words()}),
+   (115, RSet{False{}, Regex.spaces()}), (83, RSet{True{}, Regex.spaces()})]
+
+def Regex.parse.esc.find(+x: U32, tbl: List<&2, Sigma<&2, &2, U32, _ => Re>>) -> Maybe<&2, Re>:
+  match tbl:
+    case Nil{}:
+      None{}
+    case (c, r) <> rest:
+      Bool.pick(Maybe<&2, Re>, U32.is_eq(x, c), Some{r}, Regex.parse.esc.find(x, rest))
+
+# Off the table: \x \u \U take hex digits; a digit is a backreference, a
+# letter is unknown, anything else is the char itself
+def Regex.parse.esc.go(+k: Nat, hex: Nat, +x: U32, t: String, found: Maybe<&2, Re>) -> Regex.parse.Item():
+  match hex found:
+    case _ Some{r}:
+      Done{(r, t)}
+    case 0n None{}:
+      Bool.pick(Regex.parse.Item(), Char.is_digit(Chr{x}), Fail{RErr{k, "backreferences are not supported"}},
+        Bool.pick(Regex.parse.Item(), Char.is_alpha(Chr{x}), Fail{RErr{k, "bad escape"}},
+          Done{(RLit{Chr{x}}, t)}))
+    case 1n None{}:
+      Regex.parse.esc.code(k, Regex.parse.hex(k, 2n, t, 0))
+    case 2n None{}:
+      Regex.parse.esc.code(k, Regex.parse.hex(k, 4n, t, 0))
+    case 3n+_ None{}:
+      Regex.parse.esc.code(k, Regex.parse.hex(k, 8n, t, 0))
+
+# The tail after a backslash
+def Regex.parse.esc(t: String) -> Regex.parse.Item():
+  match t:
+    case SNil{}:
+      Fail{RErr{1n, "bad escape"}}
+    case SCon{Chr{+x}, +t2}:
+      Regex.parse.esc.go(Nat.add(2n, String.length(t2)), Regex.parse.index(x, [120, 117, 85], 1n), x, t2,
+        Regex.parse.esc.find(x, Regex.parse.esc.table()))
+
+def Regex.parse.cls.flush(pend: Maybe<&2, U32>, dash: Bool, rs: Regex.Ranges()) -> Regex.Ranges():
+  match pend dash:
+    case Some{+p} True{}:
+      (45, 45) <> ((p, p) <> rs)
+    case Some{+p} False{}:
+      (p, p) <> rs
+    case None{} _:
+      rs
+
+def Regex.parse.cls.range(+t: String, rs: Regex.Ranges(), +lo: U32, +c: U32) -> Regex.parse.Scan():
+  Bool.pick(Regex.parse.Scan(), U32.is_le(lo, c),
+    Done{CScan{t, None{}, False{}, (lo, c) <> rs}},
+    Fail{RErr{String.length(t), "bad character range"}})
+
+# One char joins the class: closes a pending range, or waits as the next low
+def Regex.parse.cls.item(t: String, pend: Maybe<&2, U32>, dash: Bool, rs: Regex.Ranges(), +c: U32) -> Regex.parse.Scan():
+  match pend dash:
+    case Some{lo} True{}:
+      Regex.parse.cls.range(t, rs, lo, c)
+    case Some{+p} False{}:
+      Done{CScan{t, Some{c}, False{}, (p, p) <> rs}}
+    case None{} _:
+      Done{CScan{t, Some{c}, False{}, rs}}
+
+def Regex.parse.cls.union(+t: String, pend: Maybe<&2, U32>, dash: Bool, rs: Regex.Ranges(), rs2: Regex.Ranges()) -> Regex.parse.Scan():
+  match dash:
+    case True{}:
+      Fail{RErr{String.length(t), "bad character range"}}
+    case False{}:
+      Done{CScan{t, None{}, False{}, List.append(&2, Regex.Range(), rs2, Regex.parse.cls.flush(pend, False{}, rs))}}
+
+# An escape inside a class: a char, a set (`\D` as its complement), `\b` is backspace
+def Regex.parse.cls.add(pend: Maybe<&2, U32>, dash: Bool, rs: Regex.Ranges(), r: Regex.parse.Item()) -> Regex.parse.Scan():
+  match r:
+    case Fail{e}:
+      Fail{e}
+    case Done{(RLit{Chr{c}}, t)}:
+      Regex.parse.cls.item(t, pend, dash, rs, c)
+    case Done{(RSet{False{}, rs2}, t)}:
+      Regex.parse.cls.union(t, pend, dash, rs, rs2)
+    case Done{(RSet{True{}, rs2}, t)}:
+      Regex.parse.cls.union(t, pend, dash, rs, Regex.ranges.not(rs2, 0))
+    case Done{(RWordB{False{}}, t)}:
+      Regex.parse.cls.item(t, pend, dash, rs, 8)
+    case Done{(re, +t)}:
+      Fail{RErr{String.length(t), "bad escape"}}
+
+def Regex.parse.cls.dash(t: String, pend: Maybe<&2, U32>, dash: Bool, rs: Regex.Ranges()) -> Regex.parse.Scan():
+  match pend dash:
+    case Some{lo} True{}:
+      Regex.parse.cls.range(t, rs, lo, 45)
+    case Some{p} False{}:
+      Done{CScan{t, Some{p}, True{}, rs}}
+    case None{} _:
+      Done{CScan{t, Some{45}, False{}, rs}}
+
+def Regex.parse.cls.char(kind: Nat, +x: U32, t: String, pend: Maybe<&2, U32>, dash: Bool, rs: Regex.Ranges()) -> Regex.parse.Scan():
+  match kind:
+    case 0n:
+      Regex.parse.cls.item(t, pend, dash, rs, x)
+    case 1n:
+      Done{CDone{Regex.parse.cls.flush(pend, dash, rs), t}}
+    case 2n:
+      Regex.parse.cls.add(pend, dash, rs, Regex.parse.esc(t))
+    case 3n+_:
+      Regex.parse.cls.dash(t, pend, dash, rs)
+
+def Regex.parse.cls.step(s: String, pend: Maybe<&2, U32>, dash: Bool, rs: Regex.Ranges()) -> Regex.parse.Scan():
+  match s:
+    case SNil{}:
+      Fail{RErr{0n, "unterminated character set"}}
+    case SCon{Chr{+x}, t}:
+      Regex.parse.cls.char(Regex.parse.index(x, [93, 92, 45], 1n), x, t, pend, dash, rs)
+
+def Regex.parse.cls(fuel: Nat, st: Regex.parse.Scan()) -> Regex.parse.Scan():
+  match fuel st:
+    case _ Fail{e}:
+      Fail{e}
+    case _ Done{CDone{rs, rest}}:
+      Done{CDone{rs, rest}}
+    case 0n Done{CScan{s, pend, dash, rs}}:
+      Fail{RErr{0n, "unterminated character set"}}
+    case 1n+f Done{CScan{s, pend, dash, rs}}:
+      Regex.parse.cls(f, Regex.parse.cls.step(s, pend, dash, rs))
+
+# A leading `]` is a member
+def Regex.parse.set.lead(t: String) -> Regex.Cls:
+  match t:
+    case SCon{Chr{+x}, +t2}:
+      Bool.pick(Regex.Cls, U32.is_eq(x, 93),
+        CScan{t2, Some{93}, False{}, []}, CScan{SCon{Chr{x}, t2}, None{}, False{}, []})
+    case SNil{}:
+      CScan{SNil{}, None{}, False{}, []}
+
+def Regex.parse.set.head(t: String) -> Sigma<&2, &2, Bool, _ => String>:
+  match t:
+    case SCon{Chr{+x}, +t2}:
+      Bool.pick(Sigma<&2, &2, Bool, _ => String>, U32.is_eq(x, 94), (True{}, t2), (False{}, SCon{Chr{x}, t2}))
+    case SNil{}:
+      (False{}, SNil{})
+
+def Regex.parse.set.fin(neg: Bool, r: Regex.parse.Scan()) -> Regex.parse.Item():
+  match r:
+    case Fail{e}:
+      Fail{e}
+    case Done{CDone{rs, rest}}:
+      Done{(RSet{neg, rs}, rest)}
+    case Done{CScan{s, pend, dash, rs}}:
+      Fail{RErr{0n, "unterminated character set"}}
+
+def Regex.parse.set.go(fuel: Nat, h: Sigma<&2, &2, Bool, _ => String>) -> Regex.parse.Item():
+  (neg, t) = h
+  Regex.parse.set.fin(neg, Regex.parse.cls(fuel, Done{Regex.parse.set.lead(t)}))
+
+# The tail after `[`
+def Regex.parse.set(+t: String) -> Regex.parse.Item():
+  Regex.parse.set.go(String.length(t), Regex.parse.set.head(t))
+
+def Regex.parse.char(kind: Nat, +x: U32, t: String, n: Nat, stack: Regex.parse.Stack()) -> Regex.parse.State():
+  match kind:
+    case 0n:
+      Regex.parse.push(t, n, stack, RLit{Chr{x}})
+    case 1n:
+      Regex.parse.open(t, n, stack)
+    case 2n:
+      Regex.parse.close(t, n, stack)
+    case 3n:
+      Regex.parse.bar(t, n, stack)
+    case 4n:
+      Regex.parse.rep(t, n, stack, 0n, None{})
+    case 5n:
+      Regex.parse.rep(t, n, stack, 1n, None{})
+    case 6n:
+      Regex.parse.opt(t, n, stack)
+    case 7n:
+      Regex.parse.braces(n, stack, Regex.parse.bounds(t))
+    case 8n:
+      Regex.parse.atom(n, stack, Regex.parse.set(t))
+    case 9n:
+      Regex.parse.push(t, n, stack, RAny{})
+    case 10n:
+      Regex.parse.push(t, n, stack, RBol{})
+    case 11n:
+      Regex.parse.push(t, n, stack, REol{})
+    case 12n+_:
+      Regex.parse.atom(n, stack, Regex.parse.esc(t))
+
+def Regex.parse.step(st: Regex.parse.State()) -> Regex.parse.State():
+  match st:
+    case Fail{e}:
+      Fail{e}
+    case Done{(SNil{}, (n, stack))}:
+      Done{(SNil{}, (n, stack))}
+    case Done{(SCon{Chr{+x}, t}, (n, stack))}:
+      Regex.parse.char(Regex.parse.index(x, [40, 41, 124, 42, 43, 63, 123, 91, 46, 94, 36, 92], 1n), x, t, n, stack)
+
+def Regex.parse.end.go(n: Nat, stack: Regex.parse.Stack()) -> Regex.parse.Tree():
+  match stack:
+    case fr <> Nil{}:
+      Done{(Regex.parse.fin(fr), n)}
+    case _:
+      Fail{RErr{0n, "missing )"}}
+
+def Regex.parse.end(st: Regex.parse.State()) -> Regex.parse.Tree():
+  match st:
+    case Fail{e}:
+      Fail{e}
+    case Done{(s, (n, stack))}:
+      Regex.parse.end.go(n, stack)
+
+def Regex.parse.go(fuel: Nat, st: Regex.parse.State()) -> Regex.parse.Tree():
+  match fuel:
+    case 0n:
+      Regex.parse.end(st)
+    case 1n+f:
+      Regex.parse.go(f, Regex.parse.step(st))
+
+def Regex.parse.pos(len: Nat, r: Regex.parse.Tree()) -> Regex.parse.Tree():
+  match r:
+    case Fail{RErr{k, msg}}:
+      Fail{RErr{Nat.sub(len, k), msg}}
+    case Done{v}:
+      Done{v}
+
+# The tree and its group count
+def Regex.parse.run(+p: String) -> Regex.parse.Tree():
+  +len = String.length(p)
+  Regex.parse.pos(len, Regex.parse.go(len, Done{(p, (0n, [Frame{None{}, [], [], 0n}]))}))
+
+def Regex.parse.re(r: Regex.parse.Tree()) -> Result<&2, &2, Regex.Error, Re>:
+  match r:
+    case Fail{e}:
+      Fail{e}
+    case Done{(re, n)}:
+      Done{re}
+
+def Regex.parse(p: String) -> Result<&2, &2, Regex.Error, Re>:
+  Regex.parse.re(Regex.parse.run(p))
 
 # Text
 # ----
