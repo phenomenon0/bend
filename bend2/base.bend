@@ -2666,8 +2666,8 @@ def Regex.parse.Tree() -> Data:
 def Regex.parse.Scan() -> Data:
   Result<&2, &2, Regex.Error, Regex.Cls>
 
-def Regex.parse.Num() -> Data:
-  Sigma<&2, &2, Nat, _ => Sigma<&2, &2, Nat, _ => String>>
+def Regex.parse.Num() -> Type:
+  Nat & Nat & String
 
 def Regex.parse.Code() -> Data:
   Result<&2, &2, Regex.Error, Sigma<&2, &2, U32, _ => String>>
@@ -3006,10 +3006,10 @@ def Regex.parse.set.lead(t: String) -> Regex.Cls:
     case SNil{}:
       CScan{SNil{}, None{}, False{}, []}
 
-def Regex.parse.set.head(t: String) -> Sigma<&2, &2, Bool, _ => String>:
+def Regex.parse.set.head(t: String) -> Bool & String:
   match t:
     case SCon{Chr{+x}, +t2}:
-      Bool.pick(Sigma<&2, &2, Bool, _ => String>, U32.is_eq(x, 94), (True{}, t2), (False{}, SCon{Chr{x}, t2}))
+      Bool.pick(Bool & String, U32.is_eq(x, 94), (True{}, t2), (False{}, SCon{Chr{x}, t2}))
     case SNil{}:
       (False{}, SNil{})
 
@@ -3022,7 +3022,7 @@ def Regex.parse.set.fin(neg: Bool, r: Regex.parse.Scan()) -> Regex.parse.Item():
     case Done{CScan{s, pend, dash, rs}}:
       Fail{RErr{0n, "unterminated character set"}}
 
-def Regex.parse.set.go(fuel: Nat, h: Sigma<&2, &2, Bool, _ => String>) -> Regex.parse.Item():
+def Regex.parse.set.go(fuel: Nat, h: Bool & String) -> Regex.parse.Item():
   (neg, t) = h
   Regex.parse.set.fin(neg, Regex.parse.cls(fuel, Done{Regex.parse.set.lead(t)}))
 
@@ -3582,20 +3582,20 @@ def Regex.scan.Out() -> Data:
 
 # Scan state: (the next search (at, ne), None once done; (budget left, matches reversed))
 def Regex.scan.St() -> Data:
-  Sigma<&2, &2, Maybe<&2, Sigma<&2, &2, Nat, _ => Bool>>, _ => Regex.scan.Out()>
+  Result<&2, &2, Regex.Error, Sigma<&2, &2, Maybe<&2, Sigma<&2, &2, Nat, _ => Bool>>, _ => Regex.scan.Out()>>
 
-def Regex.scan.got(left: U32, acc: List<&2, Match>, m: Maybe<&2, Match>) -> Result<&2, &2, Regex.Error, Regex.scan.St()>:
+def Regex.scan.got(left: U32, acc: List<&2, Match>, m: Maybe<&2, Match>) -> Regex.scan.St():
   match m:
     case None{}:
       Done{(None{}, (left, acc))}
     case Some{Match{+a, +b, gs}}:
       Done{(Some{(b, Nat.is_eq(a, b))}, (left, Match{a, b, gs} <> acc))}
 
-def Regex.scan.spent(left: U32, acc: List<&2, Match>, w: U32, at: Nat, r: Maybe<&2, Match> & Nat) -> Result<&2, &2, Regex.Error, Regex.scan.St()>:
+def Regex.scan.spent(left: U32, acc: List<&2, Match>, w: U32, at: Nat, r: Maybe<&2, Match> & Nat) -> Regex.scan.St():
   (m, stop) = r
   Regex.scan.got(U32.sub(left, Regex.cost(U32.from_nat(Nat.sub(1n+stop, at)), w)), acc, m)
 
-def Regex.scan.pay(re: Regex, s: String, +at: Nat, ne: Bool, left: U32, acc: List<&2, Match>, w: U32, short: Bool) -> Result<&2, &2, Regex.Error, Regex.scan.St()>:
+def Regex.scan.pay(re: Regex, s: String, +at: Nat, ne: Bool, left: U32, acc: List<&2, Match>, w: U32, short: Bool) -> Regex.scan.St():
   match short:
     case True{}:
       Fail{RErr{at, "budget exhausted"}}
@@ -3606,7 +3606,7 @@ def Regex.scan.pay(re: Regex, s: String, +at: Nat, ne: Bool, left: U32, acc: Lis
 # empty one search at the same place with `ne`, so the empty match is
 # refused there. Each search ends further right or sets `ne`, so
 # 3 + 2 * length of them always reach the end
-def Regex.scan.go(fuel: Nat, +re: Regex, +s: String, +len: Nat, +w: U32, st: Result<&2, &2, Regex.Error, Regex.scan.St()>) -> Result<&2, &2, Regex.Error, Regex.scan.Out()>:
+def Regex.scan.go(fuel: Nat, +re: Regex, +s: String, +len: Nat, +w: U32, st: Regex.scan.St()) -> Result<&2, &2, Regex.Error, Regex.scan.Out()>:
   match fuel st:
     case _, Fail{e}:
       Fail{e}
