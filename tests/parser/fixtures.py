@@ -122,6 +122,31 @@ STATEMENTS += [
     'x = {f"{k}": f"{v:>{w}}", **d}', 'for x in f"{y}": pass', 'log.info("a"\n         f"{b}"\n         "c")', 'x = f"{a}" if f"{b}" else f"{c}" + "d" f"{e}"',
 ]
 
+# P9: comprehensions. ListComp/SetComp/DictComp span their brackets; a GeneratorExp its parentheses, the call's when it is the sole argument.
+STATEMENTS += [
+    "[x for x in y]", "{x for x in y}", "{x:x for x in y}", "(x for x in y)", "f(x for x in y)", "for x in [y for y in z]: pass",
+    "a[(x for x in y):]", "a[[x for x in y][0]:]", 'f"{[x for x in y]}"', '"a" f"{sum(x for x in y)}"', 'f"{x:{[y for y in z][0]}}"', 'f"{x for x in y}"', 'f"{ {k: v for k, v in d}!r:>{max(w for w in ws)}}"',
+    "[x for x in y if z]", "[x for x in y if a if b]", "[x for x in y for z in x]", "[x for x in y if a for z in x if b if c for w in z]",
+    "[x for x, in y]", "[x for x, y in z]", "[x for *a, b in y]", "[x for *a in y]", "[x for a.b, c[0], (d, [e]) in y]", "[x for (x) in y]", "[x for [a, b] in y]", "[x for a[1:2] in y]",
+    "[x for x in not y]", "[x for x in y or z]", "[x for x in y in z]", "[x for x in a < b]", "[x for x in y if x not in z]", "[x for x in y if a or b if not c]", "[x for x in (a, b)]", "[x for x in (y) if (z)]",
+    "[a if b else c for a in d]", "{a: b if c else d for a in e}", "{a if b else c: d for a in e}", "[lambda: x for x in y]", "[lambda x: x for x in y if (lambda: 1)]", "[(x, y) for x in a for y in b]",
+    "[x for x in (lambda: y)]", "[x for x in (a if b else c)]", "[x for x in y if (a if b else c)]", "[[x for x in y] for y in z]", "[[[a for a in b] for b in c] for c in d]",
+    "{(x for x in y) for y in {z: w for z in q}}", "[x for x in [y for y in [z for z in w]]]", "[x for x in y if [z for z in x if {w for w in z}]]", "{a: [b for b in a] for a in {c for c in d}}",
+    "((x for x in y))", "((x) for x in y)", "( x for x in y )", "[ x for x in y ]", "{ x for x in y }", "{ a : b for a in c }", "f( x for x in y )", "f((x for x in y))", "f((x for x in y), 1)", "f(a, (x for x in y))",
+    "f(x for x in y)(z)", "f(x for x in y).a", "f(x for x in y)[0]", "f(g(x for x in y) for y in z)", "a.b.c(x for x in y)", "f(x)(y for y in z)", "f(*[x for x in y], **{k: v for k, v in z})", "f(k=[x for x in y])",
+    "print(x for x in y if z)", "sum(x\n for x in y)", "[x for\n x in y\n if z]", "x = [\n    a  # note\n    for a in b  # more\n    if a\n]\n", "x = {\n    k: v\n    for k, v in d.items()\n    if v\n}\n", "x = sum(\n    a * b\n    for a, b in zip(p, q)\n)\n",
+    "x = (\n    a\n    for a in b\n)", "[x for x in y][0]", "[x for x in y].sort()", "(x for x in y).send", "{x for x in y} | {z}", "[x for x in y] + [z for z in w]", "not [x for x in y]", "-len([x for x in y])",
+    "a[(x for x in y)]", "a[[x for x in y]]", "a[[x for x in y]:{z for z in w}]", "a[x, [y for y in z]]", "a[[i for i in j]] = [k for k in l]", "x = y = [z for z in w]", "x += [z for z in w]", "x, y = (z for z in w), 1",
+    "with (x for x in y): pass", "with (x for x in y) as z, [a for a in b] as c: pass", "with ([x for x in y] as z): pass", "@f(x for x in y)\ndef g(): pass", "@[d for d in e][0]\nclass A([b for b in c][0], k={x for x in y}): pass",
+    "def f(a=[x for x in y], *b: {k: v for k in z}) -> (t for t in u):\n    return [a for a in b if a]\n", "lambda a=[x for x in y]: (z for z in a)", "if [x for x in y]:\n    pass\nelif {z for z in w}:\n    pass\n",
+    "while any(x for x in y): break", "for a, b in ((x, y) for x in p for y in q): pass", "assert all(x for x in y), [z for z in w]", "raise E([x for x in y]) from (z for z in w)", "return [x for x in y], {z for z in w}",
+    "del a[[x for x in y][0]]", "try:\n    pass\nexcept tuple(e for e in es) as err:\n    pass\n", "class A:\n    x = [i for i in range(3)]\n    y = {i: i for i in x}\n", "[x for x in y]; {z for z in w}", "x = ['é😀' for a in 'é😀'] # é",
+    "[x for x in y if z is not None and w not in v]", "{**a, 'k': [x for x in y]}", "[*a, [x for x in y]]", "{*a, (x for x in y)}", "(a, [x for x in y])", "([x for x in y],)", "x = [a.b(c)[d] for a in e.f() if a.g]",
+    "[x for x in y if z]if w else[v for v in u]", "[x for x in range(10) if x % 2 == 0 for y in range(x) if y]", "{k: {j: i for j in k} for k in l if k for i in k}", "[f'{x}' for x in y if f'{x:>{w}}']", "[x[1:] for x[0] in y[::2] if x[:1]]",
+    "x = {k: [v for *v, in k if v] for k in d}\nf({g(a, b)} for a, (b, c[0]) in z if a if b for c.d in a)\n",
+    "f(x for x in y)\ng(z for z in w)\n", "if 1:\n    x = [a\n         for a in b]\n    y = 1\n", "[1 for _ in y]", "[... for x in ...]", "[None for None_ in y]", "[x for x in y if 1 if 2 if 3]",
+]
+
 INVALID = [
     "'\0'", "#\0",
     "b'a' 'b'",
@@ -155,16 +180,24 @@ INVALID = [
     'f"{\'\\n\'}"', 'f"""{a\\\n}"""', 'f"{lambda x: 1}"', 'f"{x}" b"a"', 'b"a" f"{x}"', 'f"{*a}"', 'f"{x!r!s}"', 'f"{a}}"', 'f"{x:{y}}}"', 'f"{x:{{}"', 'f"{x:{y:{z}}}"',
     'f"{x:{}}"', 'f"{(a}"', 'f"{a)}"', 'f"{a]}"', 'f"{[a)}"', 'f"{\'a}"', 'f"{a = b}"', 'f"{a=b}"', 'f"{x:{y!z}}"', 'f"{1 +}"', 'f"{x} {" "y}"', 'x = f"{pass}"', 'f"{x}" = 1',
     'del f"{x}"', 'f"{x}" += 1', 'for f"{x}" in y: pass',
+    "f(x for x in y,)", "f(x for x in y, 1)", "f(1, x for x in y)", "f(x for x in y, k=1)", "f(k=1, x for x in y)", "f(x=1 for x in y)", "f(*x for x in y)", "f(**x for x in y)", "f(a, for x in y)",
+    "class A(x for x in y): pass", "class A(B, x for x in y): pass", "a[x for x in y]", "a[1:x for x in y]", "[*a for a in b]", "(*a for a in b)", "{**a for a in b}", "{*a for a in b}", "{a: *b for a in c}",
+    "[a, b for a in c]", "(a, b for a in c)", "{a, b for a in c}", "{a: b, c: d for a in e}", "{a: b, for a in c}", "[x, for x in y]", "(x, for x in y)", "[x for x in a, b]", "[x for x in y,]", "{a: b for a in c, }",
+    "[x for x in lambda: y]", "[x for x in y if lambda: 1]", "[x for x in a if b else c]", "[x for x in y if z else w]", "[x if y for x in z]", "[x for x in y if a, b]", "[x for x in *y]", "[x for x in y if *z]",
+    "[x for 1 in y]", "[x for not x in y]", "[x for a + b in y]", "[x for f() in y]", "[x for x in]", "[for x in y]", "[x for in y]", "[x for x y]", "[x for x]", "[x for]", "{a: b for a in c for}", "[x for x in y if]", "[x for x in y for]",
+    "(x for x in y", "[x for x in y", "{x for x in y", "{a: b for a in c", "f(x for x in y", "[x for x in y)", "(x for x in y]", "{x for x in y]", "f(x for x in y]", "[x for x in y}",
+    "x for x in y", "x = y for y in z", "return x for x in y", "[x for x in y] = 1", "(x for x in y) = 1", "{x for x in y} = 1", "{a: b for a in c} = 1", "del [x for x in y]", "del (x for x in y)", "[x for x in y] += 1",
+    "for [x for x in y] in z: pass", "with a as [x for x in y]: pass", "[x for x in y for]", "[x for x in y if z for]", "[x for [x for x in y] in z]",
+    "if x: for y in z: pass", "x = for", "lambda: for", "[x for x in y] [z for z in w]", "(x for x in y) (z for z in w) w", "{x: for x in y}", "{x for x in y: z}", "[x for x in y: z]", "f(x for x in y)(", "[x\nfor x in y\n", 'f"{x for x in}"', 'f"{[x for x in y}"', 'f"{x:{y for}}"',
 ]
 
 UNSUPPORTED = [
     "K", "a.K", "f(K=1)", "match x:\n    case _: pass\n",
     "import é", "import a as é", "from é import a", "from a import é", "from a import b as é", "class é: pass", "class A(é): pass", "class A(é=1): pass", "class A:\n    x: int = 1\n", "class A:\n    async def f(self): pass\n", "@d\nclass A:\n    def f(self): yield\n", "async def f(): pass", "@d\nasync def f(): pass",
     "async for x in y: pass", "async with a: pass", "def f(): yield", "def f(): x = yield y", "lambda: (yield)", "def f(é): pass", "lambda é: 1",
-    "global é", "try: pass\nexcept E as é: pass", "try: pass\nexcept* E: pass", "def f(): await x", "def f(a: int): x: int = 1", "for x in [y for y in z]: pass",
-    "[x for x in y]", "{x for x in y}",
-    "{x:x for x in y}", "f(x for x in y)",
-    "(x := 1)", "with (x := 1): pass", "a[(x for x in y):]",
-    "a[x:=1]", "a[1:(x:=2)]", "a[é:]", "a[1:é]", "a[::é]", "a[1:, é]", "a[[x for x in y][0]:]", "a[1:2].é", "a[await b:]",
-    'f"{[x for x in y]}"', 'f"{(x := 1)}"', 'f"{(yield)}"', 'f"{await x}"', 'f"{é}"', 'f"{a.é}"', 'f"{x:{é}}"', '"a" f"{sum(x for x in y)}"', 'f"{x:{[y for y in z][0]}}"',
+    "global é", "try: pass\nexcept E as é: pass", "try: pass\nexcept* E: pass", "def f(): await x", "def f(a: int): x: int = 1", "(x := 1)", "with (x := 1): pass",
+    "a[x:=1]", "a[1:(x:=2)]", "a[é:]", "a[1:é]", "a[::é]", "a[1:, é]", "a[1:2].é", "a[await b:]",
+    'f"{(x := 1)}"', 'f"{(yield)}"', 'f"{await x}"', 'f"{é}"', 'f"{a.é}"', 'f"{x:{é}}"',
+    "[x async for x in y]", "(x async for x in y)", "{x async for x in y}", "{a: b async for a in c}", "f(x async for x in y)", "[x for x in y async for z in w]", "[await x for x in y]", "[x for x in await y]",
+    "[x := 1 for x in y]", "[x for x in (y := z)]", "[x for x in y if (z := x)]", "f(x := 1 for x in y)", "{(k := a): b for a in c}", "[(yield) for x in y]", "[é for x in y]", "[x for é in y]", "[x for x in é]", "[x for x in y if é]", "f(é for x in y)",
 ]

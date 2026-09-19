@@ -89,7 +89,7 @@ def unsupported(-A: Data, msg: String) -> M(A):
 
 def expect_token(+tok: S.Tok, +word: String) -> M(S.Tok):
   S.choose(M(S.Tok), is_text(tok, word) || is_kind(tok, word), u => take, u =>
-    S.choose(M(S.Tok), is_text(tok, "for") || is_text(tok, "async") || is_text(tok, ":="),
+    S.choose(M(S.Tok), is_text(tok, "async") || is_text(tok, ":="),
       u => unsupported(S.Tok, "production " ++ tok_text(tok)), u => syntax(S.Tok, "expected " ++ word)))
 
 def expect(word: String) -> M(S.Tok):
