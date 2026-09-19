@@ -241,16 +241,7 @@ const OPERATIONS: Record<string, Intr> = Object.setPrototypeOf({
     C:  "$0",
     JS: "f32_bits($0)",
   },
-  f32_show: {
-    C:    "f32_show(e, $0)",
-    call: true,
-    JS:   "f32_show($0)",
-  },
-  f32_read: {
-    C:    "f32_read(e, $0)",
-    call: true,
-    JS:   "f32_read($0)",
-  },
+  ...tpl_ops("f32_", "show read", "f32_$o(e, $0)", "f32_$o($0)", true),
   ...tpl_ops("f64_", "add:+ sub:- mul:* div:/",
     "f64_rewrap(f64_unbox($0) $o f64_unbox($1))", "($0 $o $1)"),
   f64_neg: {
@@ -277,16 +268,7 @@ const OPERATIONS: Record<string, Intr> = Object.setPrototypeOf({
     C:  "$0",
     JS: "f64_bits($0)",
   },
-  f64_show: {
-    C:    "f64_show(e, $0)",
-    call: true,
-    JS:   "f64_show($0)",
-  },
-  f64_read: {
-    C:    "f64_read(e, $0)",
-    call: true,
-    JS:   "f64_read($0)",
-  },
+  ...tpl_ops("f64_", "show read", "f64_$o(e, $0)", "f64_$o($0)", true),
   u32_to_f64: {
     C:  "f64_rewrap((double)(u32)($0))",
     JS: "($0)",
@@ -332,15 +314,17 @@ const OPERATIONS: Record<string, Intr> = Object.setPrototypeOf({
   // String adapters consume inputs, except cmp which returns both original
   // owned handles. Array expression results are flattened; string expressions
   // returning aggregates use the generic boxed-result adapter.
-  string_length: { C: "str_length_take(e, $0)", JS: "str_length($0)" },
+  ...tpl_ops("string_", "length hash from_list splitlines",
+    "str_$o_take(e, $0)", "str_$o($0)"),
   string_is_empty: { C: "(str_length_take(e, $0) == 0)", JS: '($0 === "")' },
-  string_get: { C: "str_get_take(e, $0, $1, false)", JS: "str_get($0, $1)" },
+  ...tpl_ops("string_", "get:false:str_get get_end:true:str_get_end",
+    "str_get_take(e, $0, $1, $o)", "$o($0, $1)"),
   string_take: { C: "str_slice_take(e, $0, 0, $1)", JS: "$0.slice(0, str_offset($0, $1))" },
   string_drop: { C: "str_slice_take(e, $0, $1, STR_LIMIT)", JS: "$0.slice(str_offset($0, $1))" },
-  string_slice: { C: "str_slice_take(e, $0, $1, $2)", JS: "str_slice($0, $1, $2)" },
-  string_take_end: { C: "str_end_take(e, $0, $1, true)", JS: "str_end($0, $1, true)" },
-  string_drop_end: { C: "str_end_take(e, $0, $1, false)", JS: "str_end($0, $1, false)" },
-  string_get_end: { C: "str_get_take(e, $0, $1, true)", JS: "str_get_end($0, $1)" },
+  ...tpl_ops("string_", "slice replace",
+    "str_$o_take(e, $0, $1, $2)", "str_$o($0, $1, $2)"),
+  ...tpl_ops("string_", "take_end:true drop_end:false",
+    "str_end_take(e, $0, $1, $o)", "str_end($0, $1, $o)"),
   string_cut: {
     C: ["str_slice_take(e, term_keep(e, $0), 0, $1)", "str_slice_take(e, $0, $1, STR_LIMIT)"],
     JS: '{$: "Tuple", fst: $0.slice(0, str_offset($0, $1)), snd: $0.slice(str_offset($0, $1))}',
@@ -349,13 +333,14 @@ const OPERATIONS: Record<string, Intr> = Object.setPrototypeOf({
   string_append: { C: "str_append_take(e, $0, $1)", JS: "($0 + $1)" },
   string_reverse: { C: "str_transform_take(e, $0, 0)", JS: '[...$0].reverse().join("")' },
   string_cmp: { C: ["$0", "$1", "str_order_peek(e, $0, $1)"], JS: "str_cmp($0, $1)" },
-  string_order: { C: "str_order_take(e, $0, $1)", JS: "str_order($0, $1)" },
+  ...tpl_ops("string_", "order join repeat partition",
+    "str_$o_take(e, $0, $1)", "str_$o($0, $1)"),
   string_eq: { C: "(str_order_take(e, $0, $1) == 1)", JS: "($0 === $1)" },
   ...tpl_ops("string_", "is_lt:< is_le:<= is_gt:> is_ge:>=",
     "(str_order_take(e, $0, $1) $o 1)",
     '(({LT: 0, EQ: 1, GT: 2})[str_order($0, $1).$] $o 1)'),
-  string_starts_with: { C: "str_edge_take(e, $0, $1, false)", JS: "$0.startsWith($1)" },
-  string_ends_with: { C: "str_edge_take(e, $0, $1, true)", JS: "$0.endsWith($1)" },
+  ...tpl_ops("string_", "starts_with:false:startsWith ends_with:true:endsWith",
+    "str_edge_take(e, $0, $1, $o)", "$0.$o($1)"),
   string_split: { C: "str_split_take(e, $0, $1, false)", JS: "str_split($0, $1)" },
   string_lines: { C: "str_split_take(e, $0, 10, false)", JS: 'str_list($0.split("\\n"))' },
   string_trim_start: { C: "str_trim_take(e, $0, 1)", JS: '$0.replace(/^[ \\t-\\r]+/, "")' },
@@ -364,27 +349,21 @@ const OPERATIONS: Record<string, Intr> = Object.setPrototypeOf({
   string_to_upper: { C: "str_transform_take(e, $0, 1)", JS: '$0.replace(/[a-z]/g, c => String.fromCharCode(c.charCodeAt(0) - 32))' },
   string_to_lower: { C: "str_transform_take(e, $0, 2)", JS: '$0.replace(/[A-Z]/g, c => String.fromCharCode(c.charCodeAt(0) + 32))' },
   string_to_list: { C: "str_to_list_take(e, $0)", JS: "str_list([...$0])" },
-  string_from_list: { C: "str_from_list_take(e, $0)", JS: "str_from_list($0)" },
   string_concat: { C: "str_join_take(e, $0, term_pak(CID_SNIL, 0))", JS: 'str_join($0, "")' },
-  string_join: { C: "str_join_take(e, $0, $1)", JS: "str_join($0, $1)" },
-  string_repeat: { C: "str_repeat_take(e, $0, $1)", JS: "str_repeat($0, $1)" },
   string_words: { C: "str_split_take(e, $0, 0, true)", JS: 'str_list($0.split(/[ \\t-\\r]+/).filter(s => s !== ""))' },
-  string_find: { C: "str_find_take(e, $0, $1, false)", JS: "str_find($0, $1, false)" },
-  string_find_last: { C: "str_find_take(e, $0, $1, true)", JS: "str_find($0, $1, true)" },
+  ...tpl_ops("string_", "find:false find_last:true",
+    "str_find_take(e, $0, $1, $o)", "str_find($0, $1, $o)"),
   string_contains: { C: "(str_search_take(e, $0, $1, 0) != STR_ABSENT)", JS: "$0.includes($1)" },
   string_count: { C: "str_search_take(e, $0, $1, 2)", JS: "str_count($0, $1)" },
   string_replace: { C: "str_replace_take(e, $0, $1, $2)", JS: "str_replace($0, $1, $2)" },
   string_split_on: { C: "str_split_on_take(e, $0, $1)", JS: 'str_list($1 === "" ? [$0] : $0.split($1))' },
-  string_partition: { C: "str_partition_take(e, $0, $1)", JS: "str_partition($0, $1)" },
-  string_splitlines: { C: "str_splitlines_take(e, $0)", JS: "str_splitlines($0)" },
   string_capitalize: { C: "str_transform_take(e, $0, 3)", JS: "str_capitalize($0)" },
   string_zfill: { C: "str_pad_take(e, $0, $1, 48, 2)", JS: 'str_pad($0, $1, "0", 2)' },
-  string_pad_start: { C: "str_pad_take(e, $0, $1, $2, 0)", JS: "str_pad($0, $1, $2, 0)" },
-  string_pad_end: { C: "str_pad_take(e, $0, $1, $2, 1)", JS: "str_pad($0, $1, $2, 1)" },
-  string_hash: { C: "str_hash_take(e, $0)", JS: "str_hash($0)" },
+  ...tpl_ops("string_", "pad_start:0 pad_end:1",
+    "str_pad_take(e, $0, $1, $2, $o)", "str_pad($0, $1, $2, $o)"),
   // The Pike VM of base, natively: a C Regex arrives flat (prog, ngroups).
-  regex_exec: { C: "re_exec_take(e, $0, $1, $2, $3, false)", JS: "re_exec($0, $1, $2, false)" },
-  regex_match_at: { C: "re_exec_take(e, $0, $1, $2, $3, true)", JS: "re_exec($0, $1, $2, true)" },
+  ...tpl_ops("regex_", "exec:false match_at:true",
+    "re_exec_take(e, $0, $1, $2, $3, $o)", "re_exec($0, $1, $2, $o)"),
   // Map.bit borrows the key and returns it: the tree order and the 33-bit key
   // protocol of the reference definition, O(1) on C, an endpoint scan on JS.
   map_bit: { C: ["$0", "str_bit_peek(e, $0, $1)"], JS: "map_bit($0, $1)" },
@@ -1112,12 +1091,13 @@ function die(m: string): never {
 // Tpl
 // ===
 
-function tpl_ops(pre: string, names: string, C: string, JS: string):
+function tpl_ops(pre: string, names: string, C: string, JS: string, call = false):
   Record<string, Intr> {
   const out: Record<string, Intr> = {};
   for (const p of names.split(" ")) {
     const [k, o = k, jo = o] = p.split(":");
-    out[pre + k] = { C: C.replaceAll("$o", o), JS: JS.replaceAll("$o", jo) };
+    const r: Intr = { C: C.replaceAll("$o", o), JS: JS.replaceAll("$o", jo) };
+    out[pre + k] = call ? { ...r, call: true } : r;
   }
   return out;
 }
