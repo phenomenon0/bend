@@ -6,7 +6,7 @@
 #   BLOCKS=4096   log size, x 65,536 code points (a power of two; 4096 = ~283 MB)
 #   N=1000000     scattered visits      THREADS="1 4 16"  RUNS=3
 #   SHARED=1      vignette 4 also runs the variant that does NOT scale
-#   GPU=1         the appendix: the same scan through the `!` GPU lane (GPU_MEM=4GB)
+#   GPU=1         the appendix: the same scan through the `!` GPU lane (GPU_MEM=8GB; 4GB is out of memory at 4096 blocks)
 #   ONLY="1 3"    play only these vignettes
 BIN=${BIN:-/tmp/bend-strings-tour}
 . "$(dirname "$0")/../text/_lib.sh" # ROOT, CORPUS, timed
@@ -29,6 +29,8 @@ if on 1 "1. READ ONCE, VIEW FOREVER"; then
   build demos/text_stream/main.bend; build $T/views.bend
   echo "\$ stream: File.read_text, 64 KiB chunks, nothing kept between chunks"
   BEND_FILE=$LOG timed "$BIN/main" --gpu off --threads 1
+  awk '/Maximum resident/ { print "  => that is " $NF " KiB for a '"$(stat -c %s "$LOG")"'-byte file" }' "$BIN/time.txt"
+  echo "  [record 2026-09-18, lane-stream] 2.7 MiB streaming a 256 MiB file; whole-file ASCII RSS 2.03x the input at 64 MiB against a 1.5x target: a miss"
   echo "\$ views: one File.read, then every line and $N scattered stamps are views"
   FILE=$LOG N=$N timed "$BIN/views" --gpu off
 fi
@@ -101,9 +103,9 @@ if [ "${GPU:-0}" = 1 ]; then
   printf '\n== APPENDIX. THE ! GPU LANE ==\n'
   build demos/parallel/gputext.bend
   grep -n 'scan!' demos/parallel/gputext.bend
-  GPUTEXT_CORPUS=$LOG "$BIN/gputext" --gpu "${GPU_MEM:=4GB}" >/dev/null 2>&1 || true # untimed warm run
+  GPUTEXT_CORPUS=$LOG "$BIN/gputext" --gpu "${GPU_MEM:=8GB}" >/dev/null 2>&1 || true # untimed warm run
   for lane in off "$GPU_MEM"; do
-    got=$(GPUTEXT_CORPUS=$LOG "$BIN/gputext" --gpu "$lane" 2>"$BIN/err")
+    got=$(GPUTEXT_CORPUS=$LOG "$BIN/gputext" --gpu "$lane" 2>"$BIN/err") || { cat "$BIN/err"; exit 1; }
     [ "$got" = "$(cat "$LOG.oracle_gpu")" ] || { echo "MISMATCH --gpu $lane: $got"; exit 1; }
     printf '%-10s %s  %s\n' "--gpu $lane" "$got" "$(cat "$BIN/err")"
   done
