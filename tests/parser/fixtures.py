@@ -70,6 +70,17 @@ STATEMENTS += [
     "with (\n    a as b,\n    c as d\n):\n    pass\n", "with f(x) as y, (g(z)): pass", "with (a, b), c: pass", "with (yy) as b, c: pass",
     "match in x", "x = [i, in_]", "*a = 1", "*a, = 1", "[*a] = 1", "for *a in y: pass", "with a as *b: pass", "with a as *b, c: pass",
 ]
+# P5: imports. alias spans run from the first name token to the asname; ImportFrom ends at `)`.
+STATEMENTS += [
+    "import a", "import a.b.c", "import a as b", "import a.b as c, d, e.f as g", "import a . b", "import a; import b;",
+    "from a import b", "from a.b import c as d, e", "from a import (b)", "from a import (b, c,)", "from a import (b as c, d as e)",
+    "from a import (\n    b,\n    c as d,  # note\n)\n", "from a import *", "from . import a", "from .. import a", "from ... import a",
+    "from .... import a", "from ..... import a", "from .a import b", "from ..a.b import c", "from ...a import b", "from . . import a",
+    "from .import a", "from . a import b", "from .a import *", "from __future__ import annotations", "from a import b as c; x = 1",
+    "from a \\\n    import b", "if a:\n    import b\nelse:\n    from c import d\n", "def f():\n    from . import g\n    return g\n",
+    "try:\n    import a\nexcept ImportError:\n    a = None\n", "import match, case", "from match import case as _",
+    "from a import (b as c)", "import a  # é",
+]
 
 INVALID = [
     "'\0'", "#\0",
@@ -90,12 +101,16 @@ INVALID = [
     "try: pass", "try: pass\nelse: pass", "try: pass\nelse: pass\nfinally: pass", "try: pass\nexcept E as: pass",
     "try: pass\nexcept E as a.b: pass", "try: pass\nexcept E, F: pass", "try: pass\nfinally: pass\nexcept: pass",
     "try: pass\nexcept as e: pass", "except: pass", "finally: pass",
+    "import", "import a,", "import a.", "import .a", "import a as", "import a as b.c", "import (a)", "import *", "import a b", "import if",
+    "from a", "from import b", "from a import", "from a import b,", "from a import ()", "from a import (b", "from a import (*)",
+    "from a import *, b", "from a import b, *", "from a import b.c", "from a import (b.c)", "from a. import b", "from a import b as",
+    "from a import b as 1", "from .. import", "from a import (b,,)", "from a import (,)", "x = import a", "from a import b c",
     "with: pass", "with a as: pass", "with a as 1: pass", "with a, : pass", "with a as f(): pass", "with (a as b) as c: pass",
 ]
 
 UNSUPPORTED = [
     "K", "a.K", "f(K=1)", "match x:\n    case _: pass\n",
-    "import x", "from x import y", "class A: pass", "async def f(): pass", "@d\nclass A: pass", "@d\nasync def f(): pass",
+    "import é", "import a as é", "from é import a", "from a import é", "from a import b as é", "class A: pass", "async def f(): pass", "@d\nclass A: pass", "@d\nasync def f(): pass",
     "async for x in y: pass", "async with a: pass", "def f(): yield", "def f(): x = yield y", "lambda: (yield)", "def f(é): pass", "lambda é: 1",
     "global é", "try: pass\nexcept E as é: pass", "try: pass\nexcept* E: pass", "def f(): await x", "def f(a: int): x: int = 1", "for x in [y for y in z]: pass",
     "[x for x in y]", "{x for x in y}",

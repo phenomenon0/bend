@@ -41,6 +41,9 @@ type Mode is Data:
   With{paren: Bool}
   Items{items: S.Json, paren: Bool, separator: Bool}
   Names{kind: String, start: S.Pos, names: S.Json}
+  From{start: S.Pos, level: Nat}
+  Dotted{dotted: Bool, text: String, start: S.Pos}
+  Aliases{dotted: Bool, paren: Bool, names: S.Json, separator: Bool}
 
 # Primitive helpers classify unsupported productions before a syntax error.
 def expected(-A: Data, +t: S.Tok, msg: String) -> P.M(A):
@@ -410,6 +413,14 @@ def go(+fuel: Nat, +mode: Mode) -> P.M(S.Expr):
                   end : S.Pos <- P.end
                   return N.statement("Return", S.expr(value), P.tok_start(t), end)), u =>
             S.choose(P.M(S.Expr), O.unsupported(t), u => P.unsupported(S.Expr, "statement " ++ P.tok_text(t)), u =>
+              S.choose(P.M(S.Expr), P.is_text(t, "import") || P.is_text(t, "from"), u =>
+                do P.M<S.Expr>:
+                  drop : S.Tok <- P.take
+                  S.choose(P.M(S.Expr), P.is_text(t, "from"), u => go(left, From{P.tok_start(t), 0n}), u =>
+                    do P.M<S.Expr>:
+                      names : S.Expr <- go(left, Aliases{True{}, False{}, S.JEnd{}, False{}})
+                      end : S.Pos <- P.end
+                      return N.node("Import", S.JField{"names", N.carried(names), S.JEnd{}}, P.tok_start(t), end)), u =>
               S.choose(P.M(S.Expr), P.is_text(t, "global") || P.is_text(t, "nonlocal"), u =>
                 do P.M<S.Expr>:
                   drop : S.Tok <- P.take
@@ -438,7 +449,7 @@ def go(+fuel: Nat, +mode: Mode) -> P.M(S.Expr):
                         return N.node("Raise", S.JField{"exc", N.opt(exc), S.JField{"cause", N.opt(cause), S.JEnd{}}}, P.tok_start(t), end), u =>
                       do P.M<S.Expr>:
                         first : S.Expr <- go(left, TestList{0n})
-                        go(left, AfterSmall{first, P.tok_start(t)})))))))))
+                        go(left, AfterSmall{first, P.tok_start(t)}))))))))))
     case 1n+left AfterSmall{first, start}:
       P.meter(S.Expr, do P.M<S.Expr>:
         +t : S.Tok <- P.peek
@@ -662,6 +673,62 @@ def go(+fuel: Nat, +mode: Mode) -> P.M(S.Expr):
           do P.M<S.Expr>:
             end : S.Pos <- P.end
             return N.node(kind, S.JField{"names", N.arr(all), S.JEnd{}}, start, end)))
+    # `from`: leading dots count the level (`...` is one token); a bare relative import has no module.
+    case 1n+left From{+start, +level}:
+      P.meter(S.Expr, do P.M<S.Expr>:
+        +t : S.Tok <- P.peek
+        S.choose(P.M(S.Expr), P.is_text(t, ".") || P.is_text(t, "..."), u =>
+          do P.M<S.Expr>:
+            drop : S.Tok <- P.take
+            go(left, From{start, level + Bool.pick(Nat, P.is_text(t, "."), 1n, 3n)}), u =>
+          do P.M<S.Expr>:
+            module : S.Json <- S.choose(P.M(S.Json), P.is_text(t, "import") && Bool.not(Nat.is_eq(level, 0n)), u => P.M.pure(S.Json, S.JNull{}), u =>
+              do P.M<S.Json>:
+                name : S.Expr <- go(left, Dotted{True{}, "", P.tok_start(t)})
+                return N.carried(name))
+            word : S.Tok <- P.expect("import")
+            +next : S.Tok <- P.peek
+            names : S.Json <- S.choose(P.M(S.Json), P.is_text(next, "*"), u =>
+              do P.M<S.Json>:
+                drop : S.Tok <- P.take
+                return S.JArr{S.JItem{N.alias(N.dotted("*", P.tok_start(next), P.tok_end(next)), S.JNull{}, P.tok_end(next)), S.JEnd{}}}, u =>
+              do P.M<S.Json>:
+                open : S.Tok <- S.choose(P.M(S.Tok), P.is_text(next, "("), u => P.take, u => P.peek)
+                items : S.Expr <- go(left, Aliases{False{}, P.is_text(next, "("), S.JEnd{}, False{}})
+                close : S.Tok <- S.choose(P.M(S.Tok), P.is_text(next, "("), u => P.expect(")"), u => P.peek)
+                return N.carried(items))
+            end : S.Pos <- P.end
+            return N.node("ImportFrom", S.JField{"module", module, S.JField{"names", names, S.JField{"level", S.JNum{level}, S.JEnd{}}}}, start, end)))
+    case 1n+left Dotted{+dotted, text, start}:
+      P.meter(S.Expr, do P.M<S.Expr>:
+        +id : S.Tok <- ident()
+        +all : String = text ++ P.tok_text(id)
+        t : S.Tok <- P.peek
+        S.choose(P.M(S.Expr), dotted && P.is_text(t, "."), u =>
+          do P.M<S.Expr>:
+            drop : S.Tok <- P.take
+            go(left, Dotted{dotted, all ++ ".", start}), u =>
+          P.M.pure(S.Expr, N.dotted(all, start, P.tok_end(id)))))
+    # A trailing comma needs the parentheses: without them the next name is required.
+    case 1n+left Aliases{+dotted, +paren, +names, separator}:
+      P.meter(S.Expr, do P.M<S.Expr>:
+        +t : S.Tok <- P.peek
+        S.choose(P.M(S.Expr), separator, u =>
+          S.choose(P.M(S.Expr), P.is_text(t, ","), u =>
+            do P.M<S.Expr>:
+              drop : S.Tok <- P.take
+              go(left, Aliases{dotted, paren, names, False{}}), u => P.M.pure(S.Expr, N.carry(N.arr(names)))), u =>
+          S.choose(P.M(S.Expr), paren && P.is_text(t, ")") && Bool.not(N.empty(names)), u => P.M.pure(S.Expr, N.carry(N.arr(names))), u =>
+            do P.M<S.Expr>:
+              name : S.Expr <- go(left, Dotted{dotted, "", P.tok_start(t)})
+              word : S.Tok <- P.peek
+              asname : S.Json <- S.choose(P.M(S.Json), P.is_text(word, "as"), u =>
+                do P.M<S.Json>:
+                  drop : S.Tok <- P.take
+                  id : S.Tok <- ident()
+                  return S.JStr{P.tok_text(id)}, u => P.M.pure(S.Json, S.JNull{}))
+              end : S.Pos <- P.end
+              go(left, Aliases{dotted, paren, S.JItem{N.alias(name, asname, end), names}, True{}}))))
 
 # K bounds dispatches, including no-consumption transitions, per token.
 # P2 deterministic grammar fuzz records the observed global high-water mark.

@@ -293,3 +293,10 @@ def withitem(ctx: S.Expr, vars: S.Json) -> S.Json:
 
 def context(items: S.Json, +body: S.Expr, start: S.Pos) -> S.Expr:
   node("With", S.JField{"items", items, S.JField{"body", S.JArr{get_fields(body)}, S.JField{"type_comment", S.JNull{}, S.JEnd{}}}}, start, get_finish(body))
+
+# P5 imports. A dotted name travels as `$json` with its real span for the alias location.
+def dotted(text: String, lo: S.Pos, hi: S.Pos) -> S.Expr:
+  node("$json", S.JField{"value", S.JStr{text}, S.JEnd{}}, lo, hi)
+
+def alias(+name: S.Expr, asname: S.Json, end: S.Pos) -> S.Json:
+  S.expr(node("alias", S.JField{"name", carried(name), S.JField{"asname", asname, S.JEnd{}}}, get_begin(name), end))
