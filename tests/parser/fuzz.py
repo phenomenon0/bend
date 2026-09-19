@@ -50,6 +50,7 @@ def main():
                                   "def f(a, b=" + value + ", *c, d: " + value + " = 1, **e) -> " + value + ":\n    return lambda x, y=" + value + ": x;\n",
                                   "@" + value + "\ndef f():\n    for a, *b in " + value + ", c:\n        del a, b[" + value + "]\n    else:\n        assert " + value + ", a\n",
                                   "try:\n    raise " + value + " from " + value + "\nexcept " + value + " as e:\n    global g\nelse:\n    pass\nfinally:\n    x = 1\n",
+                                  "import a.b as c, d\nif " + value + ":\n    from ..e.f import (g as h, i,)\n    from . import j; from k import *\n",
                                   "with (" + value + ") as a, " + value + ":\n    pass\nwith (" + value + " as b, c):\n    nonlocal n\n"]))
     # Long lists/chains and nesting deliberately exercise non-consuming transitions.
     for n in [1, 2, 10, 50, 100, 200]:
