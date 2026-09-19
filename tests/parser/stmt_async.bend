@@ -66,6 +66,6 @@ def main() -> Bool:
     String.eq(kind(parse("async with: pass")), "Syntax") &&
     String.eq(kind(parse("await (x := 1)")), "Done") &&
     String.eq(kind(parse("[x async for x in (y := z)]")), "Done") &&
-    String.eq(kind(parse("async def f(): await é")), "Unsupported")
+    String.eq(kind(parse("async def f(): await ﬁ")), "Unsupported")
 
 #|True{}

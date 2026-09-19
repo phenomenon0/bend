@@ -1,5 +1,5 @@
 """Seeded supported-grammar generation, differential checks, and residual fuel measurements."""
-from normalize import OUT, oracle, pin
+from normalize import OUT, oracle, pin, supported
 from diff import build, run, compare
 from fixtures import EXPRESSIONS, STATEMENTS, INVALID, UNSUPPORTED
 import argparse
@@ -25,6 +25,16 @@ def fstring(rng, sub):
     tokens = [token() for _ in range(rng.randrange(1, 4))]
     tokens[rng.randrange(len(tokens))] = 'f"' + field() + '"'
     return "(" + rng.choice([" ", "\n  "]).join(tokens) + ")"
+
+
+def identifier_sources(rng, count):
+    """One non-ASCII identifier of `\\w` scalars per source, in every identifier slot: the oracle accepts it as written,
+    accepts it under another (NFKC) name, or rejects a scalar outside XID_Start / XID_Continue."""
+    from gen_ident import W, XC, XS, UNSTABLE
+    pools = [sorted(W & XS - UNSTABLE)] * 4 + [sorted(W & XC - XS - UNSTABLE), sorted(W - XC), sorted(W & UNSTABLE), [ord(c) for c in "ab_1"]]
+    slots = ["{0} = 1", "x.{0}", "f({0}=1)", "def {0}({0}): pass", "class {0}: pass", "import {0}.{0} as {0}", "from a import {0}", "global {0}", "lambda {0}: {0}",
+             "f'{{{0}}}'", "[{0} for {0} in y]", "({0} := 1)", "match x:\n    case {0}.{0}: pass\n", "try: pass\nexcept E as {0}: pass", "{0}: {0} = {0}"]
+    return [rng.choice(slots).format("".join(chr(rng.choice(rng.choice(pools))) for _ in range(rng.randrange(1, 5)))) for _ in range(count)]
 
 
 def comprehension(rng, sub):
@@ -255,6 +265,21 @@ def main():
         except (RecursionError, MemoryError) as exc:
             rec["normalization-failure"] = str(exc)
         records.append(rec)
+    identifiers = identifier_sources(random.Random(0xA57A2015), args.count)
+    for source in identifiers:
+        path.write_text(source)
+        got = run(path)
+        try:
+            want, tree = oracle(source)
+        except SyntaxError as exc:
+            if got["status"] != "syntax":
+                failures.append({"source": source, "oracle": str(exc), "result": got})
+            continue
+        if not supported(tree, source):
+            if got["status"] != "unsupported":
+                failures.append({"source": source, "expected": "unsupported", "result": got})
+        elif got["status"] != "parsed" or compare(want, got["value"]) != ([], []):
+            failures.append({"source": source, "expected": "exact", "result": got})
     for expected, cases in [("syntax", INVALID), ("unsupported", UNSUPPORTED)]:
         for source in cases:
             path.write_text(source)
@@ -268,6 +293,7 @@ def main():
               "annotated_sources": args.count // 4, "yield_sources": args.count // 4, "async_sources": args.count // 4, "walrus_sources": args.count // 2, "match_sources": args.count // 2,
               "no_limit_on_oracle_accepted": not any(f.get("result", {}).get("status") == "limit" for f in failures),
               "normalization_failures": sum("normalization-failure" in r for r in records),
+              "identifier_sources": len(identifiers),
               "negative_cases": len(INVALID) + len(UNSUPPORTED),
               "negative_runs": 2 * (len(INVALID) + len(UNSUPPORTED)),
               "js_samples": sum(r["i"] % 20 == 0 and "used" in r and "normalization-failure" not in r for r in records), "failures": len(failures), "fuel_k": 32,

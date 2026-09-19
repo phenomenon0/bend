@@ -28,6 +28,6 @@ def main() -> Bool:
     String.eq(kind(parse("from a import b,")), "Syntax") &&
     String.eq(kind(parse("from import a")), "Syntax") &&
     String.eq(kind(parse("from a import (*)")), "Syntax") &&
-    String.eq(kind(parse("import é")), "Unsupported")
+    String.eq(kind(parse("import ﬁ")), "Unsupported")
 
 #|True{}

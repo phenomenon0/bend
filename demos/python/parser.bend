@@ -8,6 +8,7 @@ import ./operators.bend as O
 import ./lexer.bend as L
 import ./scanner.bend as C
 import ./fstring.bend as F
+import ./unicode.bend as U
 
 # These are grammar modes, not saved continuations: recursive results return
 # through the ordinary Bend call stack.
@@ -68,20 +69,34 @@ type Mode is Data:
   PatMap{start: S.Pos, keys: S.Json, patterns: S.Json, separator: Bool}
   PatArgs{cls: S.Expr, patterns: S.Json, attrs: S.Json, kwds: S.Json, separator: Bool}
 
-def non_ascii(s: String) -> Bool:
+# A NAME token is a run of `word` scalars. 2: not an identifier (a scalar outside XID_Continue, or outside XID_Start in
+# first place); 1: NFKC would change it (the name the oracle stores is not the text); 0: an identifier as written.
+def ident_scalar(+n: U32, +first: Bool, +found: U32) -> U32:
+  S.choose(U32, U32.is_lt(n, 128), u => found, u =>
+    S.choose(U32, U.not_continue(n) || (first && U.not_start(n)), u => 2, u =>
+      S.choose(U32, U.unstable(n), u => U32.max(found, 1), u => found)))
+
+def ident_class(s: String, +first: Bool, +found: U32) -> U32:
   match s:
     case SNil{}:
-      False{}
+      found
     case SCon{c, tail}:
-      U32.is_ge(Char.to_u32(c), 128) || non_ascii(tail)
+      ident_class(tail, False{}, U32.max(found, ident_scalar(Char.to_u32(c), first, found)))
+
+def ident_verdict(-A: Data, +k: U32, msg: String, ok: Unit -> P.M(A)) -> P.M(A):
+  S.choose(P.M(A), U32.is_eq(k, 0), ok, u =>
+    S.choose(P.M(A), U32.is_eq(k, 2), u => P.syntax(A, "invalid character"), u => P.unsupported(A, msg)))
+
+def ident_guard(-A: Data, text: String, msg: String, ok: Unit -> P.M(A)) -> P.M(A):
+  ident_verdict(A, ident_class(text, True{}, 0), msg, ok)
 
 
 def expression_name(+t: S.Tok) -> P.M(S.Expr):
-  # Identifier normalization (NFKC) is a later language expansion.
-  S.choose(P.M(S.Expr), Bool.not(non_ascii(P.tok_text(t))), u =>
+  # Identifier normalization (NFKC) is a later language expansion; an identifier NFKC leaves alone needs none.
+  ident_guard(S.Expr, P.tok_text(t), "Unicode identifier normalization", u =>
     do P.M<S.Expr>:
       drop : S.Tok <- P.take
-      return N.name(t), u => P.unsupported(S.Expr, "Unicode identifier normalization"))
+      return N.name(t))
 
 
 def comp_start(+t: S.Tok) -> Bool:
@@ -95,7 +110,7 @@ def async_word(+t: S.Tok) -> P.M(S.Tok):
       S.choose(P.M(S.Tok), P.is_text(w, "def") || P.is_text(w, "for") || P.is_text(w, "with"), u => P.take, u => P.syntax(S.Tok, "expected def, for or with after async")))
 
 def ident_token(+t: S.Tok) -> P.M(S.Tok):
-  S.choose(P.M(S.Tok), non_ascii(P.tok_text(t)), u => P.unsupported(S.Tok, "Unicode identifier normalization"), u => P.M.pure(S.Tok, t))
+  ident_guard(S.Tok, P.tok_text(t), "Unicode identifier normalization", u => P.M.pure(S.Tok, t))
 
 # A NUMBER token with the imaginary suffix.
 def imaginary(+t: S.Tok) -> Bool:
@@ -377,7 +392,7 @@ def go(+fuel: Nat, +mode: Mode) -> P.M(S.Expr):
           do P.M<S.Expr>:
             drop : S.Tok <- P.take
             +id : S.Tok <- P.expect("NAME")
-            S.choose(P.M(S.Expr), non_ascii(P.tok_text(id)), u => P.unsupported(S.Expr, "Unicode attribute normalization"), u =>
+            ident_guard(S.Expr, P.tok_text(id), "Unicode attribute normalization", u =>
               go(left, Rest{minimum, N.attr(first, id)})), u =>
           S.choose(P.M(S.Expr), P.is_text(t, "("), u =>
             do P.M<S.Expr>:
@@ -532,7 +547,7 @@ def go(+fuel: Nat, +mode: Mode) -> P.M(S.Expr):
                     value : S.Expr <- go(left, Expression{1n})
                     go(left, Arguments{fn, open, args, S.JItem{N.kw(S.JNull{}, value, P.tok_start(t)), keywords}, True{}, True{}}), u =>
                   S.choose(P.M(S.Expr), P.is_kind(t, "NAME") && P.is_text(next, "="), u =>
-                    S.choose(P.M(S.Expr), non_ascii(P.tok_text(t)), u => P.unsupported(S.Expr, "Unicode keyword normalization"), u =>
+                    ident_guard(S.Expr, P.tok_text(t), "Unicode keyword normalization", u =>
                       do P.M<S.Expr>:
                         drop : S.Tok <- P.take
                         drop : S.Tok <- P.take
@@ -548,6 +563,7 @@ def go(+fuel: Nat, +mode: Mode) -> P.M(S.Expr):
                         do P.M<S.Expr>:
                           value : S.Expr <- go(left, Expression{0n})
                           go(left, Arguments{fn, open, S.JItem{S.expr(value), args}, keywords, seen_kw, True{}})))))))))
+    # statements accumulate reversed (a line's body pushed by N.reverse): appending made a block quadratic.
     case 1n+left Block{top, statements, end}:
       P.meter(S.Expr, do P.M<S.Expr>:
         +t : S.Tok <- P.peek
@@ -555,19 +571,19 @@ def go(+fuel: Nat, +mode: Mode) -> P.M(S.Expr):
           S.choose(P.M(S.Expr), top, u =>
             do P.M<S.Expr>:
               drop : S.Tok <- P.take
-              return N.block(statements, end), u => P.syntax(S.Expr, "expected dedent")), u =>
+              return N.block(N.reverse(statements, S.JEnd{}), end), u => P.syntax(S.Expr, "expected dedent")), u =>
           S.choose(P.M(S.Expr), P.is_kind(t, "DEDENT"), u =>
             S.choose(P.M(S.Expr), top, u => P.syntax(S.Expr, "unexpected dedent"), u =>
               do P.M<S.Expr>:
                   drop : S.Tok <- P.take
-                return N.block(statements, end)), u =>
+                return N.block(N.reverse(statements, S.JEnd{}), end)), u =>
             S.choose(P.M(S.Expr), P.is_kind(t, "NEWLINE"), u =>
               do P.M<S.Expr>:
                 drop : S.Tok <- P.take
                 go(left, Block{top, statements, end}), u =>
               do P.M<S.Expr>:
                 +line : S.Expr <- go(left, Line{})
-                go(left, Block{top, S.fields_append(statements, N.get_body(line)), N.get_finish(line)})))))
+                go(left, Block{top, N.reverse(N.get_body(line), statements), N.get_finish(line)})))))
     case 1n+left Line{}:
       P.meter(S.Expr, do P.M<S.Expr>:
         +t : S.Tok <- P.peek
@@ -606,11 +622,12 @@ def go(+fuel: Nat, +mode: Mode) -> P.M(S.Expr):
                       indent : S.Tok <- P.expect("INDENT")
                       compound : S.Expr <- go(left, Cases{subject, P.tok_start(t), S.JEnd{}, P.tok_start(t)})
                       return wrap(compound)))))))
+    # statements accumulate reversed, as in Block.
     case 1n+left Simple{statements}:
       P.meter(S.Expr, do P.M<S.Expr>:
         +small : S.Expr <- go(left, Small{})
         +t : S.Tok <- P.peek
-        +body : S.Json = S.fields_append(statements, N.one(small))
+        +body : S.Json = S.JItem{S.expr(small), statements}
         S.choose(P.M(S.Expr), P.is_text(t, ";"), u =>
           do P.M<S.Expr>:
             semi : S.Tok <- P.take
@@ -619,11 +636,11 @@ def go(+fuel: Nat, +mode: Mode) -> P.M(S.Expr):
               do P.M<S.Expr>:
                 drop : S.Tok <- P.take
                 # A compound statement ends at its last non-whitespace token: the trailing `;`.
-                return N.block(body, P.tok_end(semi)), u => go(left, Simple{body})), u =>
+                return N.block(N.reverse(body, S.JEnd{}), P.tok_end(semi)), u => go(left, Simple{body})), u =>
           S.choose(P.M(S.Expr), P.is_kind(t, "NEWLINE"), u =>
             do P.M<S.Expr>:
               drop : S.Tok <- P.take
-              return N.block(body, N.get_finish(small)), u => P.syntax(S.Expr, "expected statement separator"))))
+              return N.block(N.reverse(body, S.JEnd{}), N.get_finish(small)), u => P.syntax(S.Expr, "expected statement separator"))))
     case 1n+left Small{}:
       P.meter(S.Expr, do P.M<S.Expr>:
         +t : S.Tok <- P.peek

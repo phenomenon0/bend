@@ -61,7 +61,7 @@ def main() -> Bool:
     String.eq(kind(parse("x = 1; try: pass\nfinally: pass")), "Syntax") &&
     String.eq(kind(parse("f(@)")), "Syntax") &&
     String.eq(kind(parse("{with: 1}")), "Syntax") &&
-    String.eq(kind(parse("match é:\n    case 1: pass\n")), "Unsupported") &&
-    String.eq(kind(parse("match x:\n    case é: pass\n")), "Unsupported")
+    String.eq(kind(parse("match ﬁ:\n    case 1: pass\n")), "Unsupported") &&
+    String.eq(kind(parse("match x:\n    case ﬁ: pass\n")), "Unsupported")
 
 #|True{}

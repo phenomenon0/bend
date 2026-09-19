@@ -62,7 +62,7 @@ def main() -> Bool:
     String.eq(kind(parse("with x := 1: pass")), "Syntax") &&
     String.eq(kind(parse("(x := 1) = 2")), "Syntax") &&
     String.eq(kind(parse("(x := *a)")), "Syntax") &&
-    String.eq(kind(parse("(é := 1)")), "Unsupported") &&
-    String.eq(kind(parse("(x := é)")), "Unsupported")
+    String.eq(kind(parse("(ﬁ := 1)")), "Unsupported") &&
+    String.eq(kind(parse("(x := ﬁ)")), "Unsupported")
 
 #|True{}

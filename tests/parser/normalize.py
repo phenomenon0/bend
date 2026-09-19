@@ -175,9 +175,17 @@ Match match_case MatchValue MatchSingleton MatchSequence MatchMapping MatchClass
 
 
 def supported(tree, source=None):
-    if source is not None and any(t.type == tokenize.NAME and not t.string.isascii()
-                                  for t in tokenize.generate_tokens(io.StringIO(source).readline)):
-        return False
+    # A non-ASCII identifier is in the slice when NFKC leaves it alone (gen_ident's UNSTABLE, scalar by scalar). One with a
+    # mark is not: tokenize's NAME is `\w`, which has no marks, so it reads ERRORTOKEN there and the lexer follows tokenize.
+    if source is not None:
+        for t in tokenize.generate_tokens(io.StringIO(source).readline):
+            # An f-string is one STRING token here: an unstable scalar anywhere in it counts, its literal text included.
+            fstring = t.type == tokenize.STRING and "f" in t.string[:t.string.index(t.string[-1])].lower()
+            if (fstring or t.type in (tokenize.NAME, tokenize.ERRORTOKEN)) and not t.string.isascii():
+                from gen_ident import UNSTABLE
+                if t.type == tokenize.ERRORTOKEN or any(ord(c) in UNSTABLE for c in t.string):
+                    return False
+        return all(type(node).__name__ in SUPPORTED for node in ast.walk(tree))
     return all(type(node).__name__ in SUPPORTED and
                not (isinstance(node, ast.Name) and not node.id.isascii()) and
                not (isinstance(node, ast.Attribute) and not node.attr.isascii())

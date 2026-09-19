@@ -259,16 +259,16 @@ INVALID = [
 
 UNSUPPORTED = [
     "K", "a.K", "f(K=1)",
-    "import \xe9", "import a as \xe9", "from \xe9 import a", "from a import \xe9", "from a import b as \xe9", "class \xe9: pass", "class A(\xe9): pass", "class A(\xe9=1): pass",
-    "def f(\xe9): pass", "lambda \xe9: 1",
-    "global \xe9", "try: pass\nexcept E as \xe9: pass",
-    "a[\xe9:]", "a[1:\xe9]", "a[::\xe9]", "a[1:, \xe9]", "a[1:2].\xe9",
-    "f\"{\xe9}\"", "f\"{a.\xe9}\"", "f\"{x:{\xe9}}\"",
-    "[é for x in y]", "[x for é in y]", "[x for x in é]", "[x for x in y if é]", "f(é for x in y)",
-    "\xe9: int", "x: \xe9", "x: int = \xe9", "a.\xe9: int", "x: a.\xe9", "(\xe9): int = 1",
+    "import ﬁ", "import a as ﬁ", "from ﬁ import a", "from a import ﬁ", "from a import b as ﬁ", "class ﬁ: pass", "class A(ﬁ): pass", "class A(ﬁ=1): pass",
+    "def f(ﬁ): pass", "lambda ﬁ: 1",
+    "global ﬁ", "try: pass\nexcept E as ﬁ: pass",
+    "a[ﬁ:]", "a[1:ﬁ]", "a[::ﬁ]", "a[1:, ﬁ]", "a[1:2].ﬁ",
+    "f\"{ﬁ}\"", "f\"{a.ﬁ}\"", "f\"{x:{ﬁ}}\"",
+    "[ﬁ for x in y]", "[x for ﬁ in y]", "[x for x in ﬁ]", "[x for x in y if ﬁ]", "f(ﬁ for x in y)",
+    "ﬁ: int", "x: ﬁ", "x: int = ﬁ", "a.ﬁ: int", "x: a.ﬁ", "(ﬁ): int = 1",
     # P11 / P12: yield and await parse; what they hold may still be a later slice.
-    "def f(): yield \xe9", "yield from \xe9",
-    "async def f(): await é", "async def é(): pass", "async for é in y: pass",
+    "def f(): yield ﬁ", "yield from ﬁ",
+    "async def f(): await ﬁ", "async def ﬁ(): pass", "async for ﬁ in y: pass",
 ]
 
 # P12 (async / await), P13 (walrus) and P14 (match) live in their own files: this one is at its token cap.
@@ -278,3 +278,5 @@ from fixtures_match import MATCH_STATEMENTS, MATCH_INVALID, MATCH_UNSUPPORTED
 STATEMENTS += ASYNC_STATEMENTS + WALRUS_STATEMENTS + MATCH_STATEMENTS
 INVALID += ASYNC_INVALID + WALRUS_INVALID + MATCH_INVALID
 UNSUPPORTED += WALRUS_UNSUPPORTED + MATCH_UNSUPPORTED
+# A non-ASCII identifier NFKC leaves alone parses as written; one it would change (ﬁ -> fi) is still a later slice.
+STATEMENTS += [s.replace("ﬁ", "é") for s in UNSUPPORTED if "ﬁ" in s]
