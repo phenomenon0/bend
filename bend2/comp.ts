@@ -4847,17 +4847,23 @@ INLINE Term str_copy_take(Env e, Term s) {
   return str_view_owned(e, q);
 }
 
+// A fresh node of n <= 3 words, its boxed fields already sealed.
+INLINE Term str_node(Env e, u32 cid, u32 n, u64 a, u64 b, u64 c) {
+  Loc l = heap_alloc(e, cls_fit(n));
+  if (err_seen(e.mem)) { return term_pak(CID_NONE, 0); }
+  e.mem[l] = a;
+  if (n > 1) { e.mem[l + 1] = b; }
+  if (n > 2) { e.mem[l + 2] = c; }
+  return term_ctr(cid, l);
+}
+
 INLINE Term str_get_take(Env e, Term s, Nat n, bool end) {
   StrParts p = str_peek(e, s);
   bool ok = end ? n > 0 && n <= p.len : n < p.len;
   Term c = ok ? term_pak(CID_CHR, str_at_peek(e, p,
     end ? p.len - (u32)n : (u32)n)) : 0;
   term_sink(e, s);
-  if (!ok) { return term_pak(CID_NONE, 0); }
-  Loc l = heap_alloc(e, 0);
-  if (err_seen(e.mem)) { return term_pak(CID_NONE, 0); }
-  e.mem[l] = c;
-  return term_ctr(CID_SOME, l);
+  return ok ? str_node(e, CID_SOME, 1, c, 0, 0) : term_pak(CID_NONE, 0);
 }
 
 // Map.bit's 33-bit key protocol: position 33*i says whether cell i exists;
@@ -5064,18 +5070,21 @@ typedef struct {
   u32 pos, matched, poll;
 } StrSearch;
 
-INLINE void str_search_close(Env e, THR StrSearch* k) {
-  if (!k->table) { return; }
+INLINE void str_scratch_free(Env e, Cls cls, Loc l) {
   if (err_seen(e.mem)) {
     // heap_free intentionally stops on a sticky error. This private scratch
     // block has no children: recycle it locally without clearing the error
     // or publishing to the shared bank after a device failure.
-    e.mem[k->table] = ALC_AT(e, k->cls);
-    ALC_AT(e, k->cls) = k->table;
-    ALC_LEN(e, k->cls) += 1ull << k->cls;
+    e.mem[l] = ALC_AT(e, cls);
+    ALC_AT(e, cls) = l;
+    ALC_LEN(e, cls) += 1ull << cls;
   } else {
-    heap_free(e, k->cls, k->table);
+    heap_free(e, cls, l);
   }
+}
+
+INLINE void str_search_close(Env e, THR StrSearch* k) {
+  if (k->table) { str_scratch_free(e, k->cls, k->table); }
   k->table = 0;
 }
 
@@ -5142,10 +5151,8 @@ INLINE u64 str_search_take(Env e, Term s, Term needle, u32 mode) {
 INLINE Term str_find_take(Env e, Term s, Term needle, bool last) {
   u64 at = str_search_take(e, s, needle, last ? 1 : 0);
   if (at == STR_ABSENT || err_seen(e.mem)) { return term_pak(CID_NONE, 0); }
-  Loc l = heap_alloc(e, 0);
-  if (err_seen(e.mem)) { return term_pak(CID_NONE, 0); }
-  e.mem[l] = at; // Nat is a raw word even in a generic Some payload.
-  return term_ctr(CID_SOME, l);
+  // Nat is a raw word even in a generic Some payload.
+  return str_node(e, CID_SOME, 1, at, 0, 0);
 }
 
 // Borrow a range, return an owned zero-copy window (empty never pins).
@@ -5330,16 +5337,6 @@ INLINE void re_copy(Env e, Loc dst, Loc src, u64 n) {
   for (u64 j = 0; j < n; j++) { e.mem[dst + j] = e.mem[src + j]; }
 }
 
-// A fresh node of n <= 3 words, its boxed fields already sealed.
-INLINE Term re_node(Env e, u32 cid, u32 n, u64 a, u64 b, u64 c) {
-  Loc l = heap_alloc(e, cls_fit(n));
-  if (err_seen(e.mem)) { return term_pak(CID_NONE, 0); }
-  e.mem[l] = a;
-  if (n > 1) { e.mem[l + 1] = b; }
-  if (n > 2) { e.mem[l + 2] = c; }
-  return term_ctr(cid, l);
-}
-
 // Consumes prog and s; returns a boxed Maybe<Match>.
 INLINE Term re_exec_take(Env e, Term prog, u64 ng, Term s, u64 at, bool anchored) {
   StrParts p = str_peek(e, s);
@@ -5360,9 +5357,8 @@ INLINE Term re_exec_take(Env e, Term prog, u64 ng, Term s, u64 at, bool anchored
   if (m >= RE_DEAD || sets >= RE_DEAD || ng >= 1u << 22 || words > STR_LIMIT) {
     err_post(e.mem, ERR_HEAP);
   }
-  if (err_seen(e.mem)) { term_sink(e, prog); term_sink(e, s); return out; }
   Cls cls = cls_fit((u32)words);
-  Loc P = heap_alloc(e, cls);
+  Loc P = err_seen(e.mem) ? 0 : heap_alloc(e, cls);
   if (err_seen(e.mem)) { term_sink(e, prog); term_sink(e, s); return out; }
   Loc S = P + m, V = S + sets, RP = V + m, RS = RP + m, CP = RS + m * ns;
   Loc CS = CP + m, CUR = CS + m * ns, BEST = CUR + ns, STK = BEST + ns;
@@ -5461,21 +5457,14 @@ INLINE Term re_exec_take(Env e, Term prog, u64 ng, Term s, u64 at, bool anchored
       u64 a = e.mem[BEST + 2 * g], b = e.mem[BEST + 2 * g + 1];
       Term f = term_pak(CID_NONE, 0);
       if (a != RE_NONE && b != RE_NONE) {
-        f = re_node(e, CID_SOME, 1, rfc_seal(e, re_node(e, CID_TUPLE, 2, a, b, 0)), 0, 0);
+        f = str_node(e, CID_SOME, 1, rfc_seal(e, str_node(e, CID_TUPLE, 2, a, b, 0)), 0, 0);
       }
       gs = str_cons(e, f, gs);
     }
-    out = re_node(e, CID_SOME, 1,
-      rfc_seal(e, re_node(e, CID_MATCH, 3, lo, hi, rfc_seal(e, gs))), 0, 0);
+    out = str_node(e, CID_SOME, 1,
+      rfc_seal(e, str_node(e, CID_MATCH, 3, lo, hi, rfc_seal(e, gs))), 0, 0);
   }
-  if (err_seen(e.mem)) {
-    // As str_search_close: childless private scratch, recycled locally.
-    e.mem[P] = ALC_AT(e, cls);
-    ALC_AT(e, cls) = P;
-    ALC_LEN(e, cls) += 1ull << cls;
-  } else {
-    heap_free(e, cls, P);
-  }
+  str_scratch_free(e, cls, P);
   term_sink(e, prog); term_sink(e, s);
   return out;
 }
