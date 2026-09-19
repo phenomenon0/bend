@@ -30,7 +30,7 @@ type Mode is Data:
   Line{}
   Simple{statements: S.Json}
   Small{}
-  AfterSmall{first: S.Expr, start: S.Pos, soft: Bool}
+  AfterSmall{first: S.Expr, start: S.Pos}
   Assignment{targets: S.Json, start: S.Pos}
   Compound{kind: String, start: S.Pos}
   Suite{}
@@ -42,7 +42,7 @@ type Mode is Data:
   Def{start: S.Pos, decorators: S.Json}
   For{start: S.Pos}
   Try{start: S.Pos}
-  Handlers{start: S.Pos, body: S.Expr, handlers: S.Json, end: S.Pos}
+  Handlers{start: S.Pos, body: S.Expr, handlers: S.Json, end: S.Pos, star: Bool}
   With{paren: Bool}
   Items{items: S.Json, paren: Bool, separator: Bool}
   Names{kind: String, start: S.Pos, names: S.Json}
@@ -56,10 +56,17 @@ type Mode is Data:
   Comp{kind: String, head: S.Json, start: S.Pos, close: String, gens: S.Json}
   Ifs{items: S.Json}
   Star{}
-
-# Primitive helpers classify unsupported productions before a syntax error.
-def expected(-A: Data, +t: S.Tok, msg: String) -> P.M(A):
-  S.choose(P.M(A), O.unsupported(t), u => P.unsupported(A, "production " ++ P.tok_text(t)), u => P.syntax(A, msg))
+  Subject{}
+  Cases{subject: S.Expr, start: S.Pos, cases: S.Json, end: S.Pos}
+  Patterns{}
+  Pattern{star: Bool}
+  Alternatives{items: S.Json, start: S.Pos, end: S.Pos}
+  Closed{}
+  PatName{value: S.Expr, dotted: Bool, key: Bool}
+  Literal{}
+  PatSeq{start: S.Pos, close: String, items: S.Json, separator: Bool, end: S.Pos}
+  PatMap{start: S.Pos, keys: S.Json, patterns: S.Json, separator: Bool}
+  PatArgs{cls: S.Expr, patterns: S.Json, attrs: S.Json, kwds: S.Json, separator: Bool}
 
 def non_ascii(s: String) -> Bool:
   match s:
@@ -89,6 +96,10 @@ def async_word(+t: S.Tok) -> P.M(S.Tok):
 
 def ident_token(+t: S.Tok) -> P.M(S.Tok):
   S.choose(P.M(S.Tok), non_ascii(P.tok_text(t)), u => P.unsupported(S.Tok, "Unicode identifier normalization"), u => P.M.pure(S.Tok, t))
+
+# A NUMBER token with the imaginary suffix.
+def imaginary(+t: S.Tok) -> Bool:
+  String.ends_with(P.tok_text(t), "j") || String.ends_with(P.tok_text(t), "J")
 
 def ident() -> P.M(S.Tok):
   do P.M<S.Tok>:
@@ -235,7 +246,7 @@ def go(+fuel: Nat, +mode: Mode) -> P.M(S.Expr):
                                     value : S.Expr <- go(left, Expression{1n})
                                     go(left, Dictionary{P.tok_start(t), N.one(key), N.one(value), True{}})), u =>
                               go(left, Sequence{"Set", P.tok_start(t), "}", N.one(key), True{}}))), u =>
-                      expected(S.Expr, t, "expected expression")))))))))))
+                      P.syntax(S.Expr, "expected expression")))))))))))
     case 1n+left Strings{raw, kind, start, end}:
       P.meter(S.Expr, do P.M<S.Expr>:
         +t : S.Tok <- P.peek
@@ -327,14 +338,13 @@ def go(+fuel: Nat, +mode: Mode) -> P.M(S.Expr):
           S.choose(P.M(S.Expr), comp_start(t), u =>
             S.choose(P.M(S.Expr), separator && N.sole(items), u =>
               go(left, Comp{kind ++ "Comp", S.JField{"elt", N.head(items), S.JEnd{}}, start, close, S.JEnd{}}), u => P.syntax(S.Expr, "comprehension takes one unstarred element")), u =>
-          S.choose(P.M(S.Expr), O.unsupported(t), u => P.unsupported(S.Expr, "expression"), u =>
             S.choose(P.M(S.Expr), separator, u =>
               do P.M<S.Expr>:
                 drop : S.Tok <- P.expect(",")
                 go(left, Sequence{kind, start, close, items, False{}}), u =>
               do P.M<S.Expr>:
                 value : S.Expr <- go(left, Item{0n})
-                go(left, Sequence{kind, start, close, S.JItem{S.expr(value), items}, True{}}))))))
+                go(left, Sequence{kind, start, close, S.JItem{S.expr(value), items}, True{}})))))
     case 1n+left Dictionary{start, +keys, values, +separator}:
       P.meter(S.Expr, do P.M<S.Expr>:
         +t : S.Tok <- P.peek
@@ -345,7 +355,6 @@ def go(+fuel: Nat, +mode: Mode) -> P.M(S.Expr):
           S.choose(P.M(S.Expr), comp_start(t), u =>
             S.choose(P.M(S.Expr), separator && N.sole(keys), u =>
               go(left, Comp{"DictComp", S.JField{"key", N.head(keys), S.JField{"value", N.head(values), S.JEnd{}}}, start, "}", S.JEnd{}}), u => P.syntax(S.Expr, "dict comprehension takes one key: value")), u =>
-          S.choose(P.M(S.Expr), O.unsupported(t), u => P.unsupported(S.Expr, "dictionary item"), u =>
             S.choose(P.M(S.Expr), separator, u =>
               do P.M<S.Expr>:
                 drop : S.Tok <- P.expect(",")
@@ -359,7 +368,7 @@ def go(+fuel: Nat, +mode: Mode) -> P.M(S.Expr):
                   key : S.Expr <- go(left, Expression{1n})
                   colon : S.Tok <- P.expect(":")
                   value : S.Expr <- go(left, Expression{1n})
-                  go(left, Dictionary{start, S.JItem{S.expr(key), keys}, S.JItem{S.expr(value), values}, True{}})))))))
+                  go(left, Dictionary{start, S.JItem{S.expr(key), keys}, S.JItem{S.expr(value), values}, True{}}))))))
     case 1n+left Rest{minimum, first}:
       P.meter(S.Expr, do P.M<S.Expr>:
         +t : S.Tok <- P.peek
@@ -511,7 +520,6 @@ def go(+fuel: Nat, +mode: Mode) -> P.M(S.Expr):
               do P.M<S.Expr>:
                 +gen : S.Expr <- go(left, Comp{"GeneratorExp", S.JField{"elt", N.head(args), S.JEnd{}}, open, ")", S.JEnd{}})
                 return N.call(fn, N.one(gen), S.JEnd{}, N.get_finish(gen)), u => P.syntax(S.Expr, "generator expression must be parenthesized")), u =>
-          S.choose(P.M(S.Expr), O.unsupported(t), u => P.unsupported(S.Expr, "argument"), u =>
             S.choose(P.M(S.Expr), separator, u =>
               do P.M<S.Expr>:
                 drop : S.Tok <- P.expect(",")
@@ -539,7 +547,7 @@ def go(+fuel: Nat, +mode: Mode) -> P.M(S.Expr):
                             go(left, Arguments{fn, open, S.JItem{S.expr(N.starred(P.tok_start(t), value)), args}, keywords, seen_kw, True{}})), u =>
                         do P.M<S.Expr>:
                           value : S.Expr <- go(left, Expression{0n})
-                          go(left, Arguments{fn, open, S.JItem{S.expr(value), args}, keywords, seen_kw, True{}}))))))))))
+                          go(left, Arguments{fn, open, S.JItem{S.expr(value), args}, keywords, seen_kw, True{}})))))))))
     case 1n+left Block{top, statements, end}:
       P.meter(S.Expr, do P.M<S.Expr>:
         +t : S.Tok <- P.peek
@@ -588,7 +596,16 @@ def go(+fuel: Nat, +mode: Mode) -> P.M(S.Expr):
                         body : S.Expr <- go(left, Suite{})
                         return N.context(N.carried(items), body, start)))))
                 return wrap(N.async(compound, P.is_text(t, "async"))), u =>
-              go(left, Simple{S.JEnd{}})))))
+              # `match` is a soft keyword: only `match subject_expr ':' NEWLINE` starts the statement (CPython tries it
+              # first); any other line is a simple statement on the name. Only the header backtracks, as for `with (`.
+              S.choose(P.M(S.Expr), Bool.not(P.is_text(t, "match")), u => go(left, Simple{S.JEnd{}}), u =>
+                do P.M<S.Expr>:
+                  +subject : S.Expr <- P.attempt(S.Expr, go(left, Subject{}), N.none())
+                  S.choose(P.M(S.Expr), N.is_none(subject), u => go(left, Simple{S.JEnd{}}), u =>
+                    do P.M<S.Expr>:
+                      indent : S.Tok <- P.expect("INDENT")
+                      compound : S.Expr <- go(left, Cases{subject, P.tok_start(t), S.JEnd{}, P.tok_start(t)})
+                      return wrap(compound)))))))
     case 1n+left Simple{statements}:
       P.meter(S.Expr, do P.M<S.Expr>:
         +small : S.Expr <- go(left, Small{})
@@ -606,7 +623,7 @@ def go(+fuel: Nat, +mode: Mode) -> P.M(S.Expr):
           S.choose(P.M(S.Expr), P.is_kind(t, "NEWLINE"), u =>
             do P.M<S.Expr>:
               drop : S.Tok <- P.take
-              return N.block(body, N.get_finish(small)), u => expected(S.Expr, t, "expected statement separator"))))
+              return N.block(body, N.get_finish(small)), u => P.syntax(S.Expr, "expected statement separator"))))
     case 1n+left Small{}:
       P.meter(S.Expr, do P.M<S.Expr>:
         +t : S.Tok <- P.peek
@@ -623,7 +640,6 @@ def go(+fuel: Nat, +mode: Mode) -> P.M(S.Expr):
                   value : S.Expr <- go(left, TestList{1n})
                   end : S.Pos <- P.end
                   return N.statement("Return", S.expr(value), P.tok_start(t), end)), u =>
-            S.choose(P.M(S.Expr), O.unsupported(t), u => P.unsupported(S.Expr, "statement " ++ P.tok_text(t)), u =>
               S.choose(P.M(S.Expr), P.is_text(t, "import") || P.is_text(t, "from"), u =>
                 do P.M<S.Expr>:
                   drop : S.Tok <- P.take
@@ -660,9 +676,9 @@ def go(+fuel: Nat, +mode: Mode) -> P.M(S.Expr):
                         return N.node("Raise", S.JField{"exc", N.opt(exc), S.JField{"cause", N.opt(cause), S.JEnd{}}}, P.tok_start(t), end), u =>
                       do P.M<S.Expr>:
                         first : S.Expr <- go(left, Star{})
-                        go(left, AfterSmall{first, P.tok_start(t), P.is_text(t, "match")}))))))))))
-    # `target: annotation [= value]`. `match (x):` and `match [x]:` read as a target up to the `:`; only a match header ends the line there.
-    case 1n+left AfterSmall{+first, +start, soft}:
+                        go(left, AfterSmall{first, P.tok_start(t)})))))))))
+    # `target: annotation [= value]`.
+    case 1n+left AfterSmall{+first, +start}:
       P.meter(S.Expr, do P.M<S.Expr>:
         +t : S.Tok <- P.peek
         S.choose(P.M(S.Expr), P.is_text(t, "="), u =>
@@ -680,24 +696,18 @@ def go(+fuel: Nat, +mode: Mode) -> P.M(S.Expr):
             S.choose(P.M(S.Expr), P.is_text(t, ":"), u =>
               do P.M<S.Expr>:
                 drop : S.Tok <- P.take
-                next : S.Tok <- P.peek
-                S.choose(P.M(S.Expr), soft && P.is_kind(next, "NEWLINE"), u => P.unsupported(S.Expr, "match statement"), u =>
+                target : S.Json <- P.lift(S.Json, N.ann_target(first, start))
+                note : S.Expr <- go(left, Expression{1n})
+                eq : S.Tok <- P.peek
+                value : S.Expr <- S.choose(P.M(S.Expr), P.is_text(eq, "="), u =>
                   do P.M<S.Expr>:
-                    target : S.Json <- P.lift(S.Json, N.ann_target(first, start))
-                    note : S.Expr <- go(left, Expression{1n})
-                    eq : S.Tok <- P.peek
-                    value : S.Expr <- S.choose(P.M(S.Expr), P.is_text(eq, "="), u =>
-                      do P.M<S.Expr>:
-                        drop : S.Tok <- P.take
-                        go(left, Star{}), u => P.M.pure(S.Expr, N.none()))
-                    end : S.Pos <- P.end
-                    return N.annotated(target, note, value, String.eq(N.get_tag(first), "Name") && Bool.not(N.is_grouped(first)), start, end)), u =>
-              S.choose(P.M(S.Expr), String.eq(N.get_tag(first), "Name") &&
-                String.eq(N.string(N.get(N.get_fields(first), "id")), "match") && Bool.not(O.is_end(t)), u =>
-                P.unsupported(S.Expr, "match statement"), u =>
-                do P.M<S.Expr>:
-                  end : S.Pos <- P.end
-                  return N.statement("Expr", S.expr(first), start, end))))))
+                    drop : S.Tok <- P.take
+                    go(left, Star{}), u => P.M.pure(S.Expr, N.none()))
+                end : S.Pos <- P.end
+                return N.annotated(target, note, value, String.eq(N.get_tag(first), "Name") && Bool.not(N.is_grouped(first)), start, end), u =>
+              do P.M<S.Expr>:
+                end : S.Pos <- P.end
+                return N.statement("Expr", S.expr(first), start, end)))))
     case 1n+left Assignment{targets, start}:
       P.meter(S.Expr, do P.M<S.Expr>:
         +value : S.Expr <- go(left, Star{})
@@ -798,7 +808,7 @@ def go(+fuel: Nat, +mode: Mode) -> P.M(S.Expr):
                       value : S.Expr <- go(left, Optional{"=", False{}})
                       next : N.Sig <- P.lift(N.Sig, N.sig_add(sig, N.arg(id, note, end), value, Nat.is_ge(phase, 2n), P.tok_start(t)))
                       go(left, Params{close, ann, next, Bool.pick(Nat, Nat.is_eq(phase, 2n), 3n, phase), True{}}), u =>
-                    expected(S.Expr, t, "expected parameter"))))))))
+                    P.syntax(S.Expr, "expected parameter"))))))))
     case 1n+left Decorators{items}:
       P.meter(S.Expr, do P.M<S.Expr>:
         +t : S.Tok <- P.peek
@@ -814,7 +824,7 @@ def go(+fuel: Nat, +mode: Mode) -> P.M(S.Expr):
               w : S.Tok <- S.choose(P.M(S.Tok), P.is_text(t, "async"), u => P.expect("def"), u => P.M.pure(S.Tok, t))
               function : S.Expr <- S.choose(P.M(S.Expr), P.is_text(t, "class"), u => go(left, Class{P.tok_start(t), N.arr(items)}), u =>
                 go(left, Def{P.tok_start(t), N.arr(items)}))
-              return wrap(N.async(function, P.is_text(t, "async"))), u => expected(S.Expr, t, "expected def or class after decorator"))))
+              return wrap(N.async(function, P.is_text(t, "async"))), u => P.syntax(S.Expr, "expected def or class after decorator"))))
     case 1n+left Def{start, decorators}:
       P.meter(S.Expr, do P.M<S.Expr>:
         id : S.Tok <- ident()
@@ -852,15 +862,19 @@ def go(+fuel: Nat, +mode: Mode) -> P.M(S.Expr):
       P.meter(S.Expr, do P.M<S.Expr>:
         colon : S.Tok <- P.expect(":")
         +body : S.Expr <- go(left, Suite{})
-        go(left, Handlers{start, body, S.JEnd{}, N.get_finish(body)}))
-    case 1n+left Handlers{start, body, +handlers, +end}:
+        go(left, Handlers{start, body, S.JEnd{}, N.get_finish(body), False{}}))
+    # `except*` (TryStar): every handler of the `try` has the star, and a star handler names its type.
+    case 1n+left Handlers{start, body, +handlers, +end, +star}:
       P.meter(S.Expr, do P.M<S.Expr>:
         +t : S.Tok <- P.peek
         S.choose(P.M(S.Expr), P.is_text(t, "except"), u =>
           do P.M<S.Expr>:
             drop : S.Tok <- P.take
+            +mark : S.Tok <- P.peek
+            +starred : Bool <- P.M.pure(Bool, P.is_text(mark, "*"))
+            drop : S.Tok <- S.choose(P.M(S.Tok), starred, u => P.take, u => P.peek)
             +next : S.Tok <- P.peek
-            S.choose(P.M(S.Expr), P.is_text(next, "*"), u => P.unsupported(S.Expr, "except*"), u =>
+            S.choose(P.M(S.Expr), (Bool.not(N.empty(handlers)) && Bool.xor(star, starred)) || (starred && P.is_text(next, ":")), u => P.syntax(S.Expr, "except and except* do not mix; except* names its type"), u =>
               do P.M<S.Expr>:
                 kind : S.Expr <- S.choose(P.M(S.Expr), P.is_text(next, ":"), u => P.M.pure(S.Expr, N.none()), u => go(left, Expression{1n}))
                 +word : S.Tok <- P.peek
@@ -871,12 +885,12 @@ def go(+fuel: Nat, +mode: Mode) -> P.M(S.Expr):
                     return S.JStr{P.tok_text(id)}, u => P.M.pure(S.Json, S.JNull{}))
                 colon : S.Tok <- P.expect(":")
                 +suite : S.Expr <- go(left, Suite{})
-                go(left, Handlers{start, body, S.JItem{S.expr(N.handler(kind, name, suite, P.tok_start(t))), handlers}, N.get_finish(suite)})), u =>
+                go(left, Handlers{start, body, S.JItem{S.expr(N.handler(kind, name, suite, P.tok_start(t))), handlers}, N.get_finish(suite), starred})), u =>
           S.choose(P.M(S.Expr), N.empty(handlers) && Bool.not(P.is_text(t, "finally")), u => P.syntax(S.Expr, "expected except or finally"), u =>
             do P.M<S.Expr>:
               +other : S.Expr <- S.choose(P.M(S.Expr), N.empty(handlers), u => P.M.pure(S.Expr, N.block(S.JEnd{}, end)), u => go(left, Clause{"else", end}))
               final : S.Expr <- go(left, Clause{"finally", N.get_finish(other)})
-              return N.attempt(body, handlers, other, final, start))))
+              return N.attempt(star, body, handlers, other, final, start))))
     case 1n+left With{+paren}:
       P.meter(S.Expr, do P.M<S.Expr>:
         open : S.Tok <- S.choose(P.M(S.Tok), paren, u => P.take, u => P.peek)
@@ -970,6 +984,230 @@ def go(+fuel: Nat, +mode: Mode) -> P.M(S.Expr):
                   return S.JStr{P.tok_text(id)}, u => P.M.pure(S.Json, S.JNull{}))
               end : S.Pos <- P.end
               go(left, Aliases{dotted, paren, S.JItem{N.alias(name, asname, end), names}, True{}}))))
+
+    # P14 `match`. The header is the one choice point: `subject_expr ':' NEWLINE`, the subject a named expression or a star tuple.
+    case 1n+left Subject{}:
+      P.meter(S.Expr, do P.M<S.Expr>:
+        drop : S.Tok <- P.take
+        +subject : S.Expr <- go(left, TestList{0n})
+        colon : S.Tok <- P.expect(":")
+        line : S.Tok <- P.expect("NEWLINE")
+        S.choose(P.M(S.Expr), String.eq(N.get_tag(subject), "Starred"), u => P.syntax(S.Expr, "starred subject requires tuple comma"), u => P.M.pure(S.Expr, subject)))
+    # `case_block+` to the DEDENT: nothing but `case` lines; `case` is a name anywhere else.
+    case 1n+left Cases{subject, start, +cases, end}:
+      P.meter(S.Expr, do P.M<S.Expr>:
+        +t : S.Tok <- P.peek
+        S.choose(P.M(S.Expr), P.is_text(t, "case"), u =>
+          do P.M<S.Expr>:
+            drop : S.Tok <- P.take
+            pattern : S.Expr <- go(left, Patterns{})
+            word : S.Tok <- P.peek
+            guard : S.Expr <- S.choose(P.M(S.Expr), P.is_text(word, "if"), u =>
+              do P.M<S.Expr>:
+                drop : S.Tok <- P.take
+                go(left, Expression{0n}), u => P.M.pure(S.Expr, N.none()))
+            colon : S.Tok <- P.expect(":")
+            +body : S.Expr <- go(left, Suite{})
+            go(left, Cases{subject, start, S.JItem{N.match_case(pattern, guard, body), cases}, N.get_finish(body)}), u =>
+          S.choose(P.M(S.Expr), P.is_kind(t, "DEDENT") && Bool.not(N.empty(cases)), u =>
+            do P.M<S.Expr>:
+              drop : S.Tok <- P.take
+              return N.node("Match", S.JField{"subject", S.expr(subject), S.JField{"cases", N.arr(cases), S.JEnd{}}}, start, end), u =>
+            P.syntax(S.Expr, "expected case"))))
+    # `patterns`: an open sequence (a comma, no brackets) or one pattern.
+    case 1n+left Patterns{}:
+      P.meter(S.Expr, do P.M<S.Expr>:
+        +first : S.Expr <- go(left, Pattern{True{}})
+        +t : S.Tok <- P.peek
+        S.choose(P.M(S.Expr), P.is_text(t, ","), u =>
+          do P.M<S.Expr>:
+            drop : S.Tok <- P.take
+            go(left, PatSeq{N.get_begin(first), "", N.one(first), False{}, P.tok_end(t)}), u =>
+          S.choose(P.M(S.Expr), String.eq(N.get_tag(first), "MatchStar"), u => P.syntax(S.Expr, "starred pattern requires a sequence"), u => P.M.pure(S.Expr, first))))
+    # `maybe_star_pattern` / `pattern`: `or_pattern ['as' NAME]`. Spans take the covers: `(a) as b` starts at the parenthesis.
+    case 1n+left Pattern{star}:
+      P.meter(S.Expr, do P.M<S.Expr>:
+        +t : S.Tok <- P.peek
+        S.choose(P.M(S.Expr), P.is_text(t, "*"), u =>
+          S.choose(P.M(S.Expr), Bool.not(star), u => P.syntax(S.Expr, "starred pattern requires a sequence"), u =>
+            do P.M<S.Expr>:
+              drop : S.Tok <- P.take
+              +id : S.Tok <- ident()
+              return N.node("MatchStar", S.JField{"name", N.capture(id), S.JEnd{}}, P.tok_start(t), P.tok_end(id))), u =>
+          do P.M<S.Expr>:
+            +first : S.Expr <- go(left, Closed{})
+            bar : S.Tok <- P.peek
+            +whole : S.Expr <- S.choose(P.M(S.Expr), P.is_text(bar, "|"), u =>
+              go(left, Alternatives{N.one(first), N.get_begin(first), N.get_finish(first)}), u => P.M.pure(S.Expr, first))
+            word : S.Tok <- P.peek
+            S.choose(P.M(S.Expr), Bool.not(P.is_text(word, "as")), u => P.M.pure(S.Expr, whole), u =>
+              do P.M<S.Expr>:
+                drop : S.Tok <- P.take
+                +id : S.Tok <- ident()
+                S.choose(P.M(S.Expr), P.is_text(id, "_"), u => P.syntax(S.Expr, "cannot use '_' as a target"), u =>
+                  P.M.pure(S.Expr, N.match_as(S.expr(whole), N.capture(id), N.get_begin(whole), P.tok_end(id)))))))
+    case 1n+left Alternatives{items, start, end}:
+      P.meter(S.Expr, do P.M<S.Expr>:
+        t : S.Tok <- P.peek
+        S.choose(P.M(S.Expr), P.is_text(t, "|"), u =>
+          do P.M<S.Expr>:
+            drop : S.Tok <- P.take
+            +value : S.Expr <- go(left, Closed{})
+            go(left, Alternatives{S.JItem{S.expr(value), items}, start, N.get_finish(value)}), u =>
+          P.M.pure(S.Expr, N.node("MatchOr", S.JField{"patterns", N.arr(items), S.JEnd{}}, start, end))))
+    # `closed_pattern`. `_` is the wildcard before anything else: `_.a` and `_()` are Syntax, as in the oracle.
+    case 1n+left Closed{}:
+      P.meter(S.Expr, do P.M<S.Expr>:
+        +t : S.Tok <- P.peek
+        S.choose(P.M(S.Expr), P.is_text(t, "None") || P.is_text(t, "True") || P.is_text(t, "False"), u =>
+          do P.M<S.Expr>:
+            drop : S.Tok <- P.take
+            return N.statement("MatchSingleton", S.choose(S.Json, P.is_text(t, "None"), u => S.JNull{}, u => S.JBool{P.is_text(t, "True")}), P.tok_start(t), P.tok_end(t)), u =>
+          S.choose(P.M(S.Expr), P.is_kind(t, "NAME"), u =>
+            do P.M<S.Expr>:
+              drop : S.Tok <- P.take
+              +id : S.Tok <- ident_token(t)
+              S.choose(P.M(S.Expr), P.is_text(id, "_"), u => P.M.pure(S.Expr, N.match_as(S.JNull{}, S.JNull{}, P.tok_start(id), P.tok_end(id))), u =>
+                go(left, PatName{N.name(id), False{}, False{}})), u =>
+            S.choose(P.M(S.Expr), P.is_kind(t, "NUMBER") || P.is_kind(t, "STRING") || P.is_text(t, "-"), u =>
+              do P.M<S.Expr>:
+                +value : S.Expr <- go(left, Literal{})
+                return N.statement("MatchValue", S.expr(value), N.get_begin(value), N.get_finish(value)), u =>
+              S.choose(P.M(S.Expr), P.is_text(t, "("), u =>
+                do P.M<S.Expr>:
+                  drop : S.Tok <- P.take
+                  +next : S.Tok <- P.peek
+                  S.choose(P.M(S.Expr), P.is_text(next, ")"), u => go(left, PatSeq{P.tok_start(t), ")", S.JEnd{}, False{}, P.tok_start(t)}), u =>
+                    do P.M<S.Expr>:
+                      +first : S.Expr <- go(left, Pattern{True{}})
+                      +close : S.Tok <- P.peek
+                      S.choose(P.M(S.Expr), P.is_text(close, ")") && Bool.not(String.eq(N.get_tag(first), "MatchStar")), u =>
+                        do P.M<S.Expr>:
+                          drop : S.Tok <- P.take
+                          return N.group(first, P.tok_start(t), P.tok_end(close)), u =>
+                        do P.M<S.Expr>:
+                          comma : S.Tok <- P.expect(",")
+                          go(left, PatSeq{P.tok_start(t), ")", N.one(first), False{}, P.tok_start(t)}))), u =>
+                S.choose(P.M(S.Expr), P.is_text(t, "["), u =>
+                  do P.M<S.Expr>:
+                    drop : S.Tok <- P.take
+                    go(left, PatSeq{P.tok_start(t), "]", S.JEnd{}, False{}, P.tok_start(t)}), u =>
+                  S.choose(P.M(S.Expr), P.is_text(t, "{"), u =>
+                    do P.M<S.Expr>:
+                      drop : S.Tok <- P.take
+                      go(left, PatMap{P.tok_start(t), S.JEnd{}, S.JEnd{}, False{}}), u =>
+                    P.syntax(S.Expr, "expected pattern"))))))))
+    # `name_or_attr` after its first NAME: a class pattern before `(`, a value pattern when dotted, else a capture. A mapping key is the dotted name itself.
+    case 1n+left PatName{+value, +dotted, +key}:
+      P.meter(S.Expr, do P.M<S.Expr>:
+        +t : S.Tok <- P.peek
+        S.choose(P.M(S.Expr), P.is_text(t, "."), u =>
+          do P.M<S.Expr>:
+            drop : S.Tok <- P.take
+            id : S.Tok <- ident()
+            go(left, PatName{N.attr(value, id), True{}, key}), u =>
+          S.choose(P.M(S.Expr), key, u =>
+            S.choose(P.M(S.Expr), dotted, u => P.M.pure(S.Expr, value), u => P.syntax(S.Expr, "mapping key is a literal or a dotted name")), u =>
+            S.choose(P.M(S.Expr), P.is_text(t, "("), u =>
+              do P.M<S.Expr>:
+                drop : S.Tok <- P.take
+                go(left, PatArgs{value, S.JEnd{}, S.JEnd{}, S.JEnd{}, False{}}), u =>
+              P.M.pure(S.Expr, S.choose(S.Expr, dotted, u => N.statement("MatchValue", S.expr(value), N.get_begin(value), N.get_finish(value)), u =>
+                N.match_as(S.JNull{}, N.get(N.get_fields(value), "id"), N.get_begin(value), N.get_finish(value))))))))
+    # `literal_expr`: strings, a signed number, `real ('+' | '-') imaginary`; None / True / False as a mapping key.
+    case 1n+left Literal{}:
+      P.meter(S.Expr, do P.M<S.Expr>:
+        +t : S.Tok <- P.peek
+        S.choose(P.M(S.Expr), P.is_kind(t, "STRING"), u => go(left, Prefix{14n}), u =>
+          S.choose(P.M(S.Expr), P.is_text(t, "None") || P.is_text(t, "True") || P.is_text(t, "False"), u =>
+            do P.M<S.Expr>:
+              drop : S.Tok <- P.take
+              return N.atom_constant(t), u =>
+            do P.M<S.Expr>:
+              sign : S.Tok <- S.choose(P.M(S.Tok), P.is_text(t, "-"), u => P.take, u => P.peek)
+              +number : S.Tok <- P.expect("NUMBER")
+              +real : S.Expr <- P.M.pure(S.Expr, S.choose(S.Expr, P.is_text(t, "-"), u => N.unary("USub", P.tok_start(t), N.atom_constant(number)), u => N.atom_constant(number)))
+              +op : S.Tok <- P.peek
+              S.choose(P.M(S.Expr), Bool.not(P.is_text(op, "+") || P.is_text(op, "-")), u => P.M.pure(S.Expr, real), u =>
+                S.choose(P.M(S.Expr), imaginary(number), u => P.syntax(S.Expr, "real number required in complex literal"), u =>
+                  do P.M<S.Expr>:
+                    drop : S.Tok <- P.take
+                    +imag : S.Tok <- P.expect("NUMBER")
+                    S.choose(P.M(S.Expr), imaginary(imag), u => P.M.pure(S.Expr, N.binary(real, O.tag(P.tok_text(op)), N.atom_constant(imag))), u =>
+                      P.syntax(S.Expr, "imaginary number required in complex literal")))))))
+    # `[...]`, `(...)` past its first comma, and the open sequence (close ""), which ends before `:` or `if` at its last token.
+    case 1n+left PatSeq{+start, +close, +items, separator, +end}:
+      P.meter(S.Expr, do P.M<S.Expr>:
+        +t : S.Tok <- P.peek
+        S.choose(P.M(S.Expr), S.choose(Bool, String.is_empty(close), u => P.is_text(t, ":") || P.is_text(t, "if"), u => P.is_text(t, close)), u =>
+          do P.M<S.Expr>:
+            last : S.Tok <- S.choose(P.M(S.Tok), String.is_empty(close), u => P.peek, u => P.take)
+            return N.node("MatchSequence", S.JField{"patterns", N.arr(items), S.JEnd{}}, start, S.choose(S.Pos, String.is_empty(close), u => end, u => P.tok_end(t))), u =>
+          S.choose(P.M(S.Expr), separator, u =>
+            do P.M<S.Expr>:
+              comma : S.Tok <- P.expect(",")
+              go(left, PatSeq{start, close, items, False{}, P.tok_end(t)}), u =>
+            do P.M<S.Expr>:
+              +value : S.Expr <- go(left, Pattern{True{}})
+              go(left, PatSeq{start, close, S.JItem{S.expr(value), items}, True{}, N.get_finish(value)}))))
+    # `{key: pattern, ..., **rest}`: the rest is last and no `_`.
+    case 1n+left PatMap{+start, +keys, +patterns, separator}:
+      P.meter(S.Expr, do P.M<S.Expr>:
+        +t : S.Tok <- P.peek
+        S.choose(P.M(S.Expr), P.is_text(t, "}"), u =>
+          do P.M<S.Expr>:
+            drop : S.Tok <- P.take
+            return N.match_mapping(keys, patterns, S.JNull{}, start, P.tok_end(t)), u =>
+          S.choose(P.M(S.Expr), separator, u =>
+            do P.M<S.Expr>:
+              comma : S.Tok <- P.expect(",")
+              go(left, PatMap{start, keys, patterns, False{}}), u =>
+            S.choose(P.M(S.Expr), P.is_text(t, "**"), u =>
+              do P.M<S.Expr>:
+                drop : S.Tok <- P.take
+                +id : S.Tok <- ident()
+                comma : S.Tok <- P.peek
+                drop : S.Tok <- S.choose(P.M(S.Tok), P.is_text(comma, ","), u => P.take, u => P.peek)
+                +close : S.Tok <- P.expect("}")
+                S.choose(P.M(S.Expr), P.is_text(id, "_"), u => P.syntax(S.Expr, "cannot use '_' as a target"), u =>
+                  P.M.pure(S.Expr, N.match_mapping(keys, patterns, N.capture(id), start, P.tok_end(close)))), u =>
+              do P.M<S.Expr>:
+                key : S.Expr <- S.choose(P.M(S.Expr), P.is_kind(t, "NAME"), u =>
+                  do P.M<S.Expr>:
+                    drop : S.Tok <- P.take
+                    id : S.Tok <- ident_token(t)
+                    go(left, PatName{N.name(id), False{}, True{}}), u => go(left, Literal{}))
+                colon : S.Tok <- P.expect(":")
+                value : S.Expr <- go(left, Pattern{False{}})
+                go(left, PatMap{start, S.JItem{S.expr(key), keys}, S.JItem{S.expr(value), patterns}, True{}})))))
+    # `Class(positional..., name=pattern...)`: no positional pattern after a keyword one. The oracle's positional gather takes a `_`
+    # with no look at the `=` (a capture has that lookahead) and PEG never gives it back: `C(a, _=1)` is Syntax, `C(_=1)` and `C(a, b=1, _=2)` parse.
+    case 1n+left PatArgs{+cls, +patterns, +attrs, +kwds, separator}:
+      P.meter(S.Expr, do P.M<S.Expr>:
+        +t : S.Tok <- P.peek
+        +next : S.Tok <- P.second
+        S.choose(P.M(S.Expr), P.is_text(t, ")"), u =>
+          do P.M<S.Expr>:
+            drop : S.Tok <- P.take
+            return N.node("MatchClass", S.JField{"cls", S.expr(cls), S.JField{"patterns", N.arr(patterns), S.JField{"kwd_attrs", N.arr(attrs),
+              S.JField{"kwd_patterns", N.arr(kwds), S.JEnd{}}}}}, N.get_begin(cls), P.tok_end(t)), u =>
+          S.choose(P.M(S.Expr), separator, u =>
+            do P.M<S.Expr>:
+              comma : S.Tok <- P.expect(",")
+              go(left, PatArgs{cls, patterns, attrs, kwds, False{}}), u =>
+            S.choose(P.M(S.Expr), P.is_kind(t, "NAME") && P.is_text(next, "="), u =>
+              do P.M<S.Expr>:
+                drop : S.Tok <- P.take
+                drop : S.Tok <- P.take
+                id : S.Tok <- ident_token(t)
+                S.choose(P.M(S.Expr), P.is_text(t, "_") && N.empty(attrs) && Bool.not(N.empty(patterns)), u => P.syntax(S.Expr, "wildcard keyword after positional patterns"), u =>
+                  do P.M<S.Expr>:
+                    value : S.Expr <- go(left, Pattern{False{}})
+                    go(left, PatArgs{cls, patterns, S.JItem{S.JStr{P.tok_text(id)}, attrs}, S.JItem{S.expr(value), kwds}, True{}})), u =>
+              S.choose(P.M(S.Expr), Bool.not(N.empty(attrs)), u => P.syntax(S.Expr, "positional patterns follow keyword patterns"), u =>
+                do P.M<S.Expr>:
+                  value : S.Expr <- go(left, Pattern{False{}})
+                  go(left, PatArgs{cls, S.JItem{S.expr(value), patterns}, attrs, kwds, True{}}))))))
 
 
 def raw_result(+ts: List<&2, S.Tok>) -> Result<&2, &2, S.Error, P.Reply<S.Expr>>:

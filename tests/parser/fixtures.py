@@ -258,25 +258,23 @@ INVALID = [
 ]
 
 UNSUPPORTED = [
-    "K", "a.K", "f(K=1)", "match x:\n    case _: pass\n",
+    "K", "a.K", "f(K=1)",
     "import \xe9", "import a as \xe9", "from \xe9 import a", "from a import \xe9", "from a import b as \xe9", "class \xe9: pass", "class A(\xe9): pass", "class A(\xe9=1): pass",
     "def f(\xe9): pass", "lambda \xe9: 1",
-    "global \xe9", "try: pass\nexcept E as \xe9: pass", "try: pass\nexcept* E: pass",
+    "global \xe9", "try: pass\nexcept E as \xe9: pass",
     "a[\xe9:]", "a[1:\xe9]", "a[::\xe9]", "a[1:, \xe9]", "a[1:2].\xe9",
     "f\"{\xe9}\"", "f\"{a.\xe9}\"", "f\"{x:{\xe9}}\"",
     "[é for x in y]", "[x for é in y]", "[x for x in é]", "[x for x in y if é]", "f(é for x in y)",
     "\xe9: int", "x: \xe9", "x: int = \xe9", "a.\xe9: int", "x: a.\xe9", "(\xe9): int = 1",
-    "match (x):\n    case _: pass\n", "match [x]:\n    case _: pass\n", "match x, y:\n    case _: pass\n", "match (x), y:\n    case _: pass\n", "match x.y:\n    case _: pass\n", "match (x).y[0]:\n    case z: w: int = 1\n", "match -x:\n    case _: pass\n",
-    "match x:\n    case _:\n        y: int = 1\n",
     # P11 / P12: yield and await parse; what they hold may still be a later slice.
     "def f(): yield \xe9", "yield from \xe9",
-    "async def f(): await é", "async def é(): pass", "async for é in y: pass", "async def f():\n    match x:\n        case _: await y\n",
-    "def f():\n    match x:\n        case _: yield\n",
+    "async def f(): await é", "async def é(): pass", "async for é in y: pass",
 ]
 
-# P12 (async / await) and P13 (walrus) live in their own files: this one is at its token cap.
+# P12 (async / await), P13 (walrus) and P14 (match) live in their own files: this one is at its token cap.
 from fixtures_async import ASYNC_STATEMENTS, ASYNC_INVALID
 from fixtures_walrus import WALRUS_STATEMENTS, WALRUS_INVALID, WALRUS_UNSUPPORTED
-STATEMENTS += ASYNC_STATEMENTS + WALRUS_STATEMENTS
-INVALID += ASYNC_INVALID + WALRUS_INVALID
-UNSUPPORTED += WALRUS_UNSUPPORTED
+from fixtures_match import MATCH_STATEMENTS, MATCH_INVALID, MATCH_UNSUPPORTED
+STATEMENTS += ASYNC_STATEMENTS + WALRUS_STATEMENTS + MATCH_STATEMENTS
+INVALID += ASYNC_INVALID + WALRUS_INVALID + MATCH_INVALID
+UNSUPPORTED += WALRUS_UNSUPPORTED + MATCH_UNSUPPORTED

@@ -128,6 +128,23 @@ def either_go(-A: Data, first: M(A), other: M(A), s: State) -> Result<&2, &2, S.
 def either(-A: Data, first: M(A), other: M(A)) -> M(A):
   either_go(A, first, other)
 
+# The `match` header: a Syntax failure of `act` yields `other` on the saved state (fuel too); Unsupported and Limit stand.
+def recover(-A: Data, r: Result<&2, &2, S.Error, Reply<A>>, other: A, s: State) -> Result<&2, &2, S.Error, Reply<A>>:
+  match r:
+    case Done{x}:
+      Done{x}
+    case Fail{S.PErr{S.Syntax{}, pos, msg}}:
+      Done{Reply{other, s}}
+    case Fail{e}:
+      Fail{e}
+
+def attempt_go(-A: Data, act: M(A), other: A, s: State) -> Result<&2, &2, S.Error, Reply<A>>:
+  State{+ts, +last, +fuel} = s
+  recover(A, act(State{ts, last, fuel}), other, State{ts, last, fuel})
+
+def attempt(-A: Data, act: M(A), other: A) -> M(A):
+  attempt_go(A, act, other)
+
 # An f-string field: `act` parses the field's own tokens on its own budget,
 # then the outer tokens, end and fuel resume untouched.
 def resume(-A: Data, ts: List<&2, S.Tok>, last: S.Pos, fuel: Nat, r: Result<&2, &2, S.Error, Reply<A>>) -> Result<&2, &2, S.Error, Reply<A>>:

@@ -170,7 +170,8 @@ IfExp Call keyword Assign AugAssign Expr If While Return Pass Break Continue
 Lambda arguments arg FunctionDef For Global Nonlocal Delete Assert Raise Try ExceptHandler With withitem
 Import ImportFrom alias ClassDef Slice JoinedStr FormattedValue
 ListComp SetComp DictComp GeneratorExp comprehension AnnAssign Yield YieldFrom
-AsyncFunctionDef AsyncFor AsyncWith Await NamedExpr""".split())
+AsyncFunctionDef AsyncFor AsyncWith Await NamedExpr TryStar
+Match match_case MatchValue MatchSingleton MatchSequence MatchMapping MatchClass MatchStar MatchAs MatchOr""".split())
 
 
 def supported(tree, source=None):

@@ -328,8 +328,8 @@ def loop(target: S.Json, iter: S.Expr, body: S.Expr, +other: S.Expr, start: S.Po
 def handler(kind: S.Expr, name: S.Json, +body: S.Expr, start: S.Pos) -> S.Expr:
   node("ExceptHandler", S.JField{"type", opt(kind), S.JField{"name", name, S.JField{"body", S.JArr{get_fields(body)}, S.JEnd{}}}}, start, get_finish(body))
 
-def attempt(body: S.Expr, handlers: S.Json, other: S.Expr, +final: S.Expr, start: S.Pos) -> S.Expr:
-  node("Try", S.JField{"body", S.JArr{get_fields(body)}, S.JField{"handlers", arr(handlers), S.JField{"orelse", S.JArr{get_fields(other)},
+def attempt(star: Bool, body: S.Expr, handlers: S.Json, other: S.Expr, +final: S.Expr, start: S.Pos) -> S.Expr:
+  node(Bool.pick(String, star, "TryStar", "Try"), S.JField{"body", S.JArr{get_fields(body)}, S.JField{"handlers", arr(handlers), S.JField{"orelse", S.JArr{get_fields(other)},
     S.JField{"finalbody", S.JArr{get_fields(final)}, S.JEnd{}}}}}, start, get_finish(final))
 
 def withitem(ctx: S.Expr, vars: S.Json) -> S.Json:
@@ -398,3 +398,16 @@ def clause(target: S.Json, iter: S.Expr, ifs: S.Json, is_async: Bool) -> S.Json:
 
 def comp(kind: String, head: S.Json, gens: S.Json, lo: S.Pos, hi: S.Pos) -> S.Expr:
   node(kind, S.fields_append(head, S.JField{"generators", arr(gens), S.JEnd{}}), lo, hi)
+
+# P14 `match`. `match_case` carries no location. A capture's name is null for `_` (the wildcard, `*_`).
+def match_case(pattern: S.Expr, guard: S.Expr, body: S.Expr) -> S.Json:
+  plain("match_case", S.JField{"pattern", S.expr(pattern), S.JField{"guard", opt(guard), S.JField{"body", S.JArr{get_fields(body)}, S.JEnd{}}}})
+
+def capture(+id: S.Tok) -> S.Json:
+  S.choose(S.Json, P.is_text(id, "_"), u => S.JNull{}, u => S.JStr{P.tok_text(id)})
+
+def match_as(pattern: S.Json, name: S.Json, lo: S.Pos, hi: S.Pos) -> S.Expr:
+  node("MatchAs", S.JField{"pattern", pattern, S.JField{"name", name, S.JEnd{}}}, lo, hi)
+
+def match_mapping(keys: S.Json, patterns: S.Json, rest: S.Json, lo: S.Pos, hi: S.Pos) -> S.Expr:
+  node("MatchMapping", S.JField{"keys", arr(keys), S.JField{"patterns", arr(patterns), S.JField{"rest", rest, S.JEnd{}}}}, lo, hi)

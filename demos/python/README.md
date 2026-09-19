@@ -51,12 +51,17 @@ comprehensions (`is_async` 1). Both words are keywords in 3.11: `async = 1` is `
 expressions (`NamedExpr{target, value}`, the target a `Name` in `Store`) parse where the grammar
 names `named_expression`: in parentheses, an `if` / `while` head, a positional argument, a display
 or subscript element, a comprehension's element or filter, an f-string field, a decorator; anywhere
-else a bare `:=` is `Syntax`, as is a target that is no bare name. It follows
+else a bare `:=` is `Syntax`, as is a target that is no bare name. `match` statements
+(`Match{subject, cases}`, `match_case{pattern, guard, body}` and the eight patterns `MatchValue` /
+`MatchSingleton` / `MatchSequence` / `MatchMapping` / `MatchClass` / `MatchStar` / `MatchAs` /
+`MatchOr`): `match` and `case` are soft keywords, so only `match subject_expr ':' NEWLINE` at a
+statement's head starts one (the header alone backtracks; `match = 1`, `match(x)`, `match [x]: int`
+stay simple statements) and its block holds nothing but `case` clauses. It follows
 `ast.parse`'s syntax acceptance rather than Python compilation's additional
 scope checks (`*a = 1` parses, and so does `yield` or `await` outside a function or in a comprehension).
-`except*`, `match`, non-ASCII
-identifiers, and other later-slice
-productions report `Unsupported`. Syntax failures and limits have distinct
+`except*` is `TryStar` (the `Try` fields; every handler of the `try` has the star and names its
+type). Only non-ASCII identifiers report `Unsupported`: a compound statement where a simple one
+belongs (`if a: with b: pass`) is `Syntax`, as in the oracle. Syntax failures and limits have distinct
 `Syntax` and `Limit` kinds. Failure prints `error KIND LINE COL MESSAGE` and
 exits 1. Bracket nesting is bounded at the oracle's 200; 201 is `Limit`.
 
