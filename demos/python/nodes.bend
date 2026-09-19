@@ -305,3 +305,7 @@ def alias(+name: S.Expr, asname: S.Json, end: S.Pos) -> S.Json:
 def class(id: S.Tok, +call: S.Expr, +body: S.Expr, decorators: S.Json, start: S.Pos) -> S.Expr:
   node("ClassDef", S.JField{"name", S.JStr{P.tok_text(id)}, S.JField{"bases", get(get_fields(call), "args"), S.JField{"keywords", get(get_fields(call), "keywords"),
     S.JField{"body", S.JArr{get_fields(body)}, S.JField{"decorator_list", decorators, S.JEnd{}}}}}}, start, get_finish(body))
+
+# P7 slices. An absent bound is `$none`; the span runs from the first token to the last one taken.
+def slice(lower: S.Expr, upper: S.Expr, step: S.Expr, start: S.Pos, end: S.Pos) -> S.Expr:
+  node("Slice", S.JField{"lower", opt(lower), S.JField{"upper", opt(upper), S.JField{"step", opt(step), S.JEnd{}}}}, start, end)
