@@ -22,13 +22,15 @@ pushed to upstream; `our` remote = `phenomenon0/bend`.
    all workstreams; codex output is never final.** Streams keep their own
    branches (`lane-strings`, `lane-regex`, `lane-parser`, …) off `omen`.
 
-0b. **Battery carve-out (2026-09-18):** `strings deep` may fail in `[interpret]`
-   or `[js build]` with a bun-frontend stack overflow ("the machine stack
-   overflowed"). That exact signature is a known, measured upstream fragility
-   (11–16/60 build failures, rates in `docs/omen/lanes/strings-cont.md`); it
-   does not block integration when every other lane/test is green. Any other
-   failure blocks. Owner: orchestrator — fixture-headroom rework or upstream
-   issue (stats available).
+0b. **Battery carve-out — CLOSED (2026-09-18, `lane-deepfix`):** the `strings
+   deep` frontend stack overflow ("the machine stack overflowed") is fixed at
+   source: the fixture's last deep `Nat` literal (`4097n`, 4,097 nested `Succ`
+   under the checker's check-ctr recursion) is now computed. Measured 28/240 →
+   0/240 frontend runs, strings suite 11/11 serial runs green under load;
+   report `docs/omen/lanes/deep-fix.md`. No carve-out remains: **any** battery
+   failure blocks, this signature included — if it reappears, look for a new
+   large literal before retrying. Authoring rule: big operands are computed
+   (`Nat.mul(64n, 64n)`), never written as literals.
 
 1. **Update**: `git fetch origin` (upstream); new snapshot lands on `main`.
 2. **Port**: generate a patch from the source of truth and 3-way apply —
