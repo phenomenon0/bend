@@ -320,26 +320,29 @@ type Utf8.Dec is Data:
 def Utf8.Dec.new() -> Utf8.Dec:
   Dec{0, 0}
 
+def File.read_text.Raw() -> Type:
+  File & Result<&1, &1, U32 & String, U32 & U32 & String>
+
+def File.read_text.Out() -> Type:
+  File & Result<&1, &1, U32 & String, Utf8.Dec & String>
+
 def File.read_text.go(file: File, pend: U32, need: U32, max: U32) ->
-  IO(File & Result<&1, &1, U32 & String, U32 & U32 & String>):
+  IO(File.read_text.Raw()):
   import "./effs/file_read_text_go.c"
   import "./effs/file_read_text_go.js"
 
-def File.read_text.pack(got: File & Result<&1, &1, U32 & String, U32 & U32 & String>) ->
-  IO(File & Result<&1, &1, U32 & String, Utf8.Dec & String>):
+def File.read_text.pack(got: File.read_text.Raw()) -> IO(File.read_text.Out()):
   (file, r) = got
   match r:
     case Fail{e}:
-      IO.pure(File & Result<&1, &1, U32 & String, Utf8.Dec & String>, (file, Fail{e}))
+      IO.pure(File.read_text.Out(), (file, Fail{e}))
     case Done{(pend, (need, text))}:
-      IO.pure(File & Result<&1, &1, U32 & String, Utf8.Dec & String>,
-        (file, Done{(Dec{pend, need}, text)}))
+      IO.pure(File.read_text.Out(), (file, Done{(Dec{pend, need}, text)}))
 
 def File.read_text(file: File, dec: Utf8.Dec, max: U32) ->
   IO(File & Result<&1, &1, U32 & String, Utf8.Dec & String>):
   Dec{pend, need} = dec
-  IO.bind(File & Result<&1, &1, U32 & String, U32 & U32 & String>,
-    File & Result<&1, &1, U32 & String, Utf8.Dec & String>,
+  IO.bind(File.read_text.Raw(), File.read_text.Out(),
     File.read_text.go(file, pend, need, max), File.read_text.pack)
 
 def File.write(file: File, data: String) ->
@@ -3488,9 +3491,10 @@ def Regex.exec.fin(st: Regex.exec.State()) -> Maybe<&2, Match>:
     case (work, None{}):
       None{}
 
-# Walks the subject, and also gives where it stopped; the first `at` chars are skipped (they still set
-# `prev` for `^` `\b`). `anchored` drops the fresh thread after position `at`;
-# `ne` refuses an empty match at `at` without cutting the threads below it
+# Walks the subject and gives where it stopped; the first `at` chars are
+# skipped (they still set `prev` for `^` `\b`). `anchored` drops the fresh
+# thread after `at`; `ne` refuses an empty match at `at` without cutting
+# the threads below it
 def Regex.exec.run(s: String, at: Nat, +prog: List<&2, Inst>, +full: Bool, +anchored: Bool, ne: Bool, +start: Regex.exec.Threads(), +i: Nat, prev: Maybe<&2, U32>, st: Regex.exec.State()) -> Maybe<&2, Match> & Nat:
   match s at st:
     case SCon{Chr{x}, t}, 1n+a, st:
@@ -3502,8 +3506,8 @@ def Regex.exec.run(s: String, at: Nat, +prog: List<&2, Inst>, +full: Bool, +anch
     case SNil{}, _, (work, +best):
       (Regex.exec.fin(Regex.exec.post(best, Regex.exec.feed(prog, full, ne, None{}, Regex.exec.alive(prog, (i, (prev, SNil{})), work, start, Maybe.is_some(&2, Regex.exec.Caps(), best))))), i)
 
-# The search enters one char before `at` (a view, not a walk): that char
-# is only `prev` for `^` `\b`. `at` past the end clamps, as Python's pos does
+# Enters one char before `at` (a view, not a walk): it is only `prev` for
+# `^` `\b`. `at` past the end clamps, as Python's pos
 def Regex.exec.walk(re: Regex, +s: String, at: Nat, full: Bool, anchored: Bool, ne: Bool) -> Maybe<&2, Match> & Nat:
   match re:
     case Regex{prog, n}:
@@ -3527,10 +3531,10 @@ def Regex.fullmatch(re: Regex, s: String) -> Maybe<&2, Match>:
   Regex.exec.go(re, s, 0n, True{}, True{}, False{})
 
 # Derived API. `find_all` `split` `replace` run on one budget, never reset
-# per result: a search from `at` must afford (1 + length - at) * weight up
-# front, the worst case of one exec whatever the lane, then pays only the
-# span it walked; the output is paid from what is left before it is built. Out of budget is an error, never a
-# partial answer
+# per result: a search from `at` must afford (1 + length - at) * weight, the
+# worst case of one exec whatever the lane, then pays only the span it
+# walked; the output is paid from what is left before it is built. Out of
+# budget is an error, never a partial answer
 def Regex.find(re: Regex, s: String) -> Maybe<&2, Match>:
   Regex.exec(re, s, 0n)
 
