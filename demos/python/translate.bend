@@ -93,8 +93,6 @@ def ty_of(e: Ir) -> String:
       ty(t)
     case IPrim{bend, args, t, loc}:
       ty(t)
-    case IReturn{val, loc}:
-      ty_of(val)
     case _:
       ""
 
@@ -105,8 +103,8 @@ def arg_tys(e: Ir) -> String:
     case _:
       ""
 
-def fail(b, -A: Kind(b), kind: S.ErrorKind, +loc: S.Json, msg: String) -> Result<&2, b, S.Error, A>:
-  Fail{S.error(kind, S.Pos{Lint.line(loc), Lint.col(loc)}, msg)}
+def fail(b, -A: Kind(b), k: S.ErrorKind, +loc: S.Json, msg: String) -> Result<&2, b, S.Error, A>:
+  Fail{S.error(k, S.Pos{Lint.line(loc), Lint.col(loc)}, msg)}
 
 def refuse(b, -A: Kind(b), +loc: S.Json, msg: String) -> Result<&2, b, S.Error, A>:
   fail(b, A, S.Unsupported{}, loc, msg ++ Lint.at(loc))
@@ -174,7 +172,7 @@ def grant(cs: List<&2, Contract>, +recv: Ir, +args: Ir, +attr: String, +loc: S.J
       S.choose(Result<&2, &2, S.Error, Ir>, ok, u => Done{IPrim{bend, IArg{recv, args}, ret, loc}}, u =>
         grant(rest, recv, args, attr, loc))
 
-def rest(xs: S.Json) -> S.Json:
+def tail_of(xs: S.Json) -> S.Json:
   match xs:
     case S.JItem{h, t}:
       t
@@ -198,7 +196,7 @@ def expr(fuel: Nat, +j: S.Json, +env: List<&2, Param>, +cs: List<&2, Contract>) 
         S.choose(Result<&2, &2, S.Error, Ir>, Nat.is_gt(Lint.size(j), 0n), u =>
           do Result<&2, &2, S.Error, Ir>:
             h : Ir <- expr(left, Lint.first(j), env, cs)
-            t : Ir <- expr(left, rest(j), env, cs)
+            t : Ir <- expr(left, tail_of(j), env, cs)
             Done{IArg{h, t}}, u =>
           S.choose(Result<&2, &2, S.Error, Ir>, String.eq(tag, "Name") && String.eq(Lint.tag_of(Lint.field(j, "ctx")), "Load"), u =>
             lookup(env, N.string(Lint.field(j, "id")), loc), u =>
@@ -264,8 +262,8 @@ def header(fs: List<&2, Lint.Fact>, +loc: S.Json) -> Result<&2, &2, S.Error, Uni
   match fs:
     case Nil{}:
       Done{Unit{}}
-    case Lint.Bad{at, why} <> t:
-      refuse(&2, Unit, loc, why)
+    case Lint.Bad{at, msg} <> t:
+      fail(&2, Unit, S.Unsupported{}, loc, msg)
     case Lint.Calls{g} <> t:
       header(t, loc)
 
@@ -355,12 +353,13 @@ def idents(ps: List<&2, Param>) -> Bool:
     case Param{name, t, loc} <> rest:
       ident(name) && spanned(loc) && idents(rest)
 
-def is_return(e: Ir) -> Bool:
+# A return is a statement: only the body's root may be one.
+def returned(e: Ir) -> String:
   match e:
     case IReturn{val, loc}:
-      True{}
+      ty_of(val)
     case _:
-      False{}
+      ""
 
 def is_pure(e: Eff) -> Bool:
   match e:
@@ -375,7 +374,7 @@ def verify(f: Fn, +cs: List<&2, Contract>) -> Result<&2, &2, S.Error, Fn>:
   S.choose(Result<&2, &2, S.Error, Fn>, Bool.not(ident(name) && idents(ps) && spanned(loc)), u =>
     refuse(&2, Fn, loc, "name or span not emittable"), u =>
     S.choose(Result<&2, &2, S.Error, Fn>, Bool.not(String.is_empty(bad)), u => fail(&2, Fn, S.Unsupported{}, loc, bad), u =>
-      S.choose(Result<&2, &2, S.Error, Fn>, Bool.not(is_return(body) && String.eq(ty_of(body), ty(ret))), u =>
+      S.choose(Result<&2, &2, S.Error, Fn>, Bool.not(String.eq(returned(body), ty(ret))), u =>
         refuse(&2, Fn, loc, "body does not return " ++ ty(ret)), u =>
         S.choose(Result<&2, &2, S.Error, Fn>, Bool.not(is_pure(eff)), u => refuse(&2, Fn, loc, "effect is not Pure"), u =>
           Done{Fn{name, ps, ret, eff, body, loc}}))))
@@ -435,7 +434,7 @@ def own_loc(e: Ir) -> S.Json:
 
 def row(+e: Ir, +line: Nat, +col: Nat) -> String:
   "# " ++ Nat.show(line) ++ ":" ++ Nat.show(col) ++ "-" ++ Nat.show(line) ++ ":" ++ Nat.show(Nat.add(col, String.length(show(e)))) ++
-    " <- py " ++ Lint.span(own_loc(e)) ++ " " ++ kind(e) ++ " : " ++ ty_of(e) ++ "\n"
+    " <- py " ++ Lint.span(own_loc(e)) ++ " " ++ kind(e) ++ " : " ++ ty_of(e) ++ returned(e) ++ "\n"
 
 # The span map: one row per IR node, emitted-Bend span <- Python span.
 def spans(e: Ir, +line: Nat, +col: Nat) -> String:
