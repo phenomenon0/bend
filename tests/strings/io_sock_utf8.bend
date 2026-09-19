@@ -1,18 +1,10 @@
-# TCP.recv through a Utf8.Dec (effs/tcp_recv_text_go): a text received in
-# chunks appends to its whole decode, wherever a recv cuts a scalar. TCP.recv
+# TCP.recv_text: a text received in chunks appends to its whole decode,
+# wherever a recv cuts a scalar. TCP.recv
 # decodes each chunk alone, so at max 1 every 2-, 3- and 4-byte scalar of this
 # text would come back as replacement characters. Every max must answer the
 # sent text's hash and length; max 1 also drives the recv that only feeds the
-# carry (it parks again instead of answering ""). base.bend has no room for
-# the wrapper under its cap (320 tok), so the effect is bound here.
+# carry (it parks again instead of answering "").
 import Base
-
-def Sock.Raw() -> Type:
-  Socket & Result<&1, &1, U32 & String, U32 & U32 & String>
-
-def TCP.recv_text.go(sock: Socket, pend: U32, need: U32, max: U32) -> IO(Sock.Raw()):
-  import "../../bend2/effs/tcp_recv_text_go.c"
-  import "../../bend2/effs/tcp_recv_text_go.js"
 
 def sent(m: Socket & Result<&1, &1, U32 & String, Unit>) -> IO(Socket):
   (s, r) = m
@@ -25,22 +17,22 @@ def more(eof: Bool, again: Unit -> IO(String), acc: String) -> IO(String):
     case False{}:
       again(Unit{})
 
-def step(acc: String, again: Socket -> U32 -> U32 -> String -> IO(String), got: Sock.Raw()) -> IO(String):
+def step(acc: String, again: Socket -> Utf8.Dec -> String -> IO(String), got: TCP.recv_text.Out()) -> IO(String):
   (a, r) = got
   match r:
     case Fail{(code, msg)}:
       IO.die(String, code, msg)
-    case Done{(pend, (+need, text))}:
+    case Done{(+dec, text)}:
       +all = acc ++ text
-      more(U32.is_eq(need, 4), u => again(a, pend, need, all), all)
+      more(Utf8.Dec.eof(dec), u => again(a, dec, all), all)
 
-def drain(fuel: Nat, a: Socket, pend: U32, need: U32, +max: U32, acc: String) -> IO(String):
+def drain(fuel: Nat, a: Socket, dec: Utf8.Dec, +max: U32, acc: String) -> IO(String):
   match fuel:
     case 0n:
       IO.die(String, 1, "out of fuel")
     case 1n+left:
-      IO.bind(Sock.Raw(), String, TCP.recv_text.go(a, pend, need, max),
-        step(acc, s => p => n => t => drain(left, s, p, n, max, t)))
+      IO.bind(TCP.recv_text.Out(), String, TCP.recv_text(a, dec, max),
+        step(acc, s => d => t => drain(left, s, d, max, t)))
 
 def accepted(c: Socket, +max: U32, p: Listener & Result<&1, &1, U32 & String, Socket>) -> IO(Unit):
   (l, ar) = p
@@ -49,7 +41,7 @@ def accepted(c: Socket, +max: U32, p: Listener & Result<&1, &1, U32 & String, So
     sm : Socket & Result<&1, &1, U32 & String, Unit> <- TCP.send(c, String.repeat("añ€😀 wörd\n", 3n))
     c2 : Socket <- sent(sm)
     Socket.close(c2)
-    +text : String <- drain(4000n, a, 0, 0, max, "")
+    +text : String <- drain(4000n, a, Utf8.Dec.new(), max, "")
     Listener.close(l)
     IO.print(U32.show(max) ++ " " ++ U32.show(String.hash(text)) ++ " " ++ U32.show(U32.from_nat(String.length(text))))
 

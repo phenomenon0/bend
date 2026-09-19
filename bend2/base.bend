@@ -378,6 +378,33 @@ def TCP.recv(sock: Socket, max: U32) ->
   import "./effs/tcp_recv.c"
   import "./effs/tcp_recv.js"
 
+# TCP.recv through a Utf8.Dec, as File.read_text: a scalar cut by the end
+# of a recv is carried; need answers 4 when the peer has closed.
+def TCP.recv_text.Raw() -> Type:
+  Socket & Result<&1, &1, U32 & String, U32 & U32 & String>
+
+def TCP.recv_text.Out() -> Type:
+  Socket & Result<&1, &1, U32 & String, Utf8.Dec & String>
+
+def TCP.recv_text.go(sock: Socket, pend: U32, need: U32, max: U32) ->
+  IO(TCP.recv_text.Raw()):
+  import "./effs/tcp_recv_text_go.c"
+  import "./effs/tcp_recv_text_go.js"
+
+def TCP.recv_text.pack(got: TCP.recv_text.Raw()) -> IO(TCP.recv_text.Out()):
+  (sock, r) = got
+  match r:
+    case Fail{e}:
+      IO.pure(TCP.recv_text.Out(), (sock, Fail{e}))
+    case Done{(pend, (need, text))}:
+      IO.pure(TCP.recv_text.Out(), (sock, Done{(Dec{pend, need}, text)}))
+
+def TCP.recv_text(sock: Socket, dec: Utf8.Dec, max: U32) ->
+  IO(TCP.recv_text.Out()):
+  Dec{pend, need} = dec
+  IO.bind(TCP.recv_text.Raw(), TCP.recv_text.Out(),
+    TCP.recv_text.go(sock, pend, need, max), TCP.recv_text.pack)
+
 def UDP.bind(port: U32) -> IO(Result<&1, &1, U32 & String, Socket>):
   import "./effs/udp_bind.c"
   import "./effs/udp_bind.js"
