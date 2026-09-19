@@ -355,7 +355,6 @@ const OPERATIONS: Record<string, Intr> = Object.setPrototypeOf({
     "str_find_take(e, $0, $1, $o)", "str_find($0, $1, $o)"),
   string_contains: { C: "(str_search_take(e, $0, $1, 0) != STR_ABSENT)", JS: "$0.includes($1)" },
   string_count: { C: "str_search_take(e, $0, $1, 2)", JS: "str_count($0, $1)" },
-  string_replace: { C: "str_replace_take(e, $0, $1, $2)", JS: "str_replace($0, $1, $2)" },
   string_split_on: { C: "str_split_on_take(e, $0, $1)", JS: 'str_list($1 === "" ? [$0] : $0.split($1))' },
   string_capitalize: { C: "str_transform_take(e, $0, 3)", JS: "str_capitalize($0)" },
   string_zfill: { C: "str_pad_take(e, $0, $1, 48, 2)", JS: 'str_pad($0, $1, "0", 2)' },
@@ -1096,8 +1095,7 @@ function tpl_ops(pre: string, names: string, C: string, JS: string, call = false
   const out: Record<string, Intr> = {};
   for (const p of names.split(" ")) {
     const [k, o = k, jo = o] = p.split(":");
-    const r: Intr = { C: C.replaceAll("$o", o), JS: JS.replaceAll("$o", jo) };
-    out[pre + k] = call ? { ...r, call: true } : r;
+    out[pre + k] = { C: C.replaceAll("$o", o), JS: JS.replaceAll("$o", jo), call };
   }
   return out;
 }
