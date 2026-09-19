@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# `run.sh [prefix]`, e.g. `run.sh totality` (L1) or `run.sh alias` (L2). Four lanes per specimen: strict check,
+# `run.sh [prefix]`, e.g. `run.sh totality` (L1), `run.sh alias` (L2) or `run.sh coverage` (L3). Four lanes per specimen: strict check,
 # interpreter, emitted JS, C; then the CPython evidence (semantics.py).
 set -uo pipefail
 cd "$(dirname "$0")/../.."
