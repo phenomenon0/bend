@@ -127,11 +127,13 @@ with tempfile.TemporaryDirectory(prefix="bend-strings-runtime-") as temp:
     c = c.replace("k->table = 0;", "track_kmp_live--; k->table = 0;")
     # Scratch is reclaimed even with a sticky error; account for its direct
     # local recycling, which deliberately bypasses heap_free's error guard.
-    c = c.replace("e.mem[k->table] = ALC_AT(e, k->cls);", """
-    u32 slot = track_slot(k->table);
-    assert(tracked[slot].live && tracked[slot].cls == k->cls);
-    tracked[slot].live = false; track_live--; track_bytes -= 8ull << k->cls;
-    e.mem[k->table] = ALC_AT(e, k->cls);""")
+    scratch = "e.mem[l] = ALC_AT(e, cls);"
+    assert c.count(scratch) == 1, "str_scratch_free hook moved"
+    c = c.replace(scratch, """
+    u32 slot = track_slot(l);
+    assert(tracked[slot].live && tracked[slot].cls == cls);
+    tracked[slot].live = false; track_live--; track_bytes -= 8ull << cls;
+    e.mem[l] = ALC_AT(e, cls);""")
     tests = ["static void utf8_cases(Env e) {"]
     for data in cases:
         expected = decode(data)
@@ -151,7 +153,7 @@ with tempfile.TemporaryDirectory(prefix="bend-strings-runtime-") as temp:
     faults = 0
     fault_ops = dict.fromkeys(["repeat", "prepend", "append", "copy", "transform",
                               "split", "from-list", "join"], 4)
-    fault_ops.update(slice=2, find=2, count=1, replace=7, split_on=9, partition=8,
+    fault_ops.update(slice=2, find=2, count=1, replace=5, split_on=9, partition=8,
                      splitlines=12, pad=4, decode=8)
     for op, allocations in fault_ops.items():
         for offset in range(allocations):

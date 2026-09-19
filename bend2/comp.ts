@@ -5124,8 +5124,7 @@ INLINE void str_scratch_free(Env e, Cls cls, Loc l) {
 }
 
 INLINE void str_search_close(Env e, THR StrSearch* k) {
-  if (k->table) { str_scratch_free(e, k->cls, k->table); }
-  k->table = 0;
+  if (k->table) { str_scratch_free(e, k->cls, k->table); k->table = 0; }
 }
 
 INLINE StrSearch str_search_open(Env e, StrParts text, StrParts needle) {
@@ -5217,8 +5216,7 @@ INLINE Term str_replace_take(Env e, Term s, Term old, Term value) {
   // A counting pass sizes the output once: no doubling, no recopying.
   u64 hits = q.len ? 0 : (u64)p.len + 1;
   while (q.len && str_search_next(e, &k, false, &at)) { hits++; }
-  str_search_close(e, &k);
-  k = str_search_open(e, p, q);
+  k.pos = k.matched = 0;
   out = str_reserve(e, out, p.len + hits * r.len - (q.len ? hits * q.len : 0), false,
     hits && str_nar(r) < str_nar(p) ? str_nar(r) : str_nar(p));
   if (!q.len) {
