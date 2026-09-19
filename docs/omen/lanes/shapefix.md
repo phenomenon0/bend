@@ -127,8 +127,8 @@ One run each, serial, first attempt, no retries.
 - The demo sources (`demos/python/*.bend`) are checked in the same book; their
   term depth was not audited beyond the fact that the 0/192 after-rate
   includes them.
-- "0/32 under load" bounds the per-run rate at roughly < 3% per cell with
-  conventional confidence (< 1.6% on the pooled 0/192); the structural
+- 0/32 per cell only bounds the per-run rate below ~9% (95%); the pooled
+  0/192 bounds it below ~1.6%, against 7.3% measured before. The structural
   argument (depth 512 vs a ~3,400 cliff) is the stronger guarantee.
 - The cliff moves with bun's version and stack size; a bun upgrade that
   shrinks it 3x would bring `stmt_assign` (1,130) into range.
