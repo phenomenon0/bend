@@ -331,6 +331,9 @@ const OPERATIONS: Record<string, Intr> = Object.setPrototypeOf({
   string_zfill: { C: "str_pad_take(e, $0, $1, 48, 2)", JS: 'str_pad($0, $1, "0", 2)' },
   ...tpl_ops("string_", "pad_start:0 pad_end:1",
     "str_pad_take(e, $0, $1, $2, $o)", "str_pad($0, $1, $2, $o)"),
+  // The Pike VM of base, natively: a C Regex arrives flat (prog, ngroups).
+  ...tpl_ops("regex_", "exec:false match_at:true",
+    "re_exec_take(e, $0, $1, $2, $3, $o)", "re_exec($0, $1, $2, $o)"),
   // Map.bit borrows the key and returns it: the tree order and the 33-bit key
   // protocol of the reference definition, O(1) on C, an endpoint scan on JS.
   map_bit: { C: ["$0", "str_bit_peek(e, $0, $1)"], JS: "map_bit($0, $1)" },
@@ -733,6 +736,94 @@ function str_pad(s, width, c, mode) {
   if (mode === 1) { return s + pad; }
   if (mode === 2 && (s[0] === "+" || s[0] === "-")) { return s[0] + pad + s.slice(1); }
   return pad + s;
+}
+// The C VM over Int32Array: three ints per inst, the set ranges in pairs, a
+// slot -1 unset, a dead pc or slot -1. A JS string indexes UTF-16 units, so
+// at costs one prefix scan; the walk itself goes by codePointAt.
+function re_exec(re, s, at, anchored) {
+  const insts = [];
+  for (let t = re.prog; t.$ === "Con"; t = t.tail) { insts.push(t.head); }
+  const m = insts.length, ns = 2 * (1 + Number(re.ngroups)), sets = [];
+  if (!(m < 16777215 && ns <= 8388608)) { throw "bend: a regex past the maximum size"; }
+  const arg = (n, lim) => n < lim ? Number(n) : -1;
+  const P = new Int32Array(3 * m);
+  insts.forEach((h, i) => {
+    let op = 10, a = 0, b = 0;
+    switch (h.$) {
+      case "IChr": op = 0; a = h.c | 0; break;
+      case "IAny": op = 1; break;
+      case "ISet":
+        op = h.neg ? 3 : 2; a = sets.length >> 1;
+        for (let r = h.rs; r.$ === "Con"; r = r.tail) { sets.push(r.head.fst, r.head.snd); }
+        b = (sets.length >> 1) - a; break;
+      case "ISplit": op = 4; a = arg(h.x, m); b = arg(h.y, m); break;
+      case "IJmp": op = 5; a = arg(h.x, m); break;
+      case "ISave": op = 6; a = arg(h.slot, ns); break;
+      case "IBol": op = 7; a = h.multi ? 1 : 0; break;
+      case "IEol": op = 8; a = h.multi ? 1 : 0; break;
+      case "IWordB": op = 9; a = h.neg ? 1 : 0; break;
+    }
+    P[3 * i] = op; P[3 * i + 1] = a; P[3 * i + 2] = b;
+  });
+  const S = Int32Array.from(sets), V = new Int32Array(m);
+  const RP = new Int32Array(m), RS = new Int32Array(m * ns);
+  const CP = new Int32Array(m), CS = new Int32Array(m * ns);
+  const CUR = new Int32Array(ns), BEST = new Int32Array(ns), STK = new Int32Array(2 * m + 2);
+  const word = (c) => (c >= 48 && c <= 57) || (c >= 65 && c <= 90) || c === 95 || (c >= 97 && c <= 122);
+  let i = 0, pos = 0, prev = -1;
+  for (; at > 0n && i < s.length; at--, pos++) { prev = s.codePointAt(i); i += prev > 0xffff ? 2 : 1; }
+  let nraw = 0, best = false;
+  for (const at0 = pos; ; pos++) {
+    const fresh = !best && (pos === at0 || !anchored) ? 1 : 0, gen = pos - at0 + 1;
+    if (nraw + fresh === 0) { break; }
+    const c = i < s.length ? s.codePointAt(i) : -1;
+    i += c > 0xffff ? 2 : 1;
+    let ncl = 0;
+    for (let r = 0; r < nraw + fresh; r++) {
+      if (r < nraw) { CUR.set(RS.subarray(r * ns, (r + 1) * ns)); } else { CUR.fill(-1); }
+      let sp = 1;
+      STK[0] = r < nraw ? RP[r] : 0;
+      while (sp) {
+        const x = STK[--sp];
+        if (x < -1) { CUR[x & 0x7fffffff] = STK[--sp]; continue; }
+        if (x < 0 || x >= m || V[x] === gen) { continue; }
+        V[x] = gen;
+        const op = P[3 * x], a = P[3 * x + 1], b = P[3 * x + 2];
+        let go = false;
+        if (op === 4) { STK[sp++] = b; STK[sp++] = a; }
+        else if (op === 5) { STK[sp++] = a; }
+        else if (op === 6) {
+          if (a >= 0) { STK[sp++] = CUR[a]; STK[sp++] = a | -0x80000000; CUR[a] = pos; go = true; }
+        }
+        else if (op === 7) { go = pos === 0 || (a === 1 && prev === 10); }
+        else if (op === 8) { go = c < 0 || (c === 10 && (a === 1 || i >= s.length)); }
+        else if (op === 9) { go = (pos > 0 || s.length > 0) && (a === 1) !== (word(prev) !== word(c)); }
+        else { CP[ncl] = x; CS.set(CUR, ncl++ * ns); }
+        if (go) { STK[sp++] = x + 1; }
+      }
+    }
+    nraw = 0;
+    for (let t = 0; t < ncl; t++) {
+      const x = CP[t], op = P[3 * x], a = P[3 * x + 1], b = P[3 * x + 2];
+      if (op === 10) { BEST.set(CS.subarray(t * ns, (t + 1) * ns)); best = true; break; }
+      let eat = op === 0 ? a === c : op === 1 ? c !== 10 : false;
+      if (op === 2 || op === 3) {
+        for (let j = a; j < a + b && !eat; j++) { eat = (S[2 * j] >>> 0) <= c && c <= (S[2 * j + 1] >>> 0); }
+        eat = eat !== (op === 3);
+      }
+      if (eat && c >= 0) { RP[nraw] = x + 1; RS.set(CS.subarray(t * ns, (t + 1) * ns), nraw++ * ns); }
+    }
+    prev = c;
+    if (c < 0) { break; }
+  }
+  if (!best || BEST[0] < 0 || BEST[1] < 0) { return {$: "None"}; }
+  let gs = {$: "Nil"};
+  for (let g = ns - 2; g >= 2; g -= 2) {
+    const f = BEST[g] < 0 || BEST[g + 1] < 0 ? {$: "None"}
+      : {$: "Some", value: {$: "Tuple", fst: BigInt(BEST[g]), snd: BigInt(BEST[g + 1])}};
+    gs = {$: "Con", head: f, tail: gs};
+  }
+  return {$: "Some", value: {$: "Match", start: BigInt(BEST[0]), end: BigInt(BEST[1]), groups: gs}};
 }
 function str_hash(s) {
   let h = 2166136261;
@@ -2351,7 +2442,8 @@ function emit_intr(fl: File, it: Intr, x: HTerm,
   // Native aggregate builders publish sealed fields. Teach field extraction and
   // the transitive borrow analysis about those counts on every pass.
   if (["string_split", "string_lines", "string_words", "string_to_list",
-    "string_split_on", "string_splitlines", "string_partition"].includes(op)) {
+    "string_split_on", "string_splitlines", "string_partition", "regex_exec",
+    "regex_match_at"].includes(op)) {
     facts_hot(fl, ty ?? tele_unbind(fl.book, (fl.book.tlds[k] as Def).T).ret, true);
   }
   // An intrinsic that installs count cells (blk_new, blk_keep: clone's C
@@ -2365,7 +2457,8 @@ function emit_intr(fl: File, it: Intr, x: HTerm,
     ty_adt(fl.book, m.all[0]) ?? die("an open Array element type");
     return arr_op(fl, op, lay_of(fl.book, m.all[0]), args);
   }
-  const ws = args.map((v) => (val_own(fl, v), val_word(v)));
+  const ws = op.startsWith("regex_") ? args.flatMap((v) => val_own(fl, v))
+    : args.map((v) => (val_own(fl, v), val_word(v)));
   if (Array.isArray(it.C)) {
     const as = ws.map((z) => emit_alias(fl, z, "a"));
     const vs: string[] = [];
@@ -2983,7 +3076,7 @@ const TABLES = ["CID_ARITY_T", "FID_ARITY_T", "FID_FLAG_T", "FID_RESW_T"];
 
 // The datatypes whose constructors the runtime or the elaborator lays itself.
 const RUNTIME_ADTS = ["Sigma", "String", "Word.Con", "IO.OP", "Result",
-  "Maybe", "Bool", "Unit", "List", "Char"];
+  "Maybe", "Bool", "Unit", "List", "Char", "Inst", "Match"];
 
 function compile_tables(fl: File, entries: Seg[]): string[] {
   const defs: string[] = [];
@@ -5069,6 +5162,174 @@ INLINE u32 str_hash_take(Env e, Term s) {
   }
   term_sink(e, s);
   return h;
+}
+
+// Regex
+// =====
+
+// The Pike VM of base (Regex.exec.go, full and ne off): its priorities, its
+// dead threads (a pc or a slot out of range), so a forged Regex never
+// faults. One scratch block per call: the program packed op:8|a:24|b:24 (an
+// IChr keeps its 32 bits in a:b), the set ranges lo|hi<<32, a visited row
+// stamped by generation (never cleared per step), the raw and the closed
+// thread banks (a pc row and a slot row each), the current and the best
+// slots, the closure stack (a visited pc nets <= 2 words: 2m + 1 deep). A slot is a
+// position, RE_NONE unset; RE_NONE is also the char before 0 and at the end.
+#define RE_NONE (~0ull)
+#define RE_DEAD 0xFFFFFFu
+#define RE_CHR   0
+#define RE_ANY   1
+#define RE_SET   2
+#define RE_NSET  3
+#define RE_SPLIT 4
+#define RE_JMP   5
+#define RE_SAVE  6
+#define RE_BOL   7
+#define RE_EOL   8
+#define RE_WORDB 9
+#define RE_MATCH 10
+#define re_ins(op, a, b) ((u64)(op) << 48 | (u64)(a) << 24 | (u64)(b))
+#define re_arg(n, m) ((n) < (m) ? (u64)(n) : (u64)RE_DEAD)
+
+INLINE bool re_word(u64 c) {
+  return (c >= 48 && c <= 57) || (c >= 65 && c <= 90) || c == 95
+    || (c >= 97 && c <= 122);
+}
+
+INLINE void re_copy(Env e, Loc dst, Loc src, u64 n) {
+  for (u64 j = 0; j < n; j++) { e.mem[dst + j] = e.mem[src + j]; }
+}
+
+// Consumes prog and s; returns a boxed Maybe<Match>.
+INLINE Term re_exec_take(Env e, Term prog, u64 ng, Term s, u64 at, bool anchored) {
+  StrParts p = str_peek(e, s);
+  Term out = term_pak(CID_NONE, 0);
+  u64 m = 0, sets = 0, len = p.len, ns = 2 * (1 + ng);
+  u32 poll = 0;
+  for (Term t = prog; term_aux(t) == CID_CON; m++) {
+    if (err_spun(e.mem, &poll)) { break; }
+    Loc l = term_peek(e, t);
+    Term h = e.mem[l];
+    t = e.mem[l + 1];
+    if (term_aux(h) != CID_ISET) { continue; }
+    for (Term r = e.mem[term_peek(e, h) + 1]; term_aux(r) == CID_CON; sets++) {
+      r = e.mem[term_peek(e, r) + 1];
+    }
+  }
+  u64 words = 6 * m + sets + 2 * m * (1 + ns) + 2 * ns + 2;
+  if (m >= RE_DEAD || sets >= RE_DEAD || ng >= 1u << 22 || words > STR_LIMIT) {
+    err_post(e.mem, ERR_HEAP);
+  }
+  Cls cls = cls_fit((u32)words);
+  Loc P = err_seen(e.mem) ? 0 : heap_alloc(e, cls);
+  if (err_seen(e.mem)) { term_sink(e, prog); term_sink(e, s); return out; }
+  Loc S = P + m, V = S + sets, RP = V + m, RS = RP + m, CP = RS + m * ns;
+  Loc CS = CP + m, CUR = CS + m * ns, BEST = CUR + ns, STK = BEST + ns;
+  u64 i = 0, k = 0;
+  for (Term t = prog; term_aux(t) == CID_CON; i++) {
+    if (err_spun(e.mem, &poll)) { break; }
+    Loc l = term_peek(e, t);
+    Term h = e.mem[l];
+    t = e.mem[l + 1];
+    u64 c = term_aux(h), w = re_ins(RE_MATCH, 0, 0);
+    Loc f = c == CID_ISET || c == CID_ISPLIT || c == CID_IJMP || c == CID_ISAVE
+      ? term_peek(e, h) : 0;
+    if (c == CID_ICHR) { w = re_ins(RE_CHR, 0, 0) | (u32)term_loc(h); }
+    else if (c == CID_IANY) { w = re_ins(RE_ANY, 0, 0); }
+    else if (c == CID_ISPLIT) { w = re_ins(RE_SPLIT, re_arg(e.mem[f], m), re_arg(e.mem[f + 1], m)); }
+    else if (c == CID_IJMP) { w = re_ins(RE_JMP, re_arg(e.mem[f], m), 0); }
+    else if (c == CID_ISAVE) { w = re_ins(RE_SAVE, re_arg(e.mem[f], ns), 0); }
+    else if (c == CID_IBOL) { w = re_ins(RE_BOL, term_loc(h) & 1, 0); }
+    else if (c == CID_IEOL) { w = re_ins(RE_EOL, term_loc(h) & 1, 0); }
+    else if (c == CID_IWORDB) { w = re_ins(RE_WORDB, term_loc(h) & 1, 0); }
+    else if (c == CID_ISET) {
+      u64 k0 = k;
+      for (Term r = e.mem[f + 1]; term_aux(r) == CID_CON; k++) {
+        Loc q = term_peek(e, r), u = term_peek(e, e.mem[q]);
+        e.mem[S + k] = (u64)(u32)e.mem[u] | (u64)(u32)e.mem[u + 1] << 32;
+        r = e.mem[q + 1];
+      }
+      w = re_ins(e.mem[f] & 1 ? RE_NSET : RE_SET, k0, k - k0);
+    }
+    e.mem[P + i] = w;
+    e.mem[V + i] = 0;
+  }
+  if (at > len) { at = len; }
+  u64 nraw = 0, best = 0;
+  u64 prev = at ? str_at_peek(e, p, (u32)at - 1) : RE_NONE;
+  for (u64 pos = at; !err_seen(e.mem); pos++) {
+    u64 fresh = !best && (pos == at || !anchored), gen = pos - at + 1, ncl = 0;
+    if (nraw + fresh == 0) { break; }
+    u64 c = pos < len ? str_at_peek(e, p, (u32)pos) : RE_NONE;
+    for (u64 r = 0; r < nraw + fresh; r++) {
+      if (r < nraw) { re_copy(e, CUR, RS + r * ns, ns); }
+      else { for (u64 j = 0; j < ns; j++) { e.mem[CUR + j] = RE_NONE; } }
+      u64 sp = 1;
+      e.mem[STK] = r < nraw ? e.mem[RP + r] : 0;
+      while (sp) {
+        if (err_spun(e.mem, &poll)) { break; }
+        u64 x = e.mem[STK + --sp];
+        if (x >> 63) { e.mem[CUR + (u32)x] = e.mem[STK + --sp]; continue; }
+        if (x >= m || e.mem[V + x] == gen) { continue; }
+        e.mem[V + x] = gen;
+        u64 w = e.mem[P + x];
+        u32 op = (u32)(w >> 48), a = (u32)(w >> 24) & RE_DEAD, b = (u32)w & RE_DEAD;
+        bool go = false;
+        if (op == RE_SPLIT) { e.mem[STK + sp++] = b; e.mem[STK + sp++] = a; }
+        else if (op == RE_JMP) { e.mem[STK + sp++] = a; }
+        else if (op == RE_SAVE) {
+          if (a < ns) {
+            e.mem[STK + sp++] = e.mem[CUR + a];
+            e.mem[STK + sp++] = 1ull << 63 | a;
+            e.mem[CUR + a] = pos;
+            go = true;
+          }
+        }
+        else if (op == RE_BOL) { go = pos == 0 || (a && prev == 10); }
+        else if (op == RE_EOL) { go = c == RE_NONE || (c == 10 && (a || pos + 1 == len)); }
+        else if (op == RE_WORDB) { go = (pos || len) && (a != 0) != (re_word(prev) != re_word(c)); }
+        else { e.mem[CP + ncl] = x; re_copy(e, CS + ncl++ * ns, CUR, ns); }
+        if (go) { e.mem[STK + sp++] = x + 1; }
+      }
+    }
+    nraw = 0;
+    for (u64 t = 0; t < ncl; t++) {
+      u64 x = e.mem[CP + t], w = e.mem[P + x];
+      u32 op = (u32)(w >> 48), a = (u32)(w >> 24) & RE_DEAD, b = (u32)w & RE_DEAD;
+      if (op == RE_MATCH) { re_copy(e, BEST, CS + t * ns, ns); best = 1; break; }
+      bool eat = op == RE_CHR ? (u32)w == c : op == RE_ANY ? c != 10 : false;
+      if (op == RE_SET || op == RE_NSET) {
+        for (u64 j = 0; j < b && !eat; j++) {
+          u64 r = e.mem[S + a + j];
+          eat = (u32)r <= c && c <= r >> 32;
+        }
+        eat = eat != (op == RE_NSET);
+      }
+      if (eat && c != RE_NONE) {
+        e.mem[RP + nraw] = x + 1;
+        re_copy(e, RS + nraw++ * ns, CS + t * ns, ns);
+      }
+    }
+    prev = c;
+    if (c == RE_NONE) { break; }
+  }
+  u64 lo = e.mem[BEST], hi = e.mem[BEST + 1];
+  if (best && lo != RE_NONE && hi != RE_NONE && !err_seen(e.mem)) {
+    Term gs = term_pak(CID_NIL, 0);
+    for (u64 g = ng; g > 0; g--) {
+      u64 a = e.mem[BEST + 2 * g], b = e.mem[BEST + 2 * g + 1];
+      Term f = term_pak(CID_NONE, 0);
+      if (a != RE_NONE && b != RE_NONE) {
+        f = str_node(e, CID_SOME, 1, rfc_seal(e, str_node(e, CID_TUPLE, 2, a, b, 0)), 0, 0);
+      }
+      gs = str_cons(e, f, gs);
+    }
+    out = str_node(e, CID_SOME, 1,
+      rfc_seal(e, str_node(e, CID_MATCH, 3, lo, hi, rfc_seal(e, gs))), 0, 0);
+  }
+  str_scratch_free(e, cls, P);
+  term_sink(e, prog); term_sink(e, s);
+  return out;
 }
 
 // Ring
