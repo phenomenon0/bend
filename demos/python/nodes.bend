@@ -328,8 +328,8 @@ def loop(target: S.Json, iter: S.Expr, body: S.Expr, +other: S.Expr, start: S.Po
 def handler(kind: S.Expr, name: S.Json, +body: S.Expr, start: S.Pos) -> S.Expr:
   node("ExceptHandler", S.JField{"type", opt(kind), S.JField{"name", name, S.JField{"body", S.JArr{get_fields(body)}, S.JEnd{}}}}, start, get_finish(body))
 
-def attempt(body: S.Expr, handlers: S.Json, other: S.Expr, +final: S.Expr, start: S.Pos) -> S.Expr:
-  node("Try", S.JField{"body", S.JArr{get_fields(body)}, S.JField{"handlers", arr(handlers), S.JField{"orelse", S.JArr{get_fields(other)},
+def attempt(star: Bool, body: S.Expr, handlers: S.Json, other: S.Expr, +final: S.Expr, start: S.Pos) -> S.Expr:
+  node(Bool.pick(String, star, "TryStar", "Try"), S.JField{"body", S.JArr{get_fields(body)}, S.JField{"handlers", arr(handlers), S.JField{"orelse", S.JArr{get_fields(other)},
     S.JField{"finalbody", S.JArr{get_fields(final)}, S.JEnd{}}}}}, start, get_finish(final))
 
 def withitem(ctx: S.Expr, vars: S.Json) -> S.Json:

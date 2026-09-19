@@ -1,4 +1,4 @@
-"""P14 fixtures: `match` statements (PEP 634), the soft keywords, and the negatives of the retired refuse-first policy (a compound statement or `@` in a simple position). Oracle-validated like fixtures.py, which imports these."""
+"""P14 fixtures: `match` statements (PEP 634), `except*` (TryStar), the soft keywords, and the negatives of the retired refuse-first policy (a compound statement or `@` in a simple position). Oracle-validated like fixtures.py, which imports these."""
 # Accepted by the pinned ast.parse. The first is the `stmt_match.bend` wire source; the soft-keyword lines are simple statements.
 MATCH_STATEMENTS = [
    
@@ -79,7 +79,12 @@ MATCH_STATEMENTS = [
     'def f(): match', 'for a in b: case(x)', 'if a: case = 1', 'match x:\n    case _: pass\n', 'match x, y:\n    case _: pass\n', 'match (x), y:\n    case _: pass\n',
     'match (x).y[0]:\n    case z: w: int = 1\n', 'match x:\n    case _:\n        y: int = 1\n', 'async def f():\n    match x:\n        case _: await y\n',
     'def f():\n    match x:\n        case _: yield\n', 'match (x := 1):\n    case _: pass\n', 'match x, y := 1:\n    case 1: pass\n', 'match x:\n    case C(a, b=1, _=2): pass\n',
-    'match x:\n    case C(_=1, _=2): pass\n', 'match x:\n    case C(_, a=_): pass\n',
+    'match x:\n    case C(_=1, _=2): pass\n', 'match x:\n    case C(_, a=_): pass\n', 'try: pass\nexcept* E: pass', 'try: pass\nexcept * E: pass', 'try: pass\nexcept*E as e: pass',
+    'try: pass\nexcept* (A, B) as e: pass\nexcept* C: pass\nelse: pass\nfinally: pass', 'try: pass\nexcept* (x := E): pass', 'try: pass\nexcept* E if a else F: pass',
+    'try: pass\nexcept* lambda: 1: pass', 'try:\n    pass\nexcept* E:\n    try: pass\n    except* F: pass\n    try: pass\n    except G: pass\n', 'def f():\n    try: pass\n    except* E: return\n',
+    'try: pass\nexcept* E: pass\nelse: pass', 'try: pass\nexcept* E: pass\nfinally: pass', 'try: pass\nexcept* await x: pass', 'try: pass\nexcept* (yield): pass', 'try: pass\nexcept* E as _: pass',
+    'try: pass\nexcept*\\\n E: pass', 'try:\n    pass\nexcept* a.b as e:\n    x = 1\n    y = 2\nexcept* f(x)[0]:\n    pass\nfinally:\n    z = 3\n',
+    'async def f():\n    try:\n        await x\n    except* E as e:\n        match e:\n            case E(): raise\n', 'try: pass\nexcept* E as match: pass',
 ]
 
 # SyntaxError in the pinned ast.parse; both lanes must answer Syntax.
@@ -151,14 +156,17 @@ MATCH_INVALID = [
     'x = def', 'x = try', 'x = with', 'x = @', 'f(def)', 'f(with)', 'f(try)', 'f(@)', 'f(k=with)', 'f(*def)', 'f(**try)', '[def]', '[x, with]', '(try)', '(x, @)', '{with: 1}', '{1: def}', '{x, try}',
     '{**with}', 'a[def]', 'a[1:with]', 'x if def else y', 'lambda: with', 'return def', 'del with', 'assert try', 'raise @', 'x: def', 'x: int = with', 'x += try', "f'{def}'", "f'{x:{with}}'",
     '[x for x in def]', '[x for x in y if with]', '@\ndef f(): pass', '@def\ndef f(): pass', 'x @ @ y', '@', 'def', 'try', 'with', 'x.def', 'x.with', 'import def', 'from a import with', 'global try',
-    'for def in y: pass', 'with a as def: pass',
+    'for def in y: pass', 'with a as def: pass', 'try: pass\nexcept*: pass', 'try: pass\nexcept* E: pass\nexcept F: pass', 'try: pass\nexcept E: pass\nexcept* F: pass',
+    'try: pass\nexcept* E: pass\nexcept: pass', 'try: pass\nexcept: pass\nexcept* E: pass', 'try: pass\nexcept* E, F: pass', 'try: pass\nexcept* E as e.f: pass', 'try: pass\nexcept* *E: pass',
+    'try: pass\nexcept* x := E: pass', 'try: pass\nexcept** E: pass', 'try: pass\nexcept* E as: pass', 'try: pass\nexcept* E\n', 'try: pass\nexcept* yield: pass',
+    'try: pass\nexcept* E: pass\nexcept* F: pass\nexcept G: pass', 'try: pass\nfinally: pass\nexcept* E: pass', 'try: pass\nelse: pass\nexcept* E: pass', 'except* E: pass',
 ]
 
 # Accepted by the oracle, out of the ASCII-identifier subset: both lanes must answer Unsupported.
 MATCH_UNSUPPORTED = [
     'match s:\n    case é: pass\n', 'match s:\n    case x.é: pass\n', 'match s:\n    case C(é=1): pass\n', 'match s:\n    case x as é: pass\n', 'match s:\n    case {**é}: pass\n',
-    'match s:\n    case [*é]: pass\n', 'match é:\n    case 1: pass\n', 'match x:\n    case 1: é\n', 'match x:\n    case é: pass\n', 'match x:\n    case a.é: pass\n', 'match x:\n    case é.a: pass\n',
-    'match x:\n    case é(): pass\n', 'match x:\n    case C(é=1): pass\n', 'match x:\n    case C(a=é): pass\n', 'match x:\n    case 1 as é: pass\n', 'match x:\n    case [*é]: pass\n',
-    'match x:\n    case {**é}: pass\n', 'match x:\n    case {é.a: 1}: pass\n', "match x:\n    case {'a': é}: pass\n", 'match x:\n    case 1 if é: pass\n', 'match x:\n    case 1 | é.b: pass\n',
-    "match x:\n    case 'é': é\n",
+    'match s:\n    case [*é]: pass\n', 'match é:\n    case 1: pass\n', 'match x:\n    case 1: é\n', 'try: pass\nexcept* E as é: pass', 'try: pass\nexcept* é: pass', 'match x:\n    case é: pass\n',
+    'match x:\n    case a.é: pass\n', 'match x:\n    case é.a: pass\n', 'match x:\n    case é(): pass\n', 'match x:\n    case C(é=1): pass\n', 'match x:\n    case C(a=é): pass\n',
+    'match x:\n    case 1 as é: pass\n', 'match x:\n    case [*é]: pass\n', 'match x:\n    case {**é}: pass\n', 'match x:\n    case {é.a: 1}: pass\n', "match x:\n    case {'a': é}: pass\n",
+    'match x:\n    case 1 if é: pass\n', 'match x:\n    case 1 | é.b: pass\n', "match x:\n    case 'é': é\n",
 ]

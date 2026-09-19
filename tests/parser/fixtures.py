@@ -261,7 +261,7 @@ UNSUPPORTED = [
     "K", "a.K", "f(K=1)",
     "import \xe9", "import a as \xe9", "from \xe9 import a", "from a import \xe9", "from a import b as \xe9", "class \xe9: pass", "class A(\xe9): pass", "class A(\xe9=1): pass",
     "def f(\xe9): pass", "lambda \xe9: 1",
-    "global \xe9", "try: pass\nexcept E as \xe9: pass", "try: pass\nexcept* E: pass",
+    "global \xe9", "try: pass\nexcept E as \xe9: pass",
     "a[\xe9:]", "a[1:\xe9]", "a[::\xe9]", "a[1:, \xe9]", "a[1:2].\xe9",
     "f\"{\xe9}\"", "f\"{a.\xe9}\"", "f\"{x:{\xe9}}\"",
     "[é for x in y]", "[x for é in y]", "[x for x in é]", "[x for x in y if é]", "f(é for x in y)",

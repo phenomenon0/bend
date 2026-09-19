@@ -59,8 +59,9 @@ statement's head starts one (the header alone backtracks; `match = 1`, `match(x)
 stay simple statements) and its block holds nothing but `case` clauses. It follows
 `ast.parse`'s syntax acceptance rather than Python compilation's additional
 scope checks (`*a = 1` parses, and so does `yield` or `await` outside a function or in a comprehension).
-`except*` and non-ASCII identifiers report `Unsupported`; nothing else does: a compound
-statement where a simple one belongs (`if a: with b: pass`) is `Syntax`, as in the oracle. Syntax failures and limits have distinct
+`except*` is `TryStar` (the `Try` fields; every handler of the `try` has the star and names its
+type). Only non-ASCII identifiers report `Unsupported`: a compound statement where a simple one
+belongs (`if a: with b: pass`) is `Syntax`, as in the oracle. Syntax failures and limits have distinct
 `Syntax` and `Limit` kinds. Failure prints `error KIND LINE COL MESSAGE` and
 exits 1. Bracket nesting is bounded at the oracle's 200; 201 is `Limit`.
 

@@ -42,7 +42,7 @@ type Mode is Data:
   Def{start: S.Pos, decorators: S.Json}
   For{start: S.Pos}
   Try{start: S.Pos}
-  Handlers{start: S.Pos, body: S.Expr, handlers: S.Json, end: S.Pos}
+  Handlers{start: S.Pos, body: S.Expr, handlers: S.Json, end: S.Pos, star: Bool}
   With{paren: Bool}
   Items{items: S.Json, paren: Bool, separator: Bool}
   Names{kind: String, start: S.Pos, names: S.Json}
@@ -862,15 +862,19 @@ def go(+fuel: Nat, +mode: Mode) -> P.M(S.Expr):
       P.meter(S.Expr, do P.M<S.Expr>:
         colon : S.Tok <- P.expect(":")
         +body : S.Expr <- go(left, Suite{})
-        go(left, Handlers{start, body, S.JEnd{}, N.get_finish(body)}))
-    case 1n+left Handlers{start, body, +handlers, +end}:
+        go(left, Handlers{start, body, S.JEnd{}, N.get_finish(body), False{}}))
+    # `except*` (TryStar): every handler of the `try` has the star, and a star handler names its type.
+    case 1n+left Handlers{start, body, +handlers, +end, +star}:
       P.meter(S.Expr, do P.M<S.Expr>:
         +t : S.Tok <- P.peek
         S.choose(P.M(S.Expr), P.is_text(t, "except"), u =>
           do P.M<S.Expr>:
             drop : S.Tok <- P.take
+            +mark : S.Tok <- P.peek
+            +starred : Bool <- P.M.pure(Bool, P.is_text(mark, "*"))
+            drop : S.Tok <- S.choose(P.M(S.Tok), starred, u => P.take, u => P.peek)
             +next : S.Tok <- P.peek
-            S.choose(P.M(S.Expr), P.is_text(next, "*"), u => P.unsupported(S.Expr, "except*"), u =>
+            S.choose(P.M(S.Expr), (Bool.not(N.empty(handlers)) && Bool.xor(star, starred)) || (starred && P.is_text(next, ":")), u => P.syntax(S.Expr, "except and except* do not mix; except* names its type"), u =>
               do P.M<S.Expr>:
                 kind : S.Expr <- S.choose(P.M(S.Expr), P.is_text(next, ":"), u => P.M.pure(S.Expr, N.none()), u => go(left, Expression{1n}))
                 +word : S.Tok <- P.peek
@@ -881,12 +885,12 @@ def go(+fuel: Nat, +mode: Mode) -> P.M(S.Expr):
                     return S.JStr{P.tok_text(id)}, u => P.M.pure(S.Json, S.JNull{}))
                 colon : S.Tok <- P.expect(":")
                 +suite : S.Expr <- go(left, Suite{})
-                go(left, Handlers{start, body, S.JItem{S.expr(N.handler(kind, name, suite, P.tok_start(t))), handlers}, N.get_finish(suite)})), u =>
+                go(left, Handlers{start, body, S.JItem{S.expr(N.handler(kind, name, suite, P.tok_start(t))), handlers}, N.get_finish(suite), starred})), u =>
           S.choose(P.M(S.Expr), N.empty(handlers) && Bool.not(P.is_text(t, "finally")), u => P.syntax(S.Expr, "expected except or finally"), u =>
             do P.M<S.Expr>:
               +other : S.Expr <- S.choose(P.M(S.Expr), N.empty(handlers), u => P.M.pure(S.Expr, N.block(S.JEnd{}, end)), u => go(left, Clause{"else", end}))
               final : S.Expr <- go(left, Clause{"finally", N.get_finish(other)})
-              return N.attempt(body, handlers, other, final, start))))
+              return N.attempt(star, body, handlers, other, final, start))))
     case 1n+left With{+paren}:
       P.meter(S.Expr, do P.M<S.Expr>:
         open : S.Tok <- S.choose(P.M(S.Tok), paren, u => P.take, u => P.peek)
