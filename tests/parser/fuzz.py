@@ -86,6 +86,46 @@ def naming(rng, sub):
                        "with (" + g + " as a, " + g + "): pass", "try: pass\nexcept " + rng.choice([g, w]) + " as e: pass", g + " if " + g + " else " + g, sub() + " if " + w + " else " + sub(), "not " + g + " < -" + g + " ** " + g, sub() + " + " + w])
 
 
+def pattern(rng, depth):
+    # P14: every pattern production, and the near misses the oracle rejects (a star outside a sequence, `as _`, a non-literal arithmetic, a trailer on `_`).
+    sub = lambda: pattern(rng, depth - 1)
+    if depth <= 0 or rng.randrange(4) == 0:
+        good = ["a", "b", "_", "0", "-1", "1.5", "2j", "1+2j", "-1 - 2J", "'s'", "'s' 't'", "b'x'", "None", "True", "False", "a.b", "a.b.c", "match", "case", "C()", "{}", "[]", "()", "f's{a}'"]
+        return rng.choice(good if rng.randrange(30) else ["-a", "1+2", "2j+1", "...", "_.a", "_()", "a[0]", "+1", "*a", "-'s'", "1 + -2j"])
+    choice = rng.randrange(12)
+    many = lambda: ", ".join(rng.choice([sub(), sub(), sub(), "*" + rng.choice(["a", "_", "a", "_", "a", "_", "a.b", "(a)"])]) for _ in range(rng.randrange(1, 4))) + rng.choice(["", ","])
+    if choice == 0:
+        return "(" + sub() + ")"
+    if choice < 3:
+        close = rng.choice(["[]", "()"] * 12 + ["[)"])
+        return close[0] + many() + close[1]
+    if choice == 3:
+        return " | ".join(sub() for _ in range(rng.randrange(2, 4)))
+    if choice == 4:
+        return sub() + " as " + rng.choice(["a", "b", "c", "d"] * 5 + ["_", "a.b", "(a)"])
+    if choice < 7:
+        key = lambda: rng.choice(["'k'", "1", "-1", "1+2j", "None", "True", "a.b", "_.a", "'k' 'l'"] * 3 + ["a", "_", "(1)"])
+        items = [key() + ": " + sub() for _ in range(rng.randrange(0, 3))] + rng.choice([[], [], ["**" + rng.choice(["r"] * 8 + ["_", "a.b"])]])
+        if rng.randrange(20) == 0:
+            rng.shuffle(items)
+        return "{" + ", ".join(items) + rng.choice(["", ","] if items else [""]) + "}"
+    if choice < 10:
+        args = [rng.choice([sub(), sub(), rng.choice(["k", "k", "k", "_", "a.b"]) + "=" + sub()] * 5 + ["*a"]) for _ in range(rng.randrange(0, 4))]
+        if rng.randrange(10):
+            args.sort(key=lambda a: "=" in a.split("(")[0].split("[")[0].split("{")[0])
+        return rng.choice(["C", "a.C", "match"] * 5 + ["_", "C()"]) + "(" + ", ".join(args) + ")"
+    return sub() + ", " + sub()
+
+
+def matching(rng, sub):
+    case = lambda pad: pad + "case " + pattern(rng, rng.randrange(0, 4)) + rng.choice(["", "", " if " + sub(), " if " + sub(), " if a := " + sub()] * 4 + [" if " + sub() + ", b"]) + rng.choice([": pass\n", ":\n" + pad + "    x = " + sub() + "\n" + pad + "    match = case\n"])
+    head = rng.choice(["x", "x, y", "x,", "*x, y", "(x)", "[x]", "-x", "x := a", sub(), sub()] * 3 + ["*x", "x: int", ""])
+    body = "".join(case("    ") for _ in range(rng.randrange(1, 4)))
+    if rng.randrange(6) == 0:
+        body += "    case _:\n        match y:\n" + case("            ") + "    case _: pass\n"
+    return "match " + head + ":\n" + body + rng.choice(["", "match(x)\ncase = match\n"] * 8 + ["else: pass\n", "    pass\n"])
+
+
 def expression(rng, depth):
     if depth <= 0 or rng.randrange(5) == 0:
         return rng.choice(["a", "b", "c", "0", "17", "0x10", "1.5", "True", "None", "'é😀'", "..."])
@@ -163,9 +203,13 @@ def main():
     rng = random.Random(0xA57A2013)
     for i in range(args.count // 2):  # twice the others: most slots take no bare walrus, so over half are negatives
         line = naming(rng, lambda: expression(rng, rng.randrange(0, 3)))
-        # A compound statement after `:` or `;` is this parser's Unsupported, not a negative: those lines stay bare.
-        sources.append(line if line.startswith(("with", "try", "@")) else rng.choice([line, line, "def f():\n    " + line + "\n    return x\n", "async def f(self):\n    while a:\n        " + line + "\n    else:\n        " + line + "; " + line + "\n",
+        sources.append(rng.choice([line, line, "def f():\n    " + line + "\n    return x\n", "async def f(self):\n    while a:\n        " + line + "\n    else:\n        " + line + "; " + line + "\n",
                                   "if a: " + line + "; " + line + "\nelse:\n    " + line + "\n", "class A:\n    def f(self):\n        try:\n            " + line + "\n        finally:\n            pass\n"]))
+    # A sixth stream, for the same reason.
+    rng = random.Random(0xA57A2014)
+    for i in range(args.count // 2):  # as the fifth: the near misses make about half negatives
+        block = matching(rng, lambda: expression(rng, rng.randrange(0, 3)))
+        sources.append(rng.choice([block, block, "def f(x):\n" + "".join("    " + l + "\n" for l in block.splitlines()), "class A:\n    async def f(self):\n        while a:\n" + "".join("            " + l + "\n" for l in block.splitlines())]))
     # Long lists/chains and nesting deliberately exercise non-consuming transitions.
     for n in [1, 2, 10, 50, 100, 200]:
         sources += ["(" * n + "a" + ")" * n, "[" * n + "a" + "]" * n,
@@ -221,7 +265,7 @@ def main():
     counts = {"generated_and_directed": len(sources), "oracle_accepted": sum("used" in r or "result" in r for r in records),
               "oracle_rejected": sum("oracle-failure" in r for r in records), "fstring_sources": sum("f\"" in s.lower() for s in sources),
               "comprehension_sources": sum(" for " in s or "\n  for " in s for s in sources),
-              "annotated_sources": args.count // 4, "yield_sources": args.count // 4, "async_sources": args.count // 4, "walrus_sources": args.count // 2,
+              "annotated_sources": args.count // 4, "yield_sources": args.count // 4, "async_sources": args.count // 4, "walrus_sources": args.count // 2, "match_sources": args.count // 2,
               "no_limit_on_oracle_accepted": not any(f.get("result", {}).get("status") == "limit" for f in failures),
               "normalization_failures": sum("normalization-failure" in r for r in records),
               "negative_cases": len(INVALID) + len(UNSUPPORTED),

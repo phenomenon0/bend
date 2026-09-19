@@ -398,3 +398,16 @@ def clause(target: S.Json, iter: S.Expr, ifs: S.Json, is_async: Bool) -> S.Json:
 
 def comp(kind: String, head: S.Json, gens: S.Json, lo: S.Pos, hi: S.Pos) -> S.Expr:
   node(kind, S.fields_append(head, S.JField{"generators", arr(gens), S.JEnd{}}), lo, hi)
+
+# P14 `match`. `match_case` carries no location. A capture's name is null for `_` (the wildcard, `*_`).
+def match_case(pattern: S.Expr, guard: S.Expr, body: S.Expr) -> S.Json:
+  plain("match_case", S.JField{"pattern", S.expr(pattern), S.JField{"guard", opt(guard), S.JField{"body", S.JArr{get_fields(body)}, S.JEnd{}}}})
+
+def capture(+id: S.Tok) -> S.Json:
+  S.choose(S.Json, P.is_text(id, "_"), u => S.JNull{}, u => S.JStr{P.tok_text(id)})
+
+def match_as(pattern: S.Json, name: S.Json, lo: S.Pos, hi: S.Pos) -> S.Expr:
+  node("MatchAs", S.JField{"pattern", pattern, S.JField{"name", name, S.JEnd{}}}, lo, hi)
+
+def match_mapping(keys: S.Json, patterns: S.Json, rest: S.Json, lo: S.Pos, hi: S.Pos) -> S.Expr:
+  node("MatchMapping", S.JField{"keys", arr(keys), S.JField{"patterns", arr(patterns), S.JField{"rest", rest, S.JEnd{}}}}, lo, hi)
