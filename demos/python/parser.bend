@@ -548,6 +548,7 @@ def go(+fuel: Nat, +mode: Mode) -> P.M(S.Expr):
                         do P.M<S.Expr>:
                           value : S.Expr <- go(left, Expression{0n})
                           go(left, Arguments{fn, open, S.JItem{S.expr(value), args}, keywords, seen_kw, True{}})))))))))
+    # statements accumulate reversed (a line's body pushed by N.reverse): appending made a block quadratic.
     case 1n+left Block{top, statements, end}:
       P.meter(S.Expr, do P.M<S.Expr>:
         +t : S.Tok <- P.peek
@@ -555,19 +556,19 @@ def go(+fuel: Nat, +mode: Mode) -> P.M(S.Expr):
           S.choose(P.M(S.Expr), top, u =>
             do P.M<S.Expr>:
               drop : S.Tok <- P.take
-              return N.block(statements, end), u => P.syntax(S.Expr, "expected dedent")), u =>
+              return N.block(N.reverse(statements, S.JEnd{}), end), u => P.syntax(S.Expr, "expected dedent")), u =>
           S.choose(P.M(S.Expr), P.is_kind(t, "DEDENT"), u =>
             S.choose(P.M(S.Expr), top, u => P.syntax(S.Expr, "unexpected dedent"), u =>
               do P.M<S.Expr>:
                   drop : S.Tok <- P.take
-                return N.block(statements, end)), u =>
+                return N.block(N.reverse(statements, S.JEnd{}), end)), u =>
             S.choose(P.M(S.Expr), P.is_kind(t, "NEWLINE"), u =>
               do P.M<S.Expr>:
                 drop : S.Tok <- P.take
                 go(left, Block{top, statements, end}), u =>
               do P.M<S.Expr>:
                 +line : S.Expr <- go(left, Line{})
-                go(left, Block{top, S.fields_append(statements, N.get_body(line)), N.get_finish(line)})))))
+                go(left, Block{top, N.reverse(N.get_body(line), statements), N.get_finish(line)})))))
     case 1n+left Line{}:
       P.meter(S.Expr, do P.M<S.Expr>:
         +t : S.Tok <- P.peek
@@ -606,11 +607,12 @@ def go(+fuel: Nat, +mode: Mode) -> P.M(S.Expr):
                       indent : S.Tok <- P.expect("INDENT")
                       compound : S.Expr <- go(left, Cases{subject, P.tok_start(t), S.JEnd{}, P.tok_start(t)})
                       return wrap(compound)))))))
+    # statements accumulate reversed, as in Block.
     case 1n+left Simple{statements}:
       P.meter(S.Expr, do P.M<S.Expr>:
         +small : S.Expr <- go(left, Small{})
         +t : S.Tok <- P.peek
-        +body : S.Json = S.fields_append(statements, N.one(small))
+        +body : S.Json = S.JItem{S.expr(small), statements}
         S.choose(P.M(S.Expr), P.is_text(t, ";"), u =>
           do P.M<S.Expr>:
             semi : S.Tok <- P.take
@@ -619,11 +621,11 @@ def go(+fuel: Nat, +mode: Mode) -> P.M(S.Expr):
               do P.M<S.Expr>:
                 drop : S.Tok <- P.take
                 # A compound statement ends at its last non-whitespace token: the trailing `;`.
-                return N.block(body, P.tok_end(semi)), u => go(left, Simple{body})), u =>
+                return N.block(N.reverse(body, S.JEnd{}), P.tok_end(semi)), u => go(left, Simple{body})), u =>
           S.choose(P.M(S.Expr), P.is_kind(t, "NEWLINE"), u =>
             do P.M<S.Expr>:
               drop : S.Tok <- P.take
-              return N.block(body, N.get_finish(small)), u => P.syntax(S.Expr, "expected statement separator"))))
+              return N.block(N.reverse(body, S.JEnd{}), N.get_finish(small)), u => P.syntax(S.Expr, "expected statement separator"))))
     case 1n+left Small{}:
       P.meter(S.Expr, do P.M<S.Expr>:
         +t : S.Tok <- P.peek
