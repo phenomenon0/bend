@@ -310,6 +310,38 @@ def File.read_bytes(file: File, max: U32) ->
   import "./effs/file_read_bytes.c"
   import "./effs/file_read_bytes.js"
 
+# A UTF-8 decoder's state between chunks: the bytes of a scalar cut by
+# the end of a chunk (pend, low byte first; need of them, 3 at most).
+# File.read_text is File.read through it, so the chunks of a file append
+# to its whole decode; need answers 4 at the end of the file.
+type Utf8.Dec is Data:
+  Dec{pend: U32, need: U32}
+
+def Utf8.Dec.new() -> Utf8.Dec:
+  Dec{0, 0}
+
+def File.read_text.go(file: File, pend: U32, need: U32, max: U32) ->
+  IO(File & Result<&1, &1, U32 & String, U32 & U32 & String>):
+  import "./effs/file_read_text_go.c"
+  import "./effs/file_read_text_go.js"
+
+def File.read_text.pack(got: File & Result<&1, &1, U32 & String, U32 & U32 & String>) ->
+  IO(File & Result<&1, &1, U32 & String, Utf8.Dec & String>):
+  (file, r) = got
+  match r:
+    case Fail{e}:
+      IO.pure(File & Result<&1, &1, U32 & String, Utf8.Dec & String>, (file, Fail{e}))
+    case Done{(pend, (need, text))}:
+      IO.pure(File & Result<&1, &1, U32 & String, Utf8.Dec & String>,
+        (file, Done{(Dec{pend, need}, text)}))
+
+def File.read_text(file: File, dec: Utf8.Dec, max: U32) ->
+  IO(File & Result<&1, &1, U32 & String, Utf8.Dec & String>):
+  Dec{pend, need} = dec
+  IO.bind(File & Result<&1, &1, U32 & String, U32 & U32 & String>,
+    File & Result<&1, &1, U32 & String, Utf8.Dec & String>,
+    File.read_text.go(file, pend, need, max), File.read_text.pack)
+
 def File.write(file: File, data: String) ->
   IO(File & Result<&1, &1, U32 & String, Unit>):
   import "./effs/file_write.c"
@@ -1955,6 +1987,10 @@ def Char.to_lower(+c: Char) -> Char:
 
 # String
 # ------
+
+def Utf8.Dec.eof(dec: Utf8.Dec) -> Bool:
+  Dec{pend, need} = dec
+  U32.is_eq(need, 4)
 
 def String.append(a: String, b: String) -> String:
   match a:
