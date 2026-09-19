@@ -28,8 +28,21 @@ CPython itself refuses to compile an irrefutable case ahead of others, both. Con
 dflt, captured and untyped (graded Unknown) fall through every case on some
 input, and `guarded` both runs and skips its guarded case, so each exclusion is
 necessary.
+
+L4 (tests/lint/modules_*.bend): each unit is written as name.py to a temp dir on
+sys.path (SOUNDNESS A5). Every `imports` span is an oracle Import/ImportFrom, every
+`pure` span an oracle FunctionDef, of the unit its report names. The import graph
+is read off `ast` and sorted by `graphlib`: `imports Proven` = every module below
+is a unit, no cycle, and the import raises nothing; `import cycle p` = p walks
+graph edges and the graph below has a cycle; `missing module z` = z is no unit and
+the import raises ModuleNotFoundError for z; `pure Proven` = every call on sampled
+arguments terminates, prints nothing and keeps its arguments. Controls: ping's
+`from` cycle raises ImportError while left's plain `import` cycle imports fine
+(so cycles are checked on the graph, not by importing); lack raises ImportError
+(graded Unknown); app.greet (Unknown through log) prints, and so does importing
+page (Unknown through noisy).
 """
-import ast, copy, glob, itertools, json, os, re, signal, sys, types, typing, warnings
+import ast, contextlib, copy, glob, graphlib, importlib, io, itertools, json, os, re, shutil, signal, sys, tempfile, types, typing, warnings
 
 warnings.simplefilter("ignore")  # `s is "a"` is a specimen
 
@@ -122,8 +135,116 @@ def trials(fn, node, x):
 def inputs(node):
     return [copy.deepcopy(a) for a in itertools.product(*(values(a.annotation) for a in node.args.args))]
 
+def edges(tree):
+    """The modules a unit's top-level imports name (U0 and not)."""
+    out = []
+    for n in tree.body:
+        if isinstance(n, ast.Import):
+            out += [a.name for a in n.names]
+        elif isinstance(n, ast.ImportFrom):
+            out.append("." * n.level + (n.module or ""))
+    return out
+
+def fresh(names, mod):
+    """Import mod from scratch: (exception or None, stdout)."""
+    for n in names:
+        sys.modules.pop(n, None)
+    out = io.StringIO()
+    try:
+        with contextlib.redirect_stdout(out):
+            importlib.import_module(mod)
+    except Exception as e:
+        return e, out.getvalue()
+    return None, out.getvalue()
+
+def modules(path, text, expected):
+    """L4 evidence for one modules_* specimen: (failures, checks)."""
+    srcs = dict(sources(text))
+    units = {m: srcs[fn] for m, fn in re.findall(r'unit\("(\w+)", (\w+)\(\)\)', text)}
+    trees = {m: ast.parse(s) for m, s in units.items()}
+    graph = {m: edges(t) for m, t in trees.items()}
+    def below(m, seen):
+        for d in graph.get(m, []):
+            if d not in seen:
+                seen.add(d)
+                below(d, seen)
+        return seen
+    tmp = tempfile.mkdtemp()
+    for m, s in units.items():
+        open(os.path.join(tmp, m + ".py"), "w").write(s)
+    sys.path.insert(0, tmp)
+    fails = checks = 0
+    try:
+        for m in re.finditer(r"(\w+)\.py:(\d+):(\d+)-(\d+):(\d+) (imports|pure) (\w+) ([^\n]*)", expected):
+            mod, span, rule, grade, msg = m.group(1), tuple(map(int, m.groups()[1:5])), m.group(6), m.group(7), m.group(8)
+            kinds = (ast.Import, ast.ImportFrom) if rule == "imports" else ast.FunctionDef
+            nodes = {(n.lineno, n.col_offset, n.end_lineno, n.end_col_offset): n for n in trees[mod].body if isinstance(n, kinds)}
+            checks += 1
+            if span not in nodes:
+                print(f"FAIL {path}: {rule} span {mod}.py:{span} is no oracle {rule} node"); fails += 1
+                continue
+            if "forged" in path or "certificate refuted" in msg or grade not in ("Proven", "Refuted"):
+                continue
+            reach = below(mod, {mod})
+            try:
+                graphlib.TopologicalSorter({n: graph.get(n, []) for n in reach}).prepare()
+                cyclic = False
+            except graphlib.CycleError:
+                cyclic = True
+            if rule == "imports" and grade == "Proven":
+                err, out = fresh(units, mod)
+                if cyclic or not reach <= units.keys() or err:
+                    print(f"FAIL {path}: imports Proven {mod}: cyclic={cyclic}, outside={reach - units.keys()}, {err!r}, {out!r}"); fails += 1
+            elif msg.startswith("import cycle "):
+                p = msg[len("import cycle "):].split(" -> ")
+                if p[0] != mod or not cyclic or any(b not in graph[a] for a, b in zip(p, p[1:])):
+                    print(f"FAIL {path}: {mod}: no oracle cycle along {p}"); fails += 1
+            elif msg.startswith("missing module "):
+                z = msg.split()[2]
+                err, _ = fresh(units, mod)
+                if z in units or not isinstance(err, ModuleNotFoundError) or err.name != z:
+                    print(f"FAIL {path}: {mod}: {z} is a unit or the import raised {err!r}"); fails += 1
+            elif rule == "pure" and grade == "Proven":
+                fresh(units, mod)
+                node, fn = nodes[span], getattr(sys.modules[mod], nodes[span].name)
+                for args in inputs(node):
+                    out, before = io.StringIO(), copy.deepcopy(args)
+                    with contextlib.redirect_stdout(out):
+                        ok = terminates(fn, args)
+                    if not ok or out.getvalue() or list(args) != list(before):
+                        print(f"FAIL {path}: pure Proven {mod}.{node.name}{before}: terminated={ok}, printed {out.getvalue()!r}, args {args}"); fails += 1
+            else:
+                print(f"FAIL {path}: no evidence for {rule} {grade} {msg}"); fails += 1
+        if path.endswith("modules_cycle.bend"):
+            err, _ = fresh(units, "ping")
+            if isinstance(err, ImportError) and "partially initialized" in str(err) and fresh(units, "left") == (None, ""):
+                print("ok   control: ping's `from` cycle raises ImportError, left's `import` cycle imports (graph, not import, finds it)")
+            else:
+                print(f"FAIL control: ping raised {err!r} or left did not import"); fails += 1
+        if path.endswith("modules_missing.bend"):
+            err, _ = fresh(units, "lack")
+            if type(err) is ImportError:
+                print("ok   control: lack raises ImportError (graded Unknown: no U0 counterexample for a missing def)")
+            else:
+                print(f"FAIL control: lack raised {err!r}"); fails += 1
+        if path.endswith("modules_impure.bend"):
+            fresh(units, "app")
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                sys.modules["app"].greet("a")
+            if out.getvalue() and fresh(units, "page") == (None, "loaded\n"):
+                print("ok   control: app.greet prints through log.say (graded Unknown, Refuted when declared), importing page prints")
+            else:
+                print("FAIL control: app.greet or importing page printed nothing"); fails += 1
+    finally:
+        sys.path.remove(tmp)
+        for n in units:
+            sys.modules.pop(n, None)
+        shutil.rmtree(tmp)
+    return fails, checks
+
 def main():
-    fails = calls = spans = kept = hits = cov = 0
+    fails = calls = spans = kept = hits = cov = mods = 0
     for path in sorted(glob.glob("tests/lint/*.bend")):
         text = open(path, encoding="utf-8").read()
         expected = "".join(json.loads(l[2:]) for l in text.splitlines() if l.startswith("#|"))
@@ -140,7 +261,8 @@ def main():
                 refused[py] = str(e)
             for stmt in tree.body:  # one statement at a time: `@cache` raises NameError, the rest still bind
                 try:
-                    exec(compile(ast.Module([stmt], []), path, "exec"), env)
+                    with contextlib.redirect_stdout(io.StringIO()):  # noisy prints when run
+                        exec(compile(ast.Module([stmt], []), path, "exec"), env)
                 except Exception:
                     pass
             for node in ast.walk(tree):
@@ -209,6 +331,9 @@ def main():
                     print(f"FAIL {path}: dead-case Proven {node.name} case {k} ran on {v!r}"); fails += 1
             if rule == "exhaustive" and grade == "Refuted" and not any(msg == f"not exhaustive: {v!r} matches no case" for v in d):
                 print(f"FAIL {path}: {node.name}: the counterexample is outside the oracle domain {shown}: {msg}"); fails += 1
+        if "modules_" in path:
+            f, n = modules(path, text, expected)
+            fails, mods = fails + f, mods + n
         if path.endswith("coverage_dead.bend"):
             if "makes remaining patterns unreachable" in refused.get("w.py", ""):
                 print(f"ok   control: CPython refuses w.py: {refused['w.py']}")
@@ -246,7 +371,7 @@ def main():
                 else:
                     print(f"ok   control: {name} diverges under CPython (graded Unknown)")
     print(f"semantics: {spans} spans against the oracle, {calls} Proven calls terminated, {kept} ownership-Proven calls kept "
-          f"their arguments, {hits} alias controls, {cov} coverage calls, {fails} failures")
+          f"their arguments, {hits} alias controls, {cov} coverage calls, {mods} module verdicts, {fails} failures")
     return 1 if fails or not calls else 0
 
 if __name__ == "__main__":

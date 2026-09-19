@@ -5,7 +5,8 @@
 # L2: the ownership fragment O0 (`own`, the same kernel) and the alias/effect
 # advisories (`alias`). L3: finite-domain match coverage M0 (`exhaustive`,
 # `dead_case`, the same recompute-don't-trust discipline; `coverage` searches).
-# Module summaries are L4.
+# L4: closed-module summaries U0 (`imports`, `pure`: the same kernel over a
+# summary set of modules; `modules` searches).
 import Base
 import ./syntax.bend as S
 import ./nodes.bend as N
@@ -297,15 +298,18 @@ def ident(j: S.Json) -> List<&2, Fact>:
     case _:
       []
 
-# Every condition of "name is in T0" (`o`: in O0), recomputed from the AST.
-def check_fn(+body: S.Json, +cs: List<&2, Contract>, +name: String, o: Bool) -> List<&2, Fact>:
+# The def's own conditions; `defs` are the module-level names (L4 adds imports).
+def member(+body: S.Json, +cs: List<&2, Contract>, +name: String, o: Bool, +defs: List<&2, String>) -> List<&2, Fact>:
   +f = find_def(body, name)
-  +defs = def_names(body)
   unique = S.choose(List<&2, Fact>, Nat.is_eq(count(defs, name), 1n), u => [], u =>
     [Bad{field(f, "_loc"), "no unique def " ++ name}])
-  List.append(&2, Fact, closed(body), List.append(&2, Fact, unique, List.append(&2, Fact, header(f),
+  List.append(&2, Fact, unique, List.append(&2, Fact, header(f),
     List.append(&2, Fact, scan(field(f, "body"), "", field(f, "_loc"), Env{binds(f), defs, cs}),
-      S.choose(List<&2, Fact>, o, u => ident(f), u => [])))))
+      S.choose(List<&2, Fact>, o, u => ident(f), u => []))))
+
+# Every condition of "name is in T0" (`o`: in O0), recomputed from the AST.
+def check_fn(+body: S.Json, +cs: List<&2, Contract>, +name: String, o: Bool) -> List<&2, Fact>:
+  List.append(&2, Fact, closed(body), member(body, cs, name, o, def_names(body)))
 
 # ---- verify: the kernel ----
 
@@ -1330,3 +1334,450 @@ def verdicts(ss: List<&2, Site>, +m: S.Module, +w: List<&2, Claim>) -> List<&2, 
 def coverage(+m: S.Module) -> List<&2, Diag>:
   +ss = module_sites(m)
   List.sort(~Diag, ~le, verdicts(ss, m, witness(ss)))
+
+# ---- L4: closed-module summaries (U0) ----
+
+# One module of the summary set, imported as `name` and rendered as name.py.
+# The set is closed when every import resolves inside it (SOUNDNESS.md, A5).
+type Mod is Data:
+  Mod{name: String, m: S.Module}
+
+# A summary entry, forgeable like a rank: a module's import rank, a def's pure
+# rank, or a counterexample path of imports (back to its start, or out of the set).
+type Summary is Data:
+  Ranked{module: String, rank: Nat}
+  Pure{module: String, name: String, rank: Nat}
+  Path{mods: List<&2, String>}
+
+# A top-level binder and what it denotes: mod.def, n.x or the module n.
+type Link is Data:
+  Link{name: String, qual: String}
+
+def mod_names(ms: List<&2, Mod>) -> List<&2, String>:
+  match ms:
+    case Nil{}:
+      []
+    case Mod{name, m} <> t:
+      name <> mod_names(t)
+
+def mod_body(ms: List<&2, Mod>, +k: String) -> S.Json:
+  match ms:
+    case Nil{}:
+      S.JEnd{}
+    case Mod{+name, m} <> t:
+      S.Module{body} = m
+      S.choose(S.Json, String.eq(name, k), u => body, u => mod_body(t, k))
+
+def plain(xs: S.Json, +bad: String) -> Bool:
+  match xs:
+    case S.JItem{h, t}:
+      Bool.not(String.contains(N.string(field(h, "name")), bad)) && plain(t, bad)
+    case _:
+      True{}
+
+# U0's imports: `import n [as a], ...` and `from n import x [as a], ...` at
+# level 0, every n a single name, no star.
+def u0_import(+h: S.Json) -> Bool:
+  +tag = tag_of(h)
+  +n = N.string(field(h, "module"))
+  S.choose(Bool, String.eq(tag, "Import"), u => plain(items(field(h, "names")), "."), u =>
+    String.eq(tag, "ImportFrom") && level0(field(h, "level")) && Bool.not(String.contains(n, ".")) &&
+      plain(items(field(h, "names")), "*"))
+
+def alias_names(xs: S.Json) -> List<&2, String>:
+  match xs:
+    case S.JItem{h, t}:
+      N.string(field(h, "name")) <> alias_names(t)
+    case _:
+      []
+
+# The modules a U0 import statement names, in order.
+def targets(+h: S.Json) -> List<&2, String>:
+  S.choose(List<&2, String>, Bool.not(u0_import(h)), u => [], u =>
+    S.choose(List<&2, String>, String.eq(tag_of(h), "Import"), u => alias_names(items(field(h, "names"))), u =>
+      [N.string(field(h, "module"))]))
+
+# A module's import edges, in statement order.
+def deps(xs: S.Json) -> List<&2, String>:
+  match xs:
+    case S.JItem{+h, t}:
+      List.append(&2, String, targets(h), deps(t))
+    case _:
+      []
+
+# The top level without its U0 imports: what `closed` must still admit.
+def rest_of(xs: S.Json) -> S.Json:
+  match xs:
+    case S.JItem{+h, +t}:
+      S.choose(S.Json, u0_import(h), u => rest_of(t), u => S.JItem{h, rest_of(t)})
+    case _:
+      S.JEnd{}
+
+def aliases(xs: S.Json, +pre: String) -> List<&2, Link>:
+  match xs:
+    case S.JItem{+h, t}:
+      +x = N.string(field(h, "name"))
+      +a = field(h, "asname")
+      Link{S.choose(String, is_null(a), u => x, u => N.string(a)), pre ++ x} <> aliases(t, pre)
+    case _:
+      []
+
+# Every top-level binder of module `mod`: def d is mod.d, `from n import x as a`
+# binds a to n.x, `import n as a` binds a to the module n.
+def links(xs: S.Json, +mod: String) -> List<&2, Link>:
+  match xs:
+    case S.JItem{+h, t}:
+      +tag = tag_of(h)
+      +d = N.string(field(h, "name"))
+      +pre = S.choose(String, String.eq(tag, "ImportFrom"), u => N.string(field(h, "module")) ++ ".", u => "")
+      List.append(&2, Link, S.choose(List<&2, Link>, String.eq(tag, "FunctionDef"), u => [Link{d, mod ++ "." ++ d}], u =>
+        S.choose(List<&2, Link>, u0_import(h), u => aliases(items(field(h, "names")), pre), u => [])), links(t, mod))
+    case _:
+      []
+
+def link_names(ls: List<&2, Link>) -> List<&2, String>:
+  match ls:
+    case Nil{}:
+      []
+    case Link{name, q} <> t:
+      name <> link_names(t)
+
+def qual(ls: List<&2, Link>, +k: String) -> String:
+  match ls:
+    case Nil{}:
+      k
+    case Link{name, q} <> t:
+      S.choose(String, String.eq(name, k), u => q, u => qual(t, k))
+
+def qualify(fs: List<&2, Fact>, +ls: List<&2, Link>) -> List<&2, Fact>:
+  match fs:
+    case Nil{}:
+      []
+    case Bad{loc, why} <> t:
+      Bad{loc, why} <> qualify(t, ls)
+    case Calls{g} <> t:
+      Calls{qual(ls, g)} <> qualify(t, ls)
+
+# T0's conditions for mod.name with its imports as module binders; callees
+# come out qualified (mod.def, n.x).
+def check_x(+ms: List<&2, Mod>, +cs: List<&2, Contract>, +mod: String, +name: String) -> List<&2, Fact>:
+  +body = mod_body(ms, mod)
+  +ls = links(body, mod)
+  qualify(member(body, cs, name, False{}, link_names(ls)), ls)
+
+# The module ranks (`p` False) or the pure ranks, keyed mod.def (`p` True).
+def ranks(w: List<&2, Summary>, +p: Bool) -> List<&2, Rank>:
+  match w:
+    case Nil{}:
+      []
+    case Ranked{mod, r} <> t:
+      List.append(&2, Rank, S.choose(List<&2, Rank>, p, u => [], u => [Rank{mod, r}]), ranks(t, p))
+    case Pure{mod, name, r} <> t:
+      List.append(&2, Rank, S.choose(List<&2, Rank>, p, u => [Rank{mod ++ "." ++ name, r}], u => []), ranks(t, p))
+    case Path{ps} <> t:
+      ranks(t, p)
+
+def undefined(xs: S.Json, +defs: List<&2, String>) -> String:
+  match xs:
+    case S.JItem{+h, t}:
+      +x = N.string(field(h, "name"))
+      S.choose(String, has(defs, x), u => undefined(t, defs), u => x)
+    case _:
+      ""
+
+# Per module an import statement names: Bad if it is outside the summary set
+# or lacks a def the statement imports from it, else the edge Calls{module}.
+def stmt_facts(+h: S.Json, ts: List<&2, String>, +ms: List<&2, Mod>) -> List<&2, Fact>:
+  match ts:
+    case Nil{}:
+      []
+    case +t <> rest:
+      +loc = field(h, "_loc")
+      +x = S.choose(String, String.eq(tag_of(h), "ImportFrom"), u => undefined(items(field(h, "names")), def_names(mod_body(ms, t))), u => "")
+      f = S.choose(Fact, Bool.not(has(mod_names(ms), t)), u => Bad{loc, "missing module " ++ t ++ at(loc)}, u =>
+        S.choose(Fact, String.is_empty(x), u => Calls{t}, u => Bad{loc, t ++ " has no def " ++ x ++ at(loc)}))
+      f <> stmt_facts(h, rest, ms)
+
+def imp_facts(xs: S.Json, +ms: List<&2, Mod>) -> List<&2, Fact>:
+  match xs:
+    case S.JItem{+h, t}:
+      List.append(&2, Fact, stmt_facts(h, targets(h), ms), imp_facts(t, ms))
+    case _:
+      []
+
+def ranked_below(k: Maybe<&2, Nat>, r: Maybe<&2, Nat>) -> Bool:
+  match r:
+    case None{}:
+      Maybe.is_some(&2, Nat, k)
+    case Some{+n}:
+      Nat.is_lt(Maybe.default(&2, Nat, k, n), n)
+
+# "" iff no fact is Bad and every import edge holds a module rank below `r`
+# (the kernel), or any rank (`r` None: the search's view).
+def below(fs: List<&2, Fact>, +mr: List<&2, Rank>, +r: Maybe<&2, Nat>) -> String:
+  match fs:
+    case Nil{}:
+      ""
+    case Bad{loc, why} <> t:
+      why
+    case Calls{+g} <> t:
+      S.choose(String, ranked_below(rank(mr, g), r), u => below(t, mr, r), u =>
+        S.choose(String, Maybe.is_none(&2, Nat, r), u => "import of " ++ g ++ " is not certified (cycle or Unknown)", u =>
+          "import of " ++ g ++ " holds no smaller rank"))
+
+# "" iff `mod` is one module of the set, closed but for U0 imports, and each
+# import names a module of the set (and, `from n import x`, a def x of n)
+# ranked below `r`.
+def mod_why(+ms: List<&2, Mod>, +mod: String, +mr: List<&2, Rank>, +r: Maybe<&2, Nat>) -> String:
+  +body = mod_body(ms, mod)
+  S.choose(String, Bool.not(Nat.is_eq(count(mod_names(ms), mod), 1n)), u => "no unique module " ++ mod, u =>
+    below(List.append(&2, Fact, closed(rest_of(body)), imp_facts(body, ms)), mr, r))
+
+def final(xs: List<&2, String>, +d: String) -> String:
+  match xs:
+    case Nil{}:
+      d
+    case h <> t:
+      final(t, h)
+
+def hops(ys: List<&2, String>, +x: String, +ms: List<&2, Mod>) -> String:
+  match ys:
+    case Nil{}:
+      ""
+    case +y <> t:
+      S.choose(String, has(deps(mod_body(ms, x)), y), u => hops(t, y, ms), u => x ++ " does not import " ++ y)
+
+# "" iff `p` walks at least one recomputed import edge and ends on a module
+# it passed already (a cycle below its start) or outside the summary set.
+def path_why(p: List<&2, String>, +ms: List<&2, Mod>) -> String:
+  match p:
+    case Nil{}:
+      "empty path"
+    case +a <> +t:
+      +z = final(t, a)
+      S.choose(String, List.is_empty(&2, String, t), u => "no edge", u =>
+        S.choose(String, Nat.is_lt(1n, count(a <> t, z)) || Bool.not(has(mod_names(ms), z)), u => hops(t, a, ms), u =>
+          "the path neither closes a cycle nor leaves the summary set"))
+
+def tagged(+who: String, +why: String) -> String:
+  S.choose(String, String.is_empty(why), u => "", u => who ++ ": " ++ why)
+
+# "" iff the entry checks against the actual modules, every condition recomputed.
+def entry_why(e: Summary, +ms: List<&2, Mod>, +cs: List<&2, Contract>, +w: List<&2, Summary>) -> String:
+  match e:
+    case Ranked{+mod, r}:
+      tagged(mod, mod_why(ms, mod, ranks(w, False{}), Some{r}))
+    case Pure{+mod, +name, r}:
+      tagged(mod ++ "." ++ name, S.choose(String, Maybe.is_none(&2, Nat, rank(ranks(w, False{}), mod)), u =>
+        "module " ++ mod ++ " holds no import certificate", u => discharge(check_x(ms, cs, mod, name), ranks(w, True{}), r)))
+    case Path{+p}:
+      tagged("path [" ++ String.join(p, " -> ") ++ "]", path_why(p, ms))
+
+# "" iff every entry checks: one bad entry refutes the whole summary.
+def vouch(es: List<&2, Summary>, +ms: List<&2, Mod>, +cs: List<&2, Contract>, +w: List<&2, Summary>) -> String:
+  match es:
+    case Nil{}:
+      ""
+    case e <> t:
+      +why = entry_why(e, ms, cs, w)
+      S.choose(String, String.is_empty(why), u => vouch(t, ms, cs, w), u => why)
+
+def is_about(e: Summary, +mod: String) -> Bool:
+  match e:
+    case Ranked{m, r}:
+      String.eq(m, mod)
+    case Pure{m, n, r}:
+      False{}
+    case Path{p}:
+      String.eq(Maybe.default(&2, String, List.head(&2, String, p), ""), mod)
+
+# The import claims about `mod`: its rank, or a path from it.
+def about(w: List<&2, Summary>, +mod: String) -> List<&2, Summary>:
+  match w:
+    case Nil{}:
+      []
+    case +e <> t:
+      List.append(&2, Summary, S.choose(List<&2, Summary>, is_about(e, mod), u => [e], u => []), about(t, mod))
+
+def path_of(w: List<&2, Summary>) -> List<&2, String>:
+  match w:
+    case Nil{}:
+      []
+    case Path{p} <> t:
+      p
+    case Ranked{mod, r} <> t:
+      path_of(t)
+    case Pure{mod, name, r} <> t:
+      path_of(t)
+
+def second(xs: List<&2, String>) -> String:
+  match xs:
+    case Nil{}:
+      ""
+    case h <> t:
+      Maybe.default(&2, String, List.head(&2, String, t), "")
+
+# The first top-level import naming module `t` ("": any import at all).
+def import_loc(xs: S.Json, +t: String) -> S.Json:
+  match xs:
+    case S.JItem{+h, tl}:
+      S.choose(S.Json, has(["Import", "ImportFrom"], tag_of(h)) && (String.is_empty(t) || has(targets(h), t)), u => field(h, "_loc"), u =>
+        import_loc(tl, t))
+    case _:
+      S.JNull{}
+
+def counter(+p: List<&2, String>, +ms: List<&2, Mod>) -> String:
+  +z = final(p, "")
+  S.choose(String, has(mod_names(ms), z), u => "import cycle " ++ String.join(p, " -> "), u =>
+    "missing module " ++ z ++ " via " ++ String.join(p, " -> "))
+
+def settled(cl: List<&2, Summary>, +ms: List<&2, Mod>, +cs: List<&2, Contract>, +w: List<&2, Summary>, +mod: String) -> Diag:
+  match cl:
+    case Nil{}:
+      Diag{import_loc(mod_body(ms, mod), ""), "imports", Unknown{}, "no certificate"}
+    case +h <> +t:
+      +body = mod_body(ms, mod)
+      +why = vouch(w, ms, cs, w)
+      +p = path_of(h <> t)
+      S.choose(Diag, Bool.not(String.is_empty(why)), u => Diag{import_loc(body, ""), "imports", Refuted{}, "certificate refuted: " ++ why}, u =>
+        S.choose(Diag, List.is_empty(&2, String, p), u =>
+          Diag{import_loc(body, ""), "imports", Proven{}, "every import resolves in the summary set, acyclically (U0)"}, u =>
+          Diag{import_loc(body, second(p)), "imports", Refuted{}, counter(p, ms)}))
+
+# Kernel entry: do the imports of module `mod` resolve in the summary set,
+# acyclically? Its claims are consulted first, so none means no proof.
+def imports(+ms: List<&2, Mod>, +cs: List<&2, Contract>, +w: List<&2, Summary>, +mod: String) -> Diag:
+  settled(about(w, mod), ms, cs, w, mod)
+
+def held(entry: Maybe<&2, Nat>, +ms: List<&2, Mod>, +cs: List<&2, Contract>, +w: List<&2, Summary>, +mod: String, +name: String) -> Diag:
+  match entry:
+    case None{}:
+      Diag{field(find_def(mod_body(ms, mod), name), "_loc"), "pure", Unknown{}, "no certificate"}
+    case Some{r}:
+      +loc = field(find_def(mod_body(ms, mod), name), "_loc")
+      +why = vouch(w, ms, cs, w)
+      S.choose(Diag, String.is_empty(why), u => Diag{loc, "pure", Proven{}, "terminates with no effect, through its imports (U0)"}, u =>
+        Diag{loc, "pure", Refuted{}, "certificate refuted: " ++ why})
+
+# Kernel entry: is mod.name in U0, T0 across the summary set?
+def pure(+ms: List<&2, Mod>, +cs: List<&2, Contract>, +w: List<&2, Summary>, +mod: String, +name: String) -> Diag:
+  held(rank(ranks(w, True{}), mod ++ "." ++ name), ms, cs, w, mod, name)
+
+law no_certificate_no_imports:
+  for +ms: List<&2, Mod>
+  for +cs: List<&2, Contract>
+  for +mod: String
+  {is_proven(imports(ms, cs, Nil{}, mod)) == False{} : Bool}
+
+def no_certificate_no_imports(ms, cs, mod):
+  {==}
+
+law no_certificate_no_purity:
+  for +ms: List<&2, Mod>
+  for +cs: List<&2, Contract>
+  for +mod: String
+  for +name: String
+  {is_proven(pure(ms, cs, Nil{}, mod, name)) == False{} : Bool}
+
+def no_certificate_no_purity(ms, cs, mod, name):
+  {==}
+
+# ---- L4 analyze: untrusted summary search, then the kernel ----
+
+def mround(names: List<&2, String>, +ms: List<&2, Mod>, +w: List<&2, Summary>, +r: Nat) -> List<&2, Summary>:
+  match names:
+    case Nil{}:
+      []
+    case +h <> t:
+      ok = Maybe.is_none(&2, Nat, rank(ranks(w, False{}), h)) && String.is_empty(mod_why(ms, h, ranks(w, False{}), None{}))
+      List.append(&2, Summary, S.choose(List<&2, Summary>, ok, u => [Ranked{h, r}], u => []), mround(t, ms, w, r))
+
+def pdefs(ds: List<&2, String>, +mod: String, +ms: List<&2, Mod>, +cs: List<&2, Contract>, +w: List<&2, Summary>, +r: Nat) -> List<&2, Summary>:
+  match ds:
+    case Nil{}:
+      []
+    case +d <> t:
+      ok = Maybe.is_none(&2, Nat, rank(ranks(w, True{}), mod ++ "." ++ d)) && String.is_empty(why_not(check_x(ms, cs, mod, d), ranks(w, True{})))
+      List.append(&2, Summary, S.choose(List<&2, Summary>, ok, u => [Pure{mod, d, r}], u => []), pdefs(t, mod, ms, cs, w, r))
+
+def pround(mods: List<&2, String>, +ms: List<&2, Mod>, +cs: List<&2, Contract>, +w: List<&2, Summary>, +r: Nat) -> List<&2, Summary>:
+  match mods:
+    case Nil{}:
+      []
+    case +mod <> t:
+      List.append(&2, Summary, pdefs(def_names(mod_body(ms, mod)), mod, ms, cs, w, r), pround(t, ms, cs, w, r))
+
+# One round per unit of fuel: module ranks (`p` False) or pure ranks over the
+# defs of `names`, each above what earlier rounds ranked.
+def summarize(fuel: Nat, +p: Bool, +names: List<&2, String>, +ms: List<&2, Mod>, +cs: List<&2, Contract>, +w: List<&2, Summary>, +r: Nat) -> List<&2, Summary>:
+  match fuel:
+    case 0n:
+      w
+    case 1n+q:
+      more = S.choose(List<&2, Summary>, p, u => pround(names, ms, cs, w, r), u => mround(names, ms, w, r))
+      summarize(q, p, names, ms, cs, List.append(&2, Summary, w, more), 1n+r)
+
+# An import walk from the targets `ts` back into `seen` (the walk so far) or out
+# of the summary set, depth-first in import order, at most `fuel` edges deep.
+# ponytail: no visited set, exponential on dense import graphs; memoize if it matters.
+def trail(fuel: Nat, ts: List<&2, String>, +seen: List<&2, String>, +ms: List<&2, Mod>) -> List<&2, String>:
+  match fuel:
+    case 0n:
+      []
+    case 1n++q:
+      match ts:
+        case Nil{}:
+          []
+        case +t <> rest:
+          +goal = has(seen, t) || Bool.not(has(mod_names(ms), t))
+          +p = S.choose(List<&2, String>, goal, u => [], u => trail(q, deps(mod_body(ms, t)), t <> seen, ms))
+          S.choose(List<&2, String>, goal, u => [t], u =>
+            S.choose(List<&2, String>, List.is_empty(&2, String, p), u => trail(1n+q, rest, seen, ms), u => t <> p))
+
+def paths(names: List<&2, String>, +ms: List<&2, Mod>, +mr: List<&2, Rank>, +n: Nat) -> List<&2, Summary>:
+  match names:
+    case Nil{}:
+      []
+    case +h <> t:
+      +p = trail(n, deps(mod_body(ms, h)), [h], ms)
+      List.append(&2, Summary, S.choose(List<&2, Summary>, Maybe.is_none(&2, Nat, rank(mr, h)) && Bool.not(List.is_empty(&2, String, p)), u =>
+        [Path{h <> p}], u => []), paths(t, ms, mr, n))
+
+def ndefs(names: List<&2, String>, +ms: List<&2, Mod>) -> Nat:
+  match names:
+    case Nil{}:
+      0n
+    case +h <> t:
+      Nat.add(List.length(&2, String, def_names(mod_body(ms, h))), ndefs(t, ms))
+
+def pures(ds: List<&2, String>, +mod: String, +ms: List<&2, Mod>, +cs: List<&2, Contract>, +w: List<&2, Summary>) -> List<&2, Diag>:
+  match ds:
+    case Nil{}:
+      []
+    case +d <> t:
+      +loc = field(find_def(mod_body(ms, mod), d), "_loc")
+      v = S.choose(Diag, Maybe.is_some(&2, Nat, rank(ranks(w, True{}), mod ++ "." ++ d)), u => pure(ms, cs, w, mod, d), u =>
+        Diag{loc, "pure", Unknown{}, S.choose(String, Maybe.is_none(&2, Nat, rank(ranks(w, False{}), mod)), u =>
+          tagged(mod, mod_why(ms, mod, ranks(w, False{}), None{})), u => why_not(check_x(ms, cs, mod, d), ranks(w, True{})))})
+      v <> pures(t, mod, ms, cs, w)
+
+def summaries(us: List<&2, Mod>, +ms: List<&2, Mod>, +cs: List<&2, Contract>, +w: List<&2, Summary>) -> String:
+  match us:
+    case Nil{}:
+      ""
+    case Mod{+mod, m} <> t:
+      S.Module{+body} = m
+      +im = S.choose(List<&2, Diag>, Bool.not(any_tag(body, ["Import", "ImportFrom"])), u => [], u =>
+        [S.choose(Diag, List.is_empty(&2, Summary, about(w, mod)), u =>
+          Diag{import_loc(body, ""), "imports", Unknown{}, mod_why(ms, mod, ranks(w, False{}), None{})}, u => imports(ms, cs, w, mod))])
+      render(mod ++ ".py", List.sort(~Diag, ~le, List.append(&2, Diag, im, pures(def_names(body), mod, ms, cs, w)))) ++ summaries(t, ms, cs, w)
+
+# `imports` per module that imports and `pure` per def, through the kernel;
+# each module's diagnostics sorted, modules in manifest order.
+def modules(+ms: List<&2, Mod>, +cs: List<&2, Contract>) -> String:
+  +names = mod_names(ms)
+  +n = List.length(&2, String, names)
+  +w0 = summarize(n, False{}, names, ms, cs, [], 0n)
+  +mr = ranks(w0, False{})
+  +w = summarize(ndefs(names, ms), True{}, ranked(mr), ms, cs, List.append(&2, Summary, w0, paths(names, ms, mr, n)), 0n)
+  summaries(ms, ms, cs, w)
