@@ -181,3 +181,7 @@ def go(fuel: Nat, +st: State) -> Result<&2, &2, S.Error, List<&2, S.Tok>>:
 
 def lex(+s: String) -> Result<&2, &2, S.Error, List<&2, S.Tok>>:
   go(3n * (String.length(s) + 1n), State{s, S.Pos{1n, 0n}, [Indent{0n, 0n}], [], True{}, False{}, [], False{}})
+
+# An f-string field: `(expr)` lexed mid-line from the `{`, so every token keeps its source position.
+def lex_at(+s: String, pos: S.Pos) -> Result<&2, &2, S.Error, List<&2, S.Tok>>:
+  go(3n * (String.length(s) + 1n), State{s, pos, [Indent{0n, 0n}], [], False{}, True{}, [], False{}})

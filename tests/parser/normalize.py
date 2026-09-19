@@ -14,7 +14,9 @@ import hashlib
 import io
 import json
 import platform
+import re
 import tokenize
+import warnings
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -39,7 +41,7 @@ def pin():
             "RecursionError/MemoryError/timeouts are oracle failures, never parser verdicts",
             "Constant value = repr(literal_eval(raw)); implicit strings wrapped in parentheses",
             "type_comments=False; trivia and incidental parentheses are omitted",
-            "f-strings are unsupported (P4); oracle JoinedStr text Constant segments use repr(node.value) because their source spans cover the whole f-string",
+            "f-string text Constants: the wire carries `_parts` [kind, text] pieces (s: plain token, f: f-string literal text, v: verbatim) decoded and joined here; the oracle side uses repr(node.value) because their source spans cover the whole string run",
         ],
     }
     (OUT / "oracle.json").write_text(json.dumps(data, indent=2) + "\n")
@@ -70,16 +72,37 @@ def literal(raw):
     return repr(ast.literal_eval("(" + raw + "\n)"))
 
 
+def part(kind, text):
+    """One `_parts` piece of an f-string Constant: a plain token, f-string literal text, or verbatim text."""
+    if kind == "s":
+        return ast.literal_eval("(" + text + "\n)")
+    if kind == "v":
+        return text.replace("\r\n", "\n")
+    body = re.sub(r'\\.|["\n\r]|\\$', lambda m: m[0] if len(m[0]) == 2 else
+                  {'"': '\\"', "\n": "\\n", "\r": "\\r", "\\": "\\\\"}[m[0]], text, flags=re.S)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        return ast.literal_eval('"' + body + '"')
+
+
 def oracle(source):
     tree = ast.parse(source, feature_version=(3, 11), type_comments=False)
     maps = boundaries(source)
+    lines = ast._splitlines_no_ff(source)
+
+    def segment(node):
+        # ast.get_source_segment with the line split hoisted: per call it is O(source), quadratic on ~1 MB files.
+        lo, hi, a, b = node.lineno - 1, node.end_lineno - 1, node.col_offset, node.end_col_offset
+        if lo == hi:
+            return lines[lo].encode()[a:b].decode()
+        return "".join([lines[lo].encode()[a:].decode()] + lines[lo + 1:hi] + [lines[hi].encode()[:b].decode()])
 
     def convert(node, in_fstring=False):
         if isinstance(node, ast.AST):
             d = {"tag": type(node).__name__}
             for field, value in ast.iter_fields(node):
                 if isinstance(node, ast.Constant) and field == "value":
-                    d[field] = repr(node.value) if in_fstring else literal(ast.get_source_segment(source, node))
+                    d[field] = repr(node.value) if in_fstring else literal(segment(node))
                 else:
                     d[field] = convert(value, isinstance(node, ast.JoinedStr))
             if hasattr(node, "lineno"):
@@ -101,6 +124,9 @@ def normalize(value):
         return value
     if value.get("tag") == "Constant" and "_raw" in value:
         value = {"tag": "Constant", "value": literal(value["_raw"]),
+                 "kind": value.get("kind"), "_loc": value["_loc"]}
+    if value.get("tag") == "Constant" and "_parts" in value:
+        value = {"tag": "Constant", "value": repr("".join(part(k, t) for k, t in value["_parts"])),
                  "kind": value.get("kind"), "_loc": value["_loc"]}
     return {k: normalize(v) for k, v in value.items()}
 
@@ -142,7 +168,7 @@ Set Dict UnaryOp UAdd USub Invert Not BinOp Add Sub Mult MatMult Div FloorDiv Mo
 LShift RShift BitOr BitXor BitAnd BoolOp And Or Compare Eq NotEq Lt LtE Gt GtE Is IsNot In NotIn
 IfExp Call keyword Assign AugAssign Expr If While Return Pass Break Continue
 Lambda arguments arg FunctionDef For Global Nonlocal Delete Assert Raise Try ExceptHandler With withitem
-Import ImportFrom alias ClassDef Slice""".split())
+Import ImportFrom alias ClassDef Slice JoinedStr FormattedValue""".split())
 
 
 def supported(tree, source=None):
