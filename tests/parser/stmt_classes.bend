@@ -31,6 +31,6 @@ def main() -> Bool:
     String.eq(kind(parse("class A(B: pass")), "Syntax") &&
     String.eq(kind(parse("class A(x=1, y): pass")), "Syntax") &&
     String.eq(kind(parse("@d\nx = 1")), "Syntax") &&
-    String.eq(kind(parse("class é: pass")), "Unsupported")
+    String.eq(kind(parse("class ﬁ: pass")), "Unsupported")
 
 #|True{}

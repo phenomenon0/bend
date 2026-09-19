@@ -164,9 +164,9 @@ MATCH_INVALID = [
 
 # Accepted by the oracle, out of the ASCII-identifier subset: both lanes must answer Unsupported.
 MATCH_UNSUPPORTED = [
-    'match s:\n    case é: pass\n', 'match s:\n    case x.é: pass\n', 'match s:\n    case C(é=1): pass\n', 'match s:\n    case x as é: pass\n', 'match s:\n    case {**é}: pass\n',
-    'match s:\n    case [*é]: pass\n', 'match é:\n    case 1: pass\n', 'match x:\n    case 1: é\n', 'try: pass\nexcept* E as é: pass', 'try: pass\nexcept* é: pass', 'match x:\n    case é: pass\n',
-    'match x:\n    case a.é: pass\n', 'match x:\n    case é.a: pass\n', 'match x:\n    case é(): pass\n', 'match x:\n    case C(é=1): pass\n', 'match x:\n    case C(a=é): pass\n',
-    'match x:\n    case 1 as é: pass\n', 'match x:\n    case [*é]: pass\n', 'match x:\n    case {**é}: pass\n', 'match x:\n    case {é.a: 1}: pass\n', "match x:\n    case {'a': é}: pass\n",
-    'match x:\n    case 1 if é: pass\n', 'match x:\n    case 1 | é.b: pass\n', "match x:\n    case 'é': é\n",
+    'match s:\n    case ﬁ: pass\n', 'match s:\n    case x.ﬁ: pass\n', 'match s:\n    case C(ﬁ=1): pass\n', 'match s:\n    case x as ﬁ: pass\n', 'match s:\n    case {**ﬁ}: pass\n',
+    'match s:\n    case [*ﬁ]: pass\n', 'match ﬁ:\n    case 1: pass\n', 'match x:\n    case 1: ﬁ\n', 'try: pass\nexcept* E as ﬁ: pass', 'try: pass\nexcept* ﬁ: pass', 'match x:\n    case ﬁ: pass\n',
+    'match x:\n    case a.ﬁ: pass\n', 'match x:\n    case ﬁ.a: pass\n', 'match x:\n    case ﬁ(): pass\n', 'match x:\n    case C(ﬁ=1): pass\n', 'match x:\n    case C(a=ﬁ): pass\n',
+    'match x:\n    case 1 as ﬁ: pass\n', 'match x:\n    case [*ﬁ]: pass\n', 'match x:\n    case {**ﬁ}: pass\n', 'match x:\n    case {ﬁ.a: 1}: pass\n', "match x:\n    case {'a': ﬁ}: pass\n",
+    'match x:\n    case 1 if ﬁ: pass\n', 'match x:\n    case 1 | ﬁ.b: pass\n', "match x:\n    case 'ﬁ': ﬁ\n",
 ]

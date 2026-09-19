@@ -61,5 +61,5 @@ WALRUS_INVALID = [
 
 # Accepted by the pinned ast.parse; what the walrus holds or sits in is still a later slice.
 WALRUS_UNSUPPORTED = [
-    '(é := 1)', '(x := é)', 'if é := 1: pass', 'f(é := 1)', '[é := 1]',
+    '(ﬁ := 1)', '(x := ﬁ)', 'if ﬁ := 1: pass', 'f(ﬁ := 1)', '[ﬁ := 1]',
 ]
