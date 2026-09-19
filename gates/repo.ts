@@ -66,7 +66,7 @@ allow(/^media\/game_[a-z_]+\.gif$/, 2000000, true);
 allow(/^media\/slash_boss_3d\/[a-z_]+\.wav$/, 400000, true);
 allow(/^gates\/(_lib|_run|perf|ping|repo|test)\.ts$/, 6000);
 allow(/^tests\/[a-z]+\/[a-z0-9_]+\.bend$/, 16000);
-allow(/^tests\/[a-z]+\/[a-z0-9_]+\.(c|js)$/, 9500);
+allow(/^tests\/[a-z]+\/[a-z0-9_]+\.(c|js)$/, 8500);
 allow(/^tests\/(f64|strings|codex)\/[a-zA-Z0-9_.-]+$/, 16000);
 allow(/^tests\/(regex|parser|lint|translate)\/[A-Za-z0-9_\/.-]+$/, 16000);
 allow(/^docs\/omen\/[A-Za-z0-9_\/.-]+$/, 16000);
