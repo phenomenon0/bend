@@ -29,6 +29,6 @@ def main() -> Bool:
     String.eq(kind(parse("a[*b:1]")), "Syntax") &&
     String.eq(kind(parse("a[]")), "Syntax") &&
     String.eq(kind(parse("x = 1:2")), "Syntax") &&
-    String.eq(kind(parse("a[1:(x:=2)]")), "Unsupported")
+    String.eq(kind(parse("a[1:(x:=2)]")), "Done")
 
 #|True{}

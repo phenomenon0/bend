@@ -261,20 +261,22 @@ UNSUPPORTED = [
     "K", "a.K", "f(K=1)", "match x:\n    case _: pass\n",
     "import \xe9", "import a as \xe9", "from \xe9 import a", "from a import \xe9", "from a import b as \xe9", "class \xe9: pass", "class A(\xe9): pass", "class A(\xe9=1): pass",
     "def f(\xe9): pass", "lambda \xe9: 1",
-    "global \xe9", "try: pass\nexcept E as \xe9: pass", "try: pass\nexcept* E: pass", "(x := 1)", "with (x := 1): pass",
-    "a[x:=1]", "a[1:(x:=2)]", "a[\xe9:]", "a[1:\xe9]", "a[::\xe9]", "a[1:, \xe9]", "a[1:2].\xe9",
-    "f\"{(x := 1)}\"", "f\"{\xe9}\"", "f\"{a.\xe9}\"", "f\"{x:{\xe9}}\"",
-    "[x := 1 for x in y]", "[x for x in (y := z)]", "[x for x in y if (z := x)]", "f(x := 1 for x in y)", "{(k := a): b for a in c}", "[é for x in y]", "[x for é in y]", "[x for x in é]", "[x for x in y if é]", "f(é for x in y)",
-    "x: (y := 1)", "x: int = (y := 1)", "\xe9: int", "x: \xe9", "x: int = \xe9", "a.\xe9: int", "x: a.\xe9", "(\xe9): int = 1",
+    "global \xe9", "try: pass\nexcept E as \xe9: pass", "try: pass\nexcept* E: pass",
+    "a[\xe9:]", "a[1:\xe9]", "a[::\xe9]", "a[1:, \xe9]", "a[1:2].\xe9",
+    "f\"{\xe9}\"", "f\"{a.\xe9}\"", "f\"{x:{\xe9}}\"",
+    "[é for x in y]", "[x for é in y]", "[x for x in é]", "[x for x in y if é]", "f(é for x in y)",
+    "\xe9: int", "x: \xe9", "x: int = \xe9", "a.\xe9: int", "x: a.\xe9", "(\xe9): int = 1",
     "match (x):\n    case _: pass\n", "match [x]:\n    case _: pass\n", "match x, y:\n    case _: pass\n", "match (x), y:\n    case _: pass\n", "match x.y:\n    case _: pass\n", "match (x).y[0]:\n    case z: w: int = 1\n", "match -x:\n    case _: pass\n",
     "match x:\n    case _:\n        y: int = 1\n",
     # P11 / P12: yield and await parse; what they hold may still be a later slice.
-    "yield (x := 1)", "x = yield (y := 1)", "(yield (x := 1))", "def f(): yield \xe9", "yield from \xe9",
-    "await (x := 1)", "async def f(): await é", "async def é(): pass", "[x async for x in (y := z)]", "async with (x := 1): pass", "async for é in y: pass", "async def f():\n    match x:\n        case _: await y\n",
-    "def f():\n    match x:\n        case _: yield\n", "f'{yield (x := 1)}'",
+    "def f(): yield \xe9", "yield from \xe9",
+    "async def f(): await é", "async def é(): pass", "async for é in y: pass", "async def f():\n    match x:\n        case _: await y\n",
+    "def f():\n    match x:\n        case _: yield\n",
 ]
 
-# P12 (async / await) lives in its own file: this one is at its token cap.
+# P12 (async / await) and P13 (walrus) live in their own files: this one is at its token cap.
 from fixtures_async import ASYNC_STATEMENTS, ASYNC_INVALID
-STATEMENTS += ASYNC_STATEMENTS
-INVALID += ASYNC_INVALID
+from fixtures_walrus import WALRUS_STATEMENTS, WALRUS_INVALID, WALRUS_UNSUPPORTED
+STATEMENTS += ASYNC_STATEMENTS + WALRUS_STATEMENTS
+INVALID += ASYNC_INVALID + WALRUS_INVALID
+UNSUPPORTED += WALRUS_UNSUPPORTED

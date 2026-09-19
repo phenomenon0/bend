@@ -31,6 +31,6 @@ def main() -> Bool:
     String.eq(kind(parse("f\"{x:{y:{z}}}\"")), "Syntax") &&
     String.eq(kind(parse("f\"{x}\" b\"a\"")), "Syntax") &&
     String.eq(kind(parse("f\"{lambda x: 1}\"")), "Syntax") &&
-    String.eq(kind(parse("f\"{(x := 1)}\"")), "Unsupported")
+    String.eq(kind(parse("f\"{(x := 1)}\"")), "Done")
 
 #|True{}

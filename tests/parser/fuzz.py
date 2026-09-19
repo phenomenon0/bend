@@ -67,6 +67,25 @@ def awaiting(rng, sub):
                        a + " = 1", "(" + a + ") += 1", a + ": int", "for " + a + " in y: pass", "del " + a, "f(await=" + sub() + ")", "x.await", "async = " + sub(), "[" + sub() + " async]", "f(" + sub() + " " + c + ", 1)"])
 
 
+def naming(rng, sub):
+    """`NAME := expression` in every slot that takes a named expression, and in some that do not (the oracle rejects those)."""
+    t = rng.choice(["x"] * 60 + ["a.b", "a[0]", "(x)", "x, y", "1", "None", "await", "*x", ""])
+    v = rng.choice([sub(), sub(), sub(), "lambda: " + sub(), sub() + " if " + sub() + " else " + sub(), "(y := " + sub() + ")", "(yield)", "await z"] * 5 + ["y := " + sub(), "*a", "yield", sub() + ", " + sub(), ""])
+    w = t + rng.choice([" := ", ":=", " :=\n  "]) + v
+    g = "(" + w + ")"
+    c = rng.choice(["for", "for", "async for"]) + " i in " + rng.choice([sub(), g, w]) + rng.choice(["", " if " + g, " if " + w, " if " + g + " if " + g])
+    return rng.choice([g, g, w, "x = " + g, "x = " + w, "x = y = " + g + ", " + g, "x " + rng.choice(["+=", "|=", "<<="]) + " " + rng.choice([g, w]), "x: " + g + " = " + g, "x: int = " + w, g + " = 1", g + ": int", g + ".y[" + w + "] = " + g,
+                       "if " + w + ": pass\nelif " + w + ": pass", "if " + g + " and " + g + ":\n    while " + w + ": pass\n", "while " + w + ", 1: pass", "if not " + w + ": pass", "if " + sub() + " or " + w + ": pass",
+                       "[" + w + ", " + w + "]", "[*a, " + w + ",]", "(" + w + ", " + w + ")", "(" + w + ",)", "{" + w + ", " + w + "}", "{" + w + ": " + sub() + "}", "{" + g + ": " + g + ", **" + g + "}", "{" + sub() + ": " + w + "}",
+                       "f(" + w + ", " + w + ", k=" + g + ", *" + g + ", **" + g + ")", "f(k=" + w + ")", "f(*" + w + ")", "f(" + sub() + ", " + w + ")(" + w + ")", "class A(" + w + ", k=" + g + "): pass",
+                       "a[" + w + "]", "a[" + w + ", " + w + "]", "a[" + g + ":" + g + ":" + g + ", " + w + "]", "a[" + w + ":" + sub() + "]", "a[" + sub() + ":" + w + "]",
+                       "[" + w + " " + c + "]", "{" + w + " " + c + "}", "(" + w + " " + c + ")", "f(" + w + " " + c + ")", "{" + g + ": " + g + " " + c + "}", "{" + w + ": " + sub() + " " + c + "}", "{" + sub() + ": " + w + " " + c + "}",
+                       "f'{" + g + "!r:>{" + g + "}}'", "f'{" + w + "}'", "f'{" + g + " = }'", "lambda: " + rng.choice([g, w]), "lambda a=" + rng.choice([g, w]) + ": a", "@" + w + "\ndef f(a=" + g + ", *b: " + g + ") -> " + g + ": pass",
+                       "return " + rng.choice([g, w]), "yield " + rng.choice([g, w]), "yield from " + rng.choice([g, w]), "await " + rng.choice([g, w]), "del " + rng.choice([g, w, "a[" + w + "]"]), "assert " + rng.choice([g + ", " + g, w]),
+                       "raise " + g + " from " + rng.choice([g, w]), "for a in " + rng.choice([g, w]) + ": pass", "for " + g + " in a: pass", "with " + g + " as a, " + g + ": pass", "with (" + w + "): pass", "with (" + w + ", " + w + "): pass", "with " + w + ": pass",
+                       "with (" + g + " as a, " + g + "): pass", "try: pass\nexcept " + rng.choice([g, w]) + " as e: pass", g + " if " + g + " else " + g, sub() + " if " + w + " else " + sub(), "not " + g + " < -" + g + " ** " + g, sub() + " + " + w])
+
+
 def expression(rng, depth):
     if depth <= 0 or rng.randrange(5) == 0:
         return rng.choice(["a", "b", "c", "0", "17", "0x10", "1.5", "True", "None", "'é😀'", "..."])
@@ -140,6 +159,13 @@ def main():
                                   "async def f(self):\n    async for a, *b in " + sub() + ", c:\n        " + line + "\n    else:\n        " + line + "; " + line + "\n",
                                   "class A:\n    @d\n    async def f(self):\n        async with (" + sub() + " as a, b):\n            " + line + "\n        async with (a, b) as c: pass\n",
                                   "if a: " + line + "; " + line + "\nelse:\n    async for x in y: " + line + "\n", "async " + rng.choice(["def f(): ", "class A: ", "if a: ", "with a: ", "for x in y: ", "while a: ", "\ndef f(): "]) + line + "\n"]))
+    # A fifth stream, for the same reason.
+    rng = random.Random(0xA57A2013)
+    for i in range(args.count // 2):  # twice the others: most slots take no bare walrus, so over half are negatives
+        line = naming(rng, lambda: expression(rng, rng.randrange(0, 3)))
+        # A compound statement after `:` or `;` is this parser's Unsupported, not a negative: those lines stay bare.
+        sources.append(line if line.startswith(("with", "try", "@")) else rng.choice([line, line, "def f():\n    " + line + "\n    return x\n", "async def f(self):\n    while a:\n        " + line + "\n    else:\n        " + line + "; " + line + "\n",
+                                  "if a: " + line + "; " + line + "\nelse:\n    " + line + "\n", "class A:\n    def f(self):\n        try:\n            " + line + "\n        finally:\n            pass\n"]))
     # Long lists/chains and nesting deliberately exercise non-consuming transitions.
     for n in [1, 2, 10, 50, 100, 200]:
         sources += ["(" * n + "a" + ")" * n, "[" * n + "a" + "]" * n,
@@ -195,7 +221,7 @@ def main():
     counts = {"generated_and_directed": len(sources), "oracle_accepted": sum("used" in r or "result" in r for r in records),
               "oracle_rejected": sum("oracle-failure" in r for r in records), "fstring_sources": sum("f\"" in s.lower() for s in sources),
               "comprehension_sources": sum(" for " in s or "\n  for " in s for s in sources),
-              "annotated_sources": args.count // 4, "yield_sources": args.count // 4, "async_sources": args.count // 4,
+              "annotated_sources": args.count // 4, "yield_sources": args.count // 4, "async_sources": args.count // 4, "walrus_sources": args.count // 2,
               "no_limit_on_oracle_accepted": not any(f.get("result", {}).get("status") == "limit" for f in failures),
               "normalization_failures": sum("normalization-failure" in r for r in records),
               "negative_cases": len(INVALID) + len(UNSUPPORTED),

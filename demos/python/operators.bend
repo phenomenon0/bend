@@ -71,4 +71,4 @@ def augmented(+raw: String) -> Bool:
   String.contains("|+=|-=|*=|/=|//=|%=|**=|@=|&=||=|^=|<<=|>>=|", "|" ++ raw ++ "|") && Nat.is_ge(String.length(raw), 2n)
 
 def unsupported(+t: S.Tok) -> Bool:
-  String.contains("|def|try|with|@|:=|", "|" ++ P.tok_text(t) ++ "|") && Bool.not(String.is_empty(P.tok_text(t)))
+  String.contains("|def|try|with|@|", "|" ++ P.tok_text(t) ++ "|") && Bool.not(String.is_empty(P.tok_text(t)))
