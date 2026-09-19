@@ -2720,13 +2720,18 @@ function str_static(fl: File, cells: number[]): string {
   if (!cells.length) { return "term_pak(CID_SNIL, 0)"; }
   const key = "string:" + cells.join(",");
   const at = memo(fl.lits, key, () => {
-    const cls = cls_fit(cells.length);
+    // The narrowest cells the content allows (nar of the C runtime's String).
+    const nar = cells.some((c) => c > 65535) ? 0 : cells.some((c) => c > 255) ? 1 : 2;
+    const per = 2 << nar, bits = BigInt(64 / per);
+    const cls = cls_fit(Math.ceil(cells.length / 2 ** nar));
     const data = fl.img.length;
-    for (let i = 0; i < Math.max(2, 2 ** cls); i += 2) {
-      fl.img.push((BigInt(cells[i] ?? 0) | BigInt(cells[i + 1] ?? 0) << 32n) + "ull");
+    for (let i = 0; i < Math.max(2, 2 ** cls) << nar; i += per) {
+      let w = 0n;
+      for (let j = per - 1; j >= 0; j--) { w = w << bits | BigInt(cells[i + j] ?? 0); }
+      fl.img.push(w + "ull");
     }
     const desc = fl.img.length;
-    fl.img.push(`term_buf(${cls}, STAT_OFF + ${data})`, `${cells.length}ull`);
+    fl.img.push(`term_buf(${cls | nar << 5}, STAT_OFF + ${data})`, `${cells.length}ull`);
     return desc;
   });
   fl.stat.add("SCon");
@@ -4695,11 +4700,18 @@ INLINE Term blk_new(Env e, bool arr, Nat d, u32 lgs, u32 n, THR Term* v) {
   return term_blk(arr, c, l);
 }
 
-// String: each descriptor owns one already-counted packed U32 payload.
+// String: each descriptor owns one already-counted packed payload, its cells
+// 4, 2 or 1 bytes wide: the payload Term's aux holds nar = 0, 1, 2 above the
+// class, the narrowest width its content allowed when it was built. A view
+// never changes nar; a write of a wider cell reallocates in str_reserve.
 // Peek borrows. Take consumes metadata and moves/retains the payload BEFORE
 // releasing a shared descriptor. Only taken parts may enter str_writable.
 #define STR_LIMIT (1ull << 31)
+#define str_nar(p) ((p).data ? (u32)(term_aux((p).data) >> 5) & 3 : 2)
+#define str_cap(d) (1ull << (blk_cls(d) + ((term_aux(d) >> 5) & 3)))
 typedef struct { Term data; u32 off; u32 len; } StrParts;
+
+INLINE u32 str_fit(u32 c) { return c < 256 ? 2 : c < 65536 ? 1 : 0; }
 
 INLINE StrParts str_peek(Env e, Term s) {
   StrParts p = {0, 0, 0};
@@ -4728,7 +4740,7 @@ INLINE Term str_view_owned(Env e, StrParts p) {
     term_sink(e, p.data);
     return term_pak(CID_SNIL, 0);
   }
-  u64 cap = 1ull << blk_cls(p.data);
+  u64 cap = str_cap(p.data);
   if (cap > STR_LIMIT || p.len > cap || p.off > cap - p.len) {
     err_post(e.mem, ERR_STRS);
     term_sink(e, p.data);
@@ -4741,25 +4753,38 @@ INLINE Term str_view_owned(Env e, StrParts p) {
   return rfc_seal(e, term_make(TAG_STR, CID_SCON, l));
 }
 
-INLINE StrParts str_alloc(Env e, u64 n) {
+INLINE StrParts str_alloc(Env e, u64 n, u32 nar) {
   StrParts p = {0, 0, 0};
   if (!n || err_seen(e.mem)) { return p; }
   if (n > STR_LIMIT) { err_post(e.mem, ERR_STRS); return p; }
-  Cls c = cls_fit((u32)n);
+  Cls c = cls_fit((u32)((n + (1u << nar) - 1) >> nar));
   Loc l = heap_alloc(e, buf_wcls(c));
   if (err_seen(e.mem)) { return p; }
   // Install the count cell before this payload can escape into metadata.
-  p.data = rfc_wrap(e, term_buf(c, l), 1);
+  p.data = rfc_wrap(e, term_buf(c | nar << 5, l), 1);
   p.len = (u32)n;
   return p;
 }
 
+INLINE u32 str_cell(Corpus H, Loc l, u32 nar, u32 i) {
+  DEV u8* b = (DEV u8*)(H + l);
+  return nar == 2 ? b[i] : nar == 1 ? b[2 * i] | (u32)b[2 * i + 1] << 8
+    : *blk_ptr(H, l, i);
+}
+
+INLINE void str_cell_put(Corpus H, Loc l, u32 nar, u32 i, u32 c) {
+  DEV u8* b = (DEV u8*)(H + l);
+  if (nar == 2) { b[i] = (u8)c; }
+  else if (nar == 1) { b[2 * i] = (u8)c; b[2 * i + 1] = (u8)(c >> 8); }
+  else { *blk_ptr(H, l, i) = c; }
+}
+
 INLINE u32 str_at_peek(Env e, StrParts p, u32 i) {
-  return (u32)blk_read(e.mem, false, term_peek(e, p.data), p.off + i);
+  return str_cell(e.mem, term_peek(e, p.data), str_nar(p), p.off + i);
 }
 
 INLINE void str_put(Env e, StrParts p, u32 i, u32 c) {
-  blk_write(e.mem, false, term_peek(e, p.data), p.off + i, c);
+  str_cell_put(e.mem, term_peek(e, p.data), str_nar(p), p.off + i, c);
 }
 
 // Three-part write test: owned private metadata (str_take), dynamic origin,
@@ -4773,31 +4798,34 @@ INLINE void str_copy_cells(Env e, StrParts dst, u32 at, StrParts src) {
   if (err_seen(e.mem)) { return; }
   u32 poll = 0;
   Loc from = term_peek(e, src.data), to = term_peek(e, dst.data);
+  u32 sn = str_nar(src), dn = str_nar(dst);
   for (u32 i = 0; i < src.len; i++) {
     if (err_spun(e.mem, &poll)) { return; }
-    blk_write(e.mem, false, to, dst.off + at + i,
-      blk_read(e.mem, false, from, src.off + i));
+    str_cell_put(e.mem, to, dn, dst.off + at + i,
+      str_cell(e.mem, from, sn, src.off + i));
   }
 }
 
-// Consumes owned parts, copying only their visible range when necessary.
-INLINE StrParts str_reserve(Env e, StrParts p, u64 need, bool front) {
+// Consumes owned parts, copying only their visible range when necessary:
+// no room, not writable, or cells narrower than nar, what the write needs.
+INLINE StrParts str_reserve(Env e, StrParts p, u64 need, bool front, u32 nar) {
   u64 n = (u64)p.len + need;
   if (n > STR_LIMIT) {
     err_post(e.mem, ERR_STRS);
     term_sink(e, p.data);
     StrParts z = {0, 0, 0}; return z;
   }
-  u64 cap = p.data ? 1ull << blk_cls(p.data) : 0;
-  if (str_writable(e, p) && (front ? p.off >= need
+  u64 cap = p.data ? str_cap(p.data) : 0;
+  if (str_nar(p) < nar) { nar = str_nar(p); }
+  if (str_writable(e, p) && str_nar(p) == nar && (front ? p.off >= need
       : cap - p.off - p.len >= need)) { return p; }
   u64 target = (u64)p.len * (need ? 2 : 1);
   if (target < n) { target = n; }
   if (target > STR_LIMIT) { target = STR_LIMIT; }
-  StrParts q = str_alloc(e, target);
+  StrParts q = str_alloc(e, target, nar);
   if (!err_seen(e.mem) && q.data) {
     q.len = p.len;
-    q.off = front ? (u32)((1ull << blk_cls(q.data)) - p.len) : 0;
+    q.off = front ? (u32)(str_cap(q.data) - p.len) : 0;
     str_copy_cells(e, q, 0, p);
   }
   term_sink(e, p.data);
@@ -4805,7 +4833,7 @@ INLINE StrParts str_reserve(Env e, StrParts p, u64 need, bool front) {
 }
 
 INLINE Term str_prepend_take(Env e, u32 c, Term s) {
-  StrParts p = str_reserve(e, str_take(e, s), 1, true);
+  StrParts p = str_reserve(e, str_take(e, s), 1, true, str_fit(c));
   if (err_seen(e.mem)) { return str_view_owned(e, p); }
   p.off--; p.len++;
   str_put(e, p, 0, c);
@@ -4853,7 +4881,7 @@ INLINE Term str_append_take(Env e, Term a, Term b) {
   StrParts q = str_peek(e, b);
   if (!q.len) { term_sink(e, b); return a; }
   if (!str_peek(e, a).len) { term_sink(e, a); return b; }
-  StrParts p = str_reserve(e, str_take(e, a), q.len, false);
+  StrParts p = str_reserve(e, str_take(e, a), q.len, false, str_nar(q));
   if (!err_seen(e.mem)) {
     str_copy_cells(e, p, p.len, q);
     p.len += q.len;
@@ -4863,7 +4891,14 @@ INLINE Term str_append_take(Env e, Term a, Term b) {
 }
 
 INLINE Term str_copy_take(Env e, Term s) {
-  StrParts p = str_peek(e, s), q = str_alloc(e, p.len);
+  StrParts p = str_peek(e, s);
+  u32 nar = 2, poll = 0;
+  for (u32 i = 0; i < p.len && nar > str_nar(p); i++) {
+    if (err_spun(e.mem, &poll)) { break; }
+    u32 fit = str_fit(str_at_peek(e, p, i));
+    if (fit < nar) { nar = fit; }
+  }
+  StrParts q = str_alloc(e, p.len, nar);
   if (!err_seen(e.mem)) { str_copy_cells(e, q, 0, p); }
   term_sink(e, s);
   return str_view_owned(e, q);
@@ -4905,8 +4940,8 @@ INLINE u32 str_order_peek(Env e, Term a, Term b) {
   Loc pl = term_peek(e, p.data), ql = term_peek(e, q.data);
   for (u32 i = 0; i < n; i++) {
     if (err_spun(e.mem, &poll)) { return 1; }
-    u32 x = (u32)blk_read(e.mem, false, pl, p.off + i);
-    u32 y = (u32)blk_read(e.mem, false, ql, q.off + i);
+    u32 x = str_cell(e.mem, pl, str_nar(p), p.off + i);
+    u32 y = str_cell(e.mem, ql, str_nar(q), q.off + i);
     if (x != y) { return x < y ? 0 : 2; }
   }
   return p.len == q.len ? 1 : p.len < q.len ? 0 : 2;
@@ -4925,8 +4960,8 @@ INLINE bool str_edge_take(Env e, Term s, Term sub, bool end) {
   Loc pl = term_peek(e, p.data), ql = term_peek(e, q.data);
   for (u32 i = 0; ok && i < q.len; i++) {
     if (err_spun(e.mem, &poll)) { ok = false; break; }
-    ok = blk_read(e.mem, false, pl, p.off + off + i)
-      == blk_read(e.mem, false, ql, q.off + i);
+    ok = str_cell(e.mem, pl, str_nar(p), p.off + off + i)
+      == str_cell(e.mem, ql, str_nar(q), q.off + i);
   }
   term_sink(e, s); term_sink(e, sub);
   return ok;
@@ -4938,10 +4973,10 @@ INLINE Term str_trim_take(Env e, Term s, u32 ends) {
   StrParts p = str_peek(e, s);
   u32 lo = 0, hi = p.len, poll = 0;
   Loc l = term_peek(e, p.data);
-  while ((ends & 1) && lo < hi && str_space((u32)blk_read(e.mem, false, l, p.off + lo))) {
+  while ((ends & 1) && lo < hi && str_space(str_cell(e.mem, l, str_nar(p), p.off + lo))) {
     if (err_spun(e.mem, &poll)) { break; } lo++;
   }
-  while ((ends & 2) && hi > lo && str_space((u32)blk_read(e.mem, false, l, p.off + hi - 1))) {
+  while ((ends & 2) && hi > lo && str_space(str_cell(e.mem, l, str_nar(p), p.off + hi - 1))) {
     if (err_spun(e.mem, &poll)) { break; } hi--;
   }
   return str_slice_take(e, s, lo, hi);
@@ -4952,22 +4987,20 @@ INLINE Term str_trim_take(Env e, Term s, u32 ends) {
 INLINE Term str_transform_take(Env e, Term s, u32 mode) {
   StrParts p = str_take(e, s);
   if (!p.len) { return str_view_owned(e, p); }
-  p = str_reserve(e, p, 0, false);
+  p = str_reserve(e, p, 0, false, 2);
   if (err_seen(e.mem)) { return str_view_owned(e, p); }
   u32 poll = 0;
-  Loc l = term_peek(e, p.data);
   for (u32 i = 0; i < (mode ? p.len : p.len / 2); i++) {
     if (err_spun(e.mem, &poll)) { break; }
-    u32 c = (u32)blk_read(e.mem, false, l, p.off + i);
+    u32 c = str_at_peek(e, p, i);
     if (!mode) {
-      blk_write(e.mem, false, l, p.off + i,
-        blk_read(e.mem, false, l, p.off + p.len - 1 - i));
-      blk_write(e.mem, false, l, p.off + p.len - 1 - i, c);
+      str_put(e, p, i, str_at_peek(e, p, p.len - 1 - i));
+      str_put(e, p, p.len - 1 - i, c);
     } else {
       bool upper = mode == 1 || (mode == 3 && i == 0);
       if (upper && c >= 97 && c <= 122) { c -= 32; }
       else if (!upper && c >= 65 && c <= 90) { c += 32; }
-      blk_write(e.mem, false, l, p.off + i, c);
+      str_put(e, p, i, c);
     }
   }
   return str_view_owned(e, p);
@@ -5001,7 +5034,7 @@ INLINE Term str_from_list_take(Env e, Term xs) {
     if (err_spun(e.mem, &poll)) { break; }
     Term f[2]; spare_free(e, 1, ctr_take(e, xs, 2, f));
     xs = f[1];
-    p = str_reserve(e, p, 1, false);
+    p = str_reserve(e, p, 1, false, str_fit((u32)term_loc(f[0])));
     if (err_seen(e.mem)) { break; }
     str_put(e, p, p.len, (u32)term_loc(f[0])); p.len++;
   }
@@ -5021,7 +5054,7 @@ INLINE Term str_split_take(Env e, Term s, u32 sep, bool words) {
     u32 i = (u32)(j - 1);
     bool cut = i == 0;
     if (!cut) {
-      u32 c = (u32)blk_read(e.mem, false, l, p.off + i - 1);
+      u32 c = str_cell(e.mem, l, str_nar(p), p.off + i - 1);
       cut = words ? str_space(c) : c == sep;
     }
     if (cut) {
@@ -5043,7 +5076,7 @@ INLINE Term str_repeat_take(Env e, Term s, Nat n) {
   if (p.len && n > STR_LIMIT / p.len) {
     err_post(e.mem, ERR_STRS); term_sink(e, s); return term_pak(CID_SNIL, 0);
   }
-  StrParts q = str_alloc(e, (u64)p.len * n);
+  StrParts q = str_alloc(e, (u64)p.len * n, str_nar(p));
   if (err_seen(e.mem)) { term_sink(e, s); return str_view_owned(e, q); }
   u32 poll = 0;
   for (u64 i = 0; p.len && i < n; i++) {
@@ -5063,7 +5096,7 @@ INLINE Term str_join_take(Env e, Term xs, Term sep) {
     Term f[2]; spare_free(e, 1, ctr_take(e, xs, 2, f)); xs = f[1];
     StrParts q = str_peek(e, f[0]);
     u64 add = (u64)q.len + (first ? 0 : sp.len);
-    p = str_reserve(e, p, add, false);
+    p = str_reserve(e, p, add, false, str_nar(q) < str_nar(sp) || first ? str_nar(q) : str_nar(sp));
     if (!err_seen(e.mem)) {
       if (!first) { str_copy_cells(e, p, p.len, sp); p.len += sp.len; }
       str_copy_cells(e, p, p.len, q); p.len += q.len;
@@ -5180,7 +5213,7 @@ INLINE Term str_window(Env e, StrParts p, u32 lo, u32 hi) {
 INLINE void str_push_range(Env e, THR StrParts* out, StrParts p, u32 lo, u32 hi) {
   if (lo == hi || err_seen(e.mem)) { return; }
   p.off += lo; p.len = hi - lo;
-  *out = str_reserve(e, *out, p.len, false);
+  *out = str_reserve(e, *out, p.len, false, str_nar(p));
   if (!err_seen(e.mem)) { str_copy_cells(e, *out, out->len, p); out->len += p.len; }
 }
 
@@ -5289,7 +5322,7 @@ INLINE Term str_pad_take(Env e, Term s, Nat width, u32 c, u32 mode) {
   if (width <= len) { return s; }
   if (width > STR_LIMIT) { err_post(e.mem, ERR_STRS); term_sink(e, s); return term_pak(CID_SNIL, 0); }
   u32 n = (u32)(width - len);
-  StrParts p = str_reserve(e, str_take(e, s), n, mode != 1);
+  StrParts p = str_reserve(e, str_take(e, s), n, mode != 1, str_fit(c));
   if (err_seen(e.mem)) { return str_view_owned(e, p); }
   u32 sign = 0, first = len ? str_at_peek(e, p, 0) : 0;
   if (mode == 2 && (first == '+' || first == '-')) { sign = 1; }
@@ -6713,8 +6746,10 @@ static Term io_node(Env e, u64 cid, Term a, Term b, int hot) {
   return term_ctr(cid, l);
 }
 
+// 1-byte cells until a wider scalar arrives; then the decoded cells move to
+// that width (at most twice).
 static Term io_str(Env e, const char* p, u64 n) {
-  StrParts out = str_alloc(e, n);
+  StrParts out = str_alloc(e, n, 2);
   if (err_seen(e.mem)) { return str_view_owned(e, out); }
   u32 len = 0;
   for (u64 i = 0; i < n;) {
@@ -6731,8 +6766,17 @@ static Term io_str(Env e, const char* p, u64 n) {
       ok = ok && c >= (k == 2 ? 0x80u : k == 3 ? 0x800u : 0x10000u)
         && c <= 0x10ffff && !(c >= 0xd800 && c <= 0xdfff);
     }
-    str_put(e, out, len++, ok ? c : 0xfffd);
+    c = ok ? c : 0xfffd;
     i += ok ? k : 1;
+    if (str_fit(c) < str_nar(out)) {
+      StrParts q = str_alloc(e, len + 1 + (n - i), str_fit(c));
+      out.len = len;
+      if (q.data) { str_copy_cells(e, q, 0, out); }
+      term_sink(e, out.data);
+      out = q;
+      if (err_seen(e.mem)) { break; }
+    }
+    str_put(e, out, len++, c);
   }
   out.len = len;
   return str_view_owned(e, out);

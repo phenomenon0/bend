@@ -10,10 +10,11 @@ static void expect_text(Env e, Term s, const char* text) {
 }
 
 static void ownership(Env e) {
-  // Static image is one full class-3 payload (four words) + one descriptor.
-  assert(STAT_LEN == 6);
-  Term lit = term_make(TAG_STR, CID_SCON, STAT_OFF + 4);
-  assert(str_peek(e, lit).len == 6);
+  // Static image is one class-1 payload of 1-byte cells (one word) + one
+  // descriptor: a literal is packed at the width of its content.
+  assert(STAT_LEN == 3);
+  Term lit = term_make(TAG_STR, CID_SCON, STAT_OFF + 1);
+  assert(str_peek(e, lit).len == 6 && str_nar(str_peek(e, lit)) == 2);
   expect_text(e, str_transform_take(e, lit, 1), "ABCDEF");
   expect_text(e, lit, "abcdef");
   assert(track_live == 0);
@@ -55,15 +56,15 @@ static void ownership(Env e) {
   // payload, and dropping the old view releases that retained large slab.
   s = str_repeat_take(e, lit, 65536);
   data = str_peek(e, s).data;
-  u64 cap = 1ull << blk_cls(data);
+  u64 cap = str_cap(data);
   a = str_slice_take(e, s, 2, 5);
   assert(str_peek(e, a).data == data && cap >= 393216);
   b = str_copy_take(e, term_keep(e, a));
-  assert(blk_cls(str_peek(e, b).data) == 2);
+  assert(blk_cls(str_peek(e, b).data) == 0 && str_nar(str_peek(e, b)) == 2);
   assert(str_peek(e, b).data != data);
   u64 pinned = track_bytes;
   term_sink(e, a);
-  assert(pinned - track_bytes >= cap * 4);
+  assert(pinned - track_bytes >= cap);
   expect_text(e, b, "cde");
   assert(track_live == 0);
 
@@ -133,8 +134,14 @@ static void roundtrip(Env e) {
   assert(track_live == 0);
 }
 
+// Any width at least as wide as the content is a valid representation: cycle
+// through them so the oracles compare and combine payloads of mixed widths.
 static Term cells(Env e, const u32* xs, u32 n) {
-  StrParts p = str_alloc(e, n);
+  static u32 turn;
+  u32 nar = 2;
+  for (u32 i = 0; i < n; i++) { if (str_fit(xs[i]) < nar) { nar = str_fit(xs[i]); } }
+  if (turn++ % 3 < nar) { nar = turn % 3; }
+  StrParts p = str_alloc(e, n, nar);
   for (u32 i = 0; i < n; i++) { str_put(e, p, i, xs[i]); }
   return str_view_owned(e, p);
 }
@@ -248,7 +255,7 @@ static void adversarial(Env e) {
   u64 reads[2];
   for (u32 scale = 0; scale < 2; scale++) {
     u32 n = 131072u << scale, m = 8192u << scale;
-    StrParts a = str_alloc(e, n), b = str_alloc(e, m);
+    StrParts a = str_alloc(e, n, 2), b = str_alloc(e, m, 2);
     for (u32 i = 0; i < n; i++) { str_put(e, a, i, 'a'); }
     for (u32 i = 0; i < m; i++) { str_put(e, b, i, 'a'); }
     str_put(e, a, n - 1, 'b'); str_put(e, b, m - 1, 'b');
@@ -299,8 +306,11 @@ static void bulk_builders(Env e) {
     term_sink(e, out);
   }
   u64 before = track_payload_words;
+  u32 nar = str_nar(str_peek(e, a));
   Term out = str_repeat_take(e, a, 8192);
-  assert(str_peek(e, out).len == 8192 && track_payload_words - before == 4096);
+  // One exact allocation at the source's width: 8192 cells of 4, 2 or 1 bytes.
+  assert(str_peek(e, out).len == 8192
+    && track_payload_words - before == 4096u >> nar);
   term_sink(e, out);
   assert(track_live == 0);
   printf("concat/join/repeat: linear payload allocation bounds passed\n");
@@ -333,6 +343,8 @@ static void fault(Env e, const char* op, int after) {
   else if (!strcmp(op, "partition")) { str_partition_take(e, s, needle); }
   else if (!strcmp(op, "splitlines")) { str_splitlines_take(e, lines); }
   else if (!strcmp(op, "pad")) { str_pad_take(e, s, 20, 0xffffffff, 0); }
+  // Decoding widens twice: every payload, count cell and descriptor may fail.
+  else if (!strcmp(op, "decode")) { io_str(e, "a\xce\xbb\xf0\x9f\x98\x80", 7); }
   else { assert(false); }
   assert(e.mem[H_ERROR_CODE] == ERR_HEAP);
   assert(track_kmp_live == 0);
@@ -349,7 +361,7 @@ static void acceptance(Env e) {
   for (u32 scale = 0; scale < 3; scale++) {
     u32 n = 1u << (20 + 3 * scale);
     u64 allocs = track_allocs;
-    StrParts p = str_alloc(e, n);
+    StrParts p = str_alloc(e, n, 2);
     for (u32 i = 0; i < n; i++) { str_put(e, p, i, unit[i % 21]); }
     Term s = str_view_owned(e, p);
     u64 source_allocs = track_allocs - allocs;
@@ -491,6 +503,62 @@ static u64 stream_law(Env e) {
   return runs + 6;
 }
 
+// Width is chosen by content and is invisible: the same cells at any width
+// compare, hash and print alike; a wider write widens, a view never does,
+// and copy compacts to the content of the visible range.
+static void widths(Env e) {
+  const char* text[] = {"abc", "caf\xc3\xa9", "\xce\xbb\xe6\xbc\xa2", "a\xf0\x9f\x98\x80"};
+  const u32 nar[] = {2, 2, 1, 0}, len[] = {3, 4, 2, 2};
+  for (u32 i = 0; i < 4; i++) {
+    Term s = io_str(e, text[i], strlen(text[i]));
+    StrParts p = str_peek(e, s);
+    assert(str_nar(p) == nar[i] && p.len == len[i]);
+    // Sized by the bytes left when the width was met, never by 4-byte cells.
+    assert(blk_cls(p.data) <= cls_fit(((u32)strlen(text[i]) + (1u << nar[i]) - 1) >> nar[i]));
+    // The same cells in every wider payload are the same string.
+    u32 xs[4];
+    for (u32 j = 0; j < p.len; j++) { xs[j] = str_at_peek(e, p, j); }
+    for (u32 w = 0; w <= nar[i]; w++) {
+      StrParts q = str_alloc(e, p.len, w);
+      for (u32 j = 0; j < p.len; j++) { str_put(e, q, j, xs[j]); }
+      Term t = str_view_owned(e, q);
+      assert(str_order_peek(e, s, t) == 1);
+      assert(str_hash_take(e, term_keep(e, s)) == str_hash_take(e, term_keep(e, t)));
+      for (Nat b = 0; b < 33ull * p.len + 2; b++) {
+        assert(str_bit_peek(e, s, b) == str_bit_peek(e, t, b));
+      }
+      expect_text(e, str_copy_take(e, t), text[i]);
+    }
+    term_sink(e, s);
+    assert(track_live == 0);
+  }
+  // A unique narrow payload widens on a wide write, at either end, once.
+  Term s = str_prepend_take(e, 0x3bb, io_str(e, "abc", 3));
+  assert(str_nar(str_peek(e, s)) == 1);
+  s = str_append_take(e, s, io_str(e, "\xf0\x9f\x98\x80", 4));
+  assert(str_nar(str_peek(e, s)) == 0);
+  s = str_pad_take(e, s, 7, 0xffffffffu, 1);
+  const u32 want[] = {0x3bb, 'a', 'b', 'c', 0x1f600, 0xffffffffu, 0xffffffffu};
+  expect_cells(e, s, want, 7);
+  // A view of the ASCII middle stays a 4-byte view; its copy is 1-byte cells.
+  Term data = str_peek(e, s).data;
+  Term mid = str_slice_take(e, s, 1, 4);
+  assert(str_peek(e, mid).data == data && str_nar(str_peek(e, mid)) == 0);
+  mid = str_copy_take(e, mid);
+  assert(str_nar(str_peek(e, mid)) == 2);
+  // Narrow text absorbs a wide separator and stays equal to the wide build.
+  Term joined = str_join_take(e, str_cons(e, term_keep(e, mid), str_cons(e, mid,
+    term_pak(CID_NIL, 0))), io_str(e, "\xe6\xbc\xa2", 3));
+  const u32 both[] = {'a', 'b', 'c', 0x6f22, 'a', 'b', 'c'};
+  expect_cells(e, joined, both, 7);
+  assert(str_nar(str_peek(e, joined)) == 1);
+  // In-place uncons reads cells of every width.
+  for (u32 i = 0; i < 7; i++) {
+    Term out[2]; str_uncons(e, joined, out);
+    assert(out[0] == both[i]); joined = out[1];
+  }
+  assert(joined == term_pak(CID_SNIL, 0) && track_live == 0);}
+
 int main(int argc, char** argv) {
   Corpus h = corpus_setup(false, 1, 0);
   Env e = {h, ALC[0]};
@@ -518,7 +586,7 @@ int main(int argc, char** argv) {
   roundtrip(e);
   utf8_cases(e);
   u64 parts = stream_law(e);
-  assert(!err_seen(h) && track_live == 0);
+  widths(e);  assert(!err_seen(h) && track_live == 0);
   printf("streaming partition law: ok (%llu partitions, zero live)\n", (unsigned long long)parts);
   printf("runtime ownership + UTF-8: ok (%llu allocations, zero live)\n", (unsigned long long)track_allocs);
   return 0;
