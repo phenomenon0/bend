@@ -101,7 +101,7 @@ ending in a type-directed operator suffix of bend.ts; conservative prefixes).
 |---|---|
 | blocks / roots / live | 689 / 415 / 681 |
 | **orphans** | **8 blocks / 331 ttok** |
-| — `String.split.fin` (82) | dead **upstream too** — leave, touching it only widens the sync diff |
+| — `String.split.fin` (82) | ~~dead upstream too~~ **wrong**: upstream's `String.split` uses it; our strings-lane accumulator rewrite orphaned it. Retired at the strfix integration |
 | — `F64.{min,max,clamp,lerp,square,hypot,round}` (249) | ours, no test, no user — but the exact mirror of upstream's tested F32 kit (`tests/base/num_kit.bend`). Parity surface, not debt. **Kept**; the defect is the missing test, not the defs |
 
 So "retire orphaned helpers (String.* first)" has nothing to retire: String.* has
@@ -141,5 +141,5 @@ that contain the duplication.
 - `tests/f64/kit.bend` added: the seven F64 kit defs on interpret/JS/C
   (min/max in both argument orders, clamp above/below/inside, lerp, square,
   hypot, round half-up incl. negative). `tests/run.sh` is now **19/19** (was 16).
-  Orphans: 8 → 1 (`String.split.fin`, upstream's).
+  Orphans: 8 → 1 (`String.split.fin`; retired at the strfix integration → 0).
 - `Regex.parse` rewrite lane: deferred.

@@ -2190,14 +2190,6 @@ def String.split.push(c: Char, ps: List<&2, String>) -> List<&2, String>:
     case h <> t:
       SCon{c, h} <> t
 
-def String.split.fin(c: Char, r: List<&2, String>, cut: Bool) ->
-  List<&2, String>:
-  match cut:
-    case False{}:
-      String.split.push(c, r)
-    case True{}:
-      SNil{} <> r
-
 # Accumulators keep the reference split stack bounded on large input.
 # The current field and completed fields are reversed independently.
 law String.split.acc:
@@ -3488,8 +3480,8 @@ def Regex.exec.fin(st: Regex.exec.State()) -> Maybe<&2, Match>:
     case (work, None{}):
       None{}
 
-# Walks the subject, and also gives where it stopped; the first `at` chars are skipped (they still set
-# `prev` for `^` `\b`). `anchored` drops the fresh thread after position `at`;
+# Walks the subject, giving where it stopped; the `at` chars skipped still set
+# `prev`. `anchored` drops the fresh thread after `at`;
 # `ne` refuses an empty match at `at` without cutting the threads below it
 def Regex.exec.run(s: String, at: Nat, +prog: List<&2, Inst>, +full: Bool, +anchored: Bool, ne: Bool, +start: Regex.exec.Threads(), +i: Nat, prev: Maybe<&2, U32>, st: Regex.exec.State()) -> Maybe<&2, Match> & Nat:
   match s at st:
@@ -3502,8 +3494,7 @@ def Regex.exec.run(s: String, at: Nat, +prog: List<&2, Inst>, +full: Bool, +anch
     case SNil{}, _, (work, +best):
       (Regex.exec.fin(Regex.exec.post(best, Regex.exec.feed(prog, full, ne, None{}, Regex.exec.alive(prog, (i, (prev, SNil{})), work, start, Maybe.is_some(&2, Regex.exec.Caps(), best))))), i)
 
-# The search enters one char before `at` (a view, not a walk): that char
-# is only `prev` for `^` `\b`. `at` past the end clamps, as Python's pos does
+# Enters by view one char before `at`, for `prev`; `at` clamps as Python's pos
 def Regex.exec.walk(re: Regex, +s: String, at: Nat, full: Bool, anchored: Bool, ne: Bool) -> Maybe<&2, Match> & Nat:
   match re:
     case Regex{prog, n}:
@@ -3527,10 +3518,9 @@ def Regex.fullmatch(re: Regex, s: String) -> Maybe<&2, Match>:
   Regex.exec.go(re, s, 0n, True{}, True{}, False{})
 
 # Derived API. `find_all` `split` `replace` run on one budget, never reset
-# per result: a search from `at` must afford (1 + length - at) * weight up
-# front, the worst case of one exec whatever the lane, then pays only the
-# span it walked; the output is paid from what is left before it is built. Out of budget is an error, never a
-# partial answer
+# per result: a search from `at` must afford (1 + length - at) * weight, one
+# exec's worst case, then pays only the span walked; output is paid before
+# it is built. Out of budget is an error, never partial
 def Regex.find(re: Regex, s: String) -> Maybe<&2, Match>:
   Regex.exec(re, s, 0n)
 
