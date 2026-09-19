@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # `run.sh [prefix]`. Four lanes per specimen: strict check, interpreter, emitted JS, C; then the judge
 # (CPython oracle vs the emitted Bend for normalize_stem, repo_of, the first_dash fixture and fm_sources, the same
-# four lanes, claims C1/C2/C3 apart; first_dash also states its closed doctests as checked laws).
+# four lanes, claims C1/C2/C3 apart; first_dash also states its closed doctests as checked laws), each with
+# --optimize: optimize.bend's file is the faithful one byte for byte, or (repo_of) judged again, C1-C4.
+# C5 times the rewrite and is not a gate: `judge.py --demo repo_of --optimize --bench`.
 set -uo pipefail
 cd "$(dirname "$0")/../.."
 export PATH="$HOME/.local/bin:$PATH"
@@ -84,7 +86,7 @@ for t in tests/translator/*.bend; do
     fail=$((fail + 1))
     continue
   fi
-  if rg -q '@unsafe|\?TODO' "$t" demos/python/translate.bend; then
+  if rg -q '@unsafe|\?TODO' "$t" demos/python/translate.bend demos/python/optimize.bend; then
     printf 'FAIL unsafe or open goal\n'; fail=$((fail + 1)); continue
   fi
   # A shell function cannot be invoked by timeout; check via exported function.
@@ -108,7 +110,7 @@ for t in tests/translator/*.bend; do
   done
 done
 for demo in normalize_stem repo_of first_dash fm_sources; do
-  python3 tests/translator/judge.py --demo "$demo" || fail=$((fail + 1))
+  python3 tests/translator/judge.py --demo "$demo" --optimize || fail=$((fail + 1))
 done
 printf '\nTranslator PASS: %d, FAIL: %d\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

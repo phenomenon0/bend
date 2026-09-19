@@ -1,4 +1,4 @@
-"""The translator judge: `judge.py --demo normalize_stem | repo_of | first_dash | fm_sources`.
+"""The translator judge: `judge.py --demo normalize_stem | repo_of | first_dash | fm_sources [--optimize [--bench]]`.
 
 Extracts one allow-listed function by `ast` (its module is never imported or
 executed), translates it with demos/python/translate.bend, and reports three
@@ -17,6 +17,16 @@ as a literal str / bool / None (no output = None). Each such example becomes
 it by computation. The doctest text is parsed, never executed; every other example
 (`is None`, a nested call, a name, a keyword, an exception, ...) is counted and
 skipped, not approximated. A closed instance is not a universal theorem: C3 says so.
+
+`--optimize` (tier 3, translator-modes.md) then judges demos/python/optimize.bend's file for
+the same def: no rewrite logged -> it must be the faithful file byte for byte; else C1 and C2
+again on it (not inherited), C3 unchanged, and two more claims apart:
+
+  C4 rewrite equivalence, Bend-vs-Bend: optimized == faithful in every lane on the fixtures and
+     on 1000 more generated inputs; each logged step's law, stated against the emitted helper,
+     checked by the checker; the log's spans read back off the source by `ast`
+  C5 benefit (`--bench`): medians of seven warmed runs per lane, alternated; a lane under 1.05x
+     rejects the step there
 """
 
 import os
@@ -35,8 +45,10 @@ import doctest
 import hashlib
 import random
 import re
+import statistics
 import subprocess
 import tempfile
+import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -134,6 +146,11 @@ DEMOS = {
         "sig": "def repo_of(pid: str, slugs: list[str]) -> str | None:\n    pass\n",
         "builtins": {"len": len},
         "wrong": ('String.append(s, "-")', "s", "translation without the '-' boundary"),
+        # --optimize: rule #1's site starts_with(x, y + z) as the step law states it; the unsound
+        # helper the controls must reject; a variant whose side-condition fails (Unknown).
+        "hoist": ("tail", "s", '"-"'),
+        "owrong": ('String.starts_with(String.drop(tail, String.length(s)), "-")', "True{}", "helper without the '-' boundary"),
+        "unknown": ("s + '-'", "s.strip() + '-'"),
         "examples": [
             (("bend.bend-lang-12", ["bend", "bend-lang"]), "bend-lang"),  # longest prefix
             (("bend.bend-lang-12", ["bend-lang", "bend"]), "bend-lang"),
@@ -501,6 +518,23 @@ def lanes(test, work):
     return got
 
 
+def emit(tool, work, name, demo, text):
+    """(rc, file): demos/python/<tool>.bend on the def text, with the demo's reviewed stub."""
+    work.mkdir(exist_ok=True)
+    (work / f"{name}.py").write_text(text, encoding="utf-8")
+    (work / "sig.py").write_text(demo.get("sig", ""), encoding="utf-8")
+    return sh(
+        "bun",
+        "bend2/main.ts",
+        f"demos/python/{tool}.bend",
+        env={
+            "PY_SOURCE": str(work / f"{name}.py"),
+            "PY_DEF": name,
+            **({"PY_SIG": str(work / "sig.py")} if "sig" in demo else {}),
+        },
+    )
+
+
 def judge(name, show):
     demo = DEMOS[name]
     text, line, node = extract(demo["path"], name)
@@ -533,18 +567,7 @@ def judge(name, show):
 
     with tempfile.TemporaryDirectory(prefix="bend-judge.") as tmp:
         work = Path(tmp)
-        (work / f"{name}.py").write_text(text, encoding="utf-8")
-        (work / "sig.py").write_text(demo.get("sig", ""), encoding="utf-8")
-        rc, emitted = sh(
-            "bun",
-            "bend2/main.ts",
-            "demos/python/translate.bend",
-            env={
-                "PY_SOURCE": str(work / f"{name}.py"),
-                "PY_DEF": name,
-                **({"PY_SIG": str(work / "sig.py")} if "sig" in demo else {}),
-            },
-        )
+        rc, emitted = emit("translate", work, name, demo, text)
         if rc != 0:
             raise SystemExit(f"FAIL emission blocked: {emitted}")
         (work / f"{name}.bend").write_text(emitted + "\n", encoding="utf-8")
@@ -628,15 +651,234 @@ def judge(name, show):
     print(
         f"{name}: C1 {'ok' if c1 else 'FAIL'} · C2 {min(per.values())}/{n} · C3 {c3}"
     )
-    return c1 and c2 and ok and controls
+    return c1 and c2 and ok and controls, (demo, text, inputs, expected, maybe, want, got, emitted, c3)
+
+
+RULE = "# rewrites: rule, Python span, grade: evidence\n"
+UNKNOWN = "Unknown: not applied, the string or its prefix is not a name (it would be evaluated twice)"
+BENCH = {"c": 20000, "js": 5000, "interpret": 20}  # iterations: seconds per run in each lane
+
+
+def site(text, prefix):
+    """The span the log must name, by `ast`: the one `startswith` call whose argument reads `prefix`."""
+    [n] = [
+        n
+        for n in ast.walk(ast.parse(text))
+        if isinstance(n, ast.Call)
+        and isinstance(n.func, ast.Attribute)
+        and n.func.attr == "startswith"
+        and ast.get_source_segment(text, n.args[0]) == prefix
+    ]
+    return f"{n.lineno}:{n.col_offset}-{n.end_lineno}:{n.end_col_offset}"
+
+
+def step_law(name, out, emitted, hoist, where):
+    """The step's instance of O.starts_append, stated against the helper the rewrite emitted:
+    the faithful subterm == the optimized one, for all strings x and y."""
+    x, y, z = hoist
+    [helper] = set(re.findall(r"^def (\S+)\(", out, re.M)) - set(re.findall(r"^def (\S+)\(", emitted, re.M))
+    head = re.search(rf"^def {re.escape(helper)}\(_c: Bool, (.*?)\) ->", out, re.M).group(1)
+    ps = ", ".join(p.split(":")[0].lstrip("+") for p in head.split(", "))
+    old = f"String.starts_with({x}, String.append({y}, {z}))"
+    new = f"T.{helper}(String.starts_with({x}, {y}), {ps})"
+    return f"""import Base
+import ./{name}.bend as T
+import {os.path.relpath(ROOT / "demos/python/optimize.bend", where)} as O
+
+law bridge:
+  for b: Bool
+  for {x}: String
+  for {y}: String
+  {{O.hoisted(b, {x}, {y}, {z}) == T.{helper}(b, {ps}) : Bool}}
+
+def bridge(b, {x}, {y}):
+  match b:
+    case True{{}}:
+      {{==}}
+    case False{{}}:
+      {{==}}
+
+law step:
+  for +{x}: String
+  for +{y}: String
+  {{{old} == {new} : Bool}}
+
+def step({x}, {y}):
+  Equal.trans(Bool, {old}, O.hoisted(String.starts_with({x}, {y}), {x}, {y}, {z}), {new}, O.starts_append({x}, {y}, {z}), bridge(String.starts_with({x}, {y}), {x}, {y}))
+
+def main() -> String:
+  "laws"
+""", helper
+
+
+def bench_file(name, inputs, n):
+    """n iterations of every fixture, summed; the first argument is cut by String.take(_, k) with
+    k >= its length, so the value is unchanged but no call is shared across iterations."""
+    assert max(len(a[0]) for a in inputs) < 1000
+
+    def add(xs):
+        acc = "0n"
+        for x in reversed(xs):
+            acc = f"Nat.add({x}, {acc})"
+        return acc
+
+    calls = [
+        f"score(T.{name}({', '.join([f'String.take({bend_value(a[0])}, k)', *map(bend_value, a[1:])])}))"
+        for a in inputs
+    ]
+    parts = [calls[i : i + 20] for i in range(0, len(calls), 20)]
+    out = ["import Base", f"import ./{name}.bend as T", "", "def score(m: Maybe<&2, String>) -> Nat:",
+           "  match m:", "    case None{}:", "      0n", "    case Some{s}:", "      String.length(s)", ""]
+    for k, part in enumerate(parts):
+        out += [f"def part{k}(+k: Nat) -> Nat:", "  " + add(part), ""]
+    out += ["def all(+k: Nat) -> Nat:", "  " + add([f"part{k}(k)" for k in range(len(parts))]), "",
+            "def go(n: Nat, +k: Nat, acc: Nat) -> Nat:", "  match n:", "    case 0n:", "      acc",
+            "    case 1n+p:", "      go(p, Nat.add(k, 1n), Nat.add(acc, all(k)))", "",
+            # a literal of thousands can overflow the frontend's stack; a product does not
+            "def main() -> Nat:", f"  go(Nat.mul({n // 1000 or n}n, {1000 if n >= 1000 else 1}n), 1000n, 0n)", ""]
+    return "\n".join(out)
+
+
+def bench(name, inputs, work, arts):
+    """{lane: (faithful s, optimized s, same result)}: per lane, one warmup of each file, then
+    seven runs alternated faithful/optimized, wall clock around the process; medians."""
+    res = {}
+    for lane, n in BENCH.items():
+        cmds = {}
+        for tag, art in arts.items():
+            d = work / f"bench_{lane}_{tag}"
+            d.mkdir()
+            (d / f"{name}.bend").write_text(art + "\n", encoding="utf-8")
+            (d / "b.bend").write_text(bench_file(name, inputs, n), encoding="utf-8")
+            cmds[tag] = ["bun", "bend2/main.ts", str(d / "b.bend")]
+            if lane != "interpret":
+                target = d / ("b.js" if lane == "js" else "b")
+                rc, log = sh(*cmds[tag], "-o", str(target))
+                if rc != 0:
+                    raise SystemExit(f"FAIL C5 {lane} build: {log[:300]}")
+                cmds[tag] = ["bun", str(target)] if lane == "js" else [str(target), "--gpu", "off"]
+        times, outs = {t: [] for t in cmds}, {t: sh(*c)[1] for t, c in cmds.items()}
+        for _ in range(7):
+            for t, c in cmds.items():
+                start = time.perf_counter()
+                outs[t] = sh(*c)[1]
+                times[t].append(time.perf_counter() - start)
+        res[lane] = (statistics.median(times["f"]), statistics.median(times["o"]), outs["f"] == outs["o"])
+    return res
+
+
+def optimized(name, demo, text, inputs, expected, maybe, want, faithful, emitted, c3, show, timing):
+    with tempfile.TemporaryDirectory(prefix="bend-judge.") as tmp:
+        work = Path(tmp)
+        rc, out = emit("optimize", work, name, demo, text)
+        if rc != 0:
+            raise SystemExit(f"FAIL optimization blocked: {out}")
+        if show:
+            print(out)
+        log = out.partition(RULE)[2].splitlines()
+        if not log:
+            same = out == emitted
+            print(f"optimized             : {'ok' if same else 'FAIL'} no rewrite logged; byte-identical to the faithful file: {same}")
+            print(f"{name} --optimize: C4 no step · {'identical' if same else 'FAIL not identical'}")
+            return same
+        (work / f"{name}.bend").write_text(out + "\n", encoding="utf-8")
+        test, _ = harness(name, inputs, expected, maybe)
+        (work / "demo.bend").write_text(test, encoding="utf-8")
+        got = lanes(work / "demo.bend", work)
+        law, helper = step_law(name, out, emitted, demo["hoist"], work)
+        (work / "law.bend").write_text(law, encoding="utf-8")
+        lawful = sh("bun", "-e", CHECK, str(work / "law.bend"))[1]
+
+        # C4 beyond the fixtures, Bend-vs-Bend: the faithful file is the reference, no oracle.
+        rng = random.Random(20260920)
+        more = [demo["generate"](rng) for _ in range(1000)]
+        par = {}
+        for tag, art in (("f", emitted), ("o", out)):
+            (work / tag).mkdir()
+            (work / tag / f"{name}.bend").write_text(art + "\n", encoding="utf-8")
+            (work / tag / "demo.bend").write_text(harness(name, more, [None] * len(more), maybe)[0], encoding="utf-8")
+            par[tag] = lanes(work / tag / "demo.bend", work / tag)
+
+        # Controls: an unsound helper must fail C2, C4's parity and the step law; a site whose
+        # side-condition fails must stay faithful and be logged Unknown with its span.
+        old, new, what = demo["owrong"]
+        (work / "wrong").mkdir()
+        (work / "wrong" / f"{name}.bend").write_text(out.replace(old, new) + "\n", encoding="utf-8")
+        (work / "wrong" / "demo.bend").write_text(test, encoding="utf-8")
+        wrong = sh("bun", "bend2/main.ts", str(work / "wrong" / "demo.bend"))[1]
+        (work / "wrong" / "law.bend").write_text(step_law(name, out, emitted, demo["hoist"], work / "wrong")[0], encoding="utf-8")
+        lied = sh("bun", "bend2/main.ts", str(work / "wrong" / "law.bend"))[1]  # the reason: bridge fails
+        prefix, variant = demo["unknown"]
+        vtext = text.replace(prefix, variant)
+        rf, vf = emit("translate", work / "unknown", name, demo, vtext)
+        ro, vo = emit("optimize", work / "unknown", name, demo, vtext)
+        unknown = (
+            text.count(prefix) == 1
+            and rf == ro == 0
+            and vo.partition("\n")[2].partition(RULE)[0] == vf.partition("\n")[2] + "\n"
+            and vo.partition(RULE)[2].splitlines() == [f"# hoist_append {site(vtext, variant)} {UNKNOWN}"]
+        )
+        c5 = bench(name, inputs, work, {"f": emitted, "o": out}) if timing else None
+    controls = (
+        holes(out.replace(old, "?hole")) == ["?"]
+        and old in out
+        and wrong.startswith('"')
+        and wrong != want
+        and wrong != faithful["interpret"]
+        and "Location: bridge" in lied
+        and unknown
+    )
+    runs = ("interpret", "js", "c")
+    c1 = not holes(out) and got["check"] == "All terms check." and all(got[k].startswith('"') for k in runs)
+    per = {k: sum(a == b for a, b in zip(got[k].strip('"').split("|"), want.strip('"').split("|")[:-1])) for k in runs}
+    c2 = len({got[k] for k in runs}) == 1 and all(got[k] == want for k in runs)
+    logged = log == [f"# hoist_append {site(text, demo['unknown'][0])} Proven: law starts_append, demos/python/optimize.bend"]
+    parity = all(got[k] == faithful[k] for k in runs) and all(
+        par["o"][k] == par["f"][k] and par["f"][k].startswith('"') for k in runs
+    ) and len({par["f"][k] for k in runs}) == 1
+    c4 = logged and parity and lawful == "All terms check."
+    n = len(inputs)
+    print(f"optimized             : demos/python/optimize.bend, {len(log)} step(s) logged")
+    for line in log:
+        print(f"  {line}")
+    print(f"C1 checker acceptance : {'ok' if c1 else 'FAIL'} (again, on the optimized file)")
+    print(f"C2 source parity      : {'ok' if c2 else 'FAIL'} " + " ".join(f"{k} {v}/{n}" for k, v in per.items()) + " (again, vs the oracle; not inherited)")
+    print(f"C3 theorem status     : unchanged, {c3} (tier 3 never upgrades C3)")
+    print(
+        f"C4 rewrite equivalence: {'ok' if c4 else 'FAIL'} log spans read back by ast: {logged}; optimized == faithful in "
+        f"interpret, js, c on the {n} fixtures and 1000 more generated (seed 20260920): {parity}; step law "
+        f"(starts_append at {helper}, stated against the emitted file): {'checked' if lawful == 'All terms check.' else lawful[:300]}"
+    )
+    print(
+        f"controls              : {'ok' if controls else 'FAIL'} (injected hole rejected by C1; {what} rejected by C2, "
+        f"C4 parity and the step law; `{variant}` not applied, logged Unknown at its span, code as faithful)"
+    )
+    for k in runs:
+        if got[k] != want:
+            print(f"  lane {k}: {got[k][:400]}")
+    if c5:
+        print("C5 measured benefit   : medians of 7 warmed runs, alternated, wall clock per process (startup included); "
+              f"the {len(inputs)} fixtures per iteration; faithful -> optimized:")
+        for lane, (f, o, same) in c5.items():
+            print(f"  {lane:9} {BENCH[lane]:>6} iterations  {f:.3f} s -> {o:.3f} s  {f / o:.2f}x  "
+                  f"{'gain' if f / o >= 1.05 else 'rejected'}{'' if same else '  FAIL results differ'}")
+    verdict = " · ".join(f"{lane} {f / o:.2f}x" + ("" if f / o >= 1.05 else " (rejected)") for lane, (f, o, _) in c5.items()) if c5 else "not measured (--bench)"
+    print(f"{name} --optimize: C1 {'ok' if c1 else 'FAIL'} · C2 {min(per.values())}/{n} · C3 {c3} · "
+          f"C4 {len(log)} step Proven (law starts_append){'' if c4 else ' FAIL'} · C5 {verdict}")
+    return c1 and c2 and c4 and controls and all(same for _, _, same in (c5 or {}).values())
 
 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--demo", required=True, choices=sorted(DEMOS))
-    ap.add_argument("--show", action="store_true", help="print the emitted Bend file")
+    ap.add_argument("--show", action="store_true", help="print the emitted Bend file(s)")
+    ap.add_argument("--optimize", action="store_true", help="then judge demos/python/optimize.bend's file (C1-C4)")
+    ap.add_argument("--bench", action="store_true", help="with --optimize: time it against the faithful file (C5)")
     args = ap.parse_args()
-    sys.exit(0 if judge(args.demo, args.show) else 1)
+    ok, ctx = judge(args.demo, args.show)
+    if args.optimize:
+        ok = optimized(args.demo, *ctx, args.show, args.bench) and ok
+    sys.exit(0 if ok else 1)
 
 
 if __name__ == "__main__":
