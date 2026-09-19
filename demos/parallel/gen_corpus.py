@@ -47,13 +47,17 @@ def stats(text):  # the scan's oracle: tokens, sum of per-token rolling hashes
 
 pool_stats = [stats(b) for b in pool]
 pool_bytes = [b.encode() for b in pool]
-n = h = size = 0
+pool_gpu = [b.count("gpu") for b in pool]  # gputext.bend's occurrence count
+n = h = g = size = 0
 with open(out, "wb") as f:
     for _ in range(blocks):
         i = rng.randrange(len(pool))
         f.write(pool_bytes[i])
         size += len(pool_bytes[i])
         n, h = n + pool_stats[i][0], (h + pool_stats[i][1]) & 0xFFFFFFFF
+        g += pool_gpu[i]
 print(f"{out}: {size} bytes, {blocks * block} code points, oracle {n}:{h}")
 with open(out + ".oracle", "w") as f:
     f.write(f"{n}:{h}\n")
+with open(out + ".oracle_gpu", "w") as f:
+    f.write(f"{n}:{h}:{g}\n")
