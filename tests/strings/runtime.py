@@ -97,7 +97,17 @@ for s in texts:
 with tempfile.TemporaryDirectory(prefix="bend-strings-runtime-") as temp:
     tmp = Path(temp)
     seed = tmp / "seed.bend"
-    seed.write_text('import Base\n\ndef main() -> String:\n  "abcdef"\n')
+    # An IO seed (never run; its one literal stays the probe's static image),
+    # so the emitted runtimes carry the File.read_text effect.
+    seed.write_text('import Base\n\n'
+                    'def done(r: File & Result<&1, &1, U32 & String, Utf8.Dec & String>) -> IO(Unit):\n'
+                    '  (f, x) = r\n  File.close(f)\n\n'
+                    'def go(+s: String) -> IO(Unit):\n  do IO<Unit>:\n'
+                    '    f : File <- IO.try(File, File.open(s, s))\n'
+                    '    r : File & Result<&1, &1, U32 & String, Utf8.Dec & String> <-\n'
+                    '      File.read_text(f, Utf8.Dec.new(), 1)\n'
+                    '    done(r)\n\n'
+                    'def main() -> IO(Unit):\n  go("abcdef")\n')
     cfile, jsfile = tmp / "runtime.c", tmp / "runtime.js"
     run(["bun", "bend2/main.ts", str(seed), "-o", str(cfile), "-o", str(jsfile)])
     c = cfile.read_text().replace("int main(int argc, char** argv)", "int bend_main(int argc, char** argv)")
@@ -192,6 +202,54 @@ for (const build of [() => str_pad("a", 1n << 32n, ".", 0),
   catch (e) { if (e !== "bend: a string past the maximum length 2^31") { throw e; } }
 }
 console.log("C/JS string length diagnostics: ok");
+// Streaming partition law, as in runtime.c's stream_law.
+function streamRun(b, cuts) {
+  let pend = 0, need = 0, out = "", i = 0;
+  for (;;) {
+    let j = i;
+    while (j < b.length && !cuts(j)) { j += 1; }
+    j = j < b.length ? j + 1 : b.length;
+    const buf = new Uint8Array(need + j - i + 4);
+    for (let m = 0; m < need; m += 1) { buf[m] = (pend >>> (8 * m)) & 255; }
+    buf.set(b.subarray(i, j), need);
+    const r = file_read_text_go_dec(buf, need + j - i, i === b.length);
+    if (i < b.length && r.snd.snd === "" && r.snd.fst <= need) { throw new Error("silent chunk"); }
+    pend = r.fst; need = r.snd.fst; out += r.snd.snd;
+    if (i === b.length) { if (need !== 4 || pend !== 0) { throw new Error("eof state"); } return out; }
+    i = j;
+  }
+}
+function streamCheck(b, cuts) {
+  const got = streamRun(b, cuts), want = io_text(b, b.length);
+  if (got !== want) { throw new Error(JSON.stringify({bytes: [...b], got, want})); }
+}
+const abc = [0x00, 0x41, 0x80, 0xbf, 0xc2, 0xe0, 0xed, 0xf0, 0xf4, 0xa0, 0x90, 0xff];
+let parts = 0;
+for (let n = 0; n <= 4; n += 1) {
+  for (let w = 0; w < 12 ** n; w += 1) {
+    const b = new Uint8Array(n);
+    for (let i = 0, x = w; i < n; i += 1, x = Math.floor(x / 12)) { b[i] = abc[x % 12]; }
+    for (let mask = 0; mask < 1 << Math.max(n - 1, 0); mask += 1) { streamCheck(b, (j) => (mask >> j) & 1); parts += 1; }
+  }
+}
+for (const [bytes] of cases) {
+  const b = new Uint8Array(bytes);
+  streamCheck(b, () => 1); parts += 1;
+  for (let i = 0; i < b.length; i += 1) { streamCheck(b, (j) => j === i); parts += 1; }
+}
+let seed = 0xB3D;
+const rand = () => (seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0) >>> 8;
+for (let t = 0; t < 2000; t += 1) {
+  const b = new Uint8Array(1 + rand() % 64);
+  for (let i = 0; i < b.length; i += 1) {
+    const r = rand();
+    b[i] = r % 3 === 0 ? abc[(r >> 4) % 12] : r % 3 === 1 ? 0x80 | ((r >> 4) & 0x7f) : (r >> 4) & 255;
+  }
+  streamCheck(b, () => rand() % 3 === 0); parts += 1;
+}
+console.log("JS streaming partition law: ok (" + parts + " partitions)");
 '''
+    # Effects are emitted inside a closure; the probe needs the decode step.
+    js += (ROOT / "bend2/effs/file_read_text_go.js").read_text()
     jsfile.write_text(js)
     run(["bun", str(jsfile)])

@@ -401,6 +401,96 @@ static void acceptance(Env e) {
   }
 }
 
+// Streaming decode. The law: for every byte string and every partition of
+// it, the chunks decoded through file_read_text_go_dec (carry first), then
+// the end-of-file call, append to io_str of the whole. cuts bit i set means
+// a chunk ends after byte i; every chunk also runs as a 0-byte read first
+// when idle is set, which must change nothing.
+static u32 stream_run(Env e, const u8* b, u32 n, u64 cuts, bool idle, u32* out) {
+  char buf[64 + 4];
+  u32 pend = 0, need = 0, len = 0;
+  for (u32 i = 0; i <= n;) {
+    u32 j = i;
+    while (j < n && !((cuts >> j) & 1)) { j++; }
+    j = j < n ? j + 1 : n;
+    for (u32 pass = idle ? 0 : 1; pass < 2; pass++) {
+      u32 take = pass ? j - i : 0, had = need;
+      bool eof = pass && i == n;
+      for (u32 m = 0; m < had; m++) { buf[m] = (char)(pend >> (8 * m)); }
+      memcpy(buf + had, b + i, take);
+      u32 was_pend = pend, was_need = need;
+      Term s = file_read_text_go_dec(e, buf, had + take, eof, &pend, &need);
+      StrParts p = str_peek(e, s);
+      if (!pass) { assert(p.len == 0 && pend == was_pend && need == was_need); }
+      if (eof) { assert(need == 4 && pend == 0); } else { assert(need <= 3); }
+      // Consumed bytes always show: output, or a longer carry.
+      if (take && !eof) { assert(p.len > 0 || need > was_need); }
+      for (u32 k = 0; k < p.len; k++) { out[len++] = str_at_peek(e, p, k); }
+      term_sink(e, s);
+    }
+    if (i == n) { break; }
+    i = j;
+  }
+  assert(track_live == 0);
+  return len;
+}
+
+static void stream_check(Env e, const u8* b, u32 n, u64 cuts) {
+  u32 got[64 + 4], len = stream_run(e, b, n, cuts, (cuts ^ n) & 1, got);
+  Term s = io_str(e, (const char*)b, n);
+  StrParts p = str_peek(e, s);
+  assert(p.len == len);
+  for (u32 k = 0; k < len; k++) { assert(str_at_peek(e, p, k) == got[k]); }
+  term_sink(e, s);
+}
+
+static u64 stream_law(Env e) {
+  static const u8 abc[12] = {0x00, 0x41, 0x80, 0xbf, 0xc2, 0xe0, 0xed, 0xf0, 0xf4, 0xa0, 0x90, 0xff};
+  u64 runs = 0;
+  // Exhaustive: every string of <= 4 alphabet bytes x every partition.
+  for (u32 n = 0; n <= 4; n++) {
+    u32 total = 1;
+    for (u32 i = 0; i < n; i++) { total *= 12; }
+    for (u32 w = 0; w < total; w++) {
+      u8 b[4];
+      for (u32 i = 0, x = w; i < n; i++, x /= 12) { b[i] = abc[x % 12]; }
+      for (u64 cuts = 0; cuts < (1ull << (n ? n - 1 : 0)); cuts++) { stream_check(e, b, n, cuts); runs++; }
+    }
+  }
+  // Random: 2,000 strings biased to leads and continuations, random cuts,
+  // plus 1-byte chunks.
+  u64 x = 0xB3D5EED;
+  for (u32 t = 0; t < 2000; t++) {
+    u8 b[64];
+    u32 n = 0;
+    x = x * 6364136223846793005ull + 1442695040888963407ull; n = 1 + (u32)(x >> 58);
+    for (u32 i = 0; i < n; i++) {
+      x = x * 6364136223846793005ull + 1442695040888963407ull;
+      u32 r = (u32)(x >> 33);
+      b[i] = r % 3 == 0 ? abc[(r >> 8) % 12] : r % 3 == 1 ? (u8)(0x80 | ((r >> 8) & 0x7f)) : (u8)(r >> 8);
+    }
+    x = x * 6364136223846793005ull + 1442695040888963407ull;
+    stream_check(e, b, n, x); stream_check(e, b, n, ~0ull); runs += 2;
+  }
+  // The pinned specimen: every single split point, and 1-byte chunks.
+  static const u8 pin[20] = {0xef, 0xbb, 0xbf, 0x41, 0x00, 0xf0, 0x9f, 0x98, 0x80, 0xc0,
+    0x80, 0xed, 0xa0, 0x80, 0xf4, 0x90, 0x80, 0x80, 0xe2, 0x82};
+  for (u32 i = 0; i < 20; i++) { stream_check(e, pin, 20, 1ull << i); runs++; }
+  stream_check(e, pin, 20, ~0ull); runs++;
+  // Boundary errors, spelled out.
+  u32 got[8];
+  assert(stream_run(e, (const u8*)"\xe2\x82\xac", 3, 2, false, got) == 1 && got[0] == 0x20ac);
+  assert(stream_run(e, (const u8*)"\xe2\x82\x41", 3, 2, false, got) == 3
+    && got[0] == 0xfffd && got[1] == 0xfffd && got[2] == 0x41);
+  assert(stream_run(e, (const u8*)"\xf0\x9f", 2, 0, false, got) == 2 && got[0] == 0xfffd && got[1] == 0xfffd);
+  assert(stream_run(e, (const u8*)"\xe2\x41", 2, 0, false, got) == 2 && got[0] == 0xfffd && got[1] == 0x41);
+  for (u64 cuts = 1; cuts <= 2; cuts++) {
+    assert(stream_run(e, (const u8*)"\xed\xa0\x80", 3, cuts, false, got) == 3
+      && got[0] == 0xfffd && got[1] == 0xfffd && got[2] == 0xfffd);
+  }
+  return runs + 6;
+}
+
 int main(int argc, char** argv) {
   Corpus h = corpus_setup(false, 1, 0);
   Env e = {h, ALC[0]};
@@ -427,7 +517,9 @@ int main(int argc, char** argv) {
   acceptance(e);
   roundtrip(e);
   utf8_cases(e);
+  u64 parts = stream_law(e);
   assert(!err_seen(h) && track_live == 0);
+  printf("streaming partition law: ok (%llu partitions, zero live)\n", (unsigned long long)parts);
   printf("runtime ownership + UTF-8: ok (%llu allocations, zero live)\n", (unsigned long long)track_allocs);
   return 0;
 }
