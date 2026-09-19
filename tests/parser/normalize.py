@@ -88,13 +88,21 @@ def part(kind, text):
 def oracle(source):
     tree = ast.parse(source, feature_version=(3, 11), type_comments=False)
     maps = boundaries(source)
+    lines = ast._splitlines_no_ff(source)
+
+    def segment(node):
+        # ast.get_source_segment with the line split hoisted: per call it is O(source), quadratic on ~1 MB files.
+        lo, hi, a, b = node.lineno - 1, node.end_lineno - 1, node.col_offset, node.end_col_offset
+        if lo == hi:
+            return lines[lo].encode()[a:b].decode()
+        return "".join([lines[lo].encode()[a:].decode()] + lines[lo + 1:hi] + [lines[hi].encode()[:b].decode()])
 
     def convert(node, in_fstring=False):
         if isinstance(node, ast.AST):
             d = {"tag": type(node).__name__}
             for field, value in ast.iter_fields(node):
                 if isinstance(node, ast.Constant) and field == "value":
-                    d[field] = repr(node.value) if in_fstring else literal(ast.get_source_segment(source, node))
+                    d[field] = repr(node.value) if in_fstring else literal(segment(node))
                 else:
                     d[field] = convert(value, isinstance(node, ast.JoinedStr))
             if hasattr(node, "lineno"):

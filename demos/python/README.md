@@ -64,10 +64,12 @@ climbing. Every mode entry decrements a residual global budget. The first
 structurally decreasing Nat proves termination independently of the residual
 budget. Sequential parses thread the residual state, never replenish it
 (except the `with (` header retry below).
-The default is `32 * (token_count + 1)`: a conservative bound for the
+The default is `32 * (fuel_weight + 1)`, the weight being one per token plus a
+`STRING`'s characters: a conservative bound for the
 dispatch graph plus its repeated Rest/collection exits. Every cycle consumes
-a token, and no chain of modes between two token consumptions reaches 32
-dispatches (measured highwater: 3.25 per token). The one backtracking point,
+a token or, in an f-string body, a character of its one token, and no chain of
+modes between two consumptions reaches 32
+dispatches (measured highwater: 4.5 per token outside many-field f-strings). The one backtracking point,
 the `with (` header, restarts its second alternative from the saved budget, so
 a header is metered at most twice; bodies are outside the choice. The EOF allowance
 covers the final Block entry. The deterministic fuzz harness measures actual
@@ -77,7 +79,7 @@ An f-string stays one `STRING` token (the 3.11 tokenizer's shape). `fstring.bend
 body after CPython's `fstring_find_literal`/`fstring_find_expr`; each field's text is lexed as
 `(expr)` from the `{` (`lex_at`, so every inner token keeps its source position and a bare
 tuple takes CPython's paren span) and parsed by the same `go` on its own
-`32 * (token_count + 1)` budget (`within`); the outer budget resumes untouched. Text
+`32 * (fuel_weight + 1)` budget (`within`); the outer budget resumes untouched. Text
 Constants travel as `_parts` pieces the harness decodes and joins.
 This is an implementation bound with regression evidence, not a mechanized
 proof of Python grammar completeness or a bound on hardware memory/time.

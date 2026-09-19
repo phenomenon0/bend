@@ -26,6 +26,8 @@ EXPRESSIONS = [
     '"a" f"b{x}" \'c\' f\'d\'', 'u"a" f"{x}" "b"', '"a" u"b" f"{x}"', 'u"" f"{x:a}" "b"', 'f"{x}" u"a"', 'r"\\d" f"{x}" "\\n"', 'f"é{x}é{y + 1}😀"', '(f"é{x}"\n  f"é{y + 1}")',
     'f"""a\n  {b} and {\nc} z {  d\n + e}"""', 'f"""{x:\n>{w}}"""', 'f"""{x\n=}"""', 'f\'\'\'"{x}" \'{y}\\\'\'\'\'', 'f"{x}".format(y)', 'f"{x}"[1:]', 'f(f"{x}", k=f"{y}")',
     'u"" f"{x:a{y}b}" "b"', '"pp" f"{x:{y}b}" f"{z:c{w:d}}"', 'u"p" f"""{x:{y}b\n}""" f"{z:c{w:d}}"',
+    # Fuel: an f-string's fields outnumber its one token; the budget weighs a STRING by its characters.
+    'f"' + "{a}x" * 300 + '"', 'f"{x:' + "{w}." * 300 + '}"', 'f"{f\'' + "{a!r:>3}" * 300 + '\'}"',
 ]
 STATEMENTS = [
     "match=1", "case=2", "return *a", "a = *b", "x += *a",

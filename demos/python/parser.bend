@@ -132,6 +132,9 @@ def syntax_result(r: P.Reply<S.Expr>) -> Result<&2, &2, S.Error, S.Module>:
 def fuel_k() -> Nat:
   32n
 
+def budget(ts: List<&2, S.Tok>) -> Nat:
+  fuel_k() * (S.fuel_weight(ts, 0n) + 1n)
+
 def go(+fuel: Nat, +mode: Mode) -> P.M(S.Expr):
   match fuel mode:
     case 0n _:
@@ -234,7 +237,7 @@ def go(+fuel: Nat, +mode: Mode) -> P.M(S.Expr):
             do P.M<S.Expr>:
               +e : F.Cut <- P.lift(F.Cut, F.field(String.drop(F.rest_of(lit), 1n), F.shift(F.pos_of(lit), 1n)))
               +sub : List<&2, S.Tok> <- P.lift(List<&2, S.Tok>, L.lex_at("(" ++ F.text_of(e) ++ ")", F.pos_of(lit)))
-              +value : S.Expr <- P.within(S.Expr, sub, fuel_k() * (S.token_count(sub, 0n) + 1n), do P.M<S.Expr>:
+              +value : S.Expr <- P.within(S.Expr, sub, budget(sub), do P.M<S.Expr>:
                 inner : S.Expr <- go(left, Expression{0n})
                 drop : S.Tok <- P.expect("NEWLINE")
                 return inner)
@@ -865,8 +868,8 @@ def go(+fuel: Nat, +mode: Mode) -> P.M(S.Expr):
 
 
 def raw_result(+ts: List<&2, S.Tok>) -> Result<&2, &2, S.Error, P.Reply<S.Expr>>:
-  +budget = fuel_k() * (S.token_count(ts, 0n) + 1n)
-  go(budget, Block{True{}, S.JEnd{}, S.Pos{1n, 0n}}, P.State{ts, S.Pos{1n, 0n}, budget})
+  +fuel = budget(ts)
+  go(fuel, Block{True{}, S.JEnd{}, S.Pos{1n, 0n}}, P.State{ts, S.Pos{1n, 0n}, fuel})
 
 
 def parse(+ts: List<&2, S.Tok>) -> Result<&2, &2, S.Error, S.Module>:
@@ -874,13 +877,12 @@ def parse(+ts: List<&2, S.Tok>) -> Result<&2, &2, S.Error, S.Module>:
     result : P.Reply<S.Expr> <- raw_result(ts)
     syntax_result(result)
 
-def statistics(count: Nat, r: P.Reply<S.Expr>) -> S.Json:
+def statistics(count: Nat, +fuel: Nat, r: P.Reply<S.Expr>) -> S.Json:
   P.Reply{body, P.State{ts, end, remaining}} = r
-  +n = count
-  S.JObj{S.JField{"tokens", S.JNum{n}, S.JField{"budget", S.JNum{fuel_k() * (1n+n)},
-    S.JField{"used", S.JNum{fuel_k() * (1n+n) - remaining}, S.JEnd{}}}}}
+  S.JObj{S.JField{"tokens", S.JNum{count}, S.JField{"budget", S.JNum{fuel},
+    S.JField{"used", S.JNum{fuel - remaining}, S.JEnd{}}}}}
 
 def stats(+ts: List<&2, S.Tok>) -> Result<&2, &2, S.Error, S.Json>:
   do Result<&2, &2, S.Error, S.Json>:
     result : P.Reply<S.Expr> <- raw_result(ts)
-    return statistics(S.token_count(ts, 0n), result)
+    return statistics(S.token_count(ts, 0n), budget(ts), result)

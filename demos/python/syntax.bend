@@ -182,3 +182,13 @@ def token_count(ts: List<&2, Tok>, count: Nat) -> Nat:
       count
     case Con{h, tail}:
       token_count(tail, 1n+count)
+
+# The fuel weight of a token list: one per token plus a STRING's characters. An f-string is one
+# token whose body dispatches once per text run or field, each consuming a character of it.
+def fuel_weight(ts: List<&2, Tok>, count: Nat) -> Nat:
+  match ts:
+    case Nil{}:
+      count
+    case Con{h, tail}:
+      Tok{k, text, lo, hi} = h
+      fuel_weight(tail, 1n + count + Bool.pick(Nat, String.eq(k, "STRING"), String.length(text), 0n))
