@@ -300,3 +300,8 @@ def dotted(text: String, lo: S.Pos, hi: S.Pos) -> S.Expr:
 
 def alias(+name: S.Expr, asname: S.Json, end: S.Pos) -> S.Json:
   S.expr(node("alias", S.JField{"name", carried(name), S.JField{"asname", asname, S.JEnd{}}}, get_begin(name), end))
+
+# P6 classes. `call` is the base list parsed as a Call; only its args and keywords are kept.
+def class(id: S.Tok, +call: S.Expr, +body: S.Expr, decorators: S.Json, start: S.Pos) -> S.Expr:
+  node("ClassDef", S.JField{"name", S.JStr{P.tok_text(id)}, S.JField{"bases", get(get_fields(call), "args"), S.JField{"keywords", get(get_fields(call), "keywords"),
+    S.JField{"body", S.JArr{get_fields(body)}, S.JField{"decorator_list", decorators, S.JEnd{}}}}}}, start, get_finish(body))

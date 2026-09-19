@@ -44,6 +44,7 @@ type Mode is Data:
   From{start: S.Pos, level: Nat}
   Dotted{dotted: Bool, text: String, start: S.Pos}
   Aliases{dotted: Bool, paren: Bool, names: S.Json, separator: Bool}
+  Class{start: S.Pos, decorators: S.Json}
 
 # Primitive helpers classify unsupported productions before a syntax error.
 def expected(-A: Data, +t: S.Tok, msg: String) -> P.M(A):
@@ -360,12 +361,13 @@ def go(+fuel: Nat, +mode: Mode) -> P.M(S.Expr):
             compound : S.Expr <- go(left, Compound{Bool.pick(String, P.is_text(t, "if"), "If", "While"), P.tok_start(t)})
             return wrap(compound), u =>
           S.choose(P.M(S.Expr), P.is_text(t, "@"), u => go(left, Decorators{S.JEnd{}}), u =>
-            S.choose(P.M(S.Expr), P.is_text(t, "def") || P.is_text(t, "for") || P.is_text(t, "try") || P.is_text(t, "with"), u =>
+            S.choose(P.M(S.Expr), P.is_text(t, "def") || P.is_text(t, "class") || P.is_text(t, "for") || P.is_text(t, "try") || P.is_text(t, "with"), u =>
               do P.M<S.Expr>:
                 drop : S.Tok <- P.take
                 +next : S.Tok <- P.peek
                 +start : S.Pos = P.tok_start(t)
                 compound : S.Expr <- S.choose(P.M(S.Expr), P.is_text(t, "def"), u => go(left, Def{start, S.JArr{S.JEnd{}}}), u =>
+                  S.choose(P.M(S.Expr), P.is_text(t, "class"), u => go(left, Class{start, S.JArr{S.JEnd{}}}), u =>
                   S.choose(P.M(S.Expr), P.is_text(t, "for"), u => go(left, For{start}), u =>
                     S.choose(P.M(S.Expr), P.is_text(t, "try"), u => go(left, Try{start}), u =>
                       # CPython tries the parenthesized item list first; it must end in `):`.
@@ -375,7 +377,7 @@ def go(+fuel: Nat, +mode: Mode) -> P.M(S.Expr):
                           P.either(S.Expr, go(left, With{True{}}), go(left, With{False{}})), u =>
                           go(left, With{False{}}))
                         body : S.Expr <- go(left, Suite{})
-                        return N.context(N.carried(items), body, start))))
+                        return N.context(N.carried(items), body, start)))))
                 return wrap(compound), u =>
               go(left, Simple{S.JEnd{}})))))
     case 1n+left Simple{statements}:
@@ -582,11 +584,12 @@ def go(+fuel: Nat, +mode: Mode) -> P.M(S.Expr):
             value : S.Expr <- go(left, Expression{0n})
             line : S.Tok <- P.expect("NEWLINE")
             go(left, Decorators{S.JItem{S.expr(value), items}}), u =>
-          S.choose(P.M(S.Expr), P.is_text(t, "def"), u =>
+          S.choose(P.M(S.Expr), P.is_text(t, "def") || P.is_text(t, "class"), u =>
             do P.M<S.Expr>:
               drop : S.Tok <- P.take
-              function : S.Expr <- go(left, Def{P.tok_start(t), N.arr(items)})
-              return wrap(function), u => expected(S.Expr, t, "expected def after decorator"))))
+              function : S.Expr <- S.choose(P.M(S.Expr), P.is_text(t, "def"), u => go(left, Def{P.tok_start(t), N.arr(items)}), u =>
+                go(left, Class{P.tok_start(t), N.arr(items)}))
+              return wrap(function), u => expected(S.Expr, t, "expected def or class after decorator"))))
     case 1n+left Def{start, decorators}:
       P.meter(S.Expr, do P.M<S.Expr>:
         id : S.Tok <- ident()
@@ -597,6 +600,19 @@ def go(+fuel: Nat, +mode: Mode) -> P.M(S.Expr):
         colon : S.Tok <- P.expect(":")
         body : S.Expr <- go(left, Suite{})
         return N.function(id, N.carried(args), body, decorators, returns, start))
+    # `class`: the base list is a call's argument list on a placeholder callee.
+    case 1n+left Class{+start, decorators}:
+      P.meter(S.Expr, do P.M<S.Expr>:
+        id : S.Tok <- ident()
+        +t : S.Tok <- P.peek
+        bases : S.Expr <- S.choose(P.M(S.Expr), P.is_text(t, "("), u =>
+          do P.M<S.Expr>:
+            drop : S.Tok <- P.take
+            go(left, Arguments{N.dotted("", start, start), S.JEnd{}, S.JEnd{}, False{}, False{}}), u =>
+          P.M.pure(S.Expr, N.call(N.dotted("", start, start), S.JEnd{}, S.JEnd{}, start)))
+        colon : S.Tok <- P.expect(":")
+        body : S.Expr <- go(left, Suite{})
+        return N.class(id, bases, body, decorators, start))
     case 1n+left For{start}:
       P.meter(S.Expr, do P.M<S.Expr>:
         first : S.Expr <- go(left, TestList{6n})
