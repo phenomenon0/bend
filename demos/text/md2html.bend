@@ -2,12 +2,14 @@
 #   FILE=README.md ./md2html --gpu off > README.html
 # Subset: # ## ### headings, **bold**, *italic*, `code`, [text](url),
 # "- " bullet lists, blank-line paragraphs, ``` fences as <pre> (no inline
-# markup inside); < > & are escaped everywhere, so raw HTML shows as text.
+# markup inside). A line starting with "<" is raw HTML: it passes through
+# verbatim (shutting any open block); all other text escapes < > &.
 # An unclosed marker stays literal. md2html.py is the same spec in Python.
 import Base
 
 type Line is Data:
   Fence{}
+  Raw{}
   Blank{}
   Head{level: U32}
   Item{}
@@ -102,11 +104,12 @@ def inline(t: String) -> String:
 
 def line(+l: String) -> Line:
   Bool.pick(Line, String.starts_with(l, "```"), Fence{},
+  Bool.pick(Line, String.starts_with(l, "<"), Raw{},
   Bool.pick(Line, String.is_empty(String.trim(l)), Blank{},
   Bool.pick(Line, String.starts_with(l, "### "), Head{3},
   Bool.pick(Line, String.starts_with(l, "## "), Head{2},
   Bool.pick(Line, String.starts_with(l, "# "), Head{1},
-  Bool.pick(Line, String.starts_with(l, "- "), Item{}, Text{}))))))
+  Bool.pick(Line, String.starts_with(l, "- "), Item{}, Text{})))))))
 
 def shut(o: Open, acc: List<&2, String>) -> List<&2, String>:
   match o:
@@ -127,27 +130,33 @@ def item(l: String) -> String:
   String.concat(["<li>", inline(String.drop(l, 2n)), "</li>"])
 
 # one line: the block left open after it, and the output so far (newest first)
+def escape(s: String) -> String:
+  String.replace(String.replace(String.replace(s, "&", "&amp;"), "<", "&lt;"),
+    ">", "&gt;")
+
 def step(o: Open, k: Line, l: String, acc: List<&2, String>) ->
   Open & List<&2, String>:
   match o k:
     case Pre{} Fence{}:
       (Idle{}, "</pre>" <> acc)
     case Pre{} _:
-      (Pre{}, l <> acc)
+      (Pre{}, escape(l) <> acc)
     case o Fence{}:
       (Pre{}, "<pre>" <> shut(o, acc))
     case o Blank{}:
       (Idle{}, shut(o, acc))
     case o Head{n}:
-      (Idle{}, head(n, l) <> shut(o, acc))
+      (Idle{}, head(n, escape(l)) <> shut(o, acc))
+    case o Raw{}:
+      (Idle{}, l <> shut(o, acc))
     case Items{} Item{}:
-      (Items{}, item(l) <> acc)
+      (Items{}, item(escape(l)) <> acc)
     case o Item{}:
-      (Items{}, item(l) <> "<ul>" <> shut(o, acc))
+      (Items{}, item(escape(l)) <> "<ul>" <> shut(o, acc))
     case Para{} Text{}:
-      (Para{}, inline(l) <> acc)
+      (Para{}, inline(escape(l)) <> acc)
     case o Text{}:
-      (Para{}, inline(l) <> "<p>" <> shut(o, acc))
+      (Para{}, inline(escape(l)) <> "<p>" <> shut(o, acc))
 
 def render(ls: List<&2, String>, st: Open & List<&2, String>) -> List<&2, String>:
   match ls:
@@ -158,12 +167,8 @@ def render(ls: List<&2, String>, st: Open & List<&2, String>) -> List<&2, String
       (o, acc) = st
       render(t, step(o, line(l), l, acc))
 
-def escape(s: String) -> String:
-  String.replace(String.replace(String.replace(s, "&", "&amp;"), "<", "&lt;"),
-    ">", "&gt;")
-
 def html(s: String) -> String:
-  String.join(render(String.splitlines(escape(s)), (Idle{}, [])), "\n")
+  String.join(render(String.splitlines(s), (Idle{}, [])), "\n")
 
 def run(read: File & Result<&1, &1, U32 & String, String>, t0: Nat) -> IO(Unit):
   (f, result) = read

@@ -36,8 +36,10 @@ def inline(t):
 
 SHUT = {None: [], "p": ["</p>"], "ul": ["</ul>"], "pre": ["</pre>"]}
 
+def esc(t):
+    return t.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
 def html(s):
-    s = s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
     out, o = [], None
     for l in s.splitlines():
         fence = l.startswith("```")
@@ -45,22 +47,24 @@ def html(s):
             if fence:
                 out.append("</pre>"); o = None
             else:
-                out.append(l)
+                out.append(esc(l))
         elif fence:
             out += SHUT[o] + ["<pre>"]; o = "pre"
+        elif l.startswith("<"):
+            out += SHUT[o] + [l]; o = None
         elif not l.strip(" \t\n\r\x0b\x0c"):
             out += SHUT[o]; o = None
         elif l.startswith(("### ", "## ", "# ")):
             n = l.index(" ")
-            out += SHUT[o] + [f"<h{n}>{inline(l[n + 1:])}</h{n}>"]; o = None
+            out += SHUT[o] + [f"<h{n}>{inline(esc(l[n + 1:]))}</h{n}>"]; o = None
         elif l.startswith("- "):
             if o != "ul":
                 out += SHUT[o] + ["<ul>"]
-            out.append(f"<li>{inline(l[2:])}</li>"); o = "ul"
+            out.append(f"<li>{inline(esc(l[2:]))}</li>"); o = "ul"
         else:
             if o != "p":
                 out += SHUT[o] + ["<p>"]
-            out.append(inline(l)); o = "p"
+            out.append(inline(esc(l))); o = "p"
     return "\n".join(out + SHUT[o])
 
 print(html(open(sys.argv[1], encoding="utf-8").read()))
