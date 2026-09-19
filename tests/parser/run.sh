@@ -60,14 +60,22 @@ from pathlib import Path
 Path('tests/parser/_out/multi_mb.py').write_bytes(b'#' * 3145728)
 PY
 
-# Tripwire (from the shapefix lane): a single-line literal over 1200 chars expands
-# to a Cons spine and can overflow the bun frontend stack under load; shape such
-# literals with ++ chains of <=512-char pieces (byte-identical).
-if grep -lE '.{1200,}' tests/parser/*.bend 2>/dev/null | head -3 | grep -q .; then
-  printf 'FAIL fixture literal guard: line over 1200 chars in: '
-  grep -lE '.{1200,}' tests/parser/*.bend | tr '\n' ' '; printf '\n'
-  fail=$((fail + 1))
-fi
+# Tripwire (shapefix): a single string LITERAL over 1200 chars expands to a Cons
+# spine and can overflow the bun frontend stack under load; shape literals with
+# ++ chains of <=512-char pieces (byte-identical).
+python3 - <<'GUARD' || fail=$((fail + 1))
+import re, glob, sys
+worst = (0, "", 0)
+for f in sorted(glob.glob("tests/parser/*.bend")):
+    for n, line in enumerate(open(f, encoding="utf-8"), 1):
+        for m in re.finditer(r'"(?:\\.|[^"\\])*"', line):
+            L = len(m.group(0)) - 2
+            if L > worst[0]: worst = (L, f, n)
+if worst[0] > 1200:
+    print(f"FAIL fixture literal guard: literal of {worst[0]} chars at {worst[1]}:{worst[2]} (shape with ++ chains)")
+    sys.exit(1)
+print(f"ok   fixture literal guard (longest {worst[0]} chars)")
+GUARD
 
 for t in tests/parser/*.bend; do
   name=$(basename "$t" .bend)
