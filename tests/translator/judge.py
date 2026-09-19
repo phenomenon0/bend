@@ -88,6 +88,38 @@ def fm_text(rng):
     )
 
 
+# fm_sources' contract edges, also the module demo's: the frontmatter shapes the parse must survive.
+DEMOS_FM_EDGES = [
+        "",
+        "---",
+        "---\n---",
+        "---\n\n---",  # an empty group: no lines
+        "---\n---\n---",
+        "---\nsources: a\n---\nsources: b\n---",  # the earliest closing delimiter
+        "---\nx: 1\n---\nsources: b\n---",  # a sources line after it is not frontmatter
+        "x---\nsources: a\n---",  # ^ is the start of the text (no re.M)
+        "\n---\nsources: a\n---",
+        "---\nsources: a\nsources: b\n---",  # the first sources line returns
+        "---\n sources: a\n---",
+        "---\nsources:[\n---",
+        "---\nsources: [a,,b]\n---",
+        "---\nsources: [ \"a\" , 'b' ]\n---",
+        "---\nsources: a:b\n---",
+        "---\nsources: [a]x\n---",
+        "---\r\nsources: a\r\n---",
+        "---\nsources: a\r\n---",
+        "---\nt: 1\rsources: a\n---",  # splitlines' boundaries: \r, \v, \f
+        "---\nt\x0bsources: a\n---",
+        '---\nt\x0csources: "q"\n---',
+        '---\nsources:\t["a",\t"b"]\n---',
+        '---\nsources: "[a]"\n---',
+        '---\nsources: ["""]\n---',
+        "---\nsources: a\n--",
+        "---\nsources: a\n----",
+        "---\n" + "t: x\n" * 20 + "sources: [" + ", ".join("s" * k for k in range(1, 12)) + "]\n---",
+]
+
+
 # Allow list. `sha256` pins the reviewed function text: a changed source is re-reviewed, not re-judged.
 # `examples` are hand-written literals (the source has a docstring and no doctest: labeled contract
 # fixtures per plan §4); the oracle must agree with them before it is trusted for anything else.
@@ -240,41 +272,51 @@ DEMOS = {
             (("---\nsources: []\n---",), [""]),
             (("---\nsources:\n---",), [""]),
         ],
-        "edges": [
-            "",
-            "---",
-            "---\n---",
-            "---\n\n---",  # an empty group: no lines
-            "---\n---\n---",
-            "---\nsources: a\n---\nsources: b\n---",  # the earliest closing delimiter
-            "---\nx: 1\n---\nsources: b\n---",  # a sources line after it is not frontmatter
-            "x---\nsources: a\n---",  # ^ is the start of the text (no re.M)
-            "\n---\nsources: a\n---",
-            "---\nsources: a\nsources: b\n---",  # the first sources line returns
-            "---\n sources: a\n---",
-            "---\nsources:[\n---",
-            "---\nsources: [a,,b]\n---",
-            "---\nsources: [ \"a\" , 'b' ]\n---",
-            "---\nsources: a:b\n---",
-            "---\nsources: [a]x\n---",
-            "---\r\nsources: a\r\n---",
-            "---\nsources: a\r\n---",
-            "---\nt: 1\rsources: a\n---",  # splitlines' boundaries: \r, \v, \f
-            "---\nt\x0bsources: a\n---",
-            '---\nt\x0csources: "q"\n---',
-            '---\nsources:\t["a",\t"b"]\n---',
-            '---\nsources: "[a]"\n---',
-            '---\nsources: ["""]\n---',
-            "---\nsources: a\n--",
-            "---\nsources: a\n----",
-            "---\n" + "t: x\n" * 20 + "sources: [" + ", ".join("s" * k for k in range(1, 12)) + "]\n---",
-        ],
+        "edges": DEMOS_FM_EDGES,
         "generate": fm_text,
         "c3": "tested fragment, no theorem. The early return is a Step fold of Maybe (Stop{Some{v}}), then a match "
         "on the fold's value; the comprehension is a recursive helper, head first. The translation rests on the "
         "primitive contracts (re.search/m.group = Py.search/Py.group on Base's Regex, splitlines, split, strip, "
         "the slices), assumed like SOUNDNESS.md A3 and only tested here; group 1 is granted because the kernel "
         "reads it off the parsed pattern. The source has no doctests, so no law is stated for it.",
+    },
+    # T4: a module, not a def. No ~4-def acyclic chain of fragment constructs exists in llm-wiki
+    # (surveyed by ast: the candidates want dicts, isinstance, Path, subprocess, sqlite3 or sets),
+    # so this is the labeled composite the plan allows: two pinned real defs, each judged on its
+    # own above, and a caller written here. `module` names the parts; the caller is the top of the
+    # chain and every fixture goes through it. Both calls are real: `fm_sources` as the
+    # comprehension's iterable (list[str]) and `normalize_stem` inside its body (str).
+    "source_stems": {
+        "module": ["fm_sources", "normalize_stem"],
+        "caller": "def source_stems(text: str) -> list[str]:\n    return [normalize_stem(s) for s in fm_sources(text)]\n",
+        "sig": "import re\ndef fm_sources(text: str) -> list[str]:\n    pass\n",
+        "builtins": {"str": str, "list": list},
+        "globals": {"re": re},
+        "wrong": ("normalize_stem(s)", "s", "the comprehension that calls nothing"),
+        "examples": [
+            (("---\nsources: [a, b]\n---\nbody",), ["a", "b"]),
+            (('---\ntitle: t\nsources: ["x", "y"]\n---\n',), ["x", "y"]),
+            (("---\nsources: Hello World\n---",), ["hello-world"]),
+            (('---\nsources: ["A B", "  C  "]\n---',), ["a-b", "c"]),
+            (("---\nsources: one\n---",), ["one"]),
+            (("---\ntitle: t\n---",), []),
+            (("no frontmatter",), []),
+            (("---\nsources: []\n---",), [""]),
+            (("---\nsources:\n---",), [""]),
+        ],
+        "edges": [
+            *DEMOS_FM_EDGES,
+            "---\nsources: A B\n---",  # the caller's own work: both calls on one item
+            "---\nsources: [ A B , C D ]\n---",
+            "---\nsources:  \n---",
+            "---\nsources: -\n---",
+        ],
+        "generate": fm_text,
+        "c3": "tested fragment, no theorem. The module is the claim: two calls between three defs, ranked by the "
+        "kernel (a callee is granted only against the defs it has already accepted, so the rank is the list "
+        "position and a cycle cannot be stated). Each call is the plain Bend call; the parts' own contracts are "
+        "unchanged and were judged apart above. The caller is written in this file and labeled, not mined: it "
+        "carries no reviewed source, so nothing is assumed of it beyond what the fragment already grants.",
     },
 }
 
@@ -292,6 +334,34 @@ def extract(path, name):
             f"FAIL extract: {len(found)} top-level defs named {name} in {path}"
         )
     return ast.get_source_segment(source, found[0]) + "\n", found[0].lineno, found[0]
+
+
+def pinned(part):
+    """(text, def node) of one reviewed def, with its provenance line and its pin checked."""
+    demo = DEMOS[part]
+    text, line, node = extract(demo["path"], part)
+    digest = hashlib.sha256(text.encode()).hexdigest()
+    print(f"source   {demo['path']}:{line} {part} sha256 {digest[:16]} (ast extraction; module never imported)")
+    if digest != demo["sha256"]:
+        raise SystemExit(
+            f"FAIL source text changed (pinned {demo['sha256'][:16]}): re-review the contract, then re-pin"
+        )
+    imported(demo["path"], demo.get("globals", {}))
+    return text, node
+
+
+def source(name, demo):
+    """(the text to translate, the def the fixtures call). A `module` demo is a labeled composite:
+    every def the caller calls is pinned like any other demo, and the caller itself is written in
+    this file -- it claims no reviewed source, so nothing is assumed of it."""
+    if "module" not in demo:
+        return pinned(name)
+    text = "\n".join([demo["caller"]] + [pinned(part)[0] for part in demo["module"]])
+    print(
+        f"source   tests/translator/judge.py {name} caller written here "
+        f"(labeled composite: {len(demo['module'])} pinned defs + the caller; the module is never imported)"
+    )
+    return text, [n for n in ast.parse(text).body if isinstance(n, ast.FunctionDef) and n.name == name][0]
 
 
 def oracle(text, name, builtins, env):
@@ -529,7 +599,7 @@ def emit(tool, work, name, demo, text):
         f"demos/python/{tool}.bend",
         env={
             "PY_SOURCE": str(work / f"{name}.py"),
-            "PY_DEF": name,
+            "PY_DEF": "" if "module" in demo else name,  # empty: the whole module, every top-level def
             **({"PY_SIG": str(work / "sig.py")} if "sig" in demo else {}),
         },
     )
@@ -537,19 +607,11 @@ def emit(tool, work, name, demo, text):
 
 def judge(name, show):
     demo = DEMOS[name]
-    text, line, node = extract(demo["path"], name)
-    sig_node = [n for n in ast.parse(demo["sig"]).body if isinstance(n, ast.FunctionDef)][0] if "sig" in demo else node
+    text, node = source(name, demo)
+    stub = [n for n in ast.parse(demo.get("sig", "")).body if isinstance(n, ast.FunctionDef) and n.name == name]
+    sig_node = stub[0] if stub else node
     ret = bend_type(sig_node.returns)
     maybe = ret.startswith("Maybe")
-    digest = hashlib.sha256(text.encode()).hexdigest()
-    print(
-        f"source   {demo['path']}:{line} {name} sha256 {digest[:16]} (ast extraction; module never imported)"
-    )
-    if digest != demo["sha256"]:
-        raise SystemExit(
-            f"FAIL source text changed (pinned {demo['sha256'][:16]}): re-review the contract, then re-pin"
-        )
-    imported(demo["path"], demo.get("globals", {}))
     fn = oracle(text, name, demo["builtins"], demo.get("globals", {}))
     laws, skipped = doctest_laws(name, node, sig_node)
     bad = [(i, fn(*i), o) for i, o in demo["examples"] + laws if fn(*i) != o]

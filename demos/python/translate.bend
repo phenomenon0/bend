@@ -1891,8 +1891,9 @@ def titles(fs: List<&2, Fn>, lead: String) -> String:
       lead ++ "`" ++ name ++ "` " ++ Lint.span(loc) ++ titles(t, ", ")
 
 # Line 1 a comment, line 2 the import, line 4 the first def: prelude, then the
-# defs in the kernel's rank order (callees first; Bend defs are order-free, so
-# the file need not follow the Python source's order); then the span map.
+# defs in the kernel's rank order, then the span map. Callees first is not a
+# preference: a Bend def may not name a def written below it, so the rank is
+# what makes the emitted file resolve at all, whatever order the Python had.
 def render_all(+fs: List<&2, Fn>, cs: List<&2, Contract>) -> String:
   +ds = all_defs(fs)
   +pre = prelude(cs, code(ds))
