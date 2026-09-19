@@ -38,6 +38,20 @@ The expected code points preserve the BOM and NUL and replace each ill-formed
 byte individually. The runtime probe additionally checks C and JS against an
 independent Python strict-decoding oracle on 517 byte vectors.
 
+`io_stream.bend` reads the same fixture, and a written corpus with 2-, 3- and
+4-byte scalars, through `File.read_text` at chunk sizes 1, 2, 3, 7 and 4096.
+Every line must equal the whole-file `File.read` line: a `Utf8.Dec` carries a
+scalar cut by a chunk boundary (3 bytes at most) into the next read, and the
+0-byte read at the end of the file replaces a carry left over and answers
+`need = 4` (`Utf8.Dec.eof`). `File.read` itself still decodes each chunk alone.
+A consumer token cut by a boundary is the consumer's to carry: keep the
+unfinished tail and append the next chunk, and `String.copy` a tail much
+shorter than its chunk, since a view pins the whole chunk's payload. The
+runtime probe checks the partition law (every partition of a byte string
+decodes to `io_str` of the whole) exhaustively over strings of up to 4 bytes
+from a 12-byte alphabet, on 2,000 random strings and on `utf8.bin` at every
+split, in C under ASan with zero live and in JS.
+
 `runtime.py` emits a fresh C/JS runtime into a temporary directory. The C probe
 runs under ASan/UBSan and instruments Corpus allocations (ASan cannot detect
 intra-Corpus frees by itself). It checks descriptor/payload ownership, static
