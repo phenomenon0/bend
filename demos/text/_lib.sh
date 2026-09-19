@@ -14,5 +14,5 @@ build() { # build NAME: demos/text/NAME.bend -> $BIN/NAME (C lane)
 timed() { # timed CMD...: run it, then print measured wall time and peak RSS
   /usr/bin/time -v -o "$BIN/time.txt" "$@"
   awk -F': ' '/Elapsed/ {w=$2} /Maximum resident/ {r=$2}
-    END {printf "  => wall %s, peak RSS %.0f MB\n", w, r/1024}' "$BIN/time.txt"
+    END {printf "  => wall %s, peak RSS %.0f MB\n", w, r/1024}' "$BIN/time.txt" >&2
 }
