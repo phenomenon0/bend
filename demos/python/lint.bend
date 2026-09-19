@@ -3,8 +3,9 @@
 # every condition from the actual AST and contracts; a witness only supplies
 # call ranks. `analyze` is untrusted search in front of it. See SOUNDNESS.md.
 # L2: the ownership fragment O0 (`own`, the same kernel) and the alias/effect
-# advisories (`alias`). Coverage (finite match domains) is lane L3; module
-# summaries are L4.
+# advisories (`alias`). L3: finite-domain match coverage M0 (`exhaustive`,
+# `dead_case`, the same recompute-don't-trust discipline; `coverage` searches).
+# Module summaries are L4.
 import Base
 import ./syntax.bend as S
 import ./nodes.bend as N
@@ -829,3 +830,503 @@ def alias(+m: S.Module, +cs: List<&2, Contract>) -> List<&2, Diag>:
 def grade_of(d: Diag) -> String:
   Diag{loc, rule, g, msg} = d
   grade(g)
+
+# ---- L3: finite-domain match coverage (M0) ----
+
+# A coverage witness entry, keyed by the match's "line:col"; cases count from
+# 0. It never carries the domain: the kernel recomputes that from the AST.
+type Claim is Data:
+  Covers{here: String, value: String, arm: Nat}
+  Miss{here: String, value: String}
+  Dead{here: String, arm: Nat}
+
+# A match with its recomputed domain; `why` is "" iff it is in M0.
+type Site is Data:
+  Site{loc: S.Json, dom: List<&2, String>, cases: S.Json, why: String}
+
+# How often `x` is bound under `j`: a string under any key that can name a
+# binder (arg, name, asname, names, rest, ...), a Name stored or deleted, or a
+# star import (it may bind anything).
+def binders(j: S.Json, +key: String, +x: String) -> Nat:
+  match j:
+    case S.JObj{+fs}:
+      name = String.eq(N.string(N.get(fs, "tag")), "Name") && String.eq(N.string(N.get(fs, "id")), x) &&
+        Bool.not(String.eq(tag_of(N.get(fs, "ctx")), "Load"))
+      Nat.add(Bool.pick(Nat, name, 1n, 0n), binders(fs, "", x))
+    case S.JField{k, value, rest}:
+      Nat.add(binders(value, k, x), binders(rest, key, x))
+    case S.JArr{xs}:
+      binders(xs, key, x)
+    case S.JItem{h, t}:
+      Nat.add(binders(h, key, x), binders(t, key, x))
+    case S.JStr{+s}:
+      Bool.pick(Nat, (String.eq(s, x) && Bool.not(has(["tag", "id", "attr", "_raw", "kind", "type_comment"], key))) ||
+        (String.eq(s, "*") && String.eq(key, "name")), 1n, 0n)
+    case _:
+      0n
+
+# A string body that is its own repr: printable ASCII, no backslash or quote.
+def bare(s: String) -> Bool:
+  match s:
+    case SNil{}:
+      True{}
+    case SCon{h, t}:
+      +n = Char.to_u32(h)
+      U32.is_ge(n, 32) && U32.is_le(n, 126) && Bool.not(U32.is_eq(n, 92) || U32.is_eq(n, 34) || U32.is_eq(n, 39)) && bare(t)
+
+def digits(s: String) -> Bool:
+  match s:
+    case SNil{}:
+      True{}
+    case SCon{h, t}:
+      +n = Char.to_u32(h)
+      U32.is_ge(n, 48) && U32.is_le(n, 57) && digits(t)
+
+# A decimal int literal already in repr form: no sign, underscore or leading 0.
+def decimal(+s: String) -> Bool:
+  Bool.not(String.is_empty(s)) && digits(s) && (String.eq(s, "0") || Bool.not(String.starts_with(s, "0")))
+
+# Python's repr of a literal M0 admits, else "": True, False, None, a decimal
+# int, or a '...'/"..." string with a bare body (its repr is '<body>').
+def canon(+s: String) -> String:
+  +body = String.drop(String.drop_end(s, 1n), 1n)
+  quoted = Nat.is_lt(1n, String.length(s)) && bare(body) &&
+    ((String.starts_with(s, "'") && String.ends_with(s, "'")) || (String.starts_with(s, "\"") && String.ends_with(s, "\"")))
+  S.choose(String, has(["True", "False", "None"], s) || decimal(s), u => s, u =>
+    S.choose(String, quoted, u => "'" ++ body ++ "'", u => ""))
+
+# The value of a literal node: a Constant, or -n on a decimal n (-0 is 0).
+def elt(+j: S.Json) -> String:
+  +op = field(j, "operand")
+  +n = String.trim(N.string(field(op, "_raw")))
+  S.choose(String, String.eq(tag_of(j), "Constant"), u => canon(String.trim(N.string(field(j, "_raw")))), u =>
+    S.choose(String, String.eq(tag_of(j), "UnaryOp") && String.eq(tag_of(field(j, "op")), "USub") && String.eq(tag_of(op), "Constant") && decimal(n), u =>
+      S.choose(String, String.eq(n, "0"), u => "0", u => "-" ++ n), u => ""))
+
+def each(xs: S.Json) -> List<&2, String>:
+  match xs:
+    case S.JItem{h, t}:
+      elt(h) <> each(t)
+    case _:
+      []
+
+# The finite domain an annotation pins under A1, in annotation order; "" marks
+# a part it cannot pin. `bl`/`lit`: bool and Literal are the builtin and
+# typing.Literal in this module.
+def domain(j: S.Json, +bl: Bool, +lit: Bool) -> List<&2, String>:
+  match j:
+    case S.JObj{+fs}:
+      +tag = N.string(N.get(fs, "tag"))
+      +v = N.get(fs, "value")
+      +s = N.get(fs, "slice")
+      S.choose(List<&2, String>, String.eq(tag, "Name"), u =>
+        S.choose(List<&2, String>, bl && String.eq(N.string(N.get(fs, "id")), "bool"), u => ["True", "False"], u => [""]), u =>
+        S.choose(List<&2, String>, String.eq(tag, "Constant"), u =>
+          [S.choose(String, String.eq(String.trim(N.string(N.get(fs, "_raw"))), "None"), u => "None", u => "")], u =>
+          S.choose(List<&2, String>, String.eq(tag, "BinOp") && String.eq(tag_of(N.get(fs, "op")), "BitOr"), u => domain(fs, bl, lit), u =>
+            S.choose(List<&2, String>, String.eq(tag, "Subscript") && lit && String.eq(tag_of(v), "Name") && String.eq(N.string(field(v, "id")), "Literal"), u =>
+              S.choose(List<&2, String>, String.eq(tag_of(s), "Tuple"), u => each(items(field(s, "elts"))), u => [elt(s)]), u => [""]))))
+    case S.JField{key, value, +rest}:
+      S.choose(List<&2, String>, has(["left", "right"], key), u => List.append(&2, String, domain(value, bl, lit), domain(rest, bl, lit)), u =>
+        domain(rest, bl, lit))
+    case _:
+      []
+
+def single(j: S.Json) -> String:
+  match j:
+    case S.JBool{b}:
+      Bool.pick(String, b, "True", "False")
+    case _:
+      "None"
+
+# Python's == on domain values: True == 1 and False == 0; otherwise equal iff
+# the reprs are (a str never equals an int).
+def eqv(+v: String) -> String:
+  S.choose(String, String.eq(v, "True"), u => "1", u => S.choose(String, String.eq(v, "False"), u => "0", u => v))
+
+# Does the M0 pattern `j` match `v`? Singletons by identity, values by ==.
+def hits(j: S.Json, +v: String) -> Bool:
+  match j:
+    case S.JObj{+fs}:
+      +tag = N.string(N.get(fs, "tag"))
+      S.choose(Bool, String.eq(tag, "MatchSingleton"), u => String.eq(single(N.get(fs, "value")), v), u =>
+        S.choose(Bool, String.eq(tag, "MatchValue"), u => String.eq(eqv(elt(N.get(fs, "value"))), eqv(v)), u =>
+          (String.eq(tag, "MatchAs") && is_null(N.get(fs, "pattern"))) || hits(fs, v)))
+    case S.JField{key, value, +rest}:
+      S.choose(Bool, has(["pattern", "patterns"], key), u => hits(value, v), u => hits(rest, v))
+    case S.JArr{xs}:
+      hits(xs, v)
+    case S.JItem{h, t}:
+      hits(h, v) || hits(t, v)
+    case _:
+      False{}
+
+# "" iff pattern `j` is in M0: a singleton, a literal value, a capture or
+# wildcard, as- and or-patterns over those; else the first offender.
+def pat_why(j: S.Json) -> String:
+  match j:
+    case S.JObj{+fs}:
+      +tag = N.string(N.get(fs, "tag"))
+      S.choose(String, String.eq(tag, "MatchSingleton") || (String.eq(tag, "MatchValue") && Bool.not(String.is_empty(elt(N.get(fs, "value"))))), u => "", u =>
+        S.choose(String, has(["MatchAs", "MatchOr"], tag), u => pat_why(fs), u => "pattern " ++ tag ++ at(N.get(fs, "_loc")) ++ " is outside M0"))
+    case S.JField{key, value, rest}:
+      +a = pat_why(value)
+      S.choose(String, String.is_empty(a), u => pat_why(rest), u => a)
+    case S.JArr{xs}:
+      pat_why(xs)
+    case S.JItem{h, t}:
+      +a = pat_why(h)
+      S.choose(String, String.is_empty(a), u => pat_why(t), u => a)
+    case _:
+      ""
+
+def arms_why(xs: S.Json) -> String:
+  match xs:
+    case S.JItem{h, t}:
+      +a = pat_why(field(h, "pattern"))
+      S.choose(String, String.is_empty(a), u => arms_why(t), u => a)
+    case _:
+      ""
+
+def param(xs: S.Json, +x: String) -> S.Json:
+  match xs:
+    case S.JItem{+h, t}:
+      S.choose(S.Json, String.eq(N.string(field(h, "arg")), x), u => h, u => param(t, x))
+    case _:
+      S.JNull{}
+
+def spot(+loc: S.Json) -> String:
+  Nat.show(line(loc)) ++ ":" ++ Nat.show(col(loc))
+
+# M0 membership of one match, recomputed: the subject is a parameter of the
+# innermost def `f`, which has no defaults and binds it nowhere else; its
+# annotation pins a finite domain; every case pattern is in M0.
+def site(+fs: S.Json, +f: S.Json, +bl: Bool, +lit: Bool) -> Site:
+  +s = N.get(fs, "subject")
+  +x = N.string(field(s, "id"))
+  +a = field(f, "args")
+  +p = param(items(field(a, "args")), x)
+  +d = domain(field(p, "annotation"), bl, lit)
+  +cases = N.get(fs, "cases")
+  why = S.choose(String, Bool.not(String.eq(tag_of(s), "Name")), u => "the subject is not a name", u =>
+    S.choose(String, is_null(p), u => x ++ " is not a parameter of the enclosing def", u =>
+      S.choose(String, Bool.not(is_empty(field(a, "defaults"))), u => "the def has parameter defaults", u =>
+        S.choose(String, Bool.not(Nat.is_eq(binders(f, "", x), 1n)), u => x ++ " is rebound in the def", u =>
+          S.choose(String, has(d, "") || Nat.is_eq(List.length(&2, String, d), 0n), u => "the annotation of " ++ x ++ " pins no finite domain", u =>
+            arms_why(items(cases)))))))
+  Site{N.get(fs, "_loc"), d, cases, why}
+
+# Every match under `j`; `f` is the innermost enclosing def (JNull at module
+# level or in a class).
+def sites(j: S.Json, +f: S.Json, +bl: Bool, +lit: Bool) -> List<&2, Site>:
+  match j:
+    case S.JObj{+fs}:
+      +tag = N.string(N.get(fs, "tag"))
+      +g = S.choose(S.Json, String.eq(tag, "FunctionDef"), u => S.JObj{fs}, u =>
+        S.choose(S.Json, has(["ClassDef", "AsyncFunctionDef"], tag), u => S.JNull{}, u => f))
+      List.append(&2, Site, S.choose(List<&2, Site>, String.eq(tag, "Match"), u => [site(fs, f, bl, lit)], u => []), sites(fs, g, bl, lit))
+    case S.JField{key, value, rest}:
+      List.append(&2, Site, sites(value, f, bl, lit), sites(rest, f, bl, lit))
+    case S.JArr{xs}:
+      sites(xs, f, bl, lit)
+    case S.JItem{h, t}:
+      List.append(&2, Site, sites(h, f, bl, lit), sites(t, f, bl, lit))
+    case _:
+      []
+
+def literal_alias(xs: S.Json) -> Bool:
+  match xs:
+    case S.JItem{+h, t}:
+      (String.eq(N.string(field(h, "name")), "Literal") && is_null(field(h, "asname"))) || literal_alias(t)
+    case _:
+      False{}
+
+def level0(j: S.Json) -> Bool:
+  match j:
+    case S.JNum{n}:
+      Nat.is_eq(n, 0n)
+    case _:
+      False{}
+
+def typing_literal(xs: S.Json) -> Bool:
+  match xs:
+    case S.JItem{+h, t}:
+      (String.eq(tag_of(h), "ImportFrom") && String.eq(N.string(field(h, "module")), "typing") && level0(field(h, "level")) &&
+        literal_alias(items(field(h, "names")))) || typing_literal(t)
+    case _:
+      False{}
+
+# bool is the builtin iff nothing in the module binds it; Literal is
+# typing.Literal iff a top-level `from typing import Literal` is its only binder.
+def module_sites(m: S.Module) -> List<&2, Site>:
+  S.Module{+body} = m
+  sites(body, S.JNull{}, Nat.is_eq(binders(body, "", "bool"), 0n), Nat.is_eq(binders(body, "", "Literal"), 1n) && typing_literal(body))
+
+def find_site(ss: List<&2, Site>, +here: String) -> Maybe<&2, Site>:
+  match ss:
+    case Nil{}:
+      None{}
+    case Site{+loc, dom, cases, why} <> t:
+      S.choose(Maybe<&2, Site>, String.eq(spot(loc), here), u => Some{Site{loc, dom, cases, why}}, u => find_site(t, here))
+
+def site_of(+m: S.Module, +here: String) -> Site:
+  Maybe.default(&2, Site, find_site(module_sites(m), here), Site{S.JNull{}, [], S.JEnd{}, "no match statement there"})
+
+def loc_of(s: Site) -> S.Json:
+  Site{loc, d, cases, why} = s
+  loc
+
+def dom_of(s: Site) -> List<&2, String>:
+  Site{loc, d, cases, why} = s
+  d
+
+def cases_of(s: Site) -> S.Json:
+  Site{loc, d, cases, why} = s
+  cases
+
+def nth(n: Nat, xs: S.Json) -> S.Json:
+  match n:
+    case 0n:
+      first(xs)
+    case 1n+p:
+      match xs:
+        case S.JItem{h, t}:
+          nth(p, t)
+        case _:
+          S.JNull{}
+
+# The first case from number `i` whose pattern matches `v` (only unguarded
+# cases when `strict`).
+def first_arm(xs: S.Json, +v: String, +i: Nat, +strict: Bool) -> Maybe<&2, Nat>:
+  match xs:
+    case S.JItem{+h, t}:
+      S.choose(Maybe<&2, Nat>, hits(field(h, "pattern"), v) && (Bool.not(strict) || is_null(field(h, "guard"))), u => Some{i}, u =>
+        first_arm(t, v, 1n+i, strict))
+    case _:
+      None{}
+
+# "" iff case `k` (number `n`) matches no value of `d` that an earlier
+# unguarded case does not catch first.
+def dead_why(d: List<&2, String>, +cases: S.Json, +n: Nat, +k: S.Json) -> String:
+  match d:
+    case Nil{}:
+      ""
+    case +v <> t:
+      +j = Maybe.default(&2, Nat, first_arm(items(cases), v, 0n, True{}), n)
+      S.choose(String, Bool.not(hits(field(k, "pattern"), v)) || Nat.is_lt(j, n), u => dead_why(t, cases, n, k), u =>
+        v ++ " reaches case " ++ Nat.show(n))
+
+# "" iff the claim holds of its match's recomputed domain and cases.
+def claim_why(c: Claim, +d: List<&2, String>, +cases: S.Json) -> String:
+  match c:
+    case Covers{here, +v, +n}:
+      +k = nth(n, items(cases))
+      S.choose(String, Bool.not(has(d, v)), u => v ++ " is not in the domain", u =>
+        S.choose(String, is_null(k), u => "no case " ++ Nat.show(n), u =>
+          S.choose(String, Bool.not(is_null(field(k, "guard"))), u => "case " ++ Nat.show(n) ++ " is guarded", u =>
+            S.choose(String, hits(field(k, "pattern"), v), u => "", u => "case " ++ Nat.show(n) ++ " does not match " ++ v))))
+    case Miss{here, +v}:
+      +j = first_arm(items(cases), v, 0n, False{})
+      S.choose(String, Bool.not(has(d, v)), u => v ++ " is not in the domain", u =>
+        S.choose(String, Maybe.is_none(&2, Nat, j), u => "", u => "case " ++ Nat.show(Maybe.default(&2, Nat, j, 0n)) ++ " matches " ++ v))
+    case Dead{here, +n}:
+      +k = nth(n, items(cases))
+      S.choose(String, is_null(k), u => "no case " ++ Nat.show(n), u => dead_why(d, cases, n, k))
+
+def at_of(c: Claim) -> String:
+  match c:
+    case Covers{here, v, n}:
+      here
+    case Miss{here, v}:
+      here
+    case Dead{here, n}:
+      here
+
+def check(+c: Claim, s: Maybe<&2, Site>) -> String:
+  match s:
+    case None{}:
+      "no match statement there"
+    case Some{Site{loc, d, cases, +why}}:
+      S.choose(String, String.is_empty(why), u => claim_why(c, d, cases), u => why)
+
+# "" iff every claim holds of the match it names, M0 membership included,
+# all recomputed from the AST: one bad claim refutes the whole witness.
+def certify(w: List<&2, Claim>, +ss: List<&2, Site>) -> String:
+  match w:
+    case Nil{}:
+      ""
+    case +c <> t:
+      +why = check(c, find_site(ss, at_of(c)))
+      S.choose(String, String.is_empty(why), u => certify(t, ss), u => "claim at " ++ at_of(c) ++ ": " ++ why)
+
+def mine(w: List<&2, Claim>, +here: String) -> List<&2, Claim>:
+  match w:
+    case Nil{}:
+      []
+    case +c <> t:
+      List.append(&2, Claim, S.choose(List<&2, Claim>, String.eq(at_of(c), here), u => [c], u => []), mine(t, here))
+
+def missed(cs: List<&2, Claim>) -> String:
+  match cs:
+    case Nil{}:
+      ""
+    case Miss{here, v} <> t:
+      v
+    case Covers{here, v, n} <> t:
+      missed(t)
+    case Dead{here, n} <> t:
+      missed(t)
+
+def covered(cs: List<&2, Claim>, +v: String) -> Bool:
+  match cs:
+    case Nil{}:
+      False{}
+    case Covers{here, x, n} <> t:
+      String.eq(x, v) || covered(t, v)
+    case Miss{here, x} <> t:
+      covered(t, v)
+    case Dead{here, n} <> t:
+      covered(t, v)
+
+def uncovered(d: List<&2, String>, +cs: List<&2, Claim>) -> String:
+  match d:
+    case Nil{}:
+      ""
+    case +v <> t:
+      S.choose(String, covered(cs, v), u => uncovered(t, cs), u => v)
+
+def braces(d: List<&2, String>) -> String:
+  "{" ++ String.join(d, ", ") ++ "}"
+
+def cover(claims: List<&2, Claim>, +m: S.Module, +w: List<&2, Claim>, +here: String) -> Diag:
+  match claims:
+    case Nil{}:
+      Diag{loc_of(site_of(m, here)), "exhaustive", Unknown{}, "no certificate"}
+    case +h <> +t:
+      +s = site_of(m, here)
+      +loc = loc_of(s)
+      +d = dom_of(s)
+      +why = certify(w, module_sites(m))
+      +miss = missed(h <> t)
+      +gap = uncovered(d, h <> t)
+      S.choose(Diag, Bool.not(String.is_empty(why)), u => Diag{loc, "exhaustive", Refuted{}, "certificate refuted: " ++ why}, u =>
+        S.choose(Diag, Bool.not(String.is_empty(miss)), u => Diag{loc, "exhaustive", Refuted{}, "not exhaustive: " ++ miss ++ " matches no case"}, u =>
+          S.choose(Diag, String.is_empty(gap), u => Diag{loc, "exhaustive", Proven{}, "every value of " ++ braces(d) ++ " reaches an unguarded case"}, u =>
+            Diag{loc, "exhaustive", Refuted{}, "certificate refuted: no case claimed for " ++ gap})))
+
+# Kernel entry: is match `here` ("line:col") exhaustive under witness `w`? Its
+# claims are consulted first, so none means no proof (the law below).
+def exhaustive(+m: S.Module, +w: List<&2, Claim>, +here: String) -> Diag:
+  cover(mine(w, here), m, w, here)
+
+def claims_dead(w: List<&2, Claim>, +here: String, +n: Nat) -> Bool:
+  match w:
+    case Nil{}:
+      False{}
+    case Dead{a, k} <> t:
+      (String.eq(a, here) && Nat.is_eq(k, n)) || claims_dead(t, here, n)
+    case Covers{a, v, k} <> t:
+      claims_dead(t, here, n)
+    case Miss{a, v} <> t:
+      claims_dead(t, here, n)
+
+def arm_loc(+m: S.Module, +here: String, +n: Nat) -> S.Json:
+  field(field(nth(n, items(cases_of(site_of(m, here)))), "pattern"), "_loc")
+
+def unreached(c: Bool, +m: S.Module, +w: List<&2, Claim>, +here: String, +n: Nat) -> Diag:
+  match c:
+    case False{}:
+      Diag{arm_loc(m, here, n), "dead-case", Unknown{}, "no certificate"}
+    case True{}:
+      d = dom_of(site_of(m, here))
+      +why = certify(w, module_sites(m))
+      S.choose(Diag, String.is_empty(why), u => Diag{arm_loc(m, here, n), "dead-case", Proven{}, "no value of " ++ braces(d) ++ " reaches this case"}, u =>
+        Diag{arm_loc(m, here, n), "dead-case", Refuted{}, "certificate refuted: " ++ why})
+
+# Kernel entry: is case `n` of match `here` dead under witness `w`?
+def dead_case(+m: S.Module, +w: List<&2, Claim>, +here: String, +n: Nat) -> Diag:
+  unreached(claims_dead(w, here, n), m, w, here, n)
+
+law no_certificate_no_coverage:
+  for +m: S.Module
+  for +here: String
+  {is_proven(exhaustive(m, Nil{}, here)) == False{} : Bool}
+
+def no_certificate_no_coverage(m, here):
+  {==}
+
+law no_certificate_no_dead_case:
+  for +m: S.Module
+  for +here: String
+  for +n: Nat
+  {is_proven(dead_case(m, Nil{}, here, n)) == False{} : Bool}
+
+def no_certificate_no_dead_case(m, here, n):
+  {==}
+
+# ---- L3 analyze: untrusted claim search, then the kernel ----
+
+# Per value: the first unguarded case that matches it, else Miss if no case
+# matches it at all; a value only guarded cases match gets no claim.
+def search(d: List<&2, String>, +here: String, +cases: S.Json) -> List<&2, Claim>:
+  match d:
+    case Nil{}:
+      []
+    case +v <> t:
+      +j = first_arm(items(cases), v, 0n, True{})
+      c = S.choose(List<&2, Claim>, Maybe.is_some(&2, Nat, j), u => [Covers{here, v, Maybe.default(&2, Nat, j, 0n)}], u =>
+        S.choose(List<&2, Claim>, Maybe.is_none(&2, Nat, first_arm(items(cases), v, 0n, False{})), u => [Miss{here, v}], u => []))
+      List.append(&2, Claim, c, search(t, here, cases))
+
+def deads(xs: S.Json, +d: List<&2, String>, +here: String, +cases: S.Json, +n: Nat) -> List<&2, Claim>:
+  match xs:
+    case S.JItem{h, t}:
+      List.append(&2, Claim, S.choose(List<&2, Claim>, String.is_empty(dead_why(d, cases, n, h)), u => [Dead{here, n}], u => []),
+        deads(t, d, here, cases, 1n+n))
+    case _:
+      []
+
+def witness(ss: List<&2, Site>) -> List<&2, Claim>:
+  match ss:
+    case Nil{}:
+      []
+    case Site{+loc, +d, +cases, +why} <> t:
+      +here = spot(loc)
+      List.append(&2, Claim, S.choose(List<&2, Claim>, String.is_empty(why), u =>
+        List.append(&2, Claim, search(d, here, cases), deads(items(cases), d, here, cases, 0n)), u => []), witness(t))
+
+def only_guarded(d: List<&2, String>, +cases: S.Json) -> String:
+  match d:
+    case Nil{}:
+      ""
+    case +v <> t:
+      S.choose(String, Maybe.is_none(&2, Nat, first_arm(items(cases), v, 0n, True{})) &&
+        Maybe.is_some(&2, Nat, first_arm(items(cases), v, 0n, False{})), u => v, u => only_guarded(t, cases))
+
+def dead_diags(cs: List<&2, Claim>, +m: S.Module, +w: List<&2, Claim>) -> List<&2, Diag>:
+  match cs:
+    case Nil{}:
+      []
+    case Dead{here, n} <> t:
+      dead_case(m, w, here, n) <> dead_diags(t, m, w)
+    case Covers{here, v, n} <> t:
+      dead_diags(t, m, w)
+    case Miss{here, v} <> t:
+      dead_diags(t, m, w)
+
+def verdicts(ss: List<&2, Site>, +m: S.Module, +w: List<&2, Claim>) -> List<&2, Diag>:
+  match ss:
+    case Nil{}:
+      []
+    case Site{+loc, +d, +cases, +why} <> t:
+      +here = spot(loc)
+      +g = only_guarded(d, cases)
+      e = S.choose(Diag, Bool.not(String.is_empty(why)), u => Diag{loc, "exhaustive", Unknown{}, why}, u =>
+        S.choose(Diag, Bool.not(String.is_empty(g)) && String.is_empty(missed(mine(w, here))), u =>
+          Diag{loc, "exhaustive", Unknown{}, g ++ " reaches only guarded cases"}, u => exhaustive(m, w, here)))
+      e <> List.append(&2, Diag, dead_diags(mine(w, here), m, w), verdicts(t, m, w))
+
+# `exhaustive` per match and `dead-case` per dead case, through the kernel.
+def coverage(+m: S.Module) -> List<&2, Diag>:
+  +ss = module_sites(m)
+  List.sort(~Diag, ~le, verdicts(ss, m, witness(ss)))

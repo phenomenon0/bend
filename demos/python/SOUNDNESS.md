@@ -5,7 +5,7 @@
 | grade | meaning |
 |---|---|
 | `Proven` | the kernel recomputed every condition of the rule's fragment from the actual AST and contracts, and they hold; the guarantee below then follows **under the listed assumptions**, with the theorem status in the last column |
-| `Refuted` | a certificate was offered and recomputation contradicts it. The *certificate* is refuted; the property itself stays Unknown |
+| `Refuted` | a certificate was offered and recomputation contradicts it. The *certificate* is refuted; the property itself stays Unknown. One exception: `exhaustive Refuted not exhaustive: v` refutes the property itself, by a counterexample the kernel recomputed (M0) |
 | `Unknown` | outside the fragment, unresolved, or no certificate. No claim either way |
 | `Advisory` | a note that needs no proof and carries none |
 
@@ -13,7 +13,8 @@ A certificate (witness) is forgeable data. `Lint.verify(ast, contracts, witness,
 of it: the witness supplies only a rank per function; fragment membership, binding and call
 resolution, contract grants and the rank inequalities are all recomputed (`certificate`).
 `Lint.analyze` is untrusted search: whatever it infers goes through the same kernel before a
-`Proven` is printed.
+`Proven` is printed. Coverage is the same: `Lint.coverage` searches, and `Lint.exhaustive` and
+`Lint.dead_case` recompute M0 membership, the domain and every claim before grading.
 
 ## Fragments
 
@@ -25,7 +26,10 @@ resolution, contract grants and the rank inequalities are all recomputed (`certi
 | S0 | `shadowed-builtin` (`Advisory`) | none. A `def`, parameter or `Store` name is spelled like a contracted primitive | — |
 | O0 | `ownership` | under A1–A4 the function satisfies B1–B3 of the **IR ownership boundary** below | argued on paper, not mechanized: a *candidate*, like T0. Evidence: `semantics.py` (arguments equal their deep copies after every generated call) |
 | L0 | `alias-mutation`, `alias-escape`, `param-mutation` (`Advisory`) | none. A reasoned note citing the binding and the later read; neither sound nor complete for Python | — |
-| K0 | law `no_certificate_no_proof` | `is_proven(verify(m, cs, [], name)) == False` for every module, contract list and name | **checked by Bend** (`{==}`, in `lint.bend`). A law about the verifier, not about Python |
+| M0 | `exhaustive` (`Proven`) | under A1–A2, whenever the match runs, some unguarded case matches the subject: no value of the domain D falls through | argued on paper (below), not mechanized. Evidence: `semantics.py` calls every value of D, traced |
+| M0 | `exhaustive` (`Refuted`, `not exhaustive: v`) | v ∈ D, and no case matches v, guarded or not, so a call with v runs no case | the same |
+| M0 | `dead-case` (`Proven`) | the case's body never runs: every value of D fails its pattern or is caught by an earlier unguarded case | the same |
+| K0 | laws `no_certificate_no_proof`, `no_certificate_no_coverage`, `no_certificate_no_dead_case` | `is_proven(verify(m, cs, [], name))`, `is_proven(exhaustive(m, [], here))` and `is_proven(dead_case(m, [], here, n))` are `False` for every input | **checked by Bend** (`{==}`, in `lint.bend`). Laws about the verifier, not about Python |
 
 ## T0 membership (all recomputed by the kernel)
 
@@ -92,14 +96,41 @@ earlier in the same loop, element/attribute-path aliases (`for x in xs`, `b = a.
 tuple targets, keyword/starred arguments, nested scopes (conflated), methods and module-level code.
 **Known noise:** rebinding does not kill an alias; method spelling is not authority.
 
+## M0 membership: the finite-domain boundary (all recomputed by the kernel)
+
+The module need not be closed. A `match` is in M0 when:
+- **Subject:** a name that is a plain positional parameter of the innermost enclosing `def`, the
+  def has no defaults, and nothing else in the def binds the name (store, `del`, capture, walrus,
+  `global`, keyword name: counted conservatively).
+- **Domain D:** the parameter's annotation, in order: `bool` → `True, False`, only if nothing in the
+  module binds `bool`; `None`; `Literal[…]`, only if a top-level `from typing import Literal` is
+  its only binder, with elements `True`/`False`/`None`, decimal ints, `-n`, and str literals of
+  printable ASCII without quote or backslash; `X | Y` concatenates. A star import binds everything.
+  Anything else (`str`, `int`, aliases, `Optional`, empty or nested `Literal`) is Unknown.
+  Why finite: under A1 each admitted annotation has finitely many exact values, and each is named
+  by a literal whose repr the kernel computes without evaluating anything.
+- **Patterns:** `None`/`True`/`False` (identity); a literal in D's syntax (`==`, so `case 1` matches
+  `True`); capture and `_` (irrefutable); `as` and `|` over those. Anything else (class, sequence,
+  mapping, dotted, float) is Unknown. A guarded case never covers and never shadows (its guard
+  may fail), but it may be taken, so it defeats a `Miss` claim.
+
+**Argument (paper).** Python tries cases in order and runs the body of the first case whose pattern
+matches and whose guard is true. By A1 the subject holds some v ∈ D, and nothing rebinds it. The
+kernel decides "pattern p matches v" exactly for M0 patterns and immutable v. So a first unguarded
+case for every v means no fall-through. No case for v means a fall-through. If every v fails p or
+reaches an earlier unguarded case, p's body is dead. A guard that raises ends the match, which
+contradicts none of the three.
+
 ## Assumptions (the trust boundary)
 
 - **A1 exact arguments.** Arguments are exact instances (not subclasses) of the annotated built-in
   types, recursively for list elements, finite, and not mutated by another thread during the call.
-  Python does not enforce annotations; T0 says nothing about other arguments.
+  Python does not enforce annotations; T0 says nothing about other arguments. A `Literal[…]`
+  parameter holds one of the listed values with its exact type (`1`, not `True` or `1.0`).
 - **A2 module state.** The call happens with module globals as they are right after import of the
   closed module (exactly the `def` names) and with CPython's pristine `builtins`. Nobody ran
-  `module.helper = evil` or `builtins.len = evil` in between.
+  `module.helper = evil` or `builtins.len = evil` in between. For M0: `bool` and `Literal` are
+  bound only by the module's syntactic binders (no `exec`, `globals()` or `builtins` writes).
 - **A3 contracts.** Each `Contract{name, arity, pure, total}` is an *assumption about CPython*, not
   something the kernel can check: `len`, `str`, `bool`, `sorted` at arity 1 on U are taken as pure
   and total. The kernel checks only that a call is *granted* by a contract (name unshadowed, arity,
@@ -113,10 +144,10 @@ tuple targets, keyword/starred arguments, nested scopes (conflated), methods and
 
 Successful return; resource bounds (a T0 function may build a 2^n-sized string); anything
 concurrent; any argument outside A1; generators/async; classes; recursion (rank/countdown
-certificates are deferred per plan §3); finite-domain `match` coverage (L3); cross-module summaries (L4);
-ownership certificates for mutating code.
+certificates are deferred per plan §3); `match` coverage outside M0 (decided guards, class/sequence/
+mapping patterns, open domains); cross-module summaries (L4); ownership certificates for mutating code.
 
-## Fixtures per rule (`bash tests/lint/run.sh totality`, `bash tests/lint/run.sh alias`)
+## Fixtures per rule (`bash tests/lint/run.sh totality`, `alias`, `coverage`)
 
 | rule | positive | negative | Unknown |
 |---|---|---|---|
@@ -125,3 +156,5 @@ ownership certificates for mutating code.
 | `shadowed-builtin` | `totality_shadow`: def, parameter, local | `fine` (uses `bool` unshadowed) | — (advisory) |
 | `ownership` | `alias_boundary`: `absent`, `share`, `echo`; `honest` in `alias_forged` | every other witness of `alias_forged` (`Refuted`; `identity` is `total Proven`) | `alias_boundary`: `same`, `caller`, `grows`, `interned`; `no certificate` |
 | L0 advisories | `alias_flag`: plan example, method/store/`+=`, if and IfExp joins, chain, container escape | `alias_safe`: repeated use, immutable reuse, copy, move, fresh join, alias passed to an O0 def | — (advisory) |
+| `exhaustive` | `coverage_proven`, `guarded_dup` in `coverage_missing`, `honest` in `coverage_forged` | `coverage_missing` (`not exhaustive: v`); every other witness of `coverage_forged` (`Refuted`) | `coverage_unknown`, `guarded`, `no certificate`, `elsewhere only` |
+| `dead-case` | `coverage_dead`: duplicate, `True` after `1`, `_` last, outside D, guarded shadow, `w.py` (`_` first); `honest dead` | `live case`, `guarded duplicate`, `bad companion`, `changed dead` (`Refuted`) | `no certificate` |
