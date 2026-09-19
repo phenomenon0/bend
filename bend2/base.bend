@@ -2591,6 +2591,9 @@ def Regex.Ranges() -> Data:
 def Regex.Span() -> Data:
   Sigma<&2, &2, Nat, _ => Nat>
 
+def Regex.Res(T: Data) -> Data:
+  Result<&2, &2, Regex.Error, T>
+
 def Regex.digits() -> Regex.Ranges():
   [(48, 57)]
 
@@ -2656,7 +2659,7 @@ def Regex.parse.Tree() -> Data:
   Result<&2, &2, Regex.Error, Sigma<&2, &2, Re, _ => Nat>>
 
 def Regex.parse.Scan() -> Data:
-  Result<&2, &2, Regex.Error, Regex.Cls>
+  Regex.Res(Regex.Cls)
 
 def Regex.parse.Num() -> Type:
   Nat & Nat & String
@@ -3093,14 +3096,14 @@ def Regex.parse.run(+p: String) -> Regex.parse.Tree():
   +len = String.length(p)
   Regex.parse.pos(len, Regex.parse.go(len, Done{(p, (0n, [Frame{None{}, [], [], 0n}]))}))
 
-def Regex.parse.re(r: Regex.parse.Tree()) -> Result<&2, &2, Regex.Error, Re>:
+def Regex.parse.re(r: Regex.parse.Tree()) -> Regex.Res(Re):
   match r:
     case Fail{e}:
       Fail{e}
     case Done{(re, n)}:
       Done{re}
 
-def Regex.parse(p: String) -> Result<&2, &2, Regex.Error, Re>:
+def Regex.parse(p: String) -> Regex.Res(Re):
   Regex.parse.re(Regex.parse.run(p))
 
 # Flags: (i, (m, s))
@@ -3115,7 +3118,7 @@ def Regex.flags.kind(s: String) -> Nat:
       Regex.parse.index(x, [105, 109, 115], 1n)
 
 # `kind` classifies the head of `f`: 0 unknown, 1 i, 2 m, 3 s
-def Regex.flags(f: String, kind: Nat, fl: Regex.Flags()) -> Result<&2, &2, Regex.Error, Regex.Flags()>:
+def Regex.flags(f: String, kind: Nat, fl: Regex.Flags()) -> Regex.Res(Regex.Flags()):
   match f kind fl:
     case SNil{}, _, fl:
       Done{fl}
@@ -3266,14 +3269,14 @@ def Regex.emit(r: Re, +fl: Regex.Flags(), +pc: Nat) -> List<&2, Inst>:
     case REmpty{}:
       []
 
-def Regex.compile.prog(fl: Regex.Flags(), re: Re, n: Nat, big: Bool) -> Result<&2, &2, Regex.Error, Regex>:
+def Regex.compile.prog(fl: Regex.Flags(), re: Re, n: Nat, big: Bool) -> Regex.Res(Regex):
   match big:
     case True{}:
       Fail{RErr{0n, "program exceeds max_prog"}}
     case False{}:
       Done{Regex{ISave{0n} <> List.append(&2, Inst, Regex.emit(Regex.expand(re), fl, 1n), [ISave{1n}, IMatch{}]), n}}
 
-def Regex.compile.tree(fr: Result<&2, &2, Regex.Error, Regex.Flags()>, t: Regex.parse.Tree()) -> Result<&2, &2, Regex.Error, Regex>:
+def Regex.compile.tree(fr: Regex.Res(Regex.Flags()), t: Regex.parse.Tree()) -> Regex.Res(Regex):
   match fr t:
     case Fail{e} _:
       Fail{e}
@@ -3284,7 +3287,7 @@ def Regex.compile.tree(fr: Result<&2, &2, Regex.Error, Regex.Flags()>, t: Regex.
 
 # Flags: any of `i` (ASCII case fold) `m` (multiline anchors) `s` (dot
 # matches newline), each at most once
-def Regex.compile(p: String, +f: String) -> Result<&2, &2, Regex.Error, Regex>:
+def Regex.compile(p: String, +f: String) -> Regex.Res(Regex):
   Regex.compile.tree(Regex.flags(f, Regex.flags.kind(f), (False{}, (False{}, False{}))), Regex.parse.run(p))
 
 # Reference Pike VM. A thread is a pc and its capture slots; at each
@@ -3620,7 +3623,7 @@ def Regex.scan.matched(ms: List<&2, Match>) -> Nat:
     case Match{a, b, gs} <> t:
       Nat.add(Nat.sub(b, a), Regex.scan.matched(t))
 
-def Regex.scan.paid.if(ms: List<&2, Match>, short: Bool, len: Nat) -> Result<&2, &2, Regex.Error, List<&2, Match>>:
+def Regex.scan.paid.if(ms: List<&2, Match>, short: Bool, len: Nat) -> Regex.Res(List<&2, Match>):
   match short:
     case True{}:
       Fail{RErr{len, "budget exhausted"}}
@@ -3629,7 +3632,7 @@ def Regex.scan.paid.if(ms: List<&2, Match>, short: Bool, len: Nat) -> Result<&2,
 
 # Pays for the output before it is built: `per` for each match, plus one
 # for each unmatched code point when `gaps`
-def Regex.scan.paid(r: Result<&2, &2, Regex.Error, Regex.scan.Out()>, gaps: Bool, per: Nat, +len: Nat) -> Result<&2, &2, Regex.Error, List<&2, Match>>:
+def Regex.scan.paid(r: Result<&2, &2, Regex.Error, Regex.scan.Out()>, gaps: Bool, per: Nat, +len: Nat) -> Regex.Res(List<&2, Match>):
   match r:
     case Fail{e}:
       Fail{e}
@@ -3644,7 +3647,7 @@ def Regex.ngroups(re: Regex) -> Nat:
 
 # Every match as a Match record (Python `findall` gives strings instead);
 # a record costs 1 + ngroups
-def Regex.find_all(+re: Regex, +s: String, limit: U32) -> Result<&2, &2, Regex.Error, List<&2, Match>>:
+def Regex.find_all(+re: Regex, +s: String, limit: U32) -> Regex.Res(List<&2, Match>):
   Regex.scan.paid(Regex.scan(re, s, limit), False{}, 1n+Regex.ngroups(re), String.length(s))
 
 # The unmatched gaps around the matches, empty ones kept
@@ -3655,7 +3658,7 @@ def Regex.split.gaps(ms: List<&2, Match>, +s: String, +prev: Nat) -> List<&2, St
     case Match{a, b, gs} <> t:
       String.slice(s, prev, a) <> Regex.split.gaps(t, s, b)
 
-def Regex.split.fin(r: Result<&2, &2, Regex.Error, List<&2, Match>>, s: String) -> Result<&2, &2, Regex.Error, List<&2, String>>:
+def Regex.split.fin(r: Regex.Res(List<&2, Match>), s: String) -> Regex.Res(List<&2, String>):
   match r:
     case Fail{e}:
       Fail{e}
@@ -3664,10 +3667,10 @@ def Regex.split.fin(r: Result<&2, &2, Regex.Error, List<&2, Match>>, s: String) 
 
 # The gaps only: separators and their groups are left out (Python `split`
 # keeps the groups); an output code point costs 1
-def Regex.split(+re: Regex, +s: String, limit: U32) -> Result<&2, &2, Regex.Error, List<&2, String>>:
+def Regex.split(+re: Regex, +s: String, limit: U32) -> Regex.Res(List<&2, String>):
   Regex.split.fin(Regex.scan.paid(Regex.scan(re, s, limit), True{}, 0n, String.length(s)), s)
 
-def Regex.replace.fin(r: Result<&2, &2, Regex.Error, List<&2, Match>>, s: String, by: String) -> Result<&2, &2, Regex.Error, String>:
+def Regex.replace.fin(r: Regex.Res(List<&2, Match>), s: String, by: String) -> Regex.Res(String):
   match r:
     case Fail{e}:
       Fail{e}
@@ -3675,7 +3678,7 @@ def Regex.replace.fin(r: Result<&2, &2, Regex.Error, List<&2, Match>>, s: String
       Done{String.join(Regex.split.gaps(ms, s, 0n), by)}
 
 # Every match replaced by the literal text `by`; an output code point costs 1
-def Regex.replace(+re: Regex, +s: String, +by: String, limit: U32) -> Result<&2, &2, Regex.Error, String>:
+def Regex.replace(+re: Regex, +s: String, +by: String, limit: U32) -> Regex.Res(String):
   Regex.replace.fin(Regex.scan.paid(Regex.scan(re, s, limit), True{}, String.length(by), String.length(s)), s, by)
 
 # Text
