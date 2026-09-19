@@ -1,0 +1,217 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>strings_tour — live</title>
+<style>
+  :root { --bg:#0d0f12; --panel:#15181d; --line:#242a33; --ink:#e8e6e1; --dim:#8b93a1;
+          --gold:#e0b357; --ok:#7fcf9a; --err:#e07a5f; --mono:ui-monospace,SFMono-Regular,Menlo,monospace; }
+  * { box-sizing:border-box; margin:0; padding:0; }
+  body { background:var(--bg); color:var(--ink); font:16px/1.6 system-ui,-apple-system,sans-serif;
+         padding:28px 16px 64px; }
+  .wrap { max-width:860px; margin:0 auto; }
+  h1 { font-size:26px; letter-spacing:.3px; }
+  h1 small { color:var(--dim); font:13px var(--mono); display:block; margin-top:6px; }
+  section { background:var(--panel); border:1px solid var(--line); border-radius:12px;
+            padding:20px; margin-top:18px; }
+  h2 { font-size:15px; text-transform:uppercase; letter-spacing:.12em; color:var(--gold);
+       margin-bottom:4px; }
+  h2 .live { background:var(--gold); color:#111; font-size:10px; border-radius:99px;
+             padding:1px 8px; vertical-align:2px; margin-left:8px; letter-spacing:.05em; }
+  p.sub { color:var(--dim); font-size:13.5px; margin-bottom:14px; }
+  .rows { font:14px/1.9 var(--mono); }
+  .row { display:flex; align-items:baseline; gap:10px; border-bottom:1px dashed var(--line);
+         padding:6px 0; flex-wrap:wrap; }
+  .row .k { color:var(--dim); flex:1 1 220px; }
+  .row .v { color:var(--ink); font-weight:600; }
+  .info { color:var(--gold); cursor:pointer; user-select:none; font-size:12px;
+          border:1px solid var(--line); border-radius:99px; padding:0 7px; }
+  .note { flex-basis:100%; color:var(--dim); font-size:12.5px; display:none; padding-left:8px; }
+  .note.on { display:block; }
+  .controls { display:flex; gap:14px; align-items:center; flex-wrap:wrap; margin:12px 0; }
+  input[type=range] { flex:1 1 260px; accent-color:var(--gold); height:28px; }
+  button { background:var(--gold); color:#111; border:0; border-radius:8px; padding:9px 16px;
+           font:600 14px system-ui; cursor:pointer; }
+  button:active { transform:translateY(1px); }
+  code, pre { font-family:var(--mono); }
+  pre { background:#0a0c0f; border:1px solid var(--line); border-radius:8px; padding:12px;
+        font-size:12.5px; color:var(--ink);
+        white-space:pre-wrap; word-break:break-word; }
+  th:first-child, td:first-child { white-space:nowrap; }
+  .badge { display:inline-block; font:11px var(--mono); color:var(--dim); border:1px solid var(--line);
+           border-radius:99px; padding:2px 10px; margin-right:6px; }
+  .measured { color:var(--dim); font-size:12.5px; margin-top:10px; }
+  table { width:100%; border-collapse:collapse; font:13px var(--mono); margin-top:8px; }
+  th,td { text-align:left; padding:6px 8px; border-bottom:1px solid var(--line); }
+  th { color:var(--dim); font-weight:400; }
+  .ok { color:var(--ok); } .err { color:var(--err); }
+  a { color:var(--gold); }
+  .slider-val { font:14px var(--mono); color:var(--gold); min-width:66px; display:inline-block; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>strings_tour — live
+  <small>lane-strings-demo · every “live” number below is computed by the tour’s own
+  programs, compiled by our Bend compiler to JavaScript and run in this page’s worker. Nothing here is a mock.</small>
+</h1>
+
+<section>
+  <h2>① Code points are the unit <span class="live">live</span></h2>
+  <p class="sub">The tour’s <code>codepoints.bend</code>, running in your browser right now. Tap the ⓘ for the one-line
+  illustration of where the other string models differ (footnotes, not a scoreboard).</p>
+  <div class="rows" id="cp-rows"><span class="sub">running…</span></div>
+</section>
+
+<section>
+  <h2>② The fuel gauge <span class="live">live · interactive</span></h2>
+  <p class="sub">Drag the bait length — the virtual log is rebuilt and <code>fuel.bend</code> reruns under it, live.
+  The linear pattern’s cost is <em>known before it runs</em>; the quadratic one pays a fixed budget and, when it runs out,
+  says exactly where — no partial answer. Short bait: completes. Long bait: exhausted by the budget.</p>
+  <div class="controls">
+    <span>bait length</span>
+    <input type="range" id="bait" min="16" max="2048" step="16" value="512">
+    <span class="slider-val" id="bait-val">512 a’s</span>
+    <button id="fuel-run">Run</button>
+  </div>
+  <div class="rows" id="fuel-rows"><span class="sub">running…</span></div>
+  <div class="measured" id="fuel-ms"></div>
+</section>
+
+<section>
+  <h2>③ Read once, view forever <span class="badge">measured on the tour</span></h2>
+  <div class="rows">
+    <div class="row"><span class="k">stream the 283 MB log in 64 KiB chunks</span><span class="v">1.9–2.7 s · peak RSS 2,532 KiB</span></div>
+    <div class="row"><span class="k">one whole-file read of the same log</span><span class="v">1.05–1.44 s · 1.3 GB RSS</span></div>
+    <div class="row"><span class="k">1,000,000 scattered slice + parse + check</span><span class="v">118–189 ms · all correct</span></div>
+  </div>
+  <div class="measured">C lane, 283 MB hostile log, under load 8–16, 2026-09-18 · the tour’s <code>views.bend</code> ·
+  reproduce: <code>demos/strings_tour/run_tour.sh</code></div>
+</section>
+
+<section>
+  <h2>④ One line of thread code <span class="badge">measured on the tour</span></h2>
+  <table>
+    <tr><th>--threads</th><th>1</th><th>4</th><th>16</th><th>scaleup</th></tr>
+    <tr><td>fork-join scan</td><td>2.10 s</td><td>0.56 s</td><td>0.33 s</td><td class="ok">6.3×</td></tr>
+    <tr><td>same, shared payload</td><td>3.18 s</td><td>2.07 s</td><td>1.87 s</td><td class="err">1.7× — does not scale</td></tr>
+  </table>
+  <p class="sub" style="margin-top:10px">Every output byte-identical across thread counts and equal to the Python oracle.
+  The second row is the honest counterpoint, kept on purpose. Same binary, only the knob turns.</p>
+</section>
+
+<section>
+  <h2>⑤ The compiler catches it <span class="badge">verbatim rejection</span></h2>
+  <p class="sub">Deliberately consume a string twice — the check happens <em>before anything runs</em>:</p>
+  <pre>$ bend demos/strings_tour/oops.bend
+Error:
+- expected : line
+- observed : line (consumed more than once)
+Location: shout
+6>| def shout(line: String) -> String:
+7 |   String.append(String.to_upper(line), line)</pre>
+</section>
+
+<section>
+  <h2>⑥ GPU appendix <span class="badge">measured · off by default</span></h2>
+  <p class="sub">The whole GPU API is one <code>!</code> — same source, same bytes on the 3090.
+  On this branchy text work the CPU wins (0.47 s vs 1.86 s) and the tour says so out loud.</p>
+</section>
+
+<section>
+  <h2>Honest block</h2>
+  <p class="sub">Case/trim are ASCII-only by design (documented + tested — see ①). Python keeps the full Unicode
+  case crown. And the miss: reading 64 MiB ASCII costs 133 MB RSS (2.03× input) against a 1.5× target — shown as a miss,
+  not a rounding.</p>
+  <p class="sub" style="margin-top:10px">Not a versus: differences live in the footnotes. Artifacts:
+  <code>demos/strings_tour/</code> (selftest 11/11 · repo gate 45/45).</p>
+</section>
+
+<p class="sub" style="margin-top:16px">strings_tour · rendered live from the Bend→JS lane · served from the working machine</p>
+</div>
+
+<script>
+const worker = new Worker("worker.js");
+const pending = new Map();
+worker.onmessage = (e) => { const r = pending.get(e.data.id); if (r) { pending.delete(e.data.id); r(e.data); } };
+function runBend(code, files, env, argv) {
+  return new Promise((res) => {
+    const id = Math.random().toString(36).slice(2);
+    pending.set(id, res);
+    worker.postMessage({ id, code, files: files || {}, env: env || {}, argv: argv || [] });
+  });
+}
+const cache = {};
+async function codeOf(url) {
+  if (!cache[url]) cache[url] = await fetch(url).then((r) => r.text());
+  return cache[url];
+}
+
+// ---- ① codepoints ----
+const FOOTNOTES = [
+  null,
+  "UTF-16 counts 4 here — 😀 is two units; s[1] returns half a character.",
+  "Python gives the same é😀A; a naive UTF-16 reverse would corrupt the emoji into two halves.",
+  "UTF-16 orders by unit: this comparison flips for astral characters.",
+  "ASCII-only by design (documented, tested). Python/JS would answer ÉSSIA.",
+  "NBSP is not whitespace to us — Python would strip it.",
+  "A combining mark is its own code point; reversed, it detaches. None of the three models owns graphemes.",
+];
+async function doCodepoints() {
+  const res = await runBend(await codeOf("codepoints.js"), {}, {}, []);
+  const rows = res.out.trimEnd().split("\n");
+  const box = document.getElementById("cp-rows");
+  box.innerHTML = "";
+  rows.forEach((line, i) => {
+    const m = line.match(/^(.+?)\s{2,}(.+)$/);
+    const div = document.createElement("div"); div.className = "row";
+    const k = document.createElement("span"); k.className = "k"; k.textContent = (m ? m[1] : line).trim();
+    const v = document.createElement("span"); v.className = "v"; v.textContent = m ? m[2].trim() : "";
+    div.append(k, v);
+    const fn = FOOTNOTES[i + 1];
+    if (fn) {
+      const b = document.createElement("span"); b.className = "info"; b.textContent = "ⓘ";
+      const n = document.createElement("span"); n.className = "note"; n.textContent = fn;
+      b.onclick = () => n.classList.toggle("on");
+      div.append(b, n);
+    }
+    box.append(div);
+  });
+  if (res.err) box.append(Object.assign(document.createElement("div"), { className: "measured", textContent: res.err }));
+}
+doCodepoints();
+
+// ---- ② fuel ----
+function logOf(len) {
+  const bait = "bait " + "a".repeat(len) + "!";
+  const lines = [bait];
+  for (let i = 0; i < 120; i++) lines.push("line " + String(i).padStart(4, "0") + " hello world é😀 — user" + i);
+  return lines.join("\n") + "\n";
+}
+const baitEl = document.getElementById("bait");
+const baitVal = document.getElementById("bait-val");
+let fuelTimer = null;
+function scheduleFuel() { clearTimeout(fuelTimer); fuelTimer = setTimeout(doFuel, 250); }
+baitEl.oninput = () => { baitVal.textContent = baitEl.value + " a’s"; scheduleFuel(); };
+document.getElementById("fuel-run").onclick = doFuel;
+async function doFuel() {
+  const len = +baitEl.value;
+  const log = logOf(len);
+  const res = await runBend(await codeOf("fuel.js"), { "/in.log": log }, { FILE: "/in.log" }, []);
+  const box = document.getElementById("fuel-rows");
+  box.innerHTML = "";
+  res.out.trimEnd().split("\n").forEach((line) => {
+    const m = line.match(/^(.+?)\s{2,}(.+)$/);
+    const div = document.createElement("div"); div.className = "row";
+    const k = document.createElement("span"); k.className = "k"; k.textContent = (m ? m[1] : line).trim();
+    const v = document.createElement("span"); v.className = "v"; v.textContent = m ? m[2].trim() : "";
+    div.append(k, v); box.append(div);
+  });
+  document.getElementById("fuel-ms").textContent = res.err.trim();
+}
+doFuel();
+</script>
+</body>
+</html>
