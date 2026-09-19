@@ -133,3 +133,13 @@ base.bend unchanged (42,318). Plan estimates vs measured: S1 −332 est / −441
 real; S2 −1.5…−2k est / −132 real; S3 open est / −0 (−331 available, declined).
 Lesson for R-lane #2 sizing: count *duplicated* ttok, not the ttok of the defs
 that contain the duplication.
+
+## Operator follow-up (2026-09-18)
+
+- comp cap **held at 81,000**: the merged tree with lane-adaptive measures 80,994;
+  re-measure at integration.
+- `tests/f64/kit.bend` added: the seven F64 kit defs on interpret/JS/C
+  (min/max in both argument orders, clamp above/below/inside, lerp, square,
+  hypot, round half-up incl. negative). `tests/run.sh` is now **19/19** (was 16).
+  Orphans: 8 → 1 (`String.split.fin`, upstream's).
+- `Regex.parse` rewrite lane: deferred.
