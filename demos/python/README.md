@@ -40,9 +40,12 @@ fields, nested/raw/triple-quoted f-strings, implicit concatenation), and compreh
 assignment target, the bare generator as a call's sole argument, inside f-string fields), and
 annotated assignment (`AnnAssign`: `target: annotation [= value]`, name / attribute / subscript
 targets, `simple` 1 only for a bare unparenthesised name, star-expressions as the value, and
-CPython's PEG quirk that `(a).b: T` is an illegal target while `((a).b): T` is not). It follows
+CPython's PEG quirk that `(a).b: T` is an illegal target while `((a).b): T` is not), and
+`yield` / `yield from` as expressions (`Yield{value?}` / `YieldFrom{value}`: a statement's head,
+an assignment's, augmented or annotated value, what parentheses or an f-string field hold; bare
+in an argument, a display, a subscript or a lambda body is `Syntax`). It follows
 `ast.parse`'s syntax acceptance rather than Python compilation's additional
-scope checks (`*a = 1` parses). `async`/`await`, `yield`,
+scope checks (`*a = 1` parses, and so does `yield` outside a function or in a comprehension). `async`/`await`,
 `except*`, `async` comprehensions, walrus, `match`, non-ASCII
 identifiers, and other later-slice
 productions report `Unsupported`. Syntax failures and limits have distinct

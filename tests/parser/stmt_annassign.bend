@@ -39,7 +39,7 @@ def main() -> Bool:
     String.eq(kind(parse("x = y: int")), "Syntax") &&
     String.eq(kind(parse("x: int += 1")), "Syntax") &&
     String.eq(kind(parse("x: ")), "Syntax") &&
-    String.eq(kind(parse("x: int = yield")), "Unsupported") &&
+    String.eq(kind(parse("x: int = await y")), "Unsupported") &&
     String.eq(kind(parse("x: (y := 1)")), "Unsupported") &&
     String.eq(kind(parse("match (x):\n    case _: pass\n")), "Unsupported") &&
     String.eq(kind(parse("match [x]:\n    case _: pass\n")), "Unsupported")

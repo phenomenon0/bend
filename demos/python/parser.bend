@@ -55,6 +55,7 @@ type Mode is Data:
   Slices{items: S.Json, start: S.Pos, end: S.Pos}
   Comp{kind: String, head: S.Json, start: S.Pos, close: String, gens: S.Json}
   Ifs{items: S.Json}
+  Star{}
 
 # Primitive helpers classify unsupported productions before a syntax error.
 def expected(-A: Data, +t: S.Tok, msg: String) -> P.M(A):
@@ -173,10 +174,10 @@ def go(+fuel: Nat, +mode: Mode) -> P.M(S.Expr):
                         +end : S.Tok <- P.take
                         return N.group(N.collection("Tuple", S.JEnd{}, P.tok_start(t), P.tok_end(end)), P.tok_start(t), P.tok_end(end)), u =>
                       do P.M<S.Expr>:
-                        +inner : S.Expr <- go(left, TestList{0n})
+                        +inner : S.Expr <- go(left, Star{})
                         +word : S.Tok <- P.peek
                         S.choose(P.M(S.Expr), String.eq(N.get_tag(inner), "Starred"), u => P.syntax(S.Expr, "starred expression requires tuple comma"), u =>
-                          S.choose(P.M(S.Expr), P.is_text(word, "for"), u =>
+                          S.choose(P.M(S.Expr), P.is_text(word, "for") && Bool.not(String.starts_with(N.get_tag(inner), "Yield") && Bool.not(N.is_grouped(inner))), u =>
                             S.choose(P.M(S.Expr), String.eq(N.get_tag(inner), "Tuple") && Bool.not(N.is_grouped(inner)), u => P.syntax(S.Expr, "unparenthesized comprehension element"), u =>
                               go(left, Comp{"GeneratorExp", S.JField{"elt", S.expr(inner), S.JEnd{}}, P.tok_start(t), ")", S.JEnd{}})), u =>
                             do P.M<S.Expr>:
@@ -435,6 +436,22 @@ def go(+fuel: Nat, +mode: Mode) -> P.M(S.Expr):
             test : S.Expr <- go(left, Expression{2n})
             go(left, Ifs{S.JItem{S.expr(test), items}}), u =>
           P.M.pure(S.Expr, N.carry(N.arr(items)))))
+    # `yield_expr | star_expressions`: a statement's head, an assignment's value, what a group holds. `yield from` takes one expression.
+    case 1n+left Star{}:
+      P.meter(S.Expr, do P.M<S.Expr>:
+        +t : S.Tok <- P.peek
+        S.choose(P.M(S.Expr), Bool.not(P.is_text(t, "yield")), u => go(left, TestList{0n}), u =>
+          do P.M<S.Expr>:
+            drop : S.Tok <- P.take
+            +next : S.Tok <- P.peek
+            S.choose(P.M(S.Expr), O.is_end(next), u => P.M.pure(S.Expr, N.statement("Yield", S.JNull{}, P.tok_start(t), P.tok_end(t))), u =>
+              do P.M<S.Expr>:
+                value : S.Expr <- S.choose(P.M(S.Expr), P.is_text(next, "from"), u =>
+                  do P.M<S.Expr>:
+                    drop : S.Tok <- P.take
+                    go(left, Expression{0n}), u => go(left, TestList{0n}))
+                end : S.Pos <- P.end
+                return N.statement(Bool.pick(String, P.is_text(next, "from"), "YieldFrom", "Yield"), S.expr(value), P.tok_start(t), end))))
     case 1n+left Boolean{minimum, level, operator, values, start, end}:
       P.meter(S.Expr, do P.M<S.Expr>:
         t : S.Tok <- P.peek
@@ -613,7 +630,7 @@ def go(+fuel: Nat, +mode: Mode) -> P.M(S.Expr):
                         end : S.Pos <- P.end
                         return N.node("Raise", S.JField{"exc", N.opt(exc), S.JField{"cause", N.opt(cause), S.JEnd{}}}, P.tok_start(t), end), u =>
                       do P.M<S.Expr>:
-                        first : S.Expr <- go(left, TestList{0n})
+                        first : S.Expr <- go(left, Star{})
                         go(left, AfterSmall{first, P.tok_start(t), P.is_text(t, "match")}))))))))))
     # `target: annotation [= value]`. `match (x):` and `match [x]:` read as a target up to the `:`; only a match header ends the line there.
     case 1n+left AfterSmall{+first, +start, soft}:
@@ -628,7 +645,7 @@ def go(+fuel: Nat, +mode: Mode) -> P.M(S.Expr):
             do P.M<S.Expr>:
               target : S.Json <- P.lift(S.Json, N.target(first, True{}))
               drop : S.Tok <- P.take
-              value : S.Expr <- go(left, TestList{0n})
+              value : S.Expr <- go(left, Star{})
               end : S.Pos <- P.end
               return N.augmented(target, O.tag(String.drop_end(P.tok_text(t), 1n)), value, start, end), u =>
             S.choose(P.M(S.Expr), P.is_text(t, ":"), u =>
@@ -643,7 +660,7 @@ def go(+fuel: Nat, +mode: Mode) -> P.M(S.Expr):
                     value : S.Expr <- S.choose(P.M(S.Expr), P.is_text(eq, "="), u =>
                       do P.M<S.Expr>:
                         drop : S.Tok <- P.take
-                        go(left, TestList{0n}), u => P.M.pure(S.Expr, N.none()))
+                        go(left, Star{}), u => P.M.pure(S.Expr, N.none()))
                     end : S.Pos <- P.end
                     return N.annotated(target, note, value, String.eq(N.get_tag(first), "Name") && Bool.not(N.is_grouped(first)), start, end)), u =>
               S.choose(P.M(S.Expr), String.eq(N.get_tag(first), "Name") &&
@@ -654,7 +671,7 @@ def go(+fuel: Nat, +mode: Mode) -> P.M(S.Expr):
                   return N.statement("Expr", S.expr(first), start, end))))))
     case 1n+left Assignment{targets, start}:
       P.meter(S.Expr, do P.M<S.Expr>:
-        +value : S.Expr <- go(left, TestList{0n})
+        +value : S.Expr <- go(left, Star{})
         t : S.Tok <- P.peek
         S.choose(P.M(S.Expr), P.is_text(t, "="), u =>
           do P.M<S.Expr>:
