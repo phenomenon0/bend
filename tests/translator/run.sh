@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # `run.sh [prefix]`. Four lanes per specimen: strict check, interpreter, emitted JS, C; then the judge
-# (CPython oracle vs the emitted Bend for normalize_stem, repo_of and the first_dash fixture, the same
+# (CPython oracle vs the emitted Bend for normalize_stem, repo_of, the first_dash fixture and fm_sources, the same
 # four lanes, claims C1/C2/C3 apart; first_dash also states its closed doctests as checked laws).
 set -uo pipefail
 cd "$(dirname "$0")/../.."
@@ -107,7 +107,7 @@ for t in tests/translator/*.bend; do
     fi
   done
 done
-for demo in normalize_stem repo_of first_dash; do
+for demo in normalize_stem repo_of first_dash fm_sources; do
   python3 tests/translator/judge.py --demo "$demo" || fail=$((fail + 1))
 done
 printf '\nTranslator PASS: %d, FAIL: %d\n' "$pass" "$fail"

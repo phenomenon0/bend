@@ -1,4 +1,4 @@
-"""The translator judge: `judge.py --demo normalize_stem | repo_of | first_dash`.
+"""The translator judge: `judge.py --demo normalize_stem | repo_of | first_dash | fm_sources`.
 
 Extracts one allow-listed function by `ast` (its module is never imported or
 executed), translates it with demos/python/translate.bend, and reports three
@@ -44,6 +44,37 @@ WS = " \t\n\r\x0b\x0c"
 ALPHABET = (
     "".join(map(chr, range(32, 127))) + WS
 )  # the value contract: printable ASCII + six ASCII whitespace
+
+# fm_sources' frontmatter: lines a `sources:` line may sit among, and the text around them.
+FM_LINES = [
+    "sources: a",
+    "sources: [a, b]",
+    'sources: ["x", "y"]',
+    "sources: []",
+    "sources:",
+    "sources:[",
+    "sources: a:b",
+    "sources: [a]x",
+    "sources: [ 'a' ,\t\"b\" ,]",
+    "  sources: z",
+    "title: t",
+    "",
+]
+
+
+def fm_text(rng):
+    def line():
+        if rng.random() < 0.3:
+            return "sources:" + "".join(rng.choice(ALPHABET) for _ in range(rng.randrange(0, 12)))
+        return rng.choice(FM_LINES)
+
+    return (
+        rng.choice(["", "---\n", "---\n", "---\n", "---\n", "x---\n", "---\r\n", "\n---\n"])
+        + "".join(line() + rng.choice(["\n", "\n", "\n", "\r\n", "\r", "\x0b"]) for _ in range(rng.randrange(0, 4)))
+        + rng.choice(["---", "---", "---\n", "--", "", "---\nsources: late\n---"])
+        + rng.choice(["", "body", "\nsources: after\n"]),
+    )
+
 
 # Allow list. `sha256` pins the reviewed function text: a changed source is re-reviewed, not re-judged.
 # `examples` are hand-written literals (the source has a docstring and no doctest: labeled contract
@@ -173,6 +204,61 @@ DEMOS = {
         "c3": "tested fragment, no theorem. `break` is a Step fold (Continue/Stop): items after the stop are "
         "not evaluated. Its closed doctests are checked laws (closed instances, not a universal theorem).",
     },
+    # T3: re.search/group, an early return from a loop, a comprehension, slices. Unannotated: the
+    # stub is the reviewed signature, and its `import re` is the labeled assumption that `re` is
+    # the stdlib module, which `imported` checks against the source module by `ast`.
+    "fm_sources": {
+        "path": Path.home() / "Documents/Project/llm-wiki/tools/synapse.py",
+        "sha256": "e40787adf3abbb7112660ed3c9d36ec9c36c7a9baceb5152498af17ea2c7956f",
+        "sig": "import re\ndef fm_sources(text: str) -> list[str]:\n    pass\n",
+        "builtins": {},
+        "globals": {"re": re},
+        "wrong": (r'"^---\\n(.*?)\\n---"', r'"^---\\n(.*)\\n---"', "translation with a greedy group"),
+        "examples": [
+            (("---\nsources: [a, b]\n---\nbody",), ["a", "b"]),
+            (('---\ntitle: t\nsources: ["x", "y"]\n---\n',), ["x", "y"]),
+            (("---\nsources: one\n---",), ["one"]),
+            (("---\ntitle: t\n---",), []),
+            (("no frontmatter",), []),
+            (("---\nsources: []\n---",), [""]),
+            (("---\nsources:\n---",), [""]),
+        ],
+        "edges": [
+            "",
+            "---",
+            "---\n---",
+            "---\n\n---",  # an empty group: no lines
+            "---\n---\n---",
+            "---\nsources: a\n---\nsources: b\n---",  # the earliest closing delimiter
+            "---\nx: 1\n---\nsources: b\n---",  # a sources line after it is not frontmatter
+            "x---\nsources: a\n---",  # ^ is the start of the text (no re.M)
+            "\n---\nsources: a\n---",
+            "---\nsources: a\nsources: b\n---",  # the first sources line returns
+            "---\n sources: a\n---",
+            "---\nsources:[\n---",
+            "---\nsources: [a,,b]\n---",
+            "---\nsources: [ \"a\" , 'b' ]\n---",
+            "---\nsources: a:b\n---",
+            "---\nsources: [a]x\n---",
+            "---\r\nsources: a\r\n---",
+            "---\nsources: a\r\n---",
+            "---\nt: 1\rsources: a\n---",  # splitlines' boundaries: \r, \v, \f
+            "---\nt\x0bsources: a\n---",
+            '---\nt\x0csources: "q"\n---',
+            '---\nsources:\t["a",\t"b"]\n---',
+            '---\nsources: "[a]"\n---',
+            '---\nsources: ["""]\n---',
+            "---\nsources: a\n--",
+            "---\nsources: a\n----",
+            "---\n" + "t: x\n" * 20 + "sources: [" + ", ".join("s" * k for k in range(1, 12)) + "]\n---",
+        ],
+        "generate": fm_text,
+        "c3": "tested fragment, no theorem. The early return is a Step fold of Maybe (Stop{Some{v}}), then a match "
+        "on the fold's value; the comprehension is a recursive helper, head first. The translation rests on the "
+        "primitive contracts (re.search/m.group = Py.search/Py.group on Base's Regex, splitlines, split, strip, "
+        "the slices), assumed like SOUNDNESS.md A3 and only tested here; group 1 is granted because the kernel "
+        "reads it off the parsed pattern. The source has no doctests, so no law is stated for it.",
+    },
 }
 
 
@@ -191,11 +277,35 @@ def extract(path, name):
     return ast.get_source_segment(source, found[0]) + "\n", found[0].lineno, found[0]
 
 
-def oracle(text, name, builtins):
-    # The extracted def alone: nothing of its module, and no builtin but the demo's reviewed few.
-    scope = {"__builtins__": builtins}
+def oracle(text, name, builtins, env):
+    # The extracted def alone: nothing of its module, and no builtin or global but the demo's reviewed few.
+    scope = {"__builtins__": builtins, **env}
     exec(compile(text, name, "exec"), scope)
     return scope[name]
+
+
+def imported(path, names):
+    """Each global is its stdlib module: the module binds it only by a top-level `import name`.
+    A syntactic check (A1-like: nothing rebinds it through globals() or sys.modules)."""
+    mod = ast.parse(Path(path).read_text(encoding="utf-8"), feature_version=(3, 11))
+    for g in names:
+        good = bad = 0
+        for n in ast.walk(mod):
+            if isinstance(n, (ast.Import, ast.ImportFrom)):
+                for a in n.names:
+                    if (a.asname or a.name.split(".")[0]) == g:
+                        plain = isinstance(n, ast.Import) and a.name == g and a.asname is None and n in mod.body
+                        good, bad = good + plain, bad + (not plain)
+            elif isinstance(n, ast.Name) and not isinstance(n.ctx, ast.Load):
+                bad += n.id == g
+            elif isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.ExceptHandler, ast.MatchAs, ast.MatchStar)):
+                bad += n.name == g
+            elif isinstance(n, ast.arg):
+                bad += n.arg == g
+            elif isinstance(n, (ast.Global, ast.Nonlocal)):
+                bad += g in n.names
+        if good < 1 or bad:
+            raise SystemExit(f"FAIL {g} is not bound only by `import {g}` in {path}")
 
 
 def bend_literal(s):
@@ -280,6 +390,8 @@ def law_file(name, ret, laws):
 def encode(e, maybe):
     if e is None:
         return "N|"
+    if isinstance(e, list):
+        return "".join("".join(f"{ord(c)} " for c in x) + ";" for x in e) + "|"
     return ("S " if maybe else "") + "".join(f"{ord(c)} " for c in e) + "|"
 
 
@@ -308,12 +420,30 @@ def harness(name, inputs, expected, maybe):
             '      "S " ++ codes(s)',
             "",
         ]
+    listed = any(isinstance(e, list) for e in expected)
+    if listed:
+        out += [
+            "def item(s: String) -> String:",
+            "  match s:",
+            "    case SNil{}:",
+            '      ";"',
+            "    case SCon{h, t}:",
+            '      U32.show(Char.to_u32(h)) ++ " " ++ item(t)',
+            "",
+            "def listed(xs: List<&2, String>) -> String:",
+            "  match xs:",
+            "    case Nil{}:",
+            '      "|"',
+            "    case Con{h, t}:",
+            "      item(h) ++ listed(t)",
+            "",
+        ]
     for k, part in enumerate(parts):
         out += [
             f"def part{k}() -> String:",
             "  "
             + " ++\n  ".join(
-                f"{'shown' if maybe else 'codes'}(T.{name}({', '.join(map(bend_value, a))}))"
+                f"{'shown' if maybe else 'listed' if listed else 'codes'}(T.{name}({', '.join(map(bend_value, a))}))"
                 for a in part
             ),
             "",
@@ -374,7 +504,7 @@ def lanes(test, work):
 def judge(name, show):
     demo = DEMOS[name]
     text, line, node = extract(demo["path"], name)
-    sig_node = ast.parse(demo["sig"]).body[0] if "sig" in demo else node
+    sig_node = [n for n in ast.parse(demo["sig"]).body if isinstance(n, ast.FunctionDef)][0] if "sig" in demo else node
     ret = bend_type(sig_node.returns)
     maybe = ret.startswith("Maybe")
     digest = hashlib.sha256(text.encode()).hexdigest()
@@ -385,7 +515,8 @@ def judge(name, show):
         raise SystemExit(
             f"FAIL source text changed (pinned {demo['sha256'][:16]}): re-review the contract, then re-pin"
         )
-    fn = oracle(text, name, demo["builtins"])
+    imported(demo["path"], demo.get("globals", {}))
+    fn = oracle(text, name, demo["builtins"], demo.get("globals", {}))
     laws, skipped = doctest_laws(name, node, sig_node)
     bad = [(i, fn(*i), o) for i, o in demo["examples"] + laws if fn(*i) != o]
     if bad:
