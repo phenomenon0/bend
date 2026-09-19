@@ -49,7 +49,7 @@ def main() -> Bool:
     String.eq(kind(parse("del (yield)")), "Syntax") &&
     String.eq(kind(parse("(yield x for x in y)")), "Syntax") &&
     String.eq(kind(parse("yield.x")), "Syntax") &&
-    String.eq(kind(parse("yield (x := 1)")), "Unsupported") &&
+    String.eq(kind(parse("yield (x := 1)")), "Done") &&
     String.eq(kind(parse("yield await x")), "Done")
 
 #|True{}

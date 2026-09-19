@@ -47,10 +47,14 @@ in an argument, a display, a subscript or a lambda body is `Syntax`), and `async
 `async for` / `async with` (the plain statement's fields under the `Async` tag, from the `async`
 token; after decorators only `async def`), `await` (`Await{value}`: `await` takes a primary, so
 `await x ** 2` is `(await x) ** 2` and `await -x` is `Syntax`) and `async for` clauses in
-comprehensions (`is_async` 1). Both words are keywords in 3.11: `async = 1` is `Syntax`. It follows
+comprehensions (`is_async` 1). Both words are keywords in 3.11: `async = 1` is `Syntax`. Named
+expressions (`NamedExpr{target, value}`, the target a `Name` in `Store`) parse where the grammar
+names `named_expression`: in parentheses, an `if` / `while` head, a positional argument, a display
+or subscript element, a comprehension's element or filter, an f-string field, a decorator; anywhere
+else a bare `:=` is `Syntax`, as is a target that is no bare name. It follows
 `ast.parse`'s syntax acceptance rather than Python compilation's additional
 scope checks (`*a = 1` parses, and so does `yield` or `await` outside a function or in a comprehension).
-`except*`, walrus, `match`, non-ASCII
+`except*`, `match`, non-ASCII
 identifiers, and other later-slice
 productions report `Unsupported`. Syntax failures and limits have distinct
 `Syntax` and `Limit` kinds. Failure prints `error KIND LINE COL MESSAGE` and

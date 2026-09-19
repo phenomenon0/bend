@@ -137,6 +137,10 @@ def target_ctx(j: S.Json, +mode: String, +ctx: S.Json) -> S.Json:
     case _:
       j
 
+# `NAME := expression`: the target is a Name in Store.
+def named(+t: S.Tok, +value: S.Expr) -> S.Expr:
+  node("NamedExpr", S.JField{"target", target_ctx(S.expr(name(t)), "", S.context(S.Store{})), S.JField{"value", S.expr(value), S.JEnd{}}}, P.tok_start(t), get_finish(value))
+
 # `del` targets are assignment targets minus Starred, in Del context. A bare
 # top-level `*a = b` is the compiler's error, not ast.parse's: accepted here.
 def target_with(+e: S.Expr, +aug: Bool, +del: Bool) -> Result<&2, &2, S.Error, S.Json>:
@@ -153,6 +157,10 @@ def target(e: S.Expr, aug: Bool) -> Result<&2, &2, S.Error, S.Json>:
 def is_grouped(e: S.Expr) -> Bool:
   S.Expr{tag, fs, lo, hi, cover, grouped} = e
   grouped
+
+# An unparenthesised node of this tag.
+def bare(+e: S.Expr, tag: String) -> Bool:
+  String.eq(get_tag(e), tag) && Bool.not(is_grouped(e))
 
 # PEG commitment, CPython 3.11: `'(' single_target ')'` wins the annotated target's first alternative and is
 # never retried, so a target that *starts* with a parenthesised Name/Attribute/Subscript and goes on

@@ -20,7 +20,7 @@ def main() -> Bool:
     String.eq(kind(parse("f(**x,*y)")), "Syntax") &&
     String.eq(kind(parse("import x,")), "Syntax") &&
     String.eq(kind(parse("class A(B: pass")), "Syntax") &&
-    String.eq(kind(parse("x: int = (y := 1)")), "Unsupported") &&
+    String.eq(kind(parse("x: int = (y := 1)")), "Done") &&
     String.eq(kind(parse("match x:\n    case _: pass\n")), "Unsupported")
 
 #|True{}

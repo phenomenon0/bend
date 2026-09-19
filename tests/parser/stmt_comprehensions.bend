@@ -34,7 +34,7 @@ def main() -> Bool:
     String.eq(kind(parse("[x for x in lambda: y]")), "Syntax") &&
     String.eq(kind(parse("a[x for x in y]")), "Syntax") &&
     String.eq(kind(parse("[x for x in y] = 1")), "Syntax") &&
-    String.eq(kind(parse("[x for x in (y := z)]")), "Unsupported") &&
-    String.eq(kind(parse("[x := 1 for x in y]")), "Unsupported")
+    String.eq(kind(parse("[x for x in (y := z)]")), "Done") &&
+    String.eq(kind(parse("[x := 1 for x in y]")), "Done")
 
 #|True{}
