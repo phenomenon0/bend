@@ -78,10 +78,6 @@ type Fn is Data:
 type Sig is Data:
   Sig{name: String, params: List<&2, Param>, ret: Ty}
 
-def sig_of(f: Fn) -> Sig:
-  Fn{name, ps, ret, eff, body, loc} = f
-  Sig{name, ps, ret}
-
 # A primitive's contract is an assumption about CPython and Base on the value
 # contract (printable ASCII plus the six ASCII whitespace), like SOUNDNESS.md
 # A3: `recv.method(args)` on an exact `recv` means `bend(recv, args)`. The
@@ -1435,7 +1431,8 @@ def why(e: Ir, +pos: Pos, +env: List<&2, Param>, +facts: List<&2, Ir>, +cs: List
       S.choose(String, spanned(loc) && bound(env, acc_of(pos), ty_of(val)), u => why(val, PArg{}, env, facts, cs, ss), u =>
         "break outside a fold step, or not of the accumulator's type" ++ Lint.at(loc))
     case ICall{+name, +args, +t, +loc}:
-      S.choose(String, spanned(loc) && ident(name) && resolves(ss, name, args, ty(t)), u => why(args, PArg{}, env, facts, cs, ss), u =>
+      S.choose(String, spanned(loc) && ident(name) && Bool.not(has_name(env, name)) && resolves(ss, name, args, ty(t)), u =>
+        why(args, PArg{}, env, facts, cs, ss), u =>
         "call " ++ name ++ "(" ++ arg_tys(args) ++ ") -> " ++ ty(t) ++ " is granted by no def ranked below this one" ++ Lint.at(loc))
     case ISome{+val, t, +loc}:
       S.choose(String, spanned(loc) && String.eq(ty(inner(t)), ty_of(val)) && Bool.not(String.is_empty(ty_of(val))), u =>
@@ -1548,6 +1545,16 @@ def verify_in(f: Fn, +ss: List<&2, Sig>, +cs: List<&2, Contract>) -> Result<&2, 
 def verify(f: Fn, +cs: List<&2, Contract>) -> Result<&2, &2, S.Error, Fn>:
   verify_in(f, [], cs)
 
+# The signatures with this def's own added, so the defs ranked above may call
+# it. Two defs of one name are refused here: the module would emit two defs of
+# that name, and no call could say which. The source path cannot state it
+# (`unique`), but a TypedIR is data.
+def fresh(f: Fn, +ss: List<&2, Sig>) -> Result<&2, &2, S.Error, List<&2, Sig>>:
+  Fn{+name, +ps, +ret, eff, body, +loc} = f
+  S.choose(Result<&2, &2, S.Error, List<&2, Sig>>, named(ss, name), u =>
+    refuse(&2, List<&2, Sig>, loc, "two defs of the module are named " ++ name), u =>
+    Done{List.append(&2, Sig, ss, [Sig{name, ps, ret}])})
+
 def placed(r: Result<&2, &2, S.Error, Fn>) -> Bool:
   match r:
     case Done{g}:
@@ -1582,7 +1589,7 @@ def order(fuel: Nat, fs: List<&2, Fn>, +ss: List<&2, Sig>, +cs: List<&2, Contrac
       +left = p
       do Result<&2, &2, S.Error, List<&2, Fn>>:
         +g : Fn <- verify_in(f, ss, cs)
-        +more : List<&2, Sig> <- Done{List.append(&2, Sig, ss, [sig_of(g)])}
+        +more : List<&2, Sig> <- fresh(g, ss)
         rest : List<&2, Fn> <- order(left, first_ready(t, [], more, cs), more, cs)
         Done{g <> rest}
 
