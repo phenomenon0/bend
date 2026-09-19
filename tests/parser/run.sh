@@ -99,6 +99,7 @@ if [ -z "${1:-}" ] && [ -f tests/parser/fuzz.py ]; then
   python3 tests/parser/diff.py --fixtures all || fail=$((fail + 1))
   python3 tests/parser/fuzz.py || fail=$((fail + 1))
   python3 tests/parser/adversarial.py || fail=$((fail + 1))
+  python3 tests/parser/lexscale.py || fail=$((fail + 1))
   python3 tests/parser/diff.py --corpus 1 || fail=$((fail + 1))
 fi
 printf '\nParser PASS: %d, FAIL: %d\n' "$pass" "$fail"
