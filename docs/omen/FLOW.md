@@ -38,9 +38,10 @@ pushed to upstream; `our` remote = `phenomenon0/bend`.
    - `git apply -3` in this repo (needs the source blobs: `git fetch <src> …`).
    - Always `--binary` (test fixtures like `tests/strings/utf8.bin`).
 3. **Commit**: snapshot-style commits on **`omen`** (our line) — f64, strings,
-   gates/caps each as logical commits; caps in `gates/repo.ts` land at the next
-   round thousand above the *measured* size in THIS tree (f64+strings ported =
-   base 27,844 → cap 28,000; comp 75,152 → cap 76,000).
+   gates/caps each as logical commits; caps in `gates/repo.ts` follow the
+   **cap-budget rule** (see Discipline): f64+strings ported = base 27,844 → cap
+   28,000; comp 75,152 → cap 76,000 — those historic raises were "measured +
+   round thousand"; from 2026-09-18 that reading is Closed.
 4. **Verify** (the gates decide, not prose):
    - `bun gates/repo.ts` — repo shape + caps. (Current: PASS 42/42.)
    - `bash tests/run.sh` (f64, 16 checks) and `bash tests/run.sh --strings`
@@ -56,6 +57,37 @@ pushed to upstream; `our` remote = `phenomenon0/bend`.
 6. **Publish upstream** (deliberate, user-approved only): his pipeline is
    close-and-fold — the artifact here is shaped so a hand-port or a
    "Reported by" fix is mechanical.
+
+## Discipline — add function, reduce code (operator, 2026-09-18)
+
+Upstream's snapshot delta (`0b7e2b11` → origin/main, +50 commits): 37 files,
+**+3,086/−2,451** (del/ins **0.79**), comp cap **+0.5k**. Their additions absorb
+old code because every fix is **re-implemented by hand**. Our stack delta: 119
+files, **+12,395/−98** (0.008) — build-out; caps auto-raised (comp 76k→81k, base
+28k→43k). Build-out may not buy permanent bulk; keep their discipline with
+three rules:
+
+1. **Caps are budgets, not thermometers.** A cap rises only for *new public
+   surface*, itemized in the lane report (which rows/defs force it, k each).
+   No surface, no raise — the lane simplifies until it fits the frozen cap.
+   "Measured + margin" is not a reason.
+2. **Alternate build lanes with one R-lane (reduce).** After ≤2 build lanes
+   land, one R-lane runs (measure targets at lane start). Open targets:
+   - `comp.ts` — collapse per-op native rows behind the `tpl_ops`-style
+     templates where signatures match (string / regex / list families);
+   - runtime C — one scratch ABI for the `*_take` families (`str_*_take`,
+     `re_exec_take`, list natives share the take/scratch shape);
+   - `base.bend` — retire superseded pure-Bend helpers the lanes replaced
+     (String.* was the start); demo-only code leaves the base lib.
+   Acceptance: **net-negative ttok per target file**, caps unchanged, gates green.
+3. **The fable pass is size-aware.** The rule-0 rewrite accepts only when:
+   gates green, every cap change itemized, duplicated helpers met by the port
+   are merged or listed for the R-lane.
+
+Bookkeeping: lane reports already table ttok before→final per file — add the
+**ratio** (ins/del) and the **cap line** (raised by k, forced by which rows /
+or "held"). Tracked targets: build lanes ≥0.15, R-lanes ≥0.7 (his cycle: 0.79).
+Every raise books a debt row naming the R-lane that retires it.
 
 ## Layout
 
