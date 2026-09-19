@@ -1,4 +1,4 @@
-# The translator, slices T1-T2: wire AST -> TypedIR -> Bend, faithful mode only
+# The translator, slices T1-T3: wire AST -> TypedIR -> Bend, faithful mode only
 # (docs/omen/plans/translator-modes.md, tiers 1-2; no rewrite layer).
 # `elaborate` is untrusted search; `verify` is the kernel: it recomputes every
 # binding, type, position and primitive contract from the IR itself, and `emit`
@@ -7,7 +7,11 @@
 # IBranch (`if`/`and`/`or`/IfExp), IFold (`for` over a list, `break` as
 # Continue/Stop), and None -> Maybe (ISome, IMaybe). A branch or a loop is
 # rendered as a helper def that matches on its parameter, so the untaken side
-# is never evaluated (no Bool.pick, no strict `||`). ICall is still refused.
+# is never evaluated (no Bool.pick, no strict `||`). T3 adds the long tail
+# `fm_sources` needs: an early return from a loop (a Stop of Some{value}, then a
+# match on the fold's result), IList, IMap (a comprehension as a recursive
+# helper), string slices, `re.search` and `m.group(k)` as guarded partials, and
+# `if not m`. ICall is still refused.
 # Ownership: every value is an immutable exact str/bool/list/Optional
 # (SOUNDNESS.md A1); a name read twice is marked `+` by the renderer and the
 # Bend checker (C1) checks it. See docs/omen/lanes/translator-t2.md.
@@ -19,14 +23,17 @@ import ./lexer.bend as L
 import ./parser.bend as P
 import ./lint.bend as Lint
 
-# TInt is a natural number (Bend `Nat`): in this fragment only `len` makes one
-# and only a comparison reads one. TBad is no type: its spelling equals nothing.
+# TInt is a natural number (Bend `Nat`): in this fragment only `len` and a
+# decimal literal make one; a comparison, a slice bound and `group` read one.
+# TMatch is a successful re match with its subject (Python keeps `m.string`).
+# TBad is no type: its spelling equals nothing.
 type Ty is Data:
   TBool{}
   TStr{}
   TInt{}
   TList{of: Ty}
   TMaybe{of: Ty}
+  TMatch{}
   TBad{}
 
 type Eff is Data:
@@ -39,7 +46,8 @@ type Eff is Data:
 # ILet/IReturn/IStop are block nodes (a let line, the function's tail, a `break`
 # in a fold step); IBranch, IMaybe and IFold are expressions rendered as calls
 # of helper defs. IMaybe matches the Optional name `on` and rebinds it, narrowed
-# to its payload, inside `some`. IFold's value is the final accumulator.
+# to its payload, inside `some`. IFold's value is the final accumulator. IList
+# is a list display; IMap is `[body for item in over]`, a helper call too.
 type Ir is Data:
   IVar{name: String, ty: Ty, loc: S.Json}
   ILit{text: String, ty: Ty, loc: S.Json}
@@ -54,6 +62,8 @@ type Ir is Data:
   ISome{val: Ir, ty: Ty, loc: S.Json}
   IMaybe{on: String, none: Ir, some: Ir, ty: Ty, loc: S.Json}
   IStop{val: Ir, loc: S.Json}
+  IList{items: Ir, ty: Ty, loc: S.Json}
+  IMap{item: String, over: Ir, body: Ir, ty: Ty, loc: S.Json}
 
 type Param is Data:
   Param{name: String, ty: Ty, loc: S.Json}
@@ -66,9 +76,12 @@ type Fn is Data:
 # A3: `recv.method(args)` on an exact `recv` means `bend(recv, args)`. The
 # receiver's static type resolves the method (A1: exact `str`, no subclass),
 # so spelling alone is never authority. A call is granted only if pure and total.
-# `pre` guards a Python-partial operation: the kernel grants it only where the
-# fact `pre(args)` is known on the path and every argument after the receiver
-# is a non-empty literal. `src` is the Bend text of a helper Base lacks.
+# `pre` guards a Python-partial operation: the kernel grants it only where every
+# argument after the receiver is a literal (a non-empty string or a natural) and
+# the guard holds: `literal` by that alone, `positive` for a nonzero natural,
+# `Regex.compile` when the pattern compiles, else where the fact `pre(args)` is
+# known on the path. `src` is the Bend text of a helper Base lacks. A method
+# spelled `re.` is `re`'s function, reachable only if the signature imports it.
 type Contract is Data:
   Contract{recv: Ty, method: String, args: List<&2, Ty>, ret: Ty, bend: String, pure: Bool, total: Bool, pre: String, src: String}
 
@@ -76,6 +89,25 @@ type Contract is Data:
 # raises IndexError without the guard and ValueError on an empty sep.
 def after() -> String:
   "def Py.after(+s: String, +sep: String) -> String:\n  Pair.snd(String, String, Pair.snd(String, String & String, String.partition(s, sep)))\n\n"
+
+# x.strip(cs): the ends of x cleared of every char in cs. One self-recursive def
+# (a helper calling back is a law user code cannot use); both sides are total.
+def strip() -> String:
+  "def Py.strip_start(s: String, +cs: String) -> String:\n  match s:\n    case SNil{}:\n      SNil{}\n    case SCon{+h, +t}:\n      Bool.pick(String, String.contains(cs, SCon{h, SNil{}}), Py.strip_start(t, cs), SCon{h, t})\n\n" ++
+  "def Py.strip(s: String, +cs: String) -> String:\n  String.reverse(Py.strip_start(String.reverse(Py.strip_start(s, cs)), cs))\n\n"
+
+# re.search(p, s, f): the first match of p in s with its subject (Python's
+# m.string, so a Data pair), under Base's Regex (CPython 3.11 re.ASCII, equal on the value
+# contract). The guard makes the Fail arm, Python's re.error, unreachable.
+def search() -> String:
+  "type Py.Match is Data:\n  PyMatch{s: String, m: Match}\n\n" ++
+  "def Py.search.found(+s: String, m: Maybe<&2, Match>) -> Maybe<&2, Py.Match>:\n  match m:\n    case None{}:\n      None{}\n    case Some{mm}:\n      Some{PyMatch{s, mm}}\n\n" ++
+  "def Py.search.run(+s: String, r: Regex.Res(Regex)) -> Maybe<&2, Py.Match>:\n  match r:\n    case Fail{e}:\n      None{}\n    case Done{re}:\n      Py.search.found(s, Regex.find(re, s))\n\n" ++
+  "def Py.search(s: String, p: String, +f: String) -> Maybe<&2, Py.Match>:\n  Py.search.run(s, Regex.compile(p, f))\n\n"
+
+# m.group(k) where group k took part in the match; Python gives None otherwise.
+def group() -> String:
+  "def Py.group(m: Py.Match, k: Nat) -> String:\n  match m:\n    case PyMatch{s, mm}:\n      Maybe.default(&2, String, Regex.group(s, mm, k), \"\")\n\n"
 
 def contracts() -> List<&2, Contract>:
   [Contract{TStr{}, "strip", [], TStr{}, "String.trim", True{}, True{}, "", ""},
@@ -88,7 +120,14 @@ def contracts() -> List<&2, Contract>:
    Contract{TStr{}, "__len__", [], TInt{}, "String.length", True{}, True{}, "", ""},
    Contract{TInt{}, "__gt__", [TInt{}], TBool{}, "Nat.is_gt", True{}, True{}, "", ""},
    Contract{TBool{}, "not", [], TBool{}, "Bool.not", True{}, True{}, "", ""},
-   Contract{TStr{}, "split(,1)[1]", [TStr{}], TStr{}, "Py.after", True{}, True{}, "String.contains", after()}]
+   Contract{TStr{}, "split(,1)[1]", [TStr{}], TStr{}, "Py.after", True{}, True{}, "String.contains", after()},
+   Contract{TStr{}, "strip", [TStr{}], TStr{}, "Py.strip", True{}, True{}, "", strip()},
+   Contract{TStr{}, "splitlines", [], TList{TStr{}}, "String.splitlines", True{}, True{}, "", ""},
+   Contract{TStr{}, "split", [TStr{}], TList{TStr{}}, "String.split_on", True{}, True{}, "literal", ""},
+   Contract{TStr{}, "[i:]", [TInt{}], TStr{}, "String.drop", True{}, True{}, "", ""},
+   Contract{TStr{}, "[:-k]", [TInt{}], TStr{}, "String.drop_end", True{}, True{}, "positive", ""},
+   Contract{TStr{}, "re.search", [TStr{}, TStr{}], TMaybe{TMatch{}}, "Py.search", True{}, True{}, "Regex.compile", search()},
+   Contract{TMatch{}, "group", [TInt{}], TStr{}, "Py.group", True{}, True{}, "Py.took", group()}]
 
 # ---- types ----
 
@@ -105,6 +144,8 @@ def ty(t: Ty) -> String:
       "List<&2, " ++ ty(of) ++ ">"
     case TMaybe{of}:
       "Maybe<&2, " ++ ty(of) ++ ">"
+    case TMatch{}:
+      "Py.Match"
     case TBad{}:
       ""
 
@@ -131,6 +172,10 @@ def typ(e: Ir) -> Ty:
     case ISome{val, t, loc}:
       t
     case IMaybe{on, none, some, t, loc}:
+      t
+    case IList{items, t, loc}:
+      t
+    case IMap{item, over, body, t, loc}:
       t
     case ILet{name, val, body, loc}:
       typ(body)
@@ -202,6 +247,10 @@ def own_loc(e: Ir) -> S.Json:
       loc
     case IStop{val, loc}:
       loc
+    case IList{items, t, loc}:
+      loc
+    case IMap{item, over, body, t, loc}:
+      loc
     case _:
       S.JNull{}
 
@@ -264,6 +313,10 @@ def reads(e: Ir, +x: String) -> Nat:
       reads(val, x)
     case IStop{val, loc}:
       reads(val, x)
+    case IList{items, t, loc}:
+      reads(items, x)
+    case IMap{item, over, body, t, loc}:
+      Nat.add(reads(over, x), S.choose(Nat, String.eq(item, x), u => 0n, u => some1(reads(body, x))))
     case _:
       0n
 
@@ -306,6 +359,21 @@ def stops(e: Ir) -> Bool:
     case _:
       False{}
 
+# Does every path of a fold step's `if` arm end in a Stop? Then the statements
+# after the `if` are its else-continuation, as in a function body.
+def stops_all(e: Ir) -> Bool:
+  match e:
+    case IStop{val, loc}:
+      True{}
+    case ILet{name, val, body, loc}:
+      stops_all(body)
+    case IBranch{test, yes, no, t, loc}:
+      stops_all(yes) && stops_all(no)
+    case IMaybe{on, none, some, t, loc}:
+      stops_all(none) && stops_all(some)
+    case _:
+      False{}
+
 def is_lit(e: Ir, want: String) -> Bool:
   match e:
     case ILit{text, t, loc}:
@@ -335,6 +403,8 @@ def lit_text(text: String, t: Ty) -> String:
       S.quote(text)
     case TBool{}:
       text ++ "{}"
+    case TInt{}:
+      text ++ "n"
     case TMaybe{of}:
       "None{}"
     case _:
@@ -376,6 +446,10 @@ def show(e: Ir, +f: String, +env: List<&2, Param>) -> String:
     case IFold{item, over, acc, init, +step, t, loc}:
       hname(f, "for", loc) ++ "(" ++ show(over, f, env) ++ ", " ++ seed(show(init, f, env), stops(step)) ++
         argl(caps(env, IArg{step, IEnd{}}, [item, acc])) ++ ")"
+    case IList{items, t, loc}:
+      "[" ++ show(items, f, env) ++ "]"
+    case IMap{item, over, body, t, +loc}:
+      hname(f, "comp", loc) ++ "(" ++ show(over, f, env) ++ argl(caps(env, IArg{body, IEnd{}}, [item])) ++ ")"
     case _:
       "?refused"
 
@@ -387,13 +461,26 @@ def refuse(b, -A: Kind(b), +loc: S.Json, msg: String) -> Result<&2, b, S.Error, 
 
 # ---- literals ----
 
-def plain(s: String, +q: U32) -> Bool:
+# Printable ASCII other than `q` and `b`.
+def plain(s: String, +q: U32, +b: U32) -> Bool:
   match s:
     case SNil{}:
       True{}
     case SCon{h, t}:
       +n = Char.to_u32(h)
-      U32.is_ge(n, 32) && U32.is_le(n, 126) && Bool.not(U32.is_eq(n, 92)) && Bool.not(U32.is_eq(n, q)) && plain(t, q)
+      U32.is_ge(n, 32) && U32.is_le(n, 126) && Bool.not(U32.is_eq(n, b)) && Bool.not(U32.is_eq(n, q)) && plain(t, q, b)
+
+def digits(s: String) -> Bool:
+  match s:
+    case SNil{}:
+      True{}
+    case SCon{h, t}:
+      +n = Char.to_u32(h)
+      U32.is_ge(n, 48) && U32.is_le(n, 57) && digits(t)
+
+# A decimal natural as Python spells it: no sign, no `_`, no leading zero.
+def natural(+s: String) -> Bool:
+  Bool.not(String.is_empty(s)) && digits(s) && (String.eq(s, "0") || Bool.not(String.starts_with(s, "0")))
 
 def quoted(s: String) -> Bool:
   match s:
@@ -411,24 +498,30 @@ def closes(last: Maybe<&2, Char>, +q: U32) -> Bool:
       False{}
 
 # The literal contract: one '...' or "..." token of printable ASCII with no
-# backslash and no inner closing quote (so no prefix, escape, triple quote or
-# adjacent literal). Its value is then its body, by inspection of the grammar.
-def literal(+raw: String) -> Maybe<&2, String>:
+# backslash and no inner closing quote (so no other prefix, escape, triple quote
+# or adjacent literal); or r'...' / r"..." whose body may hold a backslash but
+# not end in one. Its value is then its body, by inspection of the grammar.
+def quote(+raw: String, +r: Bool) -> Maybe<&2, String>:
   match raw:
     case SNil{}:
       None{}
     case SCon{h, +t}:
       +q = Char.to_u32(h)
       +body = String.drop_end(t, 1n)
-      ok = (U32.is_eq(q, 34) || U32.is_eq(q, 39)) && closes(String.get_end(t, 1n), q) && plain(body, q)
+      ok = (U32.is_eq(q, 34) || U32.is_eq(q, 39)) && closes(String.get_end(t, 1n), q) &&
+        plain(body, q, S.choose(U32, r, u => q, u => 92)) && Bool.not(r && String.ends_with(body, "\\"))
       S.choose(Maybe<&2, String>, ok, u => Some{body}, u => None{})
+
+def literal(+raw: String) -> Maybe<&2, String>:
+  +r = String.starts_with(raw, "r")
+  quote(S.choose(String, r, u => String.drop(raw, 1n), u => raw), r)
 
 def lit(m: Maybe<&2, String>, +loc: S.Json) -> Result<&2, &2, S.Error, Ir>:
   match m:
     case Some{s}:
       Done{ILit{s, TStr{}, loc}}
     case None{}:
-      refuse(&2, Ir, loc, "literal outside the contract (one plain ASCII string, no escapes; True, False, None)")
+      refuse(&2, Ir, loc, "literal outside the contract (one plain ASCII string or r-string, no escapes; a decimal natural; True, False, None)")
 
 def is_maybe(t: Ty) -> Bool:
   match t:
@@ -444,7 +537,8 @@ def constant(+raw: String, +ret: Ty, +loc: S.Json) -> Result<&2, &2, S.Error, Ir
     S.choose(Result<&2, &2, S.Error, Ir>, String.eq(raw, "None"), u =>
       S.choose(Result<&2, &2, S.Error, Ir>, is_maybe(ret), u => Done{ILit{"None", ret, loc}}, u =>
         refuse(&2, Ir, loc, "None outside an Optional return type")), u =>
-      lit(literal(raw), loc)))
+      S.choose(Result<&2, &2, S.Error, Ir>, natural(raw), u => Done{ILit{raw, TInt{}, loc}}, u =>
+        lit(literal(raw), loc))))
 
 # ---- elaborate: untrusted search ----
 
@@ -519,6 +613,56 @@ def split_form(+j: S.Json) -> Bool:
     String.eq(Lint.tag_of(f), "Attribute") && String.eq(N.string(Lint.field(f, "attr")), "split") &&
     Lint.is_empty(Lint.field(c, "keywords")) && Nat.is_eq(Lint.size(as), 2n) && is_const(Lint.first(tail_of(as)), "1")
 
+# x[i:], x[:-k], x[i:-k]: no step; a present upper bound is a negated literal.
+def slice_form(+j: S.Json) -> Bool:
+  +sl = Lint.field(j, "slice")
+  +hi = Lint.field(sl, "upper")
+  String.eq(Lint.tag_of(j), "Subscript") && String.eq(Lint.tag_of(sl), "Slice") && Lint.is_null(Lint.field(sl, "step")) &&
+    Bool.not(Lint.is_null(Lint.field(sl, "lower")) && Lint.is_null(hi)) &&
+    (Lint.is_null(hi) || (String.eq(Lint.tag_of(hi), "UnaryOp") && String.eq(Lint.tag_of(Lint.field(hi, "op")), "USub") &&
+      String.eq(Lint.tag_of(Lint.field(hi, "operand")), "Constant")))
+
+# The present bounds of a slice, lower first; the upper as its literal k.
+def bounds(+sl: S.Json) -> S.Json:
+  +lo = Lint.field(sl, "lower")
+  +hi = S.choose(S.Json, Lint.is_null(Lint.field(sl, "upper")), u => S.JEnd{}, u => S.JItem{Lint.field(Lint.field(sl, "upper"), "operand"), S.JEnd{}})
+  S.choose(S.Json, Lint.is_null(lo), u => hi, u => S.JItem{lo, hi})
+
+def offers(cs: List<&2, Contract>, +m: String) -> Bool:
+  match cs:
+    case Nil{}:
+      False{}
+    case Contract{r, method, as, ret, bend, pure, total, pre, src} <> rest:
+      String.eq(method, m) || offers(rest, m)
+
+def is_attr(+j: S.Json, +of: String, +attr: String) -> Bool:
+  +v = Lint.field(j, "value")
+  String.eq(Lint.tag_of(j), "Attribute") && String.eq(Lint.tag_of(v), "Name") && String.eq(N.string(Lint.field(v, "id")), of) &&
+    String.eq(N.string(Lint.field(j, "attr")), attr)
+
+# re.search(p, s, re.S), where `re` is the module the signature imports (a
+# granted contract) and no local name.
+def re_form(+j: S.Json, +env: List<&2, Param>, +cs: List<&2, Contract>) -> Bool:
+  +as = Lint.items(Lint.field(j, "args"))
+  String.eq(Lint.tag_of(j), "Call") && is_attr(Lint.field(j, "func"), "re", "search") && offers(cs, "re.search") &&
+    Bool.not(has_name(env, "re")) && Lint.is_empty(Lint.field(j, "keywords")) && Nat.is_eq(Lint.size(as), 3n) &&
+    is_attr(Lint.first(tail_of(tail_of(as))), "re", "S")
+
+def zero(j: S.Json) -> Bool:
+  match j:
+    case S.JNum{n}:
+      Nat.is_eq(n, 0n)
+    case _:
+      False{}
+
+# [elt for x in xs]: one generator, a fresh name, no condition.
+def comp_form(+j: S.Json, +env: List<&2, Param>) -> Bool:
+  +gs = Lint.items(Lint.field(j, "generators"))
+  +g = Lint.first(gs)
+  +t = Lint.field(g, "target")
+  String.eq(Lint.tag_of(j), "ListComp") && Nat.is_eq(Lint.size(gs), 1n) && String.eq(Lint.tag_of(t), "Name") &&
+    Bool.not(has_name(env, N.string(Lint.field(t, "id")))) && Lint.is_empty(Lint.field(g, "ifs")) && zero(Lint.field(g, "is_async"))
+
 def is_len(+j: S.Json, +env: List<&2, Param>) -> Bool:
   +f = Lint.field(j, "func")
   String.eq(Lint.tag_of(j), "Call") && String.eq(Lint.tag_of(f), "Name") && String.eq(N.string(Lint.field(f, "id")), "len") &&
@@ -532,10 +676,14 @@ def two(a: S.Json, b: S.Json) -> S.Json:
 
 # The subexpressions of a node, in Python's evaluation order. A node with none
 # here is a leaf or is refused by `build`.
-def subs(+j: S.Json, +env: List<&2, Param>) -> S.Json:
+def subs(+j: S.Json, +env: List<&2, Param>, +cs: List<&2, Contract>) -> S.Json:
   +tag = Lint.tag_of(j)
   +c = Lint.field(j, "value")
-  S.choose(S.Json, is_method(j), u => S.JItem{Lint.field(Lint.field(j, "func"), "value"), Lint.items(Lint.field(j, "args"))}, u =>
+  +as = Lint.items(Lint.field(j, "args"))
+  S.choose(S.Json, re_form(j, env, cs), u => two(Lint.first(as), Lint.first(tail_of(as))), u =>
+  S.choose(S.Json, slice_form(j), u => S.JItem{c, bounds(Lint.field(j, "slice"))}, u =>
+  S.choose(S.Json, String.eq(tag, "List"), u => Lint.items(Lint.field(j, "elts")), u =>
+  S.choose(S.Json, is_method(j), u => S.JItem{Lint.field(Lint.field(j, "func"), "value"), as}, u =>
     S.choose(S.Json, is_len(j, env), u => Lint.items(Lint.field(j, "args")), u =>
       S.choose(S.Json, String.eq(tag, "UnaryOp"), u => S.JItem{Lint.field(j, "operand"), S.JEnd{}}, u =>
         S.choose(S.Json, String.eq(tag, "BinOp"), u => two(Lint.field(j, "left"), Lint.field(j, "right")), u =>
@@ -545,19 +693,21 @@ def subs(+j: S.Json, +env: List<&2, Param>) -> S.Json:
               S.choose(S.Json, String.eq(narrow(j), ""), u => Lint.items(Lint.field(j, "values")), u => tail_of(Lint.items(Lint.field(j, "values")))), u =>
               S.choose(S.Json, String.eq(tag, "IfExp"), u => S.JItem{Lint.field(j, "test"), two(Lint.field(j, "body"), Lint.field(j, "orelse"))}, u =>
                 S.choose(S.Json, split_form(j), u =>
-                  two(Lint.field(Lint.field(c, "func"), "value"), Lint.first(Lint.items(Lint.field(c, "args")))), u => S.JEnd{}))))))))
+                  two(Lint.field(Lint.field(c, "func"), "value"), Lint.first(Lint.items(Lint.field(c, "args")))), u => S.JEnd{})))))))))))
 
 # The environment the subexpressions see: X narrowed under `X is None or E`.
 def scope(+j: S.Json, +env: List<&2, Param>) -> List<&2, Param>:
   +x = narrow(j)
   S.choose(List<&2, Param>, String.eq(x, ""), u => env, u => Param{x, inner(type_in(env, x)), Lint.field(j, "_loc")} <> env)
 
-def all_bool(e: Ir) -> Bool:
+def all_ty(e: Ir, +want: String) -> Bool:
   match e:
     case IArg{h, t}:
-      String.eq(ty_of(h), "Bool") && all_bool(t)
-    case _:
+      String.eq(ty_of(h), want) && all_ty(t, want)
+    case IEnd{}:
       True{}
+    case _:
+      False{}
 
 def reads_end(e: Ir) -> Nat:
   match e:
@@ -593,11 +743,28 @@ def lit_bool(b: Bool, loc: S.Json) -> Ir:
   ILit{S.choose(String, b, u => "True", u => "False"), TBool{}, loc}
 
 def need_bool(+e: Ir, r: Result<&2, &2, S.Error, Ir>) -> Result<&2, &2, S.Error, Ir>:
-  S.choose(Result<&2, &2, S.Error, Ir>, all_bool(e), u => r, u =>
+  S.choose(Result<&2, &2, S.Error, Ir>, all_ty(e, "Bool"), u => r, u =>
     refuse(&2, Ir, own_loc(hd(e)), "truthiness of a non-bool is outside the fragment"))
 
+# A list display: `[]` takes the declared return type, which must be a list.
+def list_of(+kids: Ir, +ret: Ty, +loc: S.Json) -> Result<&2, &2, S.Error, Ir>:
+  +t = S.choose(Ty, Nat.is_eq(reads_end(kids), 0n), u => ret, u => TList{typ(hd(kids))})
+  S.choose(Result<&2, &2, S.Error, Ir>, Bool.not(String.is_empty(ty(elem(t)))) && all_ty(kids, ty(elem(t))), u => Done{IList{kids, t, loc}}, u =>
+    refuse(&2, Ir, loc, "list of mixed element types, or [] outside a list return type"))
+
+# x[i:-k] = drop_end(drop(x, i), k).
+def cut(+j: S.Json, +kids: Ir, +cs: List<&2, Contract>, +loc: S.Json) -> Result<&2, &2, S.Error, Ir>:
+  +sl = Lint.field(j, "slice")
+  +lo = Bool.not(Lint.is_null(Lint.field(sl, "lower")))
+  +hi = Bool.not(Lint.is_null(Lint.field(sl, "upper")))
+  S.choose(Result<&2, &2, S.Error, Ir>, lo && hi, u =>
+    do Result<&2, &2, S.Error, Ir>:
+      d : Ir <- grant(cs, hd(kids), IArg{hd(tl(kids)), IEnd{}}, "[i:]", loc)
+      grant(cs, d, tl(tl(kids)), "[:-k]", loc), u =>
+    grant(cs, hd(kids), tl(kids), S.choose(String, lo, u => "[i:]", u => "[:-k]"), loc))
+
 # One node from its elaborated subexpressions `kids`. Not recursive.
-def build(+j: S.Json, +kids: Ir, +env: List<&2, Param>, +cs: List<&2, Contract>) -> Result<&2, &2, S.Error, Ir>:
+def build(+j: S.Json, +kids: Ir, +env: List<&2, Param>, +cs: List<&2, Contract>, +ret: Ty) -> Result<&2, &2, S.Error, Ir>:
   +tag = Lint.tag_of(j)
   +loc = Lint.field(j, "_loc")
   +op = S.choose(String, String.eq(tag, "Compare"), u => op_of(j), u => Lint.tag_of(Lint.field(j, "op")))
@@ -606,6 +773,9 @@ def build(+j: S.Json, +kids: Ir, +env: List<&2, Param>, +cs: List<&2, Contract>)
   +c = hd(tl(tl(kids)))
   +x = S.choose(String, String.eq(tag, "BoolOp"), u => narrow(j), u => none_test(j, op))
   +yes = String.eq(op, "Is") || String.eq(op, "Or")
+  S.choose(Result<&2, &2, S.Error, Ir>, re_form(j, env, cs), u => grant(cs, b, IArg{a, IArg{ILit{"s", TStr{}, Lint.field(Lint.first(tail_of(tail_of(Lint.items(Lint.field(j, "args"))))), "_loc")}, IEnd{}}}, "re.search", loc), u =>
+  S.choose(Result<&2, &2, S.Error, Ir>, slice_form(j), u => cut(j, kids, cs, loc), u =>
+  S.choose(Result<&2, &2, S.Error, Ir>, String.eq(tag, "List"), u => list_of(kids, ret, loc), u =>
   S.choose(Result<&2, &2, S.Error, Ir>, is_method(j), u => grant(cs, a, tl(kids), N.string(Lint.field(Lint.field(j, "func"), "attr")), loc), u =>
     S.choose(Result<&2, &2, S.Error, Ir>, is_len(j, env), u => grant(cs, a, IEnd{}, "__len__", loc), u =>
       S.choose(Result<&2, &2, S.Error, Ir>, split_form(j), u => grant(cs, a, tl(kids), "split(,1)[1]", loc), u =>
@@ -626,7 +796,11 @@ def build(+j: S.Json, +kids: Ir, +env: List<&2, Param>, +cs: List<&2, Contract>)
                       S.choose(Result<&2, &2, S.Error, Ir>, String.eq(op, "Gt"), u => grant(cs, a, tl(kids), "__gt__", loc), u =>
                         S.choose(Result<&2, &2, S.Error, Ir>, String.eq(op, "In"), u => grant(cs, b, IArg{a, IEnd{}}, "__contains__", loc), u =>
                           S.choose(Result<&2, &2, S.Error, Ir>, String.eq(op, "NotIn"), u => negate(grant(cs, b, IArg{a, IEnd{}}, "__contains__", loc), cs, loc), u =>
-                            refuse(&2, Ir, loc, "outside the fragment: " ++ tag ++ S.choose(String, String.eq(op, ""), u => "", u => " " ++ op)))))))))))))))
+                            refuse(&2, Ir, loc, "outside the fragment: " ++ tag ++ S.choose(String, String.eq(op, ""), u => "", u => " " ++ op))))))))))))))))))
+
+def listy(+e: Ir, what: String) -> Result<&2, &2, S.Error, Unit>:
+  S.choose(Result<&2, &2, S.Error, Unit>, String.is_empty(ty(elem(typ(e)))), u =>
+    refuse(&2, Unit, own_loc(e), what ++ " over a non-list (" ++ ty_of(e) ++ ")"), u => Done{Unit{}})
 
 # One def walks nodes and argument chains (JItem). Fuel is the JSON size, a
 # bound on depth: exhaustion is a Limit diagnostic, not a partial tree.
@@ -641,6 +815,8 @@ def expr(fuel: Nat, +j: S.Json, +env: List<&2, Param>, +cs: List<&2, Contract>, 
       +left = p
       +tag = Lint.tag_of(j)
       +loc = Lint.field(j, "_loc")
+      +g = Lint.first(Lint.items(Lint.field(j, "generators")))
+      +x = N.string(Lint.field(Lint.field(g, "target"), "id"))
       S.choose(Result<&2, &2, S.Error, Ir>, Lint.is_empty(S.JArr{j}), u => Done{IEnd{}}, u =>
         S.choose(Result<&2, &2, S.Error, Ir>, Nat.is_gt(Lint.size(j), 0n), u =>
           do Result<&2, &2, S.Error, Ir>:
@@ -650,9 +826,15 @@ def expr(fuel: Nat, +j: S.Json, +env: List<&2, Param>, +cs: List<&2, Contract>, 
           S.choose(Result<&2, &2, S.Error, Ir>, String.eq(tag, "Name") && String.eq(Lint.tag_of(Lint.field(j, "ctx")), "Load"), u =>
             lookup(env, N.string(Lint.field(j, "id")), loc), u =>
             S.choose(Result<&2, &2, S.Error, Ir>, String.eq(tag, "Constant"), u => constant(raw_of(j), ret, loc), u =>
+            S.choose(Result<&2, &2, S.Error, Ir>, comp_form(j, env), u =>
               do Result<&2, &2, S.Error, Ir>:
-                kids : Ir <- expr(left, subs(j, env), scope(j, env), cs, ret)
-                build(j, kids, env, cs)))))
+                +over : Ir <- expr(left, Lint.field(g, "iter"), env, cs, ret)
+                ok : Unit <- listy(over, "comprehension")
+                +body : Ir <- expr(left, Lint.field(j, "elt"), Param{x, elem(typ(over)), loc} <> env, cs, ret)
+                Done{IMap{x, over, body, TList{typ(body)}, loc}}, u =>
+              do Result<&2, &2, S.Error, Ir>:
+                kids : Ir <- expr(left, subs(j, env, cs), scope(j, env), cs, ret)
+                build(j, kids, env, cs, ret))))))
 
 def weight(j: S.Json) -> Nat:
   match j:
@@ -691,6 +873,33 @@ def target(+h: S.Json) -> String:
 def slot(+env: List<&2, Param>, +x: String, e: Ir) -> Ty:
   S.choose(Ty, has_name(env, x), u => type_in(env, x), u => typ(e))
 
+# Is there a node with this tag (and this id, unless "") in `j`?
+def under(j: S.Json, +tag: String, +id: String) -> Bool:
+  match j:
+    case S.JObj{+fs}:
+      +o = {S.JObj{fs} : S.Json}
+      (String.eq(Lint.tag_of(o), tag) && (String.is_empty(id) || String.eq(N.string(Lint.field(o, "id")), id))) || under(fs, tag, id)
+    case S.JArr{xs}:
+      under(xs, tag, id)
+    case S.JField{key, value, rest}:
+      under(value, tag, id) || under(rest, tag, id)
+    case S.JItem{h, t}:
+      under(h, tag, id) || under(t, tag, id)
+    case _:
+      False{}
+
+# `not X` on an Optional match: X is None, since a match is always truthy.
+def no_match(+j: S.Json, +env: List<&2, Param>) -> String:
+  +x = Lint.field(j, "operand")
+  +id = N.string(Lint.field(x, "id"))
+  ok = String.eq(Lint.tag_of(j), "UnaryOp") && String.eq(Lint.tag_of(Lint.field(j, "op")), "Not") && String.eq(Lint.tag_of(x), "Name") &&
+    String.eq(ty(type_in(env, id)), ty(TMaybe{TMatch{}}))
+  S.choose(String, ok, u => id, u => "")
+
+def falls(bad: Bool, +t: S.Json) -> Result<&2, &2, S.Error, Unit>:
+  S.choose(Result<&2, &2, S.Error, Unit>, bad, u =>
+    refuse(&2, Unit, Lint.field(Lint.first(t), "_loc"), "statement after an if that falls through inside a loop is outside the fragment"), u => Done{Unit{}})
+
 def must_bool(+e: Ir) -> Result<&2, &2, S.Error, Unit>:
   S.choose(Result<&2, &2, S.Error, Unit>, String.eq(ty_of(e), "Bool"), u => Done{Unit{}}, u =>
     refuse(&2, Unit, own_loc(e), "truthiness of a non-bool is outside the fragment"))
@@ -699,9 +908,11 @@ def must_bool(+e: Ir) -> Result<&2, &2, S.Error, Unit>:
 # `return e` (falling off the end, an implicit None, is refused) and the
 # statements after an `if` are its else-continuation. Inside a `for` body `acc`
 # names the accumulator: a path ends by falling off (the step's value is the
-# accumulator) or by `break`; an `if` must then be the last statement, and
-# `return` is refused (an early-return fold is T3). A leading docstring is a
-# constant expression statement: skipped.
+# accumulator) or by `break`; an `if` must then be the last statement, unless
+# its arm always stops. A loop that returns has no accumulator of the user's:
+# its own, ret_L_C, is None until a `return e` stops the fold with Some{e};
+# then a match on it returns e or runs the statements after the loop. A
+# leading docstring is a constant expression statement: skipped.
 def block(fuel: Nat, xs: S.Json, first: Bool, +near: S.Json, +env: List<&2, Param>, +cs: List<&2, Contract>, +ret: Ty, +acc: String) -> Result<&2, &2, S.Error, Ir>:
   match fuel xs:
     case 0n _:
@@ -716,43 +927,60 @@ def block(fuel: Nat, xs: S.Json, first: Bool, +near: S.Json, +env: List<&2, Para
       +last = Lint.is_empty(S.JArr{t})
       +body = Lint.items(Lint.field(h, "body"))
       +a = accs(Lint.binds(Lint.field(h, "body")), env, "")
+      +nx = no_match(Lint.field(h, "test"), env)
+      +r = "ret_" ++ Nat.show(Lint.line(loc)) ++ "_" ++ Nat.show(Lint.col(loc))
+      +rt = {TMaybe{ret} : Ty}
       S.choose(Result<&2, &2, S.Error, Ir>, first && docstring(h), u => block(left, t, False{}, near, env, cs, ret, acc), u =>
         S.choose(Result<&2, &2, S.Error, Ir>, String.eq(tag, "Return") && Bool.not(Lint.is_null(val)), u =>
-          S.choose(Result<&2, &2, S.Error, Ir>, loop, u => refuse(&2, Ir, loc, "early return inside a loop is outside the fragment (T3)"), u =>
             S.choose(Result<&2, &2, S.Error, Ir>, Bool.not(last), u => refuse(&2, Ir, Lint.field(Lint.first(t), "_loc"), "statement after return"), u =>
               do Result<&2, &2, S.Error, Ir>:
                 +e : Ir <- expr(weight(val), val, env, cs, ret)
-                r : Ir <- lift(e, ret, loc)
-                Done{IReturn{r, loc}})), u =>
+                +v : Ir <- lift(e, ret, loc)
+                Done{S.choose(Ir, loop, u => IStop{ISome{v, rt, loc}, loc}, u => IReturn{v, loc})}), u =>
           S.choose(Result<&2, &2, S.Error, Ir>, String.eq(tag, "Assign") && Bool.not(String.eq(x, "")), u =>
             do Result<&2, &2, S.Error, Ir>:
               +e : Ir <- expr(weight(val), val, env, cs, ret)
               v : Ir <- lift(e, slot(env, x, e), loc)
               k : Ir <- block(left, t, False{}, loc, Param{x, slot(env, x, e), loc} <> env, cs, ret, acc)
               Done{ILet{x, v, k, loc}}, u =>
+            S.choose(Result<&2, &2, S.Error, Ir>, String.eq(tag, "If") && Bool.not(String.is_empty(nx)), u =>
+              do Result<&2, &2, S.Error, Ir>:
+                +none : Ir <- block(left, body, False{}, loc, env, cs, ret, acc)
+                ok : Unit <- falls(loop && Bool.not(last) && Bool.not(stops_all(none)), t)
+                some : Ir <- block(left, chain(Lint.items(Lint.field(h, "orelse")), t), False{}, loc, Param{nx, TMatch{}, loc} <> env, cs, ret, acc)
+                Done{IMaybe{nx, none, some, typ(none), loc}}, u =>
             S.choose(Result<&2, &2, S.Error, Ir>, String.eq(tag, "If"), u =>
-              S.choose(Result<&2, &2, S.Error, Ir>, loop && Bool.not(last), u =>
-                refuse(&2, Ir, Lint.field(Lint.first(t), "_loc"), "statement after if inside a loop is outside the fragment"), u =>
                 do Result<&2, &2, S.Error, Ir>:
                   +c : Ir <- expr(weight(Lint.field(h, "test")), Lint.field(h, "test"), env, cs, ret)
                   ok : Unit <- must_bool(c)
                   +yes : Ir <- block(left, body, False{}, loc, env, cs, ret, acc)
+                  ok : Unit <- falls(loop && Bool.not(last) && Bool.not(stops_all(yes)), t)
                   no : Ir <- block(left, chain(Lint.items(Lint.field(h, "orelse")), t), False{}, loc, env, cs, ret, acc)
-                  Done{IBranch{c, yes, no, typ(yes), loc}}), u =>
+                  Done{IBranch{c, yes, no, typ(yes), loc}}, u =>
               S.choose(Result<&2, &2, S.Error, Ir>, String.eq(tag, "For") && Bool.not(loop), u =>
                 S.choose(Result<&2, &2, S.Error, Ir>, String.eq(x, "") || has_name(env, x) || Bool.not(Lint.is_empty(Lint.field(h, "orelse"))), u =>
                   refuse(&2, Ir, loc, "for: the target must be one fresh name and there is no else"), u =>
+                  S.choose(Result<&2, &2, S.Error, Ir>, under(body, "Return", ""), u =>
+                    S.choose(Result<&2, &2, S.Error, Ir>, Bool.not(String.eq(a, "")), u =>
+                      refuse(&2, Ir, loc, "for: a loop that returns must not also assign a name bound before it"), u =>
+                      S.choose(Result<&2, &2, S.Error, Ir>, has_name(env, r) || under(S.JItem{h, t}, "Name", r), u =>
+                        refuse(&2, Ir, loc, "for: the name " ++ r ++ " is taken"), u =>
+                        do Result<&2, &2, S.Error, Ir>:
+                          +over : Ir <- expr(weight(Lint.field(h, "iter")), Lint.field(h, "iter"), env, cs, ret)
+                          ok : Unit <- listy(over, "for")
+                          step : Ir <- block(left, body, False{}, loc, Param{x, elem(typ(over)), loc} <> Param{r, rt, loc} <> env, cs, ret, r)
+                          k : Ir <- block(left, t, False{}, loc, env, cs, ret, acc)
+                          Done{ILet{r, IFold{x, over, r, ILit{"None", rt, loc}, step, rt, loc}, IMaybe{r, k, IReturn{IVar{r, ret, loc}, loc}, ret, loc}, loc}})), u =>
                   S.choose(Result<&2, &2, S.Error, Ir>, String.eq(a, "") || String.eq(a, "?"), u =>
                     refuse(&2, Ir, loc, "for: the body must assign exactly one name bound before the loop (the accumulator)"), u =>
                     do Result<&2, &2, S.Error, Ir>:
                       +over : Ir <- expr(weight(Lint.field(h, "iter")), Lint.field(h, "iter"), env, cs, ret)
-                      ok : Unit <- S.choose(Result<&2, &2, S.Error, Unit>, String.eq(ty(elem(typ(over))), ""), u =>
-                        refuse(&2, Unit, own_loc(over), "for over a non-list (" ++ ty_of(over) ++ ")"), u => Done{Unit{}})
+                      ok : Unit <- listy(over, "for")
                       step : Ir <- block(left, body, False{}, loc, Param{x, elem(typ(over)), loc} <> env, cs, ret, a)
                       k : Ir <- block(left, t, False{}, loc, env, cs, ret, acc)
-                      Done{ILet{a, IFold{x, over, a, IVar{a, type_in(env, a), loc}, step, type_in(env, a), loc}, k, loc}})), u =>
+                      Done{ILet{a, IFold{x, over, a, IVar{a, type_in(env, a), loc}, step, type_in(env, a), loc}, k, loc}}))), u =>
                 S.choose(Result<&2, &2, S.Error, Ir>, String.eq(tag, "Break") && loop && last, u => Done{IStop{IVar{acc, type_in(env, acc), loc}, loc}}, u =>
-                  refuse(&2, Ir, loc, "outside the fragment: statement " ++ tag)))))))
+                  refuse(&2, Ir, loc, "outside the fragment: statement " ++ tag))))))))
     case 1n+p _:
       S.choose(Result<&2, &2, S.Error, Ir>, String.eq(acc, ""), u =>
         refuse(&2, Ir, near, "no return: falling off the end is outside the fragment"), u =>
@@ -839,8 +1067,12 @@ def elaborate(m: S.Module, sig: S.Module, +cs: List<&2, Contract>, +name: String
     [Lint.Bad{loc, "no unique def " ++ name}])
   source = S.choose(List<&2, Lint.Fact>, Lint.is_null(stub) || plain_args(f), u => [], u =>
     [Lint.Bad{loc, "a signature is given: the source header must be plain and unannotated"}])
+  +bs = Lint.binds(f)
+  global = S.choose(List<&2, Lint.Fact>, Lint.has(bs, "re") || Lint.has(bs, "len"), u =>
+    [Lint.Bad{loc, "the def binds re or len, which Python then reads as a local"}], u => [])
   do Result<&2, &2, S.Error, Fn>:
-    ok : Unit <- header(List.append(&2, Lint.Fact, unique, List.append(&2, Lint.Fact, Lint.closed(body), List.append(&2, Lint.Fact, source, Lint.header(g)))), loc)
+    ok : Unit <- header(List.append(&2, Lint.Fact, unique, List.append(&2, Lint.Fact, Lint.closed(body), List.append(&2, Lint.Fact, source,
+      List.append(&2, Lint.Fact, global, Lint.header(g))))), loc)
     +env : List<&2, Param> <- params(Lint.items(Lint.field(Lint.field(g, "args"), "args")), Lint.items(Lint.field(Lint.field(f, "args"), "args")))
     +ret : Ty <- ann(weight(g), Lint.field(g, "returns"), loc)
     e : Ir <- block(weight(Lint.field(f, "body")), Lint.items(Lint.field(f, "body")), True{}, loc, env, cs, ret, "")
@@ -874,8 +1106,8 @@ def simple(e: Ir) -> Bool:
 
 def solid(e: Ir) -> Bool:
   match e:
-    case ILit{text, t, loc}:
-      Bool.not(String.is_empty(text)) && String.eq(ty(t), "String")
+    case ILit{text, +t, loc}:
+      Bool.not(String.is_empty(text)) && (String.eq(ty(t), "String") || String.eq(ty(t), "Nat"))
     case IArg{h, t}:
       solid(h) && solid(t)
     case IEnd{}:
@@ -883,32 +1115,105 @@ def solid(e: Ir) -> Bool:
     case _:
       False{}
 
-# What a test's outcome makes known on the path: `p(args)` for a primitive call
-# of names and literals, seen through not/or/and. The kernel drops every fact
-# at every binder, so a fact never outlives the names it mentions.
-def known(e: Ir, +want: Bool) -> List<&2, String>:
+# What a test's outcome makes known on the path: the primitive call itself, of
+# names and literals, seen through not/or/and. The kernel drops every fact at
+# every binder, so a fact never outlives the names it mentions; except where
+# IMaybe's some arm rebinds `on` to its own payload, the same value narrowed.
+def known(e: Ir, +want: Bool) -> List<&2, Ir>:
   match e:
     case IArg{h, t}:
       known(h, want)
-    case IPrim{+bend, +args, t, loc}:
-      S.choose(List<&2, String>, String.eq(bend, "Bool.not"), u => known(args, Bool.not(want)), u =>
-        S.choose(List<&2, String>, want && simple(args), u => [bend ++ "(" ++ show(args, "", []) ++ ")"], u => []))
+    case IPrim{+bend, +args, +t, +loc}:
+      S.choose(List<&2, Ir>, String.eq(bend, "Bool.not"), u => known(args, Bool.not(want)), u =>
+        S.choose(List<&2, Ir>, want && simple(args), u => [IPrim{bend, args, t, loc}], u => []))
     case IBranch{+test, +yes, +no, t, loc}:
       +or = is_lit(yes, "True") && Bool.not(want)
       +and = is_lit(no, "False") && want
-      S.choose(List<&2, String>, or, u => List.append(&2, String, known(test, False{}), known(no, False{})), u =>
-        S.choose(List<&2, String>, and, u => List.append(&2, String, known(test, True{}), known(yes, True{})), u => []))
+      S.choose(List<&2, Ir>, or, u => List.append(&2, Ir, known(test, False{}), known(no, False{})), u =>
+        S.choose(List<&2, Ir>, and, u => List.append(&2, Ir, known(test, True{}), known(yes, True{})), u => []))
     case _:
       []
 
+# What a let makes known: `m = re.search(p, ...)` binds a match that, if any,
+# took every group p must take (Py.took is a fact, not a primitive).
+def lets(+name: String, val: Ir, +loc: S.Json) -> List<&2, Ir>:
+  match val:
+    case IPrim{+bend, args, t, l}:
+      S.choose(List<&2, Ir>, String.eq(bend, "Py.search"), u =>
+        [IPrim{"Py.took", IArg{IVar{name, TBad{}, loc}, IArg{hd(tl(args)), IEnd{}}}, TBool{}, loc}], u => [])
+    case _:
+      []
+
+def text_of(e: Ir) -> String:
+  match e:
+    case ILit{text, t, loc}:
+      text
+    case _:
+      ""
+
+# Group k takes part in every match of r, so m.group(k) is a string, not None.
+def must(r: Re, +k: String) -> Bool:
+  match r:
+    case RCap{n, x}:
+      String.eq(Nat.show(n), k) || must(x, k)
+    case RCat{a, b}:
+      must(a, k) || must(b, k)
+    case RAlt{a, b}:
+      must(a, k) && must(b, k)
+    case RRep{x, lo, hi, g}:
+      Nat.is_gt(lo, 0n) && must(x, k)
+    case _:
+      False{}
+
+def took(r: Regex.Res(Re), +k: String) -> Bool:
+  match r:
+    case Done{x}:
+      must(x, k)
+    case Fail{e}:
+      False{}
+
+def compiles(r: Regex.Res(Regex)) -> Bool:
+  match r:
+    case Done{x}:
+      True{}
+    case Fail{e}:
+      False{}
+
+# Does the fact give the guard `pre` of these arguments? Itself; or
+# `startswith(x, q)` gives `sep in x` when q holds sep; or `Py.took(m, p)` gives
+# the group `m.group(k)` asks for.
+def gives(f: Ir, +pre: String, +args: Ir) -> Bool:
+  match f:
+    case IPrim{+b, +fa, t, loc}:
+      +x = String.eq(show(hd(fa), "", []), show(hd(args), "", []))
+      +q = hd(tl(fa))
+      (String.eq(b, pre) && String.eq(show(fa, "", []), show(args, "", []))) ||
+        (x && String.eq(pre, "String.contains") && String.eq(b, "String.starts_with") && solid(tl(fa)) && String.contains(text_of(q), text_of(hd(tl(args))))) ||
+        (x && String.eq(pre, "Py.took") && String.eq(b, pre) && took(Regex.parse(text_of(q)), text_of(hd(tl(args)))))
+    case _:
+      False{}
+
+def holds(fs: List<&2, Ir>, +pre: String, +args: Ir) -> Bool:
+  match fs:
+    case Nil{}:
+      False{}
+    case f <> rest:
+      gives(f, pre, args) || holds(rest, pre, args)
+
+# A guard that the literal arguments decide alone. The one flag contracted is re.S.
+def static(+pre: String, +args: Ir) -> Bool:
+  String.eq(pre, "literal") || (String.eq(pre, "positive") && Bool.not(String.eq(text_of(hd(tl(args))), "0"))) ||
+    (String.eq(pre, "Regex.compile") && String.eq(text_of(hd(tl(tl(args)))), "s") && compiles(Regex.compile(text_of(hd(tl(args))), "s")))
+
 # A contract grants `bend` at these types; a guarded one (`pre`) only where the
-# guard is a known fact of the same arguments, names and non-empty literals.
-def granted(cs: List<&2, Contract>, +bend: String, +args: Ir, +ret: String, +facts: List<&2, String>) -> Bool:
+# arguments after the receiver are literals and the guard is decided by them or
+# given by a fact known on the path (then the receiver is a name).
+def granted(cs: List<&2, Contract>, +bend: String, +args: Ir, +ret: String, +facts: List<&2, Ir>) -> Bool:
   match cs:
     case Nil{}:
       False{}
     case Contract{r, method, as, out, b, pure, total, +pre, src} <> rest:
-      guard = String.is_empty(pre) || (simple(args) && solid(tl(args)) && Lint.has(facts, pre ++ "(" ++ show(args, "", []) ++ ")"))
+      guard = String.is_empty(pre) || (solid(tl(args)) && (static(pre, args) || (simple(args) && holds(facts, pre, args))))
       (String.eq(b, bend) && String.eq(ty(r) ++ ";" ++ tys(as), arg_tys(args)) && String.eq(ty(out), ret) && pure && total && guard) ||
         granted(rest, bend, args, ret, facts)
 
@@ -969,7 +1274,9 @@ def acc_of(p: Pos) -> String:
 def lit_ok(+text: String, t: Ty) -> Bool:
   match t:
     case TStr{}:
-      plain(text, 0)
+      plain(text, 0, 0)
+    case TInt{}:
+      natural(text)
     case TBool{}:
       String.eq(text, "True") || String.eq(text, "False")
     case TMaybe{of}:
@@ -987,7 +1294,7 @@ def both(a: String, +b: String) -> String:
 # "" iff the node is inside the emittable fragment: bound, typed, spanned, in a
 # position that can hold it, every primitive granted by a contract (and its
 # guard known). Recomputed from the IR alone; the elaborator is not trusted.
-def why(e: Ir, +pos: Pos, +env: List<&2, Param>, +facts: List<&2, String>, +cs: List<&2, Contract>) -> String:
+def why(e: Ir, +pos: Pos, +env: List<&2, Param>, +facts: List<&2, Ir>, +cs: List<&2, Contract>) -> String:
   match e:
     case IVar{+name, t, +loc}:
       S.choose(String, spanned(loc) && bound(env, name, ty(t)), u => "", u => "unbound or mistyped name " ++ name ++ Lint.at(loc))
@@ -1006,7 +1313,7 @@ def why(e: Ir, +pos: Pos, +env: List<&2, Param>, +facts: List<&2, String>, +cs: 
       S.choose(String, spanned(loc) && bound(env, acc_of(pos), ty_of(val)), u => why(val, PArg{}, env, facts, cs), u =>
         "break outside a fold step, or not of the accumulator's type" ++ Lint.at(loc))
     case ICall{name, args, t, loc}:
-      "IR node Call is not emittable in T2" ++ Lint.at(loc)
+      "IR node Call is not emittable in T3" ++ Lint.at(loc)
     case ISome{+val, t, +loc}:
       S.choose(String, spanned(loc) && String.eq(ty(inner(t)), ty_of(val)) && Bool.not(String.is_empty(ty_of(val))), u =>
         why(val, PArg{}, env, facts, cs), u => "Some of a mistyped value" ++ Lint.at(loc))
@@ -1014,16 +1321,16 @@ def why(e: Ir, +pos: Pos, +env: List<&2, Param>, +facts: List<&2, String>, +cs: 
       +stepped = String.is_empty(acc_of(pos)) || String.eq(acc_of(pos), name) || Bool.not(has_name(env, name))
       +kept = Bool.not(has_name(env, name)) || bound(env, name, ty_of(val))
       ok = spanned(loc) && ident(name) && Bool.not(is_arg(pos)) && Bool.not(String.is_empty(ty_of(val))) && stepped && kept
-      S.choose(String, ok, u => both(why(val, PArg{}, env, facts, cs), why(body, pos, Param{name, typ(val), loc} <> env, [], cs)), u =>
+      S.choose(String, ok, u => both(why(val, PArg{}, env, facts, cs), why(body, pos, Param{name, typ(val), loc} <> env, lets(name, val, loc), cs)), u =>
         "let of " ++ name ++ ": in argument position, retyped, or rebinding a captured name inside a fold step" ++ Lint.at(loc))
     case IBranch{+test, +yes, +no, +t, +loc}:
       ok = spanned(loc) && String.eq(ty_of(test), "Bool") && String.eq(ty_of(yes), ty(t)) && String.eq(ty_of(no), ty(t)) && Bool.not(String.is_empty(ty(t)))
-      S.choose(String, ok, u => both(why(test, PArg{}, env, facts, cs), both(why(yes, pos, env, List.append(&2, String, known(test, True{}), facts), cs),
-        why(no, pos, env, List.append(&2, String, known(test, False{}), facts), cs))), u => "branch on a non-Bool test, or arms of another type" ++ Lint.at(loc))
+      S.choose(String, ok, u => both(why(test, PArg{}, env, facts, cs), both(why(yes, pos, env, List.append(&2, Ir, known(test, True{}), facts), cs),
+        why(no, pos, env, List.append(&2, Ir, known(test, False{}), facts), cs))), u => "branch on a non-Bool test, or arms of another type" ++ Lint.at(loc))
     case IMaybe{+on, +none, +some, +t, +loc}:
       ok = spanned(loc) && ident(on) && is_maybe(type_in(env, on)) && Nat.is_eq(reads(none, on), 0n) &&
         String.eq(ty_of(none), ty(t)) && String.eq(ty_of(some), ty(t)) && Bool.not(String.is_empty(ty(t)))
-      S.choose(String, ok, u => both(why(none, pos, env, facts, cs), why(some, pos, Param{on, inner(type_in(env, on)), loc} <> env, [], cs)), u =>
+      S.choose(String, ok, u => both(why(none, pos, env, facts, cs), why(some, pos, Param{on, inner(type_in(env, on)), loc} <> env, facts, cs)), u =>
         "Optional match on a name that is not Optional, a None arm that reads it, or arms of another type" ++ Lint.at(loc))
     case IFold{+item, +over, +acc, +init, +step, +t, +loc}:
       ok = spanned(loc) && ident(item) && ident(acc) && Bool.not(String.eq(item, acc)) && Bool.not(String.is_empty(ty(elem(typ(over))))) &&
@@ -1031,6 +1338,14 @@ def why(e: Ir, +pos: Pos, +env: List<&2, Param>, +facts: List<&2, String>, +cs: 
       S.choose(String, ok, u => both(why(over, PArg{}, env, facts, cs), both(why(init, PArg{}, env, facts, cs),
         why(step, PStep{acc}, Param{acc, t, loc} <> Param{item, elem(typ(over)), loc} <> env, [], cs))), u =>
         "fold over a non-list, item = accumulator, or a step of another type" ++ Lint.at(loc))
+    case IList{+items, +t, +loc}:
+      ok = spanned(loc) && Bool.not(String.is_empty(ty(elem(t)))) && all_ty(items, ty(elem(t)))
+      S.choose(String, ok, u => why(items, PArg{}, env, facts, cs), u => "list of items not all of its element type" ++ Lint.at(loc))
+    case IMap{+item, +over, +body, +t, +loc}:
+      ok = spanned(loc) && ident(item) && Bool.not(String.is_empty(ty(elem(typ(over))))) && Bool.not(String.is_empty(ty_of(body))) &&
+        String.eq(ty(t), ty(TList{typ(body)}))
+      S.choose(String, ok, u => both(why(over, PArg{}, env, facts, cs), why(body, PArg{}, Param{item, elem(typ(over)), loc} <> env, [], cs)), u =>
+        "comprehension over a non-list, or of another type" ++ Lint.at(loc))
 
 # The type every tail path returns; "" if any path does not end in IReturn.
 def returned(e: Ir) -> String:
@@ -1069,6 +1384,10 @@ def helpers(e: Ir, +f: String) -> List<&2, String>:
       hname(f, "opt", loc) <> List.append(&2, String, helpers(none, f), helpers(some, f))
     case IFold{item, over, acc, init, step, t, loc}:
       hname(f, "for", loc) <> List.append(&2, String, helpers(over, f), List.append(&2, String, helpers(init, f), helpers(step, f)))
+    case IList{items, t, loc}:
+      helpers(items, f)
+    case IMap{item, over, body, t, loc}:
+      hname(f, "comp", loc) <> List.append(&2, String, helpers(over, f), helpers(body, f))
     case _:
       []
 
@@ -1122,6 +1441,10 @@ def kind(e: Ir) -> String:
       "Opt " ++ on
     case IFold{item, over, acc, init, step, t, loc}:
       "Fold " ++ item ++ " -> " ++ acc
+    case IList{items, t, loc}:
+      "List"
+    case IMap{item, over, body, t, loc}:
+      "Map " ++ item
     case _:
       "?"
 
@@ -1167,6 +1490,11 @@ def xrows(e: Ir, +f: String, +env: List<&2, Param>, +dl: Nat, +col: Nat) -> List
       +to = Nat.add(at, Nat.add(String.length(show(over, f, env)), Nat.add(2n, String.length(seed("", stops(step))))))
       row(IFold{item, over, acc, init, step, t, loc}, String.length(show(IFold{item, over, acc, init, step, t, loc}, f, env)), dl, col) <>
         List.append(&2, Row, xrows(over, f, env, dl, at), xrows(init, f, env, dl, S.choose(Nat, stops(step), u => Nat.sub(to, 1n), u => to)))
+    case IList{+items, +t, +loc}:
+      row(IList{items, t, loc}, String.length(show(IList{items, t, loc}, f, env)), dl, col) <> xrows(items, f, env, dl, 1n+col)
+    case IMap{+item, +over, +body, +t, +loc}:
+      row(IMap{item, over, body, t, loc}, String.length(show(IMap{item, over, body, t, loc}, f, env)), dl, col) <>
+        xrows(over, f, env, dl, Nat.add(col, 1n+String.length(hname(f, "comp", loc))))
     case IEnd{}:
       []
     case +other:
@@ -1288,6 +1616,16 @@ def defs(e: Ir, +f: String, +env: List<&2, Param>, +wrap: Bool) -> List<&2, Def>
           "    case Nil{}:\n      " ++ acc ++ "\n    case " ++ pat ++ ":\n")
       List.append(&2, Def, defs(over, f, env, False{}), List.append(&2, Def, defs(init, f, env, False{}), List.append(&2, Def, defs(step, f, inside, stop),
         [atop(head, [], blk(step, f, inside, S.choose(Nat, stop, u => 9n, u => 5n), 6n, name ++ "(_rest, ", argl(cs) ++ ")", stop))])))
+    case IList{items, t, loc}:
+      defs(items, f, env, False{})
+    case IMap{+item, +over, +body, +t, +loc}:
+      +inside = {Param{item, elem(typ(over)), loc} <> env : List<&2, Param>}
+      +cs = caps(env, IArg{body, IEnd{}}, [item])
+      +name = hname(f, "comp", loc)
+      head = "def " ++ name ++ "(_xs: " ++ ty(typ(over)) ++ sigs(cs, IEnd{}, True{}) ++ ") -> " ++ ty(t) ++ ":\n  match _xs:\n" ++
+        "    case Nil{}:\n      []\n    case Con{" ++ mark(reads(body, item)) ++ item ++ ", _rest}:\n"
+      List.append(&2, Def, defs(over, f, env, False{}), List.append(&2, Def, defs(body, f, inside, False{}),
+        [atop(head, [], blk(body, f, inside, 5n, 6n, "", " <> " ++ name ++ "(_rest" ++ argl(cs) ++ ")", False{}))]))
     case _:
       []
 
@@ -1361,16 +1699,38 @@ def emit(f: Fn, +cs: List<&2, Contract>) -> Result<&2, &2, S.Error, String>:
     ok : Fn <- verify(f, cs)
     Done{render(ok, cs)}
 
-# `sig` is Python source holding an annotated stub of `name`, or "" when the
-# def carries its own annotations.
-def translate_as(source: String, sig: String, +cs: List<&2, Contract>, +name: String) -> Result<&2, &2, S.Error, String>:
+# The signature says `import re`: one name, no alias.
+def imports_re(xs: S.Json) -> Bool:
+  match xs:
+    case S.JItem{+h, t}:
+      +ns = Lint.items(Lint.field(h, "names"))
+      +a = Lint.first(ns)
+      (String.eq(Lint.tag_of(h), "Import") && Nat.is_eq(Lint.size(ns), 1n) && String.eq(N.string(Lint.field(a, "name")), "re") &&
+        Lint.is_null(Lint.field(a, "asname"))) || imports_re(t)
+    case _:
+      False{}
+
+# `re.` contracts are `re`'s functions: offered only where `re` is that module.
+def scoped(cs: List<&2, Contract>, +re: Bool) -> List<&2, Contract>:
+  match cs:
+    case Nil{}:
+      []
+    case Contract{r, +method, as, ret, bend, pure, total, pre, src} <> rest:
+      +more = scoped(rest, re)
+      S.choose(List<&2, Contract>, re || Bool.not(String.starts_with(method, "re.")), u =>
+        Contract{r, method, as, ret, bend, pure, total, pre, src} <> more, u => more)
+
+# `sig` is Python source holding an annotated stub of `name` (and `import re`
+# if `re` is the module), or "" when the def carries its own annotations.
+def translate_as(source: String, sig: String, cs: List<&2, Contract>, +name: String) -> Result<&2, &2, S.Error, String>:
   do Result<&2, &2, S.Error, String>:
     ts : List<&2, S.Tok> <- L.lex(source)
     m : S.Module <- P.parse(ts)
     ss : List<&2, S.Tok> <- L.lex(sig)
-    g : S.Module <- P.parse(ss)
-    f : Fn <- elaborate(m, g, cs, name)
-    emit(f, cs)
+    +g : S.Module <- P.parse(ss)
+    +on : List<&2, Contract> <- Done{scoped(cs, imports_re(Lint.items(Lint.field(S.module(g), "body"))))}
+    f : Fn <- elaborate(m, g, on, name)
+    emit(f, on)
 
 def translate(source: String, +cs: List<&2, Contract>, name: String) -> Result<&2, &2, S.Error, String>:
   translate_as(source, "", cs, name)
