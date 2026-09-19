@@ -23,7 +23,7 @@ The hand lexer handles indentation and alternate tab columns, comments,
 bracket-suppressed newlines, explicit continuations, CRLF, form feed, keywords,
 raw number spellings, and prefixed/single/triple strings. Unicode word ranges
 are frozen from the pinned CPython 3.11.15 Unicode database. The parser defers
-Unicode identifier normalization and f-strings to later slices.
+Unicode identifier normalization to later slices.
 
 The parser supports expressions, calls, attributes, subscripts without slices,
 tuple/list/set/dict displays and unpacking, `lambda`, assignment and augmented
@@ -33,7 +33,9 @@ assignment, expression statements, `if/elif/else`, `while/else`, `for/else`,
 `del`, `assert`, `raise`, `return`, `pass`, `break`, `continue`, and `import` /
 `from … import` (dotted names, `as`, relative levels, `*`, parenthesized lists), and
 `class` (bases, keywords, `**kwds`, decorators, nested), and slices
-(`a[i:j:k]`, any bound omitted, slice tuples `a[:, 1]`, in Load/Store/Del). It follows
+(`a[i:j:k]`, any bound omitted, slice tuples `a[:, 1]`, in Load/Store/Del), and f-strings
+(`JoinedStr`/`FormattedValue`: fields, `!r`/`!s`/`!a`, the debug `=`, format specs with nested
+fields, nested/raw/triple-quoted f-strings, implicit concatenation). It follows
 `ast.parse`'s syntax acceptance rather than Python compilation's additional
 scope checks (`*a = 1` parses). `async`/`await`, `yield`,
 `except*`, comprehensions, annotated assignment, walrus, non-ASCII
@@ -57,7 +59,7 @@ conversion in Bend. `normalize.py` separates every location from structural
 comparison and maps CPython UTF-8 byte columns to code points per LF-delimited
 physical line. Trivia is dropped; there is no span sampling.
 
-One directly recursive `go` dispatches 39 grammar modes with precedence
+One directly recursive `go` dispatches 41 grammar modes with precedence
 climbing. Every mode entry decrements a residual global budget. The first
 structurally decreasing Nat proves termination independently of the residual
 budget. Sequential parses thread the residual state, never replenish it
@@ -70,6 +72,13 @@ the `with (` header, restarts its second alternative from the saved budget, so
 a header is metered at most twice; bodies are outside the choice. The EOF allowance
 covers the final Block entry. The deterministic fuzz harness measures actual
 consumption and rejects any `Limit` on an oracle-accepted generated input.
+
+An f-string stays one `STRING` token (the 3.11 tokenizer's shape). `fstring.bend` scans its
+body after CPython's `fstring_find_literal`/`fstring_find_expr`; each field's text is lexed as
+`(expr)` from the `{` (`lex_at`, so every inner token keeps its source position and a bare
+tuple takes CPython's paren span) and parsed by the same `go` on its own
+`32 * (token_count + 1)` budget (`within`); the outer budget resumes untouched. Text
+Constants travel as `_parts` pieces the harness decodes and joins.
 This is an implementation bound with regression evidence, not a mechanized
 proof of Python grammar completeness or a bound on hardware memory/time.
 

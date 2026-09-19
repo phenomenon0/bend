@@ -309,3 +309,26 @@ def class(id: S.Tok, +call: S.Expr, +body: S.Expr, decorators: S.Json, start: S.
 # P7 slices. An absent bound is `$none`; the span runs from the first token to the last one taken.
 def slice(lower: S.Expr, upper: S.Expr, step: S.Expr, start: S.Pos, end: S.Pos) -> S.Expr:
   node("Slice", S.JField{"lower", opt(lower), S.JField{"upper", opt(upper), S.JField{"step", opt(step), S.JEnd{}}}}, start, end)
+
+# P8 f-strings. A Constant's `_parts` are [kind, text] pieces the harness decodes and joins:
+# "s" a whole plain token, "f" f-string literal text (escapes), "v" verbatim (raw, debug text).
+# `$f` carries the body scan state between FString steps.
+def part(kind: String, text: String) -> S.Json:
+  S.JArr{S.JItem{S.JStr{kind}, S.JItem{S.JStr{text}, S.JEnd{}}}}
+
+def fstate(values: S.Json, parts: S.Json, rest: String, pos: S.Pos) -> S.Expr:
+  +p = pos
+  node("$f", S.JField{"values", values, S.JField{"parts", parts, S.JField{"rest", S.JStr{rest}, S.JEnd{}}}}, p, p)
+
+def flush(values: S.Json, parts: S.Json, kind: S.Json, lo: S.Pos, hi: S.Pos) -> S.Json:
+  match parts:
+    case S.JItem{h, t}:
+      S.JItem{S.expr(node("Constant", S.JField{"_parts", arr(S.JItem{h, t}), S.JField{"kind", kind, S.JEnd{}}}, lo, hi)), values}
+    case _:
+      values
+
+def joined(values: S.Json, lo: S.Pos, hi: S.Pos) -> S.Expr:
+  node("JoinedStr", S.JField{"values", arr(values), S.JEnd{}}, lo, hi)
+
+def formatted(value: S.Expr, conversion: S.Json, spec: S.Json, lo: S.Pos, hi: S.Pos) -> S.Expr:
+  node("FormattedValue", S.JField{"value", S.expr(value), S.JField{"conversion", conversion, S.JField{"format_spec", spec, S.JEnd{}}}}, lo, hi)

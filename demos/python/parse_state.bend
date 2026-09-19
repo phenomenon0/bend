@@ -54,6 +54,10 @@ def peek(s: State) -> Result<&2, &2, S.Error, Reply<S.Tok>>:
   State{+ts, last, fuel} = s
   Done{Reply{first(ts), State{ts, last, fuel}}}
 
+def tokens(s: State) -> Result<&2, &2, S.Error, Reply<List<&2, S.Tok>>>:
+  State{+ts, last, fuel} = s
+  Done{Reply{ts, State{ts, last, fuel}}}
+
 def second(s: State) -> Result<&2, &2, S.Error, Reply<S.Tok>>:
   State{+ts, last, fuel} = s
   Done{Reply{first(List.tail(&2, S.Tok, ts)), State{ts, last, fuel}}}
@@ -125,3 +129,19 @@ def either_go(-A: Data, first: M(A), other: M(A), s: State) -> Result<&2, &2, S.
 
 def either(-A: Data, first: M(A), other: M(A)) -> M(A):
   either_go(A, first, other)
+
+# An f-string field: `act` parses the field's own tokens on its own budget,
+# then the outer tokens, end and fuel resume untouched.
+def resume(-A: Data, ts: List<&2, S.Tok>, last: S.Pos, fuel: Nat, r: Result<&2, &2, S.Error, Reply<A>>) -> Result<&2, &2, S.Error, Reply<A>>:
+  match r:
+    case Done{Reply{x, inner}}:
+      Done{Reply{x, State{ts, last, fuel}}}
+    case Fail{e}:
+      Fail{e}
+
+def within_go(-A: Data, sub: List<&2, S.Tok>, budget: Nat, act: M(A), s: State) -> Result<&2, &2, S.Error, Reply<A>>:
+  State{ts, +last, fuel} = s
+  resume(A, ts, last, fuel, act(State{sub, last, budget}))
+
+def within(-A: Data, sub: List<&2, S.Tok>, budget: Nat, act: M(A)) -> M(A):
+  within_go(A, sub, budget, act)

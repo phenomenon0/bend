@@ -5,6 +5,9 @@ import ./syntax.bend as S
 import ./parse_state.bend as P
 import ./nodes.bend as N
 import ./operators.bend as O
+import ./lexer.bend as L
+import ./scanner.bend as C
+import ./fstring.bend as F
 
 # These are grammar modes, not saved continuations: recursive results return
 # through the ordinary Bend call stack.
@@ -13,6 +16,8 @@ type Mode is Data:
   Prefix{minimum: Nat}
   Rest{minimum: Nat, left: S.Expr}
   Strings{raw: String, kind: S.Json, start: S.Pos, end: S.Pos}
+  Joined{kind: S.Json, start: S.Pos, end: S.Pos, values: S.Json, parts: S.Json}
+  FString{ctx: F.Ctx, level: Nat, rest: String, pos: S.Pos, values: S.Json, parts: S.Json}
   Item{minimum: Nat}
   TestList{minimum: Nat}
   Comma{minimum: Nat, items: S.Json, start: S.Pos, end: S.Pos}
@@ -91,12 +96,41 @@ def bytes_literal(raw: String) -> Bool:
   +prefix = String.to_lower(String.take(String.trim_start(raw), 2n))
   String.starts_with(prefix, "b") || String.eq(prefix, "rb")
 
+# A run of adjacent STRING tokens: does it hold an f-string, and where does it end.
+def run_f(ts: List<&2, S.Tok>) -> Bool:
+  match ts:
+    case Nil{}:
+      False{}
+    case Con{+t, rest}:
+      S.choose(Bool, P.is_kind(t, "STRING"), u => S.choose(Bool, fstring(P.tok_text(t)), u => True{}, u => run_f(rest)), u => False{})
+
+def run_end(ts: List<&2, S.Tok>, +end: S.Pos) -> S.Pos:
+  match ts:
+    case Nil{}:
+      end
+    case Con{+t, rest}:
+      S.choose(S.Pos, P.is_kind(t, "STRING"), u => run_end(rest, P.tok_end(t)), u => end)
+
+def empty_text(+o: F.Open) -> Bool:
+  F.Open{raw, +body, offset} = o
+  S.choose(Bool, raw, u => String.is_empty(body), u => F.vanishes(body))
+
+def conversion(+t: F.Tail) -> S.Json:
+  +c = F.conversion(t)
+  S.choose(S.Json, Bool.not(Nat.is_eq(c, 0n)), u => S.JNum{c}, u =>
+    S.choose(S.Json, String.is_empty(F.debug(t)) || F.has_spec(t), u => S.JNeg{1n}, u => S.JNum{114n}))
+
 def syntax_result(r: P.Reply<S.Expr>) -> Result<&2, &2, S.Error, S.Module>:
   match r:
     case P.Reply{body, P.State{Nil{}, last, fuel}}:
       Done{S.Module{N.get_body(body)}}
     case P.Reply{body, P.State{Con{t, rest}, last, fuel}}:
       Fail{S.PErr{S.Syntax{}, P.tok_start(t), "tokens after EOF"}}
+
+# K bounds dispatches, including no-consumption transitions, per token.
+# P2 deterministic grammar fuzz records the observed global high-water mark.
+def fuel_k() -> Nat:
+  32n
 
 def go(+fuel: Nat, +mode: Mode) -> P.M(S.Expr):
   match fuel mode:
@@ -115,7 +149,11 @@ def go(+fuel: Nat, +mode: Mode) -> P.M(S.Expr):
               drop : S.Tok <- P.take
               return N.atom_constant(t), u =>
             S.choose(P.M(S.Expr), P.is_kind(t, "STRING"), u =>
-              go(left, Strings{"", literal_kind(P.tok_text(t)), P.tok_start(t), P.tok_end(t)}), u =>
+              do P.M<S.Expr>:
+                +ts : List<&2, S.Tok> <- P.tokens
+                S.choose(P.M(S.Expr), run_f(ts), u =>
+                  go(left, Joined{literal_kind(P.tok_text(t)), P.tok_start(t), run_end(ts, P.tok_start(t)), S.JEnd{}, S.JEnd{}}), u =>
+                  go(left, Strings{"", literal_kind(P.tok_text(t)), P.tok_start(t), P.tok_end(t)})), u =>
               S.choose(P.M(S.Expr), P.is_text(t, "+") || P.is_text(t, "-") || P.is_text(t, "~") || (P.is_text(t, "not") && Nat.is_le(minimum, 4n)), u =>
                 do P.M<S.Expr>:
                   drop : S.Tok <- P.take
@@ -165,13 +203,54 @@ def go(+fuel: Nat, +mode: Mode) -> P.M(S.Expr):
       P.meter(S.Expr, do P.M<S.Expr>:
         +t : S.Tok <- P.peek
         S.choose(P.M(S.Expr), P.is_kind(t, "STRING"), u =>
-          S.choose(P.M(S.Expr), fstring(P.tok_text(t)), u => P.unsupported(S.Expr, "f-string"), u =>
-            S.choose(P.M(S.Expr), Bool.not(String.is_empty(raw)) && Bool.xor(bytes_literal(raw), bytes_literal(P.tok_text(t))), u =>
-              P.syntax(S.Expr, "cannot mix bytes and nonbytes literals"), u =>
-              do P.M<S.Expr>:
-                drop : S.Tok <- P.take
-                go(left, Strings{raw ++ " " ++ P.tok_text(t), kind, start, P.tok_end(t)}))), u =>
+          S.choose(P.M(S.Expr), Bool.not(String.is_empty(raw)) && Bool.xor(bytes_literal(raw), bytes_literal(P.tok_text(t))), u =>
+            P.syntax(S.Expr, "cannot mix bytes and nonbytes literals"), u =>
+            do P.M<S.Expr>:
+              drop : S.Tok <- P.take
+              go(left, Strings{raw ++ " " ++ P.tok_text(t), kind, start, P.tok_end(t)})), u =>
           P.M.pure(S.Expr, N.constant(raw, kind, start, end))))
+    case 1n+left Joined{+kind, +start, +end, +values, +parts}:
+      P.meter(S.Expr, do P.M<S.Expr>:
+        +t : S.Tok <- P.peek
+        S.choose(P.M(S.Expr), Bool.not(P.is_kind(t, "STRING")), u => P.M.pure(S.Expr, N.joined(N.flush(values, parts, kind, start, end), start, end)), u =>
+          S.choose(P.M(S.Expr), bytes_literal(P.tok_text(t)), u => P.syntax(S.Expr, "cannot mix bytes and nonbytes literals"), u =>
+            do P.M<S.Expr>:
+              drop : S.Tok <- P.take
+              +o : F.Open <- P.M.pure(F.Open, F.open(P.tok_text(t)))
+              S.choose(P.M(S.Expr), fstring(P.tok_text(t)), u =>
+                do P.M<S.Expr>:
+                  +st : S.Expr <- go(left, FString{F.Ctx{F.is_raw(o), kind, start, end, P.tok_start(t), P.tok_end(t)}, 0n, F.body(o), F.shift(P.tok_start(t), F.offset(o)), values, parts})
+                  go(left, Joined{kind, start, end, N.get(N.get_fields(st), "values"), N.get(N.get_fields(st), "parts")}), u =>
+                go(left, Joined{kind, start, end, values, S.choose(S.Json, empty_text(o), u => parts, u => S.JItem{N.part("s", P.tok_text(t)), parts})})))))
+    # CPython 3.11: a spec's closing text Constant takes its own token's span and no kind; all else the run's.
+    case 1n+left FString{ctx, +level, rest, pos, +values, parts}:
+      F.Ctx{+raw, +kind, +lo, +hi, +tlo, +thi} = ctx
+      P.meter(S.Expr, do P.M<S.Expr>:
+        +lit : F.Cut <- P.lift(F.Cut, F.literal(rest, raw, level, 0n, pos, ""))
+        +parts : S.Json <- P.M.pure(S.Json, S.choose(S.Json, empty_text(F.Open{raw, F.text_of(lit), 0n}), u => parts, u =>
+          S.JItem{N.part(Bool.pick(String, raw, "v", "f"), F.text_of(lit)), parts}))
+        S.choose(P.M(S.Expr), Bool.not(Char.is_eq(C.head(F.rest_of(lit)), '{')), u => P.M.pure(S.Expr, N.fstate(values, parts, F.rest_of(lit), F.pos_of(lit))), u =>
+          S.choose(P.M(S.Expr), Nat.is_le(2n, level), u => P.lift(S.Expr, F.fail(S.Expr, F.pos_of(lit), "f-string: expressions nested too deeply")), u =>
+            do P.M<S.Expr>:
+              +e : F.Cut <- P.lift(F.Cut, F.field(String.drop(F.rest_of(lit), 1n), F.shift(F.pos_of(lit), 1n)))
+              +sub : List<&2, S.Tok> <- P.lift(List<&2, S.Tok>, L.lex_at("(" ++ F.text_of(e) ++ ")", F.pos_of(lit)))
+              +value : S.Expr <- P.within(S.Expr, sub, fuel_k() * (S.token_count(sub, 0n) + 1n), do P.M<S.Expr>:
+                inner : S.Expr <- go(left, Expression{0n})
+                drop : S.Tok <- P.expect("NEWLINE")
+                return inner)
+              +tl : F.Tail <- P.lift(F.Tail, F.tail(F.rest_of(e), F.pos_of(e)))
+              +cut : F.Cut <- P.M.pure(F.Cut, F.tail_cut(tl))
+              +spec : S.Expr <- S.choose(P.M(S.Expr), F.has_spec(tl), u =>
+                go(left, FString{F.Ctx{raw, kind, lo, hi, tlo, thi}, 1n+level, F.rest_of(cut), F.pos_of(cut), S.JEnd{}, S.JEnd{}}), u =>
+                P.M.pure(S.Expr, N.fstate(S.JEnd{}, S.JEnd{}, F.rest_of(cut), F.pos_of(cut))))
+              +fs : S.Json <- P.M.pure(S.Json, N.get_fields(spec))
+              +after : String <- P.M.pure(String, N.string(N.get(fs, "rest")))
+              S.choose(P.M(S.Expr), Bool.not(Char.is_eq(C.head(after), '}')), u => P.lift(S.Expr, F.fail(S.Expr, N.get_begin(spec), "f-string: expecting '}'")), u =>
+                go(left, FString{F.Ctx{raw, kind, lo, hi, tlo, thi}, level, String.drop(after, 1n), F.shift(N.get_begin(spec), 1n),
+                  S.JItem{S.expr(N.formatted(value, conversion(tl),
+                    S.choose(S.Json, F.has_spec(tl), u => S.expr(N.joined(N.flush(N.get(fs, "values"), N.get(fs, "parts"), S.JNull{}, tlo, thi), tlo, thi)), u => S.JNull{}), lo, hi)),
+                    N.flush(values, S.choose(S.Json, String.is_empty(F.debug(tl)), u => parts, u => S.JItem{N.part("v", F.text_of(e) ++ F.debug(tl)), parts}), kind, lo, hi)},
+                  S.JEnd{}})))))
     case 1n+left Item{+minimum}:
       P.meter(S.Expr, do P.M<S.Expr>:
         +t : S.Tok <- P.peek
@@ -783,11 +862,6 @@ def go(+fuel: Nat, +mode: Mode) -> P.M(S.Expr):
                   return S.JStr{P.tok_text(id)}, u => P.M.pure(S.Json, S.JNull{}))
               end : S.Pos <- P.end
               go(left, Aliases{dotted, paren, S.JItem{N.alias(name, asname, end), names}, True{}}))))
-
-# K bounds dispatches, including no-consumption transitions, per token.
-# P2 deterministic grammar fuzz records the observed global high-water mark.
-def fuel_k() -> Nat:
-  32n
 
 
 def raw_result(+ts: List<&2, S.Tok>) -> Result<&2, &2, S.Error, P.Reply<S.Expr>>:

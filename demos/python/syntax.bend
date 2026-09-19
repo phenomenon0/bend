@@ -26,6 +26,7 @@ type Json is Data:
   JNull{}
   JStr{text: String}
   JNum{value: Nat}
+  JNeg{value: Nat}
   JBool{value: Bool}
   JObj{fields: Json}
   JArr{items: Json}
@@ -107,6 +108,8 @@ def json_k(j: Json, acc: String, k: String -> String) -> String:
       k(escape_into(s, acc ++ "\"") ++ "\"")
     case JNum{n}:
       k(acc ++ Nat.show(n))
+    case JNeg{n}:
+      k(acc ++ "-" ++ Nat.show(n))
     case JBool{b}:
       k(acc ++ Bool.pick(String, b, "true", "false"))
     case JObj{fs}:

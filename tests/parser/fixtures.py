@@ -18,6 +18,14 @@ EXPRESSIONS = [
     "0x1_f", "1_000", "1.25e-9", "1e999", "3j", "True", "False", "None", "...",
     "'a' 'b'", "('a' # comment\n 'b')", "u'hello'", "U'hello'", "r'\\n'", "b'abc' b'def'",
     "'''two\nlines'''", "'é😀'", "( 'é' ).upper()", "x[(a)]", "([a, b])",
+    'f""', "f'a'", 'f"{x}"', 'f"a{b}c"', 'F"{x}" Rf"{y}\\n" fR\'{z}\'', 'f"{x!r}{y!s}{z!a}"', 'f"{x:>10}"', 'f"{x!r:>{w}}"', 'f"{x:}"', 'f"{x:}}}"', 'f"{x:a{y}b{z!r}c}"',
+    'f"{x:{{y}}}"', 'f"{x:{y:>5}}"', 'f"{d:%Y-%m-%d %H:%M}"', 'f"{x:!r}"', 'f"{x::}"', 'f"{x=}"', 'f"{x = }"', 'f"{x=!s}"', 'f"{x=:>10}"', 'f"{x=  !r:>5}"', 'f"{a>=b=}"',
+    'f"{a!=b}"', 'f"{a==b!r}"', 'f"{a<b>c:d}"', 'f"{a<=b}{c>=d}"', 'f"{ a }"', 'f"{a, b}"', 'f"{ (a) , }"', 'f"{*a, b}"', 'f"{a, b!r}"', 'f"{(lambda x: 1)}"', 'f"{ {1: 2}[1] }"',
+    'f"{a[1:2]}"', 'f"{f(a, k=b)[::2].c}"', 'f"{a if b else c:>{d if e else f}}"', 'f"{{x}}{{"', 'f"{a}}}"', 'f"{{{a}}}"', 'f"\\{x}"', 'rf"\\{x}"', 'rf"{a}\\{b}\\n"',
+    'f"\\N{DIGIT ONE}{x}\\x41\\u00e9\\\\"', 'f"{x:\\n}"', 'f"a\\\n{x}"', 'f"{\'a\'}{\'\'\'b\'\'\'}"', 'f"{f\'{x}\'}"', 'f\'\'\'{f"{f\'{x}\'}"}\'\'\'', '"" f"{x}"',
+    '"a" f"b{x}" \'c\' f\'d\'', 'u"a" f"{x}" "b"', '"a" u"b" f"{x}"', 'u"" f"{x:a}" "b"', 'f"{x}" u"a"', 'r"\\d" f"{x}" "\\n"', 'f"é{x}é{y + 1}😀"', '(f"é{x}"\n  f"é{y + 1}")',
+    'f"""a\n  {b} and {\nc} z {  d\n + e}"""', 'f"""{x:\n>{w}}"""', 'f"""{x\n=}"""', 'f\'\'\'"{x}" \'{y}\\\'\'\'\'', 'f"{x}".format(y)', 'f"{x}"[1:]', 'f(f"{x}", k=f"{y}")',
+    'u"" f"{x:a{y}b}" "b"', '"pp" f"{x:{y}b}" f"{z:c{w:d}}"', 'u"p" f"""{x:{y}b\n}""" f"{z:c{w:d}}"',
 ]
 STATEMENTS = [
     "match=1", "case=2", "return *a", "a = *b", "x += *a",
@@ -107,6 +115,9 @@ STATEMENTS += [
     "def f(a=b[1:], *c: d[:2]) -> e[::3]:\n    return a[1:-1]\n", "@a[1:2]\ndef f(): pass",
     "if a[1:]:\n    x = a[:1]\nelif a[::2]:\n    pass\n", "assert a[1:2], b[:]", "raise E(a[1:]) from b[:1]", "return a[1:], b[:2]",
     "x = a[1:2] if a[:1] else a[2:]", "f(a[1:], k=b[:2], *c[::2], **d[3:])", "{a[1:]: b[:2], **c[::3]}", "a[1:2] # é", "a[b[1:]][:-1].c()[x:y, ::2] = d[:]\ndel a[1:2:3], e[*f, :g]\n", "'é😀'[1:] + a[2:]",
+    "f'{x}'", "a[1:f'{x}']", 'x = f"a{b}c"', 'if 1:\n    x = (f"a"\n         f"""b\n   {c:>{d}} {e!r}""")', 'raise E(f"bad {name!r}: {value:.2f}") from None',
+    'def f(a=f"{b}") -> f"{c}":\n    return f"{a=}"', 'class A(B):\n    f"not a doc {x}"\n    y = f"{z}"', 'assert x, f"{x} != {y}"', 'with open(f"{d}/{n}.txt") as h: pass',
+    'x = {f"{k}": f"{v:>{w}}", **d}', 'for x in f"{y}": pass', 'log.info("a"\n         f"{b}"\n         "c")', 'x = f"{a}" if f"{b}" else f"{c}" + "d" f"{e}"',
 ]
 
 INVALID = [
@@ -138,6 +149,10 @@ INVALID = [
     "a[]", "a[1:2:3:4]", "a[:::]", "a[*b:1]", "a[1:*b]", "a[1:2:*b]", "a[:", "a[1:2", "a[,]", "a[1:2,,]", "a[1 2]", "a[1:2 3]", "a[:] = ", "[1:2]", "(1:2)",
     "f(1:2)", "{1:2:3}", "x = 1:2", "a[1:2] = 1:2", "del a[1:2:3:4]", "a[1:]]", "a[1:pass]", "a[1:2)", "f(a[1:2]=3)", "for a[1:] in: pass",
     "with: pass", "with a as: pass", "with a as 1: pass", "with a, : pass", "with a as f(): pass", "with (a as b) as c: pass",
+    'f"{x!r }"', 'f"{x! r}"', 'f"{x!z}"', 'f"{x!}"', 'f"{}"', 'f"{ }"', 'f"{!r}"', 'f"{:>5}"', 'f"{=}"', 'f"{x"', 'f"{x!r"', 'f"{x:>5"', 'f"x}"', 'f"{a b}"', 'f"{x#}"',
+    'f"{\'\\n\'}"', 'f"""{a\\\n}"""', 'f"{lambda x: 1}"', 'f"{x}" b"a"', 'b"a" f"{x}"', 'f"{*a}"', 'f"{x!r!s}"', 'f"{a}}"', 'f"{x:{y}}}"', 'f"{x:{{}"', 'f"{x:{y:{z}}}"',
+    'f"{x:{}}"', 'f"{(a}"', 'f"{a)}"', 'f"{a]}"', 'f"{[a)}"', 'f"{\'a}"', 'f"{a = b}"', 'f"{a=b}"', 'f"{x:{y!z}}"', 'f"{1 +}"', 'f"{x} {" "y}"', 'x = f"{pass}"', 'f"{x}" = 1',
+    'del f"{x}"', 'f"{x}" += 1', 'for f"{x}" in y: pass',
 ]
 
 UNSUPPORTED = [
@@ -146,7 +161,8 @@ UNSUPPORTED = [
     "async for x in y: pass", "async with a: pass", "def f(): yield", "def f(): x = yield y", "lambda: (yield)", "def f(é): pass", "lambda é: 1",
     "global é", "try: pass\nexcept E as é: pass", "try: pass\nexcept* E: pass", "def f(): await x", "def f(a: int): x: int = 1", "for x in [y for y in z]: pass",
     "[x for x in y]", "{x for x in y}",
-    "{x:x for x in y}", "f(x for x in y)", "f'{x}'",
+    "{x:x for x in y}", "f(x for x in y)",
     "(x := 1)", "with (x := 1): pass", "a[(x for x in y):]",
-    "a[x:=1]", "a[1:(x:=2)]", "a[1:f'{x}']", "a[é:]", "a[1:é]", "a[::é]", "a[1:, é]", "a[[x for x in y][0]:]", "a[1:2].é", "a[await b:]",
+    "a[x:=1]", "a[1:(x:=2)]", "a[é:]", "a[1:é]", "a[::é]", "a[1:, é]", "a[[x for x in y][0]:]", "a[1:2].é", "a[await b:]",
+    'f"{[x for x in y]}"', 'f"{(x := 1)}"', 'f"{(yield)}"', 'f"{await x}"', 'f"{é}"', 'f"{a.é}"', 'f"{x:{é}}"', '"a" f"{sum(x for x in y)}"', 'f"{x:{[y for y in z][0]}}"',
 ]

@@ -8,11 +8,32 @@ import json
 import random
 
 
+def fstring(rng, sub):
+    """An implicit-concatenation run with f-strings: fields, conversions, debug `=`, nested specs."""
+    def field():
+        value = sub()
+        if any(c in value for c in '"\\#'):  # 3.11: the expression cannot reuse the quote, nor hold a backslash or comment
+            value = "a"
+        spec = rng.choice(["", "", ":", ":>10", ":{" + rng.choice(["w", "w!r", "w:>5"]) + "}", ":.{p}f", ": {a}{b} ", ":{{w}}"])
+        return "{ " + value + rng.choice(["", " ", "=", " = "]) + rng.choice(["", "", "!r", "!s", "!a"]) + spec + "}"
+    def token():
+        if rng.randrange(4) == 0:
+            return rng.choice(["'s'", "u'é'", "''", "r'\\d'", "'\\n'"])
+        body = "".join(rng.choice(["", "a", "{{", "}}", "é😀", "\\n", " x ", "'", "\\N{DIGIT ONE}"]) if rng.randrange(2) else field()
+                       for _ in range(rng.randrange(4)))
+        return rng.choice(["f", "F", "rf", "fR"]) + '"' + body + '"'
+    tokens = [token() for _ in range(rng.randrange(1, 4))]
+    tokens[rng.randrange(len(tokens))] = 'f"' + field() + '"'
+    return "(" + rng.choice([" ", "\n  "]).join(tokens) + ")"
+
+
 def expression(rng, depth):
     if depth <= 0 or rng.randrange(5) == 0:
         return rng.choice(["a", "b", "c", "0", "17", "0x10", "1.5", "True", "None", "'é😀'", "..."])
     sub = lambda: expression(rng, depth - 1)
-    choice = rng.randrange(13)
+    choice = rng.randrange(15)
+    if choice >= 13:
+        return fstring(rng, sub)
     if choice == 0:
         return rng.choice(["-", "+", "~", "not "]) + "(" + sub() + ")"
     if choice < 4:
@@ -70,6 +91,9 @@ def main():
             ast.parse(source, feature_version=(3, 11), type_comments=False)
         except (SyntaxError, RecursionError, MemoryError) as exc:
             records.append({"i": i, "oracle-failure": str(exc)})
+            # A generated source the oracle rejects (an f-string shape) is a negative: never parsed.
+            if isinstance(exc, SyntaxError) and run(path)["status"] != "syntax":
+                failures.append({"i": i, "source": source, "oracle": str(exc), "result": run(path)})
             continue
         result = run(path, mode="stats")
         if result["status"] != "parsed":
@@ -106,6 +130,7 @@ def main():
                 if got["status"] != expected:
                     failures.append({"source": source, "lane": lane, "expected": expected, "got": got})
     counts = {"generated_and_directed": len(sources), "oracle_accepted": sum("used" in r or "result" in r for r in records),
+              "oracle_rejected": sum("oracle-failure" in r for r in records), "fstring_sources": sum("f\"" in s.lower() for s in sources),
               "no_limit_on_oracle_accepted": not any(f.get("result", {}).get("status") == "limit" for f in failures),
               "normalization_failures": sum("normalization-failure" in r for r in records),
               "negative_cases": len(INVALID) + len(UNSUPPORTED),
