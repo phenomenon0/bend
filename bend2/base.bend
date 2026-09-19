@@ -86,10 +86,20 @@ type Map<a, -V: Kind(a)> is Kind(a):
   MLeaf{key: String, val: V}
   MNode{pos: Nat, lo: Map<a, V>, hi: Map<a, V>}
 
+# The shapes the Regex types share: a code point range, a class, a span
+def Regex.Range() -> Data:
+  Sigma<&2, &2, U32, _ => U32>
+
+def Regex.Ranges() -> Data:
+  List<&2, Regex.Range()>
+
+def Regex.Span() -> Data:
+  Sigma<&2, &2, Nat, _ => Nat>
+
 type Re is Data:
   RLit{c: Char}
   RAny{}
-  RSet{neg: Bool, rs: List<&2, Sigma<&2, &2, U32, _ => U32>>}
+  RSet{neg: Bool, rs: Regex.Ranges()}
   RCat{a: Re, b: Re}
   RAlt{a: Re, b: Re}
   RRep{r: Re, lo: Nat, hi: Maybe<&2, Nat>, greedy: Bool}
@@ -102,7 +112,7 @@ type Re is Data:
 type Inst is Data:
   IChr{c: U32}
   IAny{}
-  ISet{neg: Bool, rs: List<&2, Sigma<&2, &2, U32, _ => U32>>}
+  ISet{neg: Bool, rs: Regex.Ranges()}
   ISplit{x: Nat, y: Nat}
   IJmp{x: Nat}
   ISave{slot: Nat}
@@ -115,7 +125,7 @@ type Regex is Data:
   Regex{prog: List<&2, Inst>, ngroups: Nat}
 
 type Match is Data:
-  Match{start: Nat, end: Nat, groups: List<&2, Maybe<&2, Sigma<&2, &2, Nat, _ => Nat>>>}
+  Match{start: Nat, end: Nat, groups: List<&2, Maybe<&2, Regex.Span()>>}
 
 type Regex.Error is Data:
   RErr{pos: Nat, msg: String}
@@ -129,8 +139,8 @@ type Regex.Frame is Data:
 # Class scan: the unread tail, the last single char (a pending range low),
 # whether a `-` follows it, the ranges so far; CDone once `]` is read
 type Regex.Cls is Data:
-  CScan{s: String, pend: Maybe<&2, U32>, dash: Bool, rs: List<&2, Sigma<&2, &2, U32, _ => U32>>}
-  CDone{rs: List<&2, Sigma<&2, &2, U32, _ => U32>>, rest: String}
+  CScan{s: String, pend: Maybe<&2, U32>, dash: Bool, rs: Regex.Ranges()}
+  CDone{rs: Regex.Ranges(), rest: String}
 
 # Effects
 # -------
@@ -2581,15 +2591,6 @@ def Regex.max_rep() -> Nat:
 
 def Regex.max_prog() -> Nat:
   4096n
-
-def Regex.Range() -> Data:
-  Sigma<&2, &2, U32, _ => U32>
-
-def Regex.Ranges() -> Data:
-  List<&2, Regex.Range()>
-
-def Regex.Span() -> Data:
-  Sigma<&2, &2, Nat, _ => Nat>
 
 def Regex.Res(T: Data) -> Data:
   Result<&2, &2, Regex.Error, T>
