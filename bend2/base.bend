@@ -330,30 +330,30 @@ type Utf8.Dec is Data:
 def Utf8.Dec.new() -> Utf8.Dec:
   Dec{0, 0}
 
-def File.read_text.Raw() -> Type:
-  File & Result<&1, &1, U32 & String, U32 & U32 & String>
+def Utf8.Dec.Raw(H: Type) -> Type:
+  H & Result<&1, &1, U32 & String, U32 & U32 & String>
 
-def File.read_text.Out() -> Type:
-  File & Result<&1, &1, U32 & String, Utf8.Dec & String>
+def Utf8.Dec.Out(H: Type) -> Type:
+  H & Result<&1, &1, U32 & String, Utf8.Dec & String>
 
 def File.read_text.go(file: File, pend: U32, need: U32, max: U32) ->
-  IO(File.read_text.Raw()):
+  IO(Utf8.Dec.Raw(File)):
   import "./effs/file_read_text_go.c"
   import "./effs/file_read_text_go.js"
 
-def File.read_text.pack(got: File.read_text.Raw()) -> IO(File.read_text.Out()):
+def File.read_text.pack(-H: Type, got: Utf8.Dec.Raw(H)) -> IO(Utf8.Dec.Out(H)):
   (file, r) = got
   match r:
     case Fail{e}:
-      IO.pure(File.read_text.Out(), (file, Fail{e}))
+      IO.pure(Utf8.Dec.Out(H), (file, Fail{e}))
     case Done{(pend, (need, text))}:
-      IO.pure(File.read_text.Out(), (file, Done{(Dec{pend, need}, text)}))
+      IO.pure(Utf8.Dec.Out(H), (file, Done{(Dec{pend, need}, text)}))
 
 def File.read_text(file: File, dec: Utf8.Dec, max: U32) ->
   IO(File & Result<&1, &1, U32 & String, Utf8.Dec & String>):
   Dec{pend, need} = dec
-  IO.bind(File.read_text.Raw(), File.read_text.Out(),
-    File.read_text.go(file, pend, need, max), File.read_text.pack)
+  IO.bind(Utf8.Dec.Raw(File), Utf8.Dec.Out(File),
+    File.read_text.go(file, pend, need, max), File.read_text.pack(File))
 
 def File.write(file: File, data: String) ->
   IO(File & Result<&1, &1, U32 & String, Unit>):
