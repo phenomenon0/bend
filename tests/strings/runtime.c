@@ -3,6 +3,7 @@
 #include <assert.h>
 
 #define SNIL term_pak(CID_SNIL, 0)
+#define zero_live() assert(track_live == 0)
 typedef unsigned long long ull;
 
 static void expect_bytes(Env e, Term s, const char* text, u64 len) {
@@ -16,25 +17,27 @@ static void expect_text(Env e, Term s, const char* text) {
   expect_bytes(e, s, text, strlen(text));
 }
 
+static Term str(Env e, const char* text) { return io_str(e, text, strlen(text)); }
+
 static void ownership(Env e) {
-  // Static image: one descriptor + one class-1 payload of 1-byte cells (one
-  // word), since a literal is packed at the width of its content.
+  // Static image: a descriptor + a one-word payload of 1-byte cells, since a
+  // literal is packed at the width of its content.
   assert(STAT_LEN == 3);
   Term lit = term_make(TAG_STR, CID_SCON, STAT_OFF + 1);
   assert(str_peek(e, lit).len == 6 && str_nar(str_peek(e, lit)) == 2);
   expect_text(e, str_transform_take(e, lit, 1), "ABCDEF");
   expect_text(e, lit, "abcdef");
-  assert(track_live == 0);
+  zero_live();
   // Even a dynamic count wrapper cannot make static payload writable.
   StrParts wrapped = str_peek(e, lit);
   wrapped.data = rfc_wrap(e, wrapped.data, 1);
   expect_text(e, str_transform_take(e, str_view_owned(e, wrapped), 0), "fedcba");
   expect_text(e, lit, "abcdef");
-  assert(track_live == 0);
+  zero_live();
 
   // Aliased metadata: the payload still has ONE ref before opening, so a
   // payload-only write test would mutate both aliases here.
-  Term s = io_str(e, "abcdef", 6);
+  Term s = str(e, "abcdef");
   Term data = str_peek(e, s).data;
   Term alias = term_keep(e, s);
   assert((rfc_view(e, term_loc(data)) & RFC_CNT) == 1);
@@ -42,11 +45,11 @@ static void ownership(Env e) {
   assert(str_peek(e, upper).data != data);
   expect_text(e, upper, "ABCDEF");
   expect_text(e, alias, "abcdef");
-  assert(track_live == 0);
+  zero_live();
 
   // Unique transforms keep the payload; snapshots and overlapping slices
   // detach. An empty window releases both descriptor and payload.
-  s = io_str(e, "abcdef", 6); data = str_peek(e, s).data;
+  s = str(e, "abcdef"); data = str_peek(e, s).data;
   s = str_transform_take(e, s, 0);
   assert(str_peek(e, s).data == data);
   alias = term_keep(e, s);
@@ -55,8 +58,8 @@ static void ownership(Env e) {
   assert(str_peek(e, a).data == data && str_peek(e, b).data == data);
   expect_text(e, str_transform_take(e, a, 1), "EDCB");
   expect_text(e, b, "dcba");
-  assert(track_live == 0);
-  s = str_slice_take(e, io_str(e, "abc", 3), 1ull << 32, ~0ull);
+  zero_live();
+  s = str_slice_take(e, str(e, "abc"), 1ull << 32, ~0ull);
   assert(s == SNIL && track_live == 0);
 
   // A tiny zero-copy view pins its slab: copy allocates just a class-0
@@ -73,7 +76,7 @@ static void ownership(Env e) {
   term_sink(e, a);
   assert(pinned - track_bytes >= cap);
   expect_text(e, b, "cde");
-  assert(track_live == 0);
+  zero_live();
 
   // Unique SCon reconstruction reuses the headroom, uncons included.
   s = str_prepend_take(e, 'a', SNIL);
@@ -83,11 +86,11 @@ static void ownership(Env e) {
   s = str_prepend_take(e, (u32)fields[0], fields[1]);
   assert(str_peek(e, s).data == data);
   term_sink(e, s);
-  assert(track_live == 0);
+  zero_live();
 
-  // A unique descriptor advances in place: a token walk allocates nothing.
-  // A shared one must not: the alias still reads the whole text.
-  s = io_str(e, "abcd", 4);
+  // A unique descriptor advances in place, so a token walk allocates
+  // nothing; a shared one must not: the alias still reads the whole text.
+  s = str(e, "abcd");
   u64 walk = track_allocs;
   str_uncons(e, s, fields);
   assert(fields[0] == 'a' && fields[1] == s && track_allocs == walk);
@@ -97,10 +100,10 @@ static void ownership(Env e) {
   expect_text(e, alias, "bcd");
   expect_text(e, fields[1], "cd");
   // The last cell releases descriptor and payload.
-  s = io_str(e, "z", 1);
+  s = str(e, "z");
   str_uncons(e, s, fields);
   assert(fields[0] == 'z' && fields[1] == SNIL);
-  assert(track_live == 0);
+  zero_live();
 
   // A unique one-direction chain grows by copying O(n) payload cells in all.
   for (u32 front = 0; front < 2; front++) {
@@ -113,12 +116,12 @@ static void ownership(Env e) {
     assert(str_peek(e, s).len == 8192);
     assert(track_payload_words - before < 2 * 8192);
     term_sink(e, s);
-    assert(track_live == 0);
+    zero_live();
   }
 
   // Split fields are views of one payload; dropping their list visits every
   // descriptor and payload owner without reading off/len as a Term.
-  s = io_str(e, "ab,,cd,", 7); data = str_peek(e, s).data;
+  s = str(e, "ab,,cd,"); data = str_peek(e, s).data;
   Term list = str_split_take(e, s, ',', false);
   u32 fields_seen = 0;
   for (Term t = list; term_aux(t) == CID_CON;) {
@@ -129,7 +132,7 @@ static void ownership(Env e) {
   }
   assert(fields_seen == 4);
   term_sink(e, list);
-  assert(track_live == 0);
+  zero_live();
 }
 
 static Term cells_at(Env e, const u32* xs, u32 n, u32 nar) {
@@ -273,10 +276,10 @@ static void adversarial(Env e) {
 }
 
 static void new_ownership(Env e) {
-  Term s = io_str(e, "abc::def::ghi", 13), alias = term_keep(e, s);
-  Term out = str_split_on_take(e, s, io_str(e, "::", 2));
-  term_sink(e, alias); term_sink(e, out); assert(track_live == 0);
-  s = io_str(e, "-42", 3); Term data = str_peek(e, s).data;
+  Term s = str(e, "abc::def::ghi"), alias = term_keep(e, s);
+  Term out = str_split_on_take(e, s, str(e, "::"));
+  term_sink(e, alias); term_sink(e, out); zero_live();
+  s = str(e, "-42"); Term data = str_peek(e, s).data;
   alias = term_keep(e, s);
   out = str_pad_take(e, s, 8, '0', 2);
   assert(str_peek(e, out).data != data);
@@ -290,7 +293,7 @@ static void new_ownership(Env e) {
     for (u32 j = 0; j < 4; j++) { hash = (hash ^ ((raw[i] >> (8 * j)) & 255)) * 16777619u; }
   }
   assert(str_hash_take(e, cells(e, raw, 4)) == hash);
-  assert(track_live == 0);
+  zero_live();
 }
 
 static void bulk_builders(Env e) {
@@ -313,7 +316,7 @@ static void bulk_builders(Env e) {
   assert(str_peek(e, out).len == 8192
     && track_payload_words - before == 4096u >> nar);
   term_sink(e, out);
-  assert(track_live == 0);
+  zero_live();
   printf("concat/join/repeat: linear payload allocation bounds passed\n");
 }
 
@@ -321,11 +324,11 @@ static void bulk_builders(Env e) {
 // runtime.py changes only err_seen and the allocation wrapper for this mode.
 #define ON(name) if (!strcmp(op, name))
 static void fault(Env e, const char* op, int after) {
-  Term s = io_str(e, "abcdef", 6), b = io_str(e, "ghijkl", 6);
+  Term s = str(e, "abcdef"), b = str(e, "ghijkl");
   Term cs = str_to_list_take(e, term_keep(e, s));
   Term xs = str_split_take(e, term_keep(e, s), 'c', false);
-  Term needle = io_str(e, "cd", 2), replacement = io_str(e, "cdcd", 4);
-  Term lines = io_str(e, "ab\ncd\r\nef", 9);
+  Term needle = str(e, "cd"), replacement = str(e, "cdcd");
+  Term lines = str(e, "ab\ncd\r\nef");
   u64 guard[H_BANK];
   memcpy(guard, e.mem, sizeof guard);
   track_fail_after = after;
@@ -346,7 +349,7 @@ static void fault(Env e, const char* op, int after) {
   else ON("splitlines") { str_splitlines_take(e, lines); }
   else ON("pad") { str_pad_take(e, s, 20, 0xffffffff, 0); }
   // Decoding widens twice: every payload, count cell and descriptor may fail.
-  else ON("decode") { io_str(e, "a\xce\xbb\xf0\x9f\x98\x80", 7); }
+  else ON("decode") { str(e, "a\xce\xbb\xf0\x9f\x98\x80"); }
   else { assert(false); }
   assert(e.mem[H_ERROR_CODE] == ERR_HEAP);
   assert(track_kmp_live == 0);
@@ -447,7 +450,7 @@ static u32 stream_run(Env e, const u8* b, u32 n, u64 cuts, bool idle, u32* out) 
     if (i == n) { break; }
     i = j;
   }
-  assert(track_live == 0);
+  zero_live();
   return len;
 }
 
@@ -533,12 +536,12 @@ static void widths(Env e) {
       expect_text(e, str_copy_take(e, t), text[i]);
     }
     term_sink(e, s);
-    assert(track_live == 0);
+    zero_live();
   }
   // A unique narrow payload widens on a wide write, at either end, once.
-  Term s = str_prepend_take(e, 0x3bb, io_str(e, "abc", 3));
+  Term s = str_prepend_take(e, 0x3bb, str(e, "abc"));
   assert(str_nar(str_peek(e, s)) == 1);
-  s = str_append_take(e, s, io_str(e, "\xf0\x9f\x98\x80", 4));
+  s = str_append_take(e, s, str(e, "\xf0\x9f\x98\x80"));
   assert(str_nar(str_peek(e, s)) == 0);
   s = str_pad_take(e, s, 7, 0xffffffffu, 1);
   const u32 want[] = {0x3bb, 'a', 'b', 'c', 0x1f600, 0xffffffffu, 0xffffffffu};
@@ -551,7 +554,7 @@ static void widths(Env e) {
   assert(str_nar(str_peek(e, mid)) == 2);
   // Narrow text absorbs a wide separator and stays equal to the wide build.
   Term joined = str_join_take(e, str_cons(e, term_keep(e, mid), str_cons(e, mid,
-    term_pak(CID_NIL, 0))), io_str(e, "\xe6\xbc\xa2", 3));
+    term_pak(CID_NIL, 0))), str(e, "\xe6\xbc\xa2"));
   const u32 both[] = {'a', 'b', 'c', 0x6f22, 'a', 'b', 'c'};
   expect_cells(e, joined, both, 7);
   assert(str_nar(str_peek(e, joined)) == 1);
@@ -574,8 +577,8 @@ int main(int argc, char** argv) {
   if (argc == 2) {
     const char* op = argv[1];
     u64 n;
-    ON("limit-pad") { str_pad_take(e, io_str(e, "a", 1), 1ull << 32, '.', 0); }
-    else ON("limit-repeat") { str_repeat_take(e, io_str(e, "ab", 2), 1ull << 31); }
+    ON("limit-pad") { str_pad_take(e, str(e, "a"), 1ull << 32, '.', 0); }
+    else ON("limit-repeat") { str_repeat_take(e, str(e, "ab"), 1ull << 31); }
     else ON("raw-output") { free(io_cstr(e, str_prepend_take(e, 0xd800, SNIL), &n)); }
     return 1;
   }
@@ -586,7 +589,7 @@ int main(int argc, char** argv) {
   bulk_builders(e);
   acceptance(e);
   expect_bytes(e, io_str(e, "a\0b", 3), "a\0b", 3);
-  assert(track_live == 0);
+  zero_live();
   utf8_cases(e);
   u64 parts = stream_law(e);
   widths(e);
