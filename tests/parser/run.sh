@@ -60,6 +60,15 @@ from pathlib import Path
 Path('tests/parser/_out/multi_mb.py').write_bytes(b'#' * 3145728)
 PY
 
+# Tripwire (from the shapefix lane): a single-line literal over 1200 chars expands
+# to a Cons spine and can overflow the bun frontend stack under load; shape such
+# literals with ++ chains of <=512-char pieces (byte-identical).
+if grep -lE '.{1200,}' tests/parser/*.bend 2>/dev/null | head -3 | grep -q .; then
+  printf 'FAIL fixture literal guard: line over 1200 chars in: '
+  grep -lE '.{1200,}' tests/parser/*.bend | tr '\n' ' '; printf '\n'
+  fail=$((fail + 1))
+fi
+
 for t in tests/parser/*.bend; do
   name=$(basename "$t" .bend)
   if [ -n "${1:-}" ] && [ "${1:-}" != "--self-test" ] && [[ "$name" != "$1"* ]]; then
