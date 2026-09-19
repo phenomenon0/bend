@@ -44,6 +44,17 @@ def annotated(rng, sub):
     return target + rng.choice([": ", ":", " : "]) + sub() + value
 
 
+def yielding(rng, sub):
+    """`yield_expr | star_expressions` in every slot that takes it, and in some that do not (the oracle rejects those)."""
+    y = rng.choice(["yield", "yield", "yield " + sub(), "yield " + sub(), "yield from " + sub(), "yield " + sub() + ", " + sub(), "yield *a, " + sub(), "yield " + sub() + ",",
+                    "yield from " + sub() + ", b", "yield yield", "yield from *a"])
+    g = "(" + y + ")"
+    return rng.choice([y, y, "x = " + y, "x = y = " + y, "x " + rng.choice(["+=", "//=", "@="]) + " " + y, "x: " + sub() + " = " + y, "x: " + g, g, "(" + g + ")", "(\n " + y + "\n)",
+                       "f(" + g + ", " + sub() + ", k=" + g + ")", g + ".a[" + g + "] = " + y, "[" + g + ", " + sub() + "]", "{" + g + ": " + g + "}", g + " if " + g + " else " + g, sub() + " + " + g, "not " + g,
+                       "[" + g + " for x in " + g + " if " + g + "]", "f'{" + y + "}'", "f'{" + y + "!r:>{" + g + "}}'", "lambda: " + g, "return " + g, "yield " + g, "yield from " + g,
+                       "f(" + y + ")", "[" + y + "]", "(" + y + ", 1)", "x = " + sub() + ", " + y, "return " + y, "lambda: " + y, y + " = 1", g + " = 1", y + ": int", "(" + y + " for x in y)", "a[" + y + "]", sub() + " + " + y])
+
+
 def expression(rng, depth):
     if depth <= 0 or rng.randrange(5) == 0:
         return rng.choice(["a", "b", "c", "0", "17", "0x10", "1.5", "True", "None", "'é😀'", "..."])
@@ -102,6 +113,12 @@ def main():
         line = annotated(rng, lambda: expression(rng, rng.randrange(0, 3)))
         sources.append(rng.choice([line, line, "class A(B):\n    'doc'\n    " + line + "\n    y: int\n    def f(self):\n        self." + line + "\n",
                                   "if a: " + line + "; " + line + "\nelse:\n    " + line + "\n", "def f():\n    " + line + "\n    return x\n"]))
+    # A third stream, for the same reason.
+    rng = random.Random(0xA57A2011)
+    for i in range(args.count // 4):
+        line = yielding(rng, lambda: expression(rng, rng.randrange(0, 3)))
+        sources.append(rng.choice([line, line, "def f():\n    " + line + "\n    return x\n", "def f(self):\n    while a:\n        " + line + "\n    else:\n        " + line + "; " + line + "\n",
+                                  "if a: " + line + "; " + line + "\nelse:\n    " + line + "\n", "class A:\n    def f(self):\n        try:\n            " + line + "\n        finally:\n            pass\n"]))
     # Long lists/chains and nesting deliberately exercise non-consuming transitions.
     for n in [1, 2, 10, 50, 100, 200]:
         sources += ["(" * n + "a" + ")" * n, "[" * n + "a" + "]" * n,
@@ -157,7 +174,7 @@ def main():
     counts = {"generated_and_directed": len(sources), "oracle_accepted": sum("used" in r or "result" in r for r in records),
               "oracle_rejected": sum("oracle-failure" in r for r in records), "fstring_sources": sum("f\"" in s.lower() for s in sources),
               "comprehension_sources": sum(" for " in s or "\n  for " in s for s in sources),
-              "annotated_sources": args.count // 4,
+              "annotated_sources": args.count // 4, "yield_sources": args.count // 4,
               "no_limit_on_oracle_accepted": not any(f.get("result", {}).get("status") == "limit" for f in failures),
               "normalization_failures": sum("normalization-failure" in r for r in records),
               "negative_cases": len(INVALID) + len(UNSUPPORTED),

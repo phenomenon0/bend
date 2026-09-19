@@ -170,7 +170,44 @@ STATEMENTS += [
     "__all__: List[str] = ['a', 'b']", "VERSION: Final = '1.0'", "T_co: TypeAlias = 'Foo'", "x: ClassVar[int] = 0", "x: 'int'; y: 'str'", "x: int = 1\n# trailing\n", "\nx: int\n", "x: int\n\n", "if 1:\n    x: int = (a,\n              b)\n    y = 1\n",
 ]
 
+# P11: `yield` / `yield from` as expressions. The rule is `yield_expr | star_expressions`: a statement's head, an assignment's /
+# augmented / annotated value, what a group holds (an f-string field is a group). `ast.parse` has no scope pass: outside a
+# function, in a comprehension, in a lambda or a class body the oracle accepts them all.
+STATEMENTS += [
+    "yield", "yield x", "yield from xs", "x = yield y", "x = y = yield", "x = y = yield z", "x = yield from y", "x = y = yield from z", "x += yield", "x += yield y", "x -= yield from y",
+    "x: int = yield", "x: int = yield y", "x: int = yield from y", "x: (yield)", "x: (yield y) = (yield z)", "a.b: T = yield", "a[0]: T = yield a, b",
+    "(yield)", "((yield))", "(yield x)", "(yield from y)", "( yield )", "(yield\n)", "(yield\n x)", "(\n yield\n from\n x\n)", "x = yield \\\n y", "x = (yield\n)", "x = (yield a,\n b)",
+    "foo((yield))", "foo((yield), (yield x), k=(yield from y))", "f(*(yield))", "f(**(yield))", "((yield), 1)", "((yield),)", "x = (yield), 1", "[(yield)]", "[(yield), (yield)]", "{(yield)}", "{(yield): (yield)}", "{**(yield)}",
+    "a[(yield)]", "a[(yield):(yield):(yield)]", "a[(yield), 1:2]", "(yield).x", "(yield)[0]", "(yield)()", "(yield)(yield_)", "(yield).x = 1", "(yield)[0] += 1", "(yield).x: int", "(yield).x: int = yield", "((yield).x): int",
+    "yield()", "yield ()", "yield[0]", "yield [0]", "yield {}", "yield (a)", "yield (a), b", "yield (a, b)", "yield(a)(b)", "yield -x", "yield not x", "yield ~x", "yield +x", "yield ...", "yield None", "yield 'a' 'b'", "yield f'{x}'",
+    "yield *a", "yield *a, b", "yield a, *b", "yield a, b", "yield a,", "yield *a,", "yield a, b,", "x = yield a, b", "x = yield *a, b", "x = yield a,", "x: T = yield a, *b",
+    "yield a if b else c", "yield lambda: 1", "yield lambda: (yield)", "yield from lambda: 1", "yield from x if y else z", "yield from (a, b)", "yield from [a, b]", "yield from f(x)(y).z[0]", "yield from a or b", "yield from not a", "yield from -a",
+    "yield (yield)", "yield (yield x)", "yield from (yield)", "yield from (yield from x)", "yield (yield from (yield))", "x = yield (yield), (yield)", "yield a < b < c", "yield a or b and c", "yield [x for x in y]", "yield (x for x in y)", "yield from (x for x in y)", "yield {k: v for k, v in d}",
+    "yield;yield", "yield; yield x; yield from y;", "yield\nx", "yield\nyield\n", "if a: yield", "if a: yield x\nelse: yield from y", "while 1: x = yield", "for x in y: yield x", "for x in (yield): pass", "for x in (yield), (yield): pass",
+    "with (yield): pass", "with (yield) as y: pass", "with (yield), (yield x) as z: pass", "with ((yield) as a, (yield from b) as c): pass", "if (yield): pass", "while (yield): pass", "return (yield)", "return (yield), 1", "assert (yield)", "assert (yield), (yield)",
+    "raise (yield)", "raise (yield) from (yield)", "del (yield).x", "del (yield)[0]", "del a[(yield)]", "lambda: (yield)", "lambda x=(yield): (yield x)", "(yield) in x", "(yield) if (yield) else (yield)", "not (yield)", "-(yield)", "(yield) + (yield)", "(yield) ** (yield)", "(yield) < (yield) < (yield)", "(yield) and (yield) or (yield)",
+    "@(yield)\ndef f(): pass", "def f(x=(yield)): pass", "def f(x: (yield) = (yield)) -> (yield): pass", "class A((yield)): pass", "class A(metaclass=(yield)): pass", "class A:\n    yield\n    x = yield\n", "class A:\n    x: int = yield\n",
+    "[(yield) for x in y]", "[x for x in (yield)]", "[x for x in y if (yield)]", "{(yield): (yield x) for x in y}", "((yield) for x in y)", "f((yield) for x in y)", "[x for (yield).a in y]",
+    "f'{yield}'", "f'{yield x}'", "f'{yield from x}'", "f'{(yield)}'", "f'{ yield }'", "f'{yield!r}'", "f'{yield x:>{(yield)}}'", "f'{yield a, b}'", "f'{yield=}'", "x = f'a{yield}b' f'{yield from c}'",
+    "def f(): yield", "def f(): x = yield y", "def f():\n    yield\n", "def f():\n    x = yield\n    y = yield x\n    z = yield from y\n    return z\n", "def f():\n    while True:\n        received = yield value\n        if received is None:\n            yield from other()\n",
+    "def f():\n    try:\n        yield conn\n    finally:\n        conn.close()\n", "def f():\n    with a as b:\n        yield b, c\n", "def f():\n    for k, v in d.items():\n        yield k, v\n", "def f():\n    yield (\n        a,\n        b,\n    )\n", "def f():\n    yield {\n        'a': 1,\n    }\n    yield [\n        x\n        for x in y\n    ]\n",
+    "def f():\n    yield from (\n        x for x in y\n    )\n", "def f():\n    x = yield \\\n        y\n", "def f():\n    return (yield)\n", "def f():\n    def g():\n        yield 1\n    yield from g()\n", "def f():\n    yield  # comment\n    yield x  # comment\n",
+    "def f():\n    data = (yield)\n    data += (yield data)\n    print((yield))\n", "def f():\n    if (yield):\n        pass\n    elif (yield x):\n        pass\n", "def f():\n    yield 1; yield 2; x = yield 3\n", "def f():\n    yield\n\n\ndef g():\n    yield from f()\n",
+    "def f():\n    yield 'a' \\\n        'b'\n", "def f():\n    yield a if b else \\\n        c\n", "@contextmanager\ndef f(self, *a, **k):\n    'doc'\n    self.x: int = yield self\n", "class A:\n    def __iter__(self):\n        yield from self._items\n        yield self.last,\n",
+    "@d\nclass A:\n    def f(self): yield\n",
+    "def f(a):\n    x = y = yield a, *b\n    x += yield from (yield)\n    z: int = yield\n    print((yield), f'{yield x}')\n    yield\n",
+    "yield_ = 1", "yields", "x = yield_", "yield_from = yield_", "x.yield_", "f(yield_=1)",
+]
+
 INVALID = [
+    # P11: yield is not an `expression`: bare in an argument, a display, a subscript, a lambda body, a condition, after an operator.
+    "foo(yield)", "f(a, yield)", "f(x=yield)", "f(*yield)", "f(**yield)", "print(yield x)", "f(yield from x)", "(yield, 1)", "(1, yield)", "x = yield, 1", "x = a, yield", "x = *a, yield", "[yield]", "[yield x]", "{yield}", "{1: yield}", "{yield: 1}",
+    "a[yield]", "a[yield:]", "a[1:yield]", "lambda: yield", "lambda: yield x", "lambda x=yield: 1", "return yield", "return yield x", "raise yield", "raise x from yield", "assert yield", "assert x, yield", "del yield", "del (yield)", "del (yield x)", "del (yield from x)",
+    "if yield: pass", "while yield: pass", "for x in yield: pass", "for yield in x: pass", "for (yield) in x: pass", "with yield: pass", "with yield as x: pass", "with a as (yield): pass", "@yield\ndef f(): pass", "def f(x=yield): pass", "def f(x: yield): pass", "def f() -> yield: pass", "class A(yield): pass",
+    "yield yield", "yield from yield", "yield from", "yield from *a", "yield from a, b", "yield from a,", "yield from x, ", "x = yield from a, b", "(yield from a, b)", "yield from from x", "yield,", "yield, x", "yield if a else b", "yield in x", "yield.x", "yield for x in y", "yield x for x in y",
+    "(yield x for x in y)", "(yield for x in y)", "(yield from x for x in y)", "f(yield x for x in y)", "[yield x for x in y]", "[x for x in yield]", "[x for x in y if yield]", "not yield", "-yield", "a + yield", "a if yield else b", "a if b else yield", "a or yield", "a < yield", "a, yield", "yield x y", "yield 1 2",
+    "yield = 1", "x = yield = 1", "x = yield y = 1", "yield x = 1", "yield from x = 1", "x = yield from y = 1", "(yield) = 1", "(yield x) = 1", "(yield) += 1", "yield += 1", "yield: int", "yield x: int", "(yield): int", "(yield): int = 1", "(yield x): int", "x, (yield) = 1", "[(yield)] = 1", "x: yield", "x: yield y", "x: int = yield = 1",
+    "x: int = yield from", "x += yield from", "x = yield from", "(yield", "(yield x", "yield)", "(yield))", "((yield)", "x = (yield", "f'{yield from}'", "f'{yield,}'", "f'{yield yield}'", "import yield", "from yield import x", "from x import yield", "def yield(): pass", "class yield: pass", "global yield", "x.yield", "f(yield=1)", "yield from x from y",
     "'\0'", "#\0",
     "b'a' 'b'",
     "(*a)", "f(**a,*b)", "{*a:b}", "[*a if b else c]",
@@ -222,14 +259,17 @@ INVALID = [
 
 UNSUPPORTED = [
     "K", "a.K", "f(K=1)", "match x:\n    case _: pass\n",
-    "import é", "import a as é", "from é import a", "from a import é", "from a import b as é", "class é: pass", "class A(é): pass", "class A(é=1): pass", "class A:\n    x: int = yield\n", "class A:\n    async def f(self): pass\n", "@d\nclass A:\n    def f(self): yield\n", "async def f(): pass", "@d\nasync def f(): pass",
-    "async for x in y: pass", "async with a: pass", "def f(): yield", "def f(): x = yield y", "lambda: (yield)", "def f(é): pass", "lambda é: 1",
+    "import é", "import a as é", "from é import a", "from a import é", "from a import b as é", "class é: pass", "class A(é): pass", "class A(é=1): pass", "class A:\n    async def f(self): pass\n", "@d\nclass A:\n    def f(self): await x\n", "async def f(): pass", "@d\nasync def f(): pass",
+    "async for x in y: pass", "async with a: pass", "def f(é): pass", "lambda é: 1",
     "global é", "try: pass\nexcept E as é: pass", "try: pass\nexcept* E: pass", "def f(): await x", "def f(a: int): x: int = await a", "(x := 1)", "with (x := 1): pass",
     "a[x:=1]", "a[1:(x:=2)]", "a[é:]", "a[1:é]", "a[::é]", "a[1:, é]", "a[1:2].é", "a[await b:]",
-    'f"{(x := 1)}"', 'f"{(yield)}"', 'f"{await x}"', 'f"{é}"', 'f"{a.é}"', 'f"{x:{é}}"',
+    'f"{(x := 1)}"', 'f"{await x}"', 'f"{é}"', 'f"{a.é}"', 'f"{x:{é}}"',
     "[x async for x in y]", "(x async for x in y)", "{x async for x in y}", "{a: b async for a in c}", "f(x async for x in y)", "[x for x in y async for z in w]", "[await x for x in y]", "[x for x in await y]",
-    "[x := 1 for x in y]", "[x for x in (y := z)]", "[x for x in y if (z := x)]", "f(x := 1 for x in y)", "{(k := a): b for a in c}", "[(yield) for x in y]", "[é for x in y]", "[x for é in y]", "[x for x in é]", "[x for x in y if é]", "f(é for x in y)",
-    "x: int = yield", "x: int = yield y", "x: int = yield from y", "x: (yield)", "x: await z", "x: int = await z", "x: (y := 1)", "x: int = (y := 1)", "é: int", "x: é", "x: int = é", "a.é: int", "x: a.é", "(é): int = 1",
+    "[x := 1 for x in y]", "[x for x in (y := z)]", "[x for x in y if (z := x)]", "f(x := 1 for x in y)", "{(k := a): b for a in c}", "[é for x in y]", "[x for é in y]", "[x for x in é]", "[x for x in y if é]", "f(é for x in y)",
+    "x: await z", "x: int = await z", "x: (y := 1)", "x: int = (y := 1)", "é: int", "x: é", "x: int = é", "a.é: int", "x: a.é", "(é): int = 1",
     "match (x):\n    case _: pass\n", "match [x]:\n    case _: pass\n", "match x, y:\n    case _: pass\n", "match (x), y:\n    case _: pass\n", "match x.y:\n    case _: pass\n", "match (x).y[0]:\n    case z: w: int = 1\n", "match -x:\n    case _: pass\n",
     "match x:\n    case _:\n        y: int = 1\n", "x: [y async for y in z]", "x: int = [await y for y in z]", "class A:\n    x: int = 1\n    async def f(self): pass\n",
+    # P11: yield parses; what it holds may still be a later slice.
+    "yield (x := 1)", "yield await x", "yield from await x", "x = yield (y := 1)", "(yield (x := 1))", "def f(): yield é", "yield from é", "async def f(): yield", "async def f():\n    async for x in y: yield x\n", "def f():\n    yield\n    await x\n",
+    "def f():\n    match x:\n        case _: yield\n", "[(yield) async for x in y]", "f'{yield (x := 1)}'",
 ]
