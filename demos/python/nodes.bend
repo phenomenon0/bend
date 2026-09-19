@@ -308,6 +308,11 @@ def function(id: S.Tok, args: S.Json, +body: S.Expr, decorators: S.Json, returns
   node("FunctionDef", S.JField{"name", S.JStr{P.tok_text(id)}, S.JField{"args", args, S.JField{"body", S.JArr{get_fields(body)},
     S.JField{"decorator_list", decorators, S.JField{"returns", opt(returns), S.JField{"type_comment", S.JNull{}, S.JEnd{}}}}}}}, start, get_finish(body))
 
+# `async def` / `async for` / `async with`: the plain statement's fields under the Async tag, from the `async` token.
+def async(e: S.Expr, on: Bool) -> S.Expr:
+  S.Expr{tag, fs, lo, hi, cover, grouped} = e
+  S.Expr{Bool.pick(String, on, "Async", "") ++ tag, fs, lo, hi, cover, grouped}
+
 def loop(target: S.Json, iter: S.Expr, body: S.Expr, +other: S.Expr, start: S.Pos) -> S.Expr:
   node("For", S.JField{"target", target, S.JField{"iter", S.expr(iter), S.JField{"body", S.JArr{get_fields(body)},
     S.JField{"orelse", S.JArr{get_fields(other)}, S.JField{"type_comment", S.JNull{}, S.JEnd{}}}}}}, start, get_finish(other))
@@ -380,8 +385,8 @@ def head(items: S.Json) -> S.Json:
     case _:
       S.JNull{}
 
-def clause(target: S.Json, iter: S.Expr, ifs: S.Json) -> S.Json:
-  plain("comprehension", S.JField{"target", target, S.JField{"iter", S.expr(iter), S.JField{"ifs", ifs, S.JField{"is_async", S.JNum{0n}, S.JEnd{}}}}})
+def clause(target: S.Json, iter: S.Expr, ifs: S.Json, is_async: Bool) -> S.Json:
+  plain("comprehension", S.JField{"target", target, S.JField{"iter", S.expr(iter), S.JField{"ifs", ifs, S.JField{"is_async", S.JNum{Bool.pick(Nat, is_async, 1n, 0n)}, S.JEnd{}}}}})
 
 def comp(kind: String, head: S.Json, gens: S.Json, lo: S.Pos, hi: S.Pos) -> S.Expr:
   node(kind, S.fields_append(head, S.JField{"generators", arr(gens), S.JEnd{}}), lo, hi)

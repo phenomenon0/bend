@@ -77,6 +77,16 @@ def expression_name(+t: S.Tok) -> P.M(S.Expr):
       return N.name(t), u => P.unsupported(S.Expr, "Unicode identifier normalization"))
 
 
+def comp_start(+t: S.Tok) -> Bool:
+  P.is_text(t, "for") || P.is_text(t, "async")
+
+# `async` is a statement prefix of `def`, `for` and `with` only; the word it prefixes is what the statement dispatches on.
+def async_word(+t: S.Tok) -> P.M(S.Tok):
+  S.choose(P.M(S.Tok), Bool.not(P.is_text(t, "async")), u => P.M.pure(S.Tok, t), u =>
+    do P.M<S.Tok>:
+      +w : S.Tok <- P.peek
+      S.choose(P.M(S.Tok), P.is_text(w, "def") || P.is_text(w, "for") || P.is_text(w, "with"), u => P.take, u => P.syntax(S.Tok, "expected def, for or with after async")))
+
 def ident_token(+t: S.Tok) -> P.M(S.Tok):
   S.choose(P.M(S.Tok), non_ascii(P.tok_text(t)), u => P.unsupported(S.Tok, "Unicode identifier normalization"), u => P.M.pure(S.Tok, t))
 
@@ -160,11 +170,17 @@ def go(+fuel: Nat, +mode: Mode) -> P.M(S.Expr):
                 S.choose(P.M(S.Expr), run_f(ts), u =>
                   go(left, Joined{literal_kind(P.tok_text(t)), P.tok_start(t), run_end(ts, P.tok_start(t)), S.JEnd{}, S.JEnd{}}), u =>
                   go(left, Strings{"", literal_kind(P.tok_text(t)), P.tok_start(t), P.tok_end(t)})), u =>
-              S.choose(P.M(S.Expr), P.is_text(t, "+") || P.is_text(t, "-") || P.is_text(t, "~") || (P.is_text(t, "not") && Nat.is_le(minimum, 4n)), u =>
+              S.choose(P.M(S.Expr), ((P.is_text(t, "+") || P.is_text(t, "-") || P.is_text(t, "~")) && Nat.is_le(minimum, 13n)) || (P.is_text(t, "not") && Nat.is_le(minimum, 4n)), u =>
                 do P.M<S.Expr>:
                   drop : S.Tok <- P.take
                   operand : S.Expr <- go(left, Expression{Bool.pick(Nat, P.is_text(t, "not"), 4n, 12n)})
                   return N.unary(O.unary(P.tok_text(t)), P.tok_start(t), operand), u =>
+                # `await_primary`: AWAIT primary. Minimum 14 is a primary: no operator, unary, `not`, lambda or second await.
+                S.choose(P.M(S.Expr), P.is_text(t, "await") && Nat.is_le(minimum, 13n), u =>
+                  do P.M<S.Expr>:
+                    drop : S.Tok <- P.take
+                    +operand : S.Expr <- go(left, Expression{14n})
+                    return N.statement("Await", S.expr(operand), P.tok_start(t), N.get_finish(operand)), u =>
                 S.choose(P.M(S.Expr), P.is_text(t, "("), u =>
                   do P.M<S.Expr>:
                     drop : S.Tok <- P.take
@@ -177,7 +193,7 @@ def go(+fuel: Nat, +mode: Mode) -> P.M(S.Expr):
                         +inner : S.Expr <- go(left, Star{})
                         +word : S.Tok <- P.peek
                         S.choose(P.M(S.Expr), String.eq(N.get_tag(inner), "Starred"), u => P.syntax(S.Expr, "starred expression requires tuple comma"), u =>
-                          S.choose(P.M(S.Expr), P.is_text(word, "for") && Bool.not(String.starts_with(N.get_tag(inner), "Yield") && Bool.not(N.is_grouped(inner))), u =>
+                          S.choose(P.M(S.Expr), comp_start(word) && Bool.not(String.starts_with(N.get_tag(inner), "Yield") && Bool.not(N.is_grouped(inner))), u =>
                             S.choose(P.M(S.Expr), String.eq(N.get_tag(inner), "Tuple") && Bool.not(N.is_grouped(inner)), u => P.syntax(S.Expr, "unparenthesized comprehension element"), u =>
                               go(left, Comp{"GeneratorExp", S.JField{"elt", S.expr(inner), S.JEnd{}}, P.tok_start(t), ")", S.JEnd{}})), u =>
                             do P.M<S.Expr>:
@@ -208,7 +224,7 @@ def go(+fuel: Nat, +mode: Mode) -> P.M(S.Expr):
                                     value : S.Expr <- go(left, Expression{0n})
                                     go(left, Dictionary{P.tok_start(t), N.one(key), N.one(value), True{}})), u =>
                               go(left, Sequence{"Set", P.tok_start(t), "}", N.one(key), True{}}))), u =>
-                      expected(S.Expr, t, "expected expression"))))))))))
+                      expected(S.Expr, t, "expected expression")))))))))))
     case 1n+left Strings{raw, kind, start, end}:
       P.meter(S.Expr, do P.M<S.Expr>:
         +t : S.Tok <- P.peek
@@ -297,7 +313,7 @@ def go(+fuel: Nat, +mode: Mode) -> P.M(S.Expr):
           do P.M<S.Expr>:
             end : S.Tok <- P.take
             return N.collection(kind, items, start, P.tok_end(end)), u =>
-          S.choose(P.M(S.Expr), P.is_text(t, "for"), u =>
+          S.choose(P.M(S.Expr), comp_start(t), u =>
             S.choose(P.M(S.Expr), separator && N.sole(items), u =>
               go(left, Comp{kind ++ "Comp", S.JField{"elt", N.head(items), S.JEnd{}}, start, close, S.JEnd{}}), u => P.syntax(S.Expr, "comprehension takes one unstarred element")), u =>
           S.choose(P.M(S.Expr), O.unsupported(t), u => P.unsupported(S.Expr, "expression"), u =>
@@ -315,7 +331,7 @@ def go(+fuel: Nat, +mode: Mode) -> P.M(S.Expr):
           do P.M<S.Expr>:
             end : S.Tok <- P.take
             return N.dict(keys, values, start, P.tok_end(end)), u =>
-          S.choose(P.M(S.Expr), P.is_text(t, "for"), u =>
+          S.choose(P.M(S.Expr), comp_start(t), u =>
             S.choose(P.M(S.Expr), separator && N.sole(keys), u =>
               go(left, Comp{"DictComp", S.JField{"key", N.head(keys), S.JField{"value", N.head(values), S.JEnd{}}}, start, "}", S.JEnd{}}), u => P.syntax(S.Expr, "dict comprehension takes one key: value")), u =>
           S.choose(P.M(S.Expr), O.unsupported(t), u => P.unsupported(S.Expr, "dictionary item"), u =>
@@ -414,16 +430,17 @@ def go(+fuel: Nat, +mode: Mode) -> P.M(S.Expr):
     # `for` clauses after the head, then the close. A clause's iter and `if`s are disjunctions: no bare ternary or lambda.
     case 1n+left Comp{kind, head, start, close, gens}:
       P.meter(S.Expr, do P.M<S.Expr>:
-        t : S.Tok <- P.peek
-        S.choose(P.M(S.Expr), P.is_text(t, "for"), u =>
+        +t : S.Tok <- P.peek
+        S.choose(P.M(S.Expr), comp_start(t), u =>
           do P.M<S.Expr>:
             drop : S.Tok <- P.take
+            word : S.Tok <- S.choose(P.M(S.Tok), P.is_text(t, "async"), u => P.expect("for"), u => P.M.pure(S.Tok, t))
             first : S.Expr <- go(left, TestList{6n})
             target : S.Json <- P.lift(S.Json, N.target(first, False{}))
             word : S.Tok <- P.expect("in")
             iter : S.Expr <- go(left, Expression{2n})
             ifs : S.Expr <- go(left, Ifs{S.JEnd{}})
-            go(left, Comp{kind, head, start, close, S.JItem{N.clause(target, iter, N.carried(ifs)), gens}}), u =>
+            go(left, Comp{kind, head, start, close, S.JItem{N.clause(target, iter, N.carried(ifs), P.is_text(t, "async")), gens}}), u =>
           do P.M<S.Expr>:
             end : S.Tok <- P.expect(close)
             return N.comp(kind, head, gens, start, P.tok_end(end))))
@@ -478,7 +495,7 @@ def go(+fuel: Nat, +mode: Mode) -> P.M(S.Expr):
             end : S.Tok <- P.take
             return N.call(fn, args, keywords, P.tok_end(end)), u =>
           # A bare generator is a call's only argument; a class takes none.
-          S.choose(P.M(S.Expr), P.is_text(t, "for"), u =>
+          S.choose(P.M(S.Expr), comp_start(t), u =>
             S.choose(P.M(S.Expr), separator && N.sole(args) && N.empty(keywords) && Bool.not(String.eq(N.get_tag(fn), "$json")), u =>
               do P.M<S.Expr>:
                 +gen : S.Expr <- go(left, Comp{"GeneratorExp", S.JField{"elt", N.head(args), S.JEnd{}}, open, ")", S.JEnd{}})
@@ -541,15 +558,16 @@ def go(+fuel: Nat, +mode: Mode) -> P.M(S.Expr):
             compound : S.Expr <- go(left, Compound{Bool.pick(String, P.is_text(t, "if"), "If", "While"), P.tok_start(t)})
             return wrap(compound), u =>
           S.choose(P.M(S.Expr), P.is_text(t, "@"), u => go(left, Decorators{S.JEnd{}}), u =>
-            S.choose(P.M(S.Expr), P.is_text(t, "def") || P.is_text(t, "class") || P.is_text(t, "for") || P.is_text(t, "try") || P.is_text(t, "with"), u =>
+            S.choose(P.M(S.Expr), P.is_text(t, "def") || P.is_text(t, "class") || P.is_text(t, "for") || P.is_text(t, "try") || P.is_text(t, "with") || P.is_text(t, "async"), u =>
               do P.M<S.Expr>:
                 drop : S.Tok <- P.take
+                +w : S.Tok <- async_word(t)
                 +next : S.Tok <- P.peek
                 +start : S.Pos = P.tok_start(t)
-                compound : S.Expr <- S.choose(P.M(S.Expr), P.is_text(t, "def"), u => go(left, Def{start, S.JArr{S.JEnd{}}}), u =>
-                  S.choose(P.M(S.Expr), P.is_text(t, "class"), u => go(left, Class{start, S.JArr{S.JEnd{}}}), u =>
-                  S.choose(P.M(S.Expr), P.is_text(t, "for"), u => go(left, For{start}), u =>
-                    S.choose(P.M(S.Expr), P.is_text(t, "try"), u => go(left, Try{start}), u =>
+                compound : S.Expr <- S.choose(P.M(S.Expr), P.is_text(w, "def"), u => go(left, Def{start, S.JArr{S.JEnd{}}}), u =>
+                  S.choose(P.M(S.Expr), P.is_text(w, "class"), u => go(left, Class{start, S.JArr{S.JEnd{}}}), u =>
+                  S.choose(P.M(S.Expr), P.is_text(w, "for"), u => go(left, For{start}), u =>
+                    S.choose(P.M(S.Expr), P.is_text(w, "try"), u => go(left, Try{start}), u =>
                       # CPython tries the parenthesized item list first; it must end in `):`.
                       # Only the header backtracks: a body inside the choice would reparse 2^depth times.
                       do P.M<S.Expr>:
@@ -558,7 +576,7 @@ def go(+fuel: Nat, +mode: Mode) -> P.M(S.Expr):
                           go(left, With{False{}}))
                         body : S.Expr <- go(left, Suite{})
                         return N.context(N.carried(items), body, start)))))
-                return wrap(compound), u =>
+                return wrap(N.async(compound, P.is_text(t, "async"))), u =>
               go(left, Simple{S.JEnd{}})))))
     case 1n+left Simple{statements}:
       P.meter(S.Expr, do P.M<S.Expr>:
@@ -779,12 +797,13 @@ def go(+fuel: Nat, +mode: Mode) -> P.M(S.Expr):
             value : S.Expr <- go(left, Expression{0n})
             line : S.Tok <- P.expect("NEWLINE")
             go(left, Decorators{S.JItem{S.expr(value), items}}), u =>
-          S.choose(P.M(S.Expr), P.is_text(t, "def") || P.is_text(t, "class"), u =>
+          S.choose(P.M(S.Expr), P.is_text(t, "def") || P.is_text(t, "class") || P.is_text(t, "async"), u =>
             do P.M<S.Expr>:
               drop : S.Tok <- P.take
-              function : S.Expr <- S.choose(P.M(S.Expr), P.is_text(t, "def"), u => go(left, Def{P.tok_start(t), N.arr(items)}), u =>
-                go(left, Class{P.tok_start(t), N.arr(items)}))
-              return wrap(function), u => expected(S.Expr, t, "expected def or class after decorator"))))
+              w : S.Tok <- S.choose(P.M(S.Tok), P.is_text(t, "async"), u => P.expect("def"), u => P.M.pure(S.Tok, t))
+              function : S.Expr <- S.choose(P.M(S.Expr), P.is_text(t, "class"), u => go(left, Class{P.tok_start(t), N.arr(items)}), u =>
+                go(left, Def{P.tok_start(t), N.arr(items)}))
+              return wrap(N.async(function, P.is_text(t, "async"))), u => expected(S.Expr, t, "expected def or class after decorator"))))
     case 1n+left Def{start, decorators}:
       P.meter(S.Expr, do P.M<S.Expr>:
         id : S.Tok <- ident()

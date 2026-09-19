@@ -169,7 +169,8 @@ LShift RShift BitOr BitXor BitAnd BoolOp And Or Compare Eq NotEq Lt LtE Gt GtE I
 IfExp Call keyword Assign AugAssign Expr If While Return Pass Break Continue
 Lambda arguments arg FunctionDef For Global Nonlocal Delete Assert Raise Try ExceptHandler With withitem
 Import ImportFrom alias ClassDef Slice JoinedStr FormattedValue
-ListComp SetComp DictComp GeneratorExp comprehension AnnAssign Yield YieldFrom""".split())
+ListComp SetComp DictComp GeneratorExp comprehension AnnAssign Yield YieldFrom
+AsyncFunctionDef AsyncFor AsyncWith Await""".split())
 
 
 def supported(tree, source=None):
@@ -178,6 +179,5 @@ def supported(tree, source=None):
         return False
     return all(type(node).__name__ in SUPPORTED and
                not (isinstance(node, ast.Name) and not node.id.isascii()) and
-               not (isinstance(node, ast.Attribute) and not node.attr.isascii()) and
-               not (isinstance(node, ast.comprehension) and node.is_async)
+               not (isinstance(node, ast.Attribute) and not node.attr.isascii())
                for node in ast.walk(tree))
