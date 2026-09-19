@@ -22,6 +22,7 @@ def seconds(lines):
     path.write_bytes(LINE * lines)
     best = None
     for _ in range(3):
+        # timeout= makes subprocess poll the child on a 50 ms grid: readings are that coarse.
         start = time.monotonic()
         p = subprocess.run(
             [str(OUT / "parser"), "--gpu", "off"],
