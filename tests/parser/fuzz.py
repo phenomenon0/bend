@@ -12,7 +12,7 @@ def expression(rng, depth):
     if depth <= 0 or rng.randrange(5) == 0:
         return rng.choice(["a", "b", "c", "0", "17", "0x10", "1.5", "True", "None", "'é😀'", "..."])
     sub = lambda: expression(rng, depth - 1)
-    choice = rng.randrange(12)
+    choice = rng.randrange(13)
     if choice == 0:
         return rng.choice(["-", "+", "~", "not "]) + "(" + sub() + ")"
     if choice < 4:
@@ -31,6 +31,9 @@ def expression(rng, depth):
         return "(" + sub() + ", " + sub() + ")"
     if choice == 10:
         return "{" + sub() + ", " + sub() + "}"
+    if choice == 11:
+        part = lambda: rng.choice(["", sub()])
+        return "(" + sub() + ")[" + part() + ":" + part() + rng.choice(["", ":" + part()]) + rng.choice(["", ", " + sub(), ", ::" + part() + ","]) + "]"
     return "(" + sub() + " < " + sub() + " <= " + sub() + ")"
 
 

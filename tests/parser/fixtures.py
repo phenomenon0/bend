@@ -95,6 +95,19 @@ STATEMENTS += [
     "@d(x)\nclass A(B, *c, metaclass=M, **k):\n    \"doc\"\n    class C: pass\n    def f(self):\n        return 1\nclass D(): y = 1\n",
     "class A: pass  # é", "class A(x=1, *y): pass", "class A(**k, x=1): pass",
 ]
+# P7: slices. A Slice spans its first token (a bound or the first `:`) to its last (a bound or the last `:`).
+STATEMENTS += [
+    "a[:]", "a[::]", "a[1:]", "a[:2]", "a[::3]", "a[1:2]", "a[1:2:3]", "a[1::3]", "a[:2:3]", "a[1:2:]", "a[1::]", "a[:2:]",
+    "a[i, j]", "a[:, 1]", "a[1, :]", "a[:, :]", "a[1:2, ::3]", "a[1:2,]", "a[:,]", "a[::, ::,]", "a[..., 1:2]", "a[*b, 1:2]", "a[1:2, *b]",
+    "f(x)[1:]", "a.b[:-1]", "a[1][2:3]", "a[b[1:2]:c[::2]]", "a[b[:]]", "a[1:2][3:4][5]", "f(a[1:])[::-1].g()[x:y]", "'abc'[1:]", "[1, 2][::-1]",
+    "(a)[(1):(2):(3)]", "a[ : ]", "a[1 : 2 : 3]", "a[\n    1:\n    2\n]", "a[-1:]", "a[not b:c or d]", "a[b if c else d:e if f else g]",
+    "a[lambda: 1:2]", "a[lambda x: x:lambda: y:lambda: z]", "a[x:y, lambda: 1]", "a[b < c:d]", "a[(b, c):d]", "a[{1: 2}[1]:]",
+    "a[1:2] = b", "a[:] = b[:] = c", "a[::2], b[1:] = c", "a[1:2] += b", "a[:, 0] *= 2", "[a[1:], *b[::2]] = c",
+    "del a[1:2]", "del a[:], b[::2], (c[1:], [d[:1]])", "for a[1:2] in b: pass", "with a as b[1:2]: pass", "with a[1:2]: pass",
+    "def f(a=b[1:], *c: d[:2]) -> e[::3]:\n    return a[1:-1]\n", "@a[1:2]\ndef f(): pass",
+    "if a[1:]:\n    x = a[:1]\nelif a[::2]:\n    pass\n", "assert a[1:2], b[:]", "raise E(a[1:]) from b[:1]", "return a[1:], b[:2]",
+    "x = a[1:2] if a[:1] else a[2:]", "f(a[1:], k=b[:2], *c[::2], **d[3:])", "{a[1:]: b[:2], **c[::3]}", "a[1:2] # é", "a[b[1:]][:-1].c()[x:y, ::2] = d[:]\ndel a[1:2:3], e[*f, :g]\n", "'é😀'[1:] + a[2:]",
+]
 
 INVALID = [
     "'\0'", "#\0",
@@ -122,15 +135,18 @@ INVALID = [
     "from a", "from import b", "from a import", "from a import b,", "from a import ()", "from a import (b", "from a import (*)",
     "from a import *, b", "from a import b, *", "from a import b.c", "from a import (b.c)", "from a. import b", "from a import b as",
     "from a import b as 1", "from .. import", "from a import (b,,)", "from a import (,)", "x = import a", "from a import b c",
+    "a[]", "a[1:2:3:4]", "a[:::]", "a[*b:1]", "a[1:*b]", "a[1:2:*b]", "a[:", "a[1:2", "a[,]", "a[1:2,,]", "a[1 2]", "a[1:2 3]", "a[:] = ", "[1:2]", "(1:2)",
+    "f(1:2)", "{1:2:3}", "x = 1:2", "a[1:2] = 1:2", "del a[1:2:3:4]", "a[1:]]", "a[1:pass]", "a[1:2)", "f(a[1:2]=3)", "for a[1:] in: pass",
     "with: pass", "with a as: pass", "with a as 1: pass", "with a, : pass", "with a as f(): pass", "with (a as b) as c: pass",
 ]
 
 UNSUPPORTED = [
     "K", "a.K", "f(K=1)", "match x:\n    case _: pass\n",
-    "import é", "import a as é", "from é import a", "from a import é", "from a import b as é", "class é: pass", "class A(é): pass", "class A(é=1): pass", "class A(B[1:2]): pass", "class A:\n    x: int = 1\n", "class A:\n    async def f(self): pass\n", "@d\nclass A:\n    def f(self): yield\n", "async def f(): pass", "@d\nasync def f(): pass",
+    "import é", "import a as é", "from é import a", "from a import é", "from a import b as é", "class é: pass", "class A(é): pass", "class A(é=1): pass", "class A:\n    x: int = 1\n", "class A:\n    async def f(self): pass\n", "@d\nclass A:\n    def f(self): yield\n", "async def f(): pass", "@d\nasync def f(): pass",
     "async for x in y: pass", "async with a: pass", "def f(): yield", "def f(): x = yield y", "lambda: (yield)", "def f(é): pass", "lambda é: 1",
     "global é", "try: pass\nexcept E as é: pass", "try: pass\nexcept* E: pass", "def f(): await x", "def f(a: int): x: int = 1", "for x in [y for y in z]: pass",
     "[x for x in y]", "{x for x in y}",
-    "{x:x for x in y}", "f(x for x in y)", "a[1:2]", "a[:2]", "f'{x}'",
-    "(x := 1)", "with (x := 1): pass", "with a[1:2]: pass",
+    "{x:x for x in y}", "f(x for x in y)", "f'{x}'",
+    "(x := 1)", "with (x := 1): pass", "a[(x for x in y):]",
+    "a[x:=1]", "a[1:(x:=2)]", "a[1:f'{x}']", "a[é:]", "a[1:é]", "a[::é]", "a[1:, é]", "a[[x for x in y][0]:]", "a[1:2].é", "a[await b:]",
 ]

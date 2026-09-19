@@ -45,6 +45,9 @@ type Mode is Data:
   Dotted{dotted: Bool, text: String, start: S.Pos}
   Aliases{dotted: Bool, paren: Bool, names: S.Json, separator: Bool}
   Class{start: S.Pos, decorators: S.Json}
+  Slice{}
+  Bound{}
+  Slices{items: S.Json, start: S.Pos, end: S.Pos}
 
 # Primitive helpers classify unsupported productions before a syntax error.
 def expected(-A: Data, +t: S.Tok, msg: String) -> P.M(A):
@@ -253,15 +256,15 @@ def go(+fuel: Nat, +mode: Mode) -> P.M(S.Expr):
             S.choose(P.M(S.Expr), P.is_text(t, "["), u =>
               do P.M<S.Expr>:
                 drop : S.Tok <- P.take
-                +peek : S.Tok <- P.peek
-                S.choose(P.M(S.Expr), P.is_text(peek, ":"), u => P.unsupported(S.Expr, "slice"), u =>
+                +index : S.Expr <- go(left, Slice{})
+                +next : S.Tok <- P.peek
+                slices : S.Expr <- S.choose(P.M(S.Expr), P.is_text(next, ","), u =>
                   do P.M<S.Expr>:
-                    index : S.Expr <- go(left, TestList{0n})
-                    peek : S.Tok <- P.peek
-                    S.choose(P.M(S.Expr), P.is_text(peek, ":"), u => P.unsupported(S.Expr, "slice"), u =>
-                      do P.M<S.Expr>:
-                        end : S.Tok <- P.expect("]")
-                        go(left, Rest{minimum, N.subscript(first, N.index(index), P.tok_end(end))}))), u =>
+                    drop : S.Tok <- P.take
+                    go(left, Slices{N.one(index), N.get_begin(index), P.tok_end(next)}), u =>
+                  P.M.pure(S.Expr, N.index(index)))
+                end : S.Tok <- P.expect("]")
+                go(left, Rest{minimum, N.subscript(first, slices, P.tok_end(end))}), u =>
               S.choose(P.M(S.Expr), Nat.is_eq(level, 0n) || Nat.is_lt(level, minimum), u => P.M.pure(S.Expr, first), u =>
                 S.choose(P.M(S.Expr), Nat.is_eq(level, 1n), u =>
                   do P.M<S.Expr>:
@@ -278,6 +281,41 @@ def go(+fuel: Nat, +mode: Mode) -> P.M(S.Expr):
                         drop : S.Tok <- P.take
                         second : S.Expr <- go(left, Expression{Bool.pick(Nat, Nat.is_eq(level, 13n), 12n, 1n+level)})
                         go(left, Rest{minimum, N.binary(first, O.tag(P.tok_text(t)), second)})))))))))
+    # One subscript element: `[lower] ':' [upper] [':' [step]]`, else an ordinary (starred) expression.
+    case 1n+left Slice{}:
+      P.meter(S.Expr, do P.M<S.Expr>:
+        +t : S.Tok <- P.peek
+        +lower : S.Expr <- S.choose(P.M(S.Expr), P.is_text(t, ":"), u => P.M.pure(S.Expr, N.none()), u => go(left, Item{0n}))
+        colon : S.Tok <- P.peek
+        S.choose(P.M(S.Expr), Bool.not(P.is_text(colon, ":")), u => P.M.pure(S.Expr, lower), u =>
+          S.choose(P.M(S.Expr), String.eq(N.get_tag(lower), "Starred"), u => P.syntax(S.Expr, "starred slice bound"), u =>
+            do P.M<S.Expr>:
+              drop : S.Tok <- P.take
+              upper : S.Expr <- go(left, Bound{})
+              second : S.Tok <- P.peek
+              step : S.Expr <- S.choose(P.M(S.Expr), P.is_text(second, ":"), u =>
+                do P.M<S.Expr>:
+                  drop : S.Tok <- P.take
+                  go(left, Bound{}), u => P.M.pure(S.Expr, N.none()))
+              end : S.Pos <- P.end
+              return N.slice(lower, upper, step, S.choose(S.Pos, N.is_none(lower), u => P.tok_start(t), u => N.get_begin(lower)), end))))
+    case 1n+left Bound{}:
+      P.meter(S.Expr, do P.M<S.Expr>:
+        +t : S.Tok <- P.peek
+        S.choose(P.M(S.Expr), P.is_text(t, ":") || P.is_text(t, ",") || P.is_text(t, "]"), u => P.M.pure(S.Expr, N.none()), u => go(left, Expression{0n})))
+    # Comma with slice elements; a subscript tuple always closes on `]`.
+    case 1n+left Slices{items, start, end}:
+      P.meter(S.Expr, do P.M<S.Expr>:
+        t : S.Tok <- P.peek
+        S.choose(P.M(S.Expr), P.is_text(t, "]"), u => P.M.pure(S.Expr, N.collection("Tuple", items, start, end)), u =>
+          do P.M<S.Expr>:
+            +value : S.Expr <- go(left, Slice{})
+            +next : S.Tok <- P.peek
+            S.choose(P.M(S.Expr), P.is_text(next, ","), u =>
+              do P.M<S.Expr>:
+                drop : S.Tok <- P.take
+                go(left, Slices{S.JItem{S.expr(value), items}, start, P.tok_end(next)}), u =>
+              P.M.pure(S.Expr, N.collection("Tuple", S.JItem{S.expr(value), items}, start, N.get_finish(value))))))
     case 1n+left Boolean{minimum, level, operator, values, start, end}:
       P.meter(S.Expr, do P.M<S.Expr>:
         t : S.Tok <- P.peek
