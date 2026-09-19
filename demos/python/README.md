@@ -80,7 +80,7 @@ conversion in Bend. `normalize.py` separates every location from structural
 comparison and maps CPython UTF-8 byte columns to code points per LF-delimited
 physical line. Trivia is dropped; there is no span sampling.
 
-One directly recursive `go` dispatches 43 grammar modes with precedence
+One directly recursive `go` dispatches 55 grammar modes with precedence
 climbing. Every mode entry decrements a residual global budget. The first
 structurally decreasing Nat proves termination independently of the residual
 budget. Sequential parses thread the residual state, never replenish it
