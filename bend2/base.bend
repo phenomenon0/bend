@@ -3488,22 +3488,31 @@ def Regex.exec.fin(st: Regex.exec.State()) -> Maybe<&2, Match>:
     case (work, None{}):
       None{}
 
-# Walks the subject; the first `at` chars are skipped (they still set
+# Walks the subject, and also gives where it stopped; the first `at` chars are skipped (they still set
 # `prev` for `^` `\b`). `anchored` drops the fresh thread after position `at`;
 # `ne` refuses an empty match at `at` without cutting the threads below it
-def Regex.exec.run(s: String, at: Nat, +prog: List<&2, Inst>, +full: Bool, +anchored: Bool, ne: Bool, +start: Regex.exec.Threads(), +i: Nat, prev: Maybe<&2, U32>, st: Regex.exec.State()) -> Maybe<&2, Match>:
+def Regex.exec.run(s: String, at: Nat, +prog: List<&2, Inst>, +full: Bool, +anchored: Bool, ne: Bool, +start: Regex.exec.Threads(), +i: Nat, prev: Maybe<&2, U32>, st: Regex.exec.State()) -> Maybe<&2, Match> & Nat:
   match s at st:
     case SCon{Chr{x}, t}, 1n+a, st:
       Regex.exec.run(t, a, prog, full, anchored, ne, start, 1n+i, Some{x}, st)
+    case s, 0n, (Nil{}, Some{caps}):
+      (Regex.exec.match(caps), i)
     case SCon{Chr{+x}, +t}, 0n, (work, +best):
       Regex.exec.run(t, 0n, prog, full, anchored, False{}, Bool.pick(Regex.exec.Threads(), anchored, [], start), 1n+i, Some{x}, Regex.exec.post(best, Regex.exec.feed(prog, full, ne, Some{x}, Regex.exec.alive(prog, (i, (prev, SCon{Chr{x}, t})), work, start, Maybe.is_some(&2, Regex.exec.Caps(), best)))))
     case SNil{}, _, (work, +best):
-      Regex.exec.fin(Regex.exec.post(best, Regex.exec.feed(prog, full, ne, None{}, Regex.exec.alive(prog, (i, (prev, SNil{})), work, start, Maybe.is_some(&2, Regex.exec.Caps(), best)))))
+      (Regex.exec.fin(Regex.exec.post(best, Regex.exec.feed(prog, full, ne, None{}, Regex.exec.alive(prog, (i, (prev, SNil{})), work, start, Maybe.is_some(&2, Regex.exec.Caps(), best))))), i)
 
-def Regex.exec.go(re: Regex, s: String, at: Nat, full: Bool, anchored: Bool, ne: Bool) -> Maybe<&2, Match>:
+# The search enters one char before `at` (a view, not a walk): that char
+# is only `prev` for `^` `\b`. `at` past the end clamps, as Python's pos does
+def Regex.exec.walk(re: Regex, +s: String, at: Nat, full: Bool, anchored: Bool, ne: Bool) -> Maybe<&2, Match> & Nat:
   match re:
     case Regex{prog, n}:
-      Regex.exec.run(s, at, prog, full, anchored, ne, [(0n, List.replicate(Maybe<&2, Nat>, Nat.mul(2n, 1n+n), None{}))], 0n, None{}, ([], None{}))
+      +a = Nat.min(at, String.length(s))
+      +k = Nat.sub(a, 1n)
+      Regex.exec.run(String.drop(s, k), Nat.sub(a, k), prog, full, anchored, ne, [(0n, List.replicate(Maybe<&2, Nat>, Nat.mul(2n, 1n+n), None{}))], k, None{}, ([], None{}))
+
+def Regex.exec.go(re: Regex, s: String, at: Nat, full: Bool, anchored: Bool, ne: Bool) -> Maybe<&2, Match>:
+  Pair.fst(Maybe<&2, Match>, Nat, Regex.exec.walk(re, s, at, full, anchored, ne))
 
 # First match starting at or after `at` (code-point offset)
 def Regex.exec(re: Regex, s: String, at: Nat) -> Maybe<&2, Match>:
@@ -3518,9 +3527,9 @@ def Regex.fullmatch(re: Regex, s: String) -> Maybe<&2, Match>:
   Regex.exec.go(re, s, 0n, True{}, True{}, False{})
 
 # Derived API. `find_all` `split` `replace` run on one budget, never reset
-# per result: a search from `at` pays (1 + length - at) * weight up front,
-# the worst case of one exec whatever the lane, and the output is paid from
-# what is left before it is built. Out of budget is an error, never a
+# per result: a search from `at` must afford (1 + length - at) * weight up
+# front, the worst case of one exec whatever the lane, then pays only the
+# span it walked; the output is paid from what is left before it is built. Out of budget is an error, never a
 # partial answer
 def Regex.find(re: Regex, s: String) -> Maybe<&2, Match>:
   Regex.exec(re, s, 0n)
@@ -3578,12 +3587,16 @@ def Regex.scan.got(left: U32, acc: List<&2, Match>, m: Maybe<&2, Match>) -> Resu
     case Some{Match{+a, +b, gs}}:
       Done{(Some{(b, Nat.is_eq(a, b))}, (left, Match{a, b, gs} <> acc))}
 
-def Regex.scan.pay(re: Regex, s: String, at: Nat, ne: Bool, left: U32, acc: List<&2, Match>, short: Bool) -> Result<&2, &2, Regex.Error, Regex.scan.St()>:
+def Regex.scan.spent(left: U32, acc: List<&2, Match>, w: U32, at: Nat, r: Maybe<&2, Match> & Nat) -> Result<&2, &2, Regex.Error, Regex.scan.St()>:
+  (m, stop) = r
+  Regex.scan.got(U32.sub(left, Regex.cost(U32.from_nat(Nat.sub(1n+stop, at)), w)), acc, m)
+
+def Regex.scan.pay(re: Regex, s: String, +at: Nat, ne: Bool, left: U32, acc: List<&2, Match>, w: U32, short: Bool) -> Result<&2, &2, Regex.Error, Regex.scan.St()>:
   match short:
     case True{}:
       Fail{RErr{at, "budget exhausted"}}
     case False{}:
-      Regex.scan.got(left, acc, Regex.exec.go(re, s, at, False{}, False{}, ne))
+      Regex.scan.spent(left, acc, w, at, Regex.exec.walk(re, s, at, False{}, False{}, ne))
 
 # Python finditer order: after a match search on from its end; after an
 # empty one search at the same place with `ne`, so the empty match is
@@ -3595,7 +3608,7 @@ def Regex.scan.go(fuel: Nat, +re: Regex, +s: String, +len: Nat, +w: U32, st: Res
       Fail{e}
     case 1n+f, Done{(Some{(+at, ne)}, (+left, acc))}:
       +cost = Regex.cost(U32.from_nat(Nat.sub(1n+len, at)), w)
-      Regex.scan.go(f, re, s, len, w, Regex.scan.pay(re, s, at, ne, U32.sub(left, cost), acc, U32.is_lt(left, cost)))
+      Regex.scan.go(f, re, s, len, w, Regex.scan.pay(re, s, at, ne, left, acc, w, U32.is_lt(left, cost)))
     case _, Done{(nx, (left, acc))}:
       Done{(left, List.reverse(&2, Match, acc))}
 

@@ -4811,7 +4811,14 @@ INLINE StrParts str_reserve(Env e, StrParts p, u64 need, bool front, u32 nar) {
 }
 
 INLINE Term str_prepend_take(Env e, u32 c, Term s) {
-  StrParts p = str_reserve(e, str_take(e, s), 1, true, str_fit(c));
+  StrParts p = str_take(e, s);
+  // Putting back the cell an uncons just stepped past is a view, not a
+  // write: nothing is stored, so a shared or static payload qualifies.
+  if (p.data && p.off > 0) {
+    StrParts b = {p.data, p.off - 1, p.len + 1};
+    if (str_at_peek(e, b, 0) == c) { return str_view_owned(e, b); }
+  }
+  p = str_reserve(e, p, 1, true, str_fit(c));
   if (err_seen(e.mem)) { return str_view_owned(e, p); }
   p.off--; p.len++;
   str_put(e, p, 0, c);
@@ -5207,6 +5214,13 @@ INLINE Term str_replace_take(Env e, Term s, Term old, Term value) {
   StrParts out = {0, 0, 0};
   StrSearch k = str_search_open(e, p, q);
   u32 at = 0, lo = 0, poll = 0;
+  // A counting pass sizes the output once: no doubling, no recopying.
+  u64 hits = q.len ? 0 : (u64)p.len + 1;
+  while (q.len && str_search_next(e, &k, false, &at)) { hits++; }
+  str_search_close(e, &k);
+  k = str_search_open(e, p, q);
+  out = str_reserve(e, out, p.len + hits * r.len - (q.len ? hits * q.len : 0), false,
+    hits && str_nar(r) < str_nar(p) ? str_nar(r) : str_nar(p));
   if (!q.len) {
     for (u64 i = 0; i <= p.len; i++) {
       if (err_spun(e.mem, &poll)) { break; }
