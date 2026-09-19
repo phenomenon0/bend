@@ -31,9 +31,10 @@ assignment, expression statements, `if/elif/else`, `while/else`, `for/else`,
 `def` with the full parameter grammar, annotations and decorators,
 `try/except/else/finally`, `with` (both item-list forms), `global`, `nonlocal`,
 `del`, `assert`, `raise`, `return`, `pass`, `break`, `continue`, and `import` /
-`from … import` (dotted names, `as`, relative levels, `*`, parenthesized lists). It follows
+`from … import` (dotted names, `as`, relative levels, `*`, parenthesized lists), and
+`class` (bases, keywords, `**kwds`, decorators, nested). It follows
 `ast.parse`'s syntax acceptance rather than Python compilation's additional
-scope checks (`*a = 1` parses). Classes, `async`/`await`, `yield`,
+scope checks (`*a = 1` parses). `async`/`await`, `yield`,
 `except*`, comprehensions, annotated assignment, slices, walrus, non-ASCII
 identifiers, and other later-slice
 productions report `Unsupported`. Syntax failures and limits have distinct
@@ -55,7 +56,7 @@ conversion in Bend. `normalize.py` separates every location from structural
 comparison and maps CPython UTF-8 byte columns to code points per LF-delimited
 physical line. Trivia is dropped; there is no span sampling.
 
-One directly recursive `go` dispatches 35 grammar modes with precedence
+One directly recursive `go` dispatches 36 grammar modes with precedence
 climbing. Every mode entry decrements a residual global budget. The first
 structurally decreasing Nat proves termination independently of the residual
 budget. Sequential parses thread the residual state, never replenish it

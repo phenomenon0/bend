@@ -110,8 +110,8 @@ def literal_control():
 
 
 def segments(rows, label):
-    # Imports and classes refuse nearly every real file whole, so the evidence is per statement:
-    # every top-level or class-body statement the oracle tags supported, whole lines verbatim
+    # Later-slice productions refuse most real files whole, so the evidence is per statement:
+    # every top-level statement the oracle tags supported (members of an unsupported class too), whole lines verbatim
     # (class members under an `if 1:` header, columns kept), one synthetic file per source file.
     import ast
     out = []
@@ -129,10 +129,8 @@ def segments(rows, label):
             spans = [(min([s.lineno] + [d.lineno for d in getattr(s, "decorator_list", [])]), s.end_lineno) for s in body]
             for i, (stmt, (lo, hi)) in enumerate(zip(body, spans)):
                 alone = lo > (spans[i - 1][1] if i else floor) and (i + 1 == len(body) or hi < spans[i + 1][0])
-                if isinstance(stmt, ast.ClassDef):
-                    head = max([stmt.lineno] + [x.end_lineno for x in stmt.bases + stmt.keywords])
-                    walk(stmt.body, head, True)
-                elif alone:
+                ok = False
+                if alone:
                     text = "".join(lines[lo - 1:hi])
                     text += "" if text.endswith("\n") else "\n"
                     try:
@@ -141,6 +139,10 @@ def segments(rows, label):
                         ok = False
                     if ok:
                         parts.append(("if 1:\n" if wrapped else "") + text)
+                # A class that is not supported whole still yields its supported members.
+                if isinstance(stmt, ast.ClassDef) and not ok:
+                    head = max([stmt.lineno] + [x.end_lineno for x in stmt.bases + stmt.keywords])
+                    walk(stmt.body, head, True)
 
         walk(tree.body, 0, False)
         if parts:

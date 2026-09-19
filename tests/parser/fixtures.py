@@ -81,6 +81,20 @@ STATEMENTS += [
     "try:\n    import a\nexcept ImportError:\n    a = None\n", "import match, case", "from match import case as _",
     "from a import (b as c)", "import a  # é",
 ]
+# P6: classes. ClassDef starts at `class` (decorators excluded) and ends with its body.
+STATEMENTS += [
+    "class A: pass", "class A(): pass", "class A(B): pass", "class A(B, C,): pass", "class A(B, metaclass=M): pass",
+    "class A(metaclass=M, **kwds): pass", "class A(*bases, **kwds): pass", "class A(B.C, D[E], f(x), x=1, *y): pass",
+    "class A(B,\n        C):\n    pass\n", "@d\nclass A: pass", "@d1\n@d2(x)\n@a.b\nclass A(B):\n    pass\n",
+    "class A:\n    \"\"\"doc\"\"\"\n", "class A:\n    'doc'\n    x = 1\n    def f(self):\n        return self.x\n",
+    "class A:\n    class B:\n        class C(A): pass\n    y = B\n", "class A:\n    @staticmethod\n    def f(): pass\n    @d\n    class B: pass\n",
+    "def f():\n    class A(object):\n        pass\n    return A\n", "if a:\n    class A: pass\nelse:\n    class A(B): x = 1; y = 2\n",
+    "class A: x = 1; y = 2", "class A(B): import c", "class match: pass", "class A(B if c else D, lambda: 1): pass",
+    "class A:\n\n    # comment\n\n    def f(self): pass\n\n    # trailing\nx = 1\n", "class A(\n    B,  # note\n    metaclass=M,\n):\n    pass\n",
+    "class A:\n    def __init__(self, a, *b, c=1, **d):\n        self.a = a\n        for i in b:\n            try:\n                pass\n            finally:\n                del i\n",
+    "@d(x)\nclass A(B, *c, metaclass=M, **k):\n    \"doc\"\n    class C: pass\n    def f(self):\n        return 1\nclass D(): y = 1\n",
+    "class A: pass  # é", "class A(x=1, *y): pass", "class A(**k, x=1): pass",
+]
 
 INVALID = [
     "'\0'", "#\0",
@@ -101,6 +115,9 @@ INVALID = [
     "try: pass", "try: pass\nelse: pass", "try: pass\nelse: pass\nfinally: pass", "try: pass\nexcept E as: pass",
     "try: pass\nexcept E as a.b: pass", "try: pass\nexcept E, F: pass", "try: pass\nfinally: pass\nexcept: pass",
     "try: pass\nexcept as e: pass", "except: pass", "finally: pass",
+    "class", "class A", "class: pass", "class A(: pass", "class A(B: pass", "class A) : pass", "class A(B)", "class 1: pass", "class A.B: pass",
+    "class A(B,,): pass", "class A(x=1, y): pass", "class A(**k, *y): pass", "class if: pass", "class A:", "class A:\npass", "class A pass",
+    "@d\nx = 1", "@d\nimport a", "@\nclass A: pass", "@d class A: pass", "class A[B]: pass", "class A(B) -> C: pass", "x = class A: pass",
     "import", "import a,", "import a.", "import .a", "import a as", "import a as b.c", "import (a)", "import *", "import a b", "import if",
     "from a", "from import b", "from a import", "from a import b,", "from a import ()", "from a import (b", "from a import (*)",
     "from a import *, b", "from a import b, *", "from a import b.c", "from a import (b.c)", "from a. import b", "from a import b as",
@@ -110,7 +127,7 @@ INVALID = [
 
 UNSUPPORTED = [
     "K", "a.K", "f(K=1)", "match x:\n    case _: pass\n",
-    "import é", "import a as é", "from é import a", "from a import é", "from a import b as é", "class A: pass", "async def f(): pass", "@d\nclass A: pass", "@d\nasync def f(): pass",
+    "import é", "import a as é", "from é import a", "from a import é", "from a import b as é", "class é: pass", "class A(é): pass", "class A(é=1): pass", "class A(B[1:2]): pass", "class A:\n    x: int = 1\n", "class A:\n    async def f(self): pass\n", "@d\nclass A:\n    def f(self): yield\n", "async def f(): pass", "@d\nasync def f(): pass",
     "async for x in y: pass", "async with a: pass", "def f(): yield", "def f(): x = yield y", "lambda: (yield)", "def f(é): pass", "lambda é: 1",
     "global é", "try: pass\nexcept E as é: pass", "try: pass\nexcept* E: pass", "def f(): await x", "def f(a: int): x: int = 1", "for x in [y for y in z]: pass",
     "[x for x in y]", "{x for x in y}",
