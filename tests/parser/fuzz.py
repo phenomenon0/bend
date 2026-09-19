@@ -55,6 +55,18 @@ def yielding(rng, sub):
                        "f(" + y + ")", "[" + y + "]", "(" + y + ", 1)", "x = " + sub() + ", " + y, "return " + y, "lambda: " + y, y + " = 1", g + " = 1", y + ": int", "(" + y + " for x in y)", "a[" + y + "]", sub() + " + " + y])
 
 
+def awaiting(rng, sub):
+    """`await primary` in every expression slot, async comprehensions, and the three async statements; some shapes the oracle rejects."""
+    p = rng.choice(["x", "x.y", "f(" + sub() + ")", "x[" + sub() + "]", "(" + sub() + ")", "[" + sub() + "]", "f'{x}'", "(yield)", "1"] * 4 + ["-x", "not x", "lambda: x", "await x", "*x", ""])
+    a = "await " + p
+    c = rng.choice(["async for", "async for", "async for", "for", "for", "async"]) + " i in " + rng.choice([a, sub(), "a if b else c"]) + rng.choice(["", " if " + a, " async for j in " + a + " if j", " for j in k"])
+    return rng.choice([a, a, "x = " + a, "x = y = " + a + ", " + a, "x " + rng.choice(["+=", "**=", ">>="]) + " " + a, "x: " + a + " = " + a, a + " ** " + a, "-" + a + " ** -" + a, sub() + " + " + a + " * " + sub(),
+                       a + " if " + a + " else " + a, "not " + a + " or " + a + " < " + a, "f(" + a + ", *" + a + ", k=" + a + ", **" + a + ")", "x[" + a + ":" + a + ", " + a + "]", "{" + a + ": " + a + ", **" + a + "}", "(" + a + ").y = " + a,
+                       "f'{" + a + "!r:>{" + a + "}}'", "lambda x=" + a + ": " + a, "return " + a, "yield " + a, "yield from " + a, "del (" + a + ").y, (" + a + ")[0]", "assert " + a + ", " + a, "raise " + a + " from " + a,
+                       "[" + a + " " + c + "]", "{" + a + " " + c + "}", "{" + a + ": " + sub() + " " + c + "}", "(" + a + " " + c + ")", "f(" + sub() + " " + c + ")", "x = [[j " + c + "] " + c + "]",
+                       a + " = 1", "(" + a + ") += 1", a + ": int", "for " + a + " in y: pass", "del " + a, "f(await=" + sub() + ")", "x.await", "async = " + sub(), "[" + sub() + " async]", "f(" + sub() + " " + c + ", 1)"])
+
+
 def expression(rng, depth):
     if depth <= 0 or rng.randrange(5) == 0:
         return rng.choice(["a", "b", "c", "0", "17", "0x10", "1.5", "True", "None", "'é😀'", "..."])
@@ -119,6 +131,15 @@ def main():
         line = yielding(rng, lambda: expression(rng, rng.randrange(0, 3)))
         sources.append(rng.choice([line, line, "def f():\n    " + line + "\n    return x\n", "def f(self):\n    while a:\n        " + line + "\n    else:\n        " + line + "; " + line + "\n",
                                   "if a: " + line + "; " + line + "\nelse:\n    " + line + "\n", "class A:\n    def f(self):\n        try:\n            " + line + "\n        finally:\n            pass\n"]))
+    # A fourth stream, for the same reason.
+    rng = random.Random(0xA57A2012)
+    for i in range(args.count // 4):
+        sub = lambda: expression(rng, rng.randrange(0, 3))
+        line = awaiting(rng, sub)
+        sources.append(rng.choice([line, line, "async def f():\n    " + line + "\n    return x\n", "@d\nasync def f(a, /, b=1, *c, d, **e) -> " + sub() + ":\n    async with " + sub() + " as a, (b):\n        " + line + "\n",
+                                  "async def f(self):\n    async for a, *b in " + sub() + ", c:\n        " + line + "\n    else:\n        " + line + "; " + line + "\n",
+                                  "class A:\n    @d\n    async def f(self):\n        async with (" + sub() + " as a, b):\n            " + line + "\n        async with (a, b) as c: pass\n",
+                                  "if a: " + line + "; " + line + "\nelse:\n    async for x in y: " + line + "\n", "async " + rng.choice(["def f(): ", "class A: ", "if a: ", "with a: ", "for x in y: ", "while a: ", "\ndef f(): "]) + line + "\n"]))
     # Long lists/chains and nesting deliberately exercise non-consuming transitions.
     for n in [1, 2, 10, 50, 100, 200]:
         sources += ["(" * n + "a" + ")" * n, "[" * n + "a" + "]" * n,
@@ -174,7 +195,7 @@ def main():
     counts = {"generated_and_directed": len(sources), "oracle_accepted": sum("used" in r or "result" in r for r in records),
               "oracle_rejected": sum("oracle-failure" in r for r in records), "fstring_sources": sum("f\"" in s.lower() for s in sources),
               "comprehension_sources": sum(" for " in s or "\n  for " in s for s in sources),
-              "annotated_sources": args.count // 4, "yield_sources": args.count // 4,
+              "annotated_sources": args.count // 4, "yield_sources": args.count // 4, "async_sources": args.count // 4,
               "no_limit_on_oracle_accepted": not any(f.get("result", {}).get("status") == "limit" for f in failures),
               "normalization_failures": sum("normalization-failure" in r for r in records),
               "negative_cases": len(INVALID) + len(UNSUPPORTED),

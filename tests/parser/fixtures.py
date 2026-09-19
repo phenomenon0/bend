@@ -259,17 +259,22 @@ INVALID = [
 
 UNSUPPORTED = [
     "K", "a.K", "f(K=1)", "match x:\n    case _: pass\n",
-    "import é", "import a as é", "from é import a", "from a import é", "from a import b as é", "class é: pass", "class A(é): pass", "class A(é=1): pass", "class A:\n    async def f(self): pass\n", "@d\nclass A:\n    def f(self): await x\n", "async def f(): pass", "@d\nasync def f(): pass",
-    "async for x in y: pass", "async with a: pass", "def f(é): pass", "lambda é: 1",
-    "global é", "try: pass\nexcept E as é: pass", "try: pass\nexcept* E: pass", "def f(): await x", "def f(a: int): x: int = await a", "(x := 1)", "with (x := 1): pass",
-    "a[x:=1]", "a[1:(x:=2)]", "a[é:]", "a[1:é]", "a[::é]", "a[1:, é]", "a[1:2].é", "a[await b:]",
-    'f"{(x := 1)}"', 'f"{await x}"', 'f"{é}"', 'f"{a.é}"', 'f"{x:{é}}"',
-    "[x async for x in y]", "(x async for x in y)", "{x async for x in y}", "{a: b async for a in c}", "f(x async for x in y)", "[x for x in y async for z in w]", "[await x for x in y]", "[x for x in await y]",
+    "import \xe9", "import a as \xe9", "from \xe9 import a", "from a import \xe9", "from a import b as \xe9", "class \xe9: pass", "class A(\xe9): pass", "class A(\xe9=1): pass",
+    "def f(\xe9): pass", "lambda \xe9: 1",
+    "global \xe9", "try: pass\nexcept E as \xe9: pass", "try: pass\nexcept* E: pass", "(x := 1)", "with (x := 1): pass",
+    "a[x:=1]", "a[1:(x:=2)]", "a[\xe9:]", "a[1:\xe9]", "a[::\xe9]", "a[1:, \xe9]", "a[1:2].\xe9",
+    "f\"{(x := 1)}\"", "f\"{\xe9}\"", "f\"{a.\xe9}\"", "f\"{x:{\xe9}}\"",
     "[x := 1 for x in y]", "[x for x in (y := z)]", "[x for x in y if (z := x)]", "f(x := 1 for x in y)", "{(k := a): b for a in c}", "[é for x in y]", "[x for é in y]", "[x for x in é]", "[x for x in y if é]", "f(é for x in y)",
-    "x: await z", "x: int = await z", "x: (y := 1)", "x: int = (y := 1)", "é: int", "x: é", "x: int = é", "a.é: int", "x: a.é", "(é): int = 1",
+    "x: (y := 1)", "x: int = (y := 1)", "\xe9: int", "x: \xe9", "x: int = \xe9", "a.\xe9: int", "x: a.\xe9", "(\xe9): int = 1",
     "match (x):\n    case _: pass\n", "match [x]:\n    case _: pass\n", "match x, y:\n    case _: pass\n", "match (x), y:\n    case _: pass\n", "match x.y:\n    case _: pass\n", "match (x).y[0]:\n    case z: w: int = 1\n", "match -x:\n    case _: pass\n",
-    "match x:\n    case _:\n        y: int = 1\n", "x: [y async for y in z]", "x: int = [await y for y in z]", "class A:\n    x: int = 1\n    async def f(self): pass\n",
-    # P11: yield parses; what it holds may still be a later slice.
-    "yield (x := 1)", "yield await x", "yield from await x", "x = yield (y := 1)", "(yield (x := 1))", "def f(): yield é", "yield from é", "async def f(): yield", "async def f():\n    async for x in y: yield x\n", "def f():\n    yield\n    await x\n",
-    "def f():\n    match x:\n        case _: yield\n", "[(yield) async for x in y]", "f'{yield (x := 1)}'",
+    "match x:\n    case _:\n        y: int = 1\n",
+    # P11 / P12: yield and await parse; what they hold may still be a later slice.
+    "yield (x := 1)", "x = yield (y := 1)", "(yield (x := 1))", "def f(): yield \xe9", "yield from \xe9",
+    "await (x := 1)", "async def f(): await é", "async def é(): pass", "[x async for x in (y := z)]", "async with (x := 1): pass", "async for é in y: pass", "async def f():\n    match x:\n        case _: await y\n",
+    "def f():\n    match x:\n        case _: yield\n", "f'{yield (x := 1)}'",
 ]
+
+# P12 (async / await) lives in its own file: this one is at its token cap.
+from fixtures_async import ASYNC_STATEMENTS, ASYNC_INVALID
+STATEMENTS += ASYNC_STATEMENTS
+INVALID += ASYNC_INVALID

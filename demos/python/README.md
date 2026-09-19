@@ -43,10 +43,14 @@ targets, `simple` 1 only for a bare unparenthesised name, star-expressions as th
 CPython's PEG quirk that `(a).b: T` is an illegal target while `((a).b): T` is not), and
 `yield` / `yield from` as expressions (`Yield{value?}` / `YieldFrom{value}`: a statement's head,
 an assignment's, augmented or annotated value, what parentheses or an f-string field hold; bare
-in an argument, a display, a subscript or a lambda body is `Syntax`). It follows
+in an argument, a display, a subscript or a lambda body is `Syntax`), and `async def` /
+`async for` / `async with` (the plain statement's fields under the `Async` tag, from the `async`
+token; after decorators only `async def`), `await` (`Await{value}`: `await` takes a primary, so
+`await x ** 2` is `(await x) ** 2` and `await -x` is `Syntax`) and `async for` clauses in
+comprehensions (`is_async` 1). Both words are keywords in 3.11: `async = 1` is `Syntax`. It follows
 `ast.parse`'s syntax acceptance rather than Python compilation's additional
-scope checks (`*a = 1` parses, and so does `yield` outside a function or in a comprehension). `async`/`await`,
-`except*`, `async` comprehensions, walrus, `match`, non-ASCII
+scope checks (`*a = 1` parses, and so does `yield` or `await` outside a function or in a comprehension).
+`except*`, walrus, `match`, non-ASCII
 identifiers, and other later-slice
 productions report `Unsupported`. Syntax failures and limits have distinct
 `Syntax` and `Limit` kinds. Failure prints `error KIND LINE COL MESSAGE` and
