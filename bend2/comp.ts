@@ -6746,40 +6746,39 @@ static Term io_node(Env e, u64 cid, Term a, Term b, int hot) {
   return term_ctr(cid, l);
 }
 
-// One scalar of p[*i .. n), or U+FFFD for one ill-formed byte.
-static u32 io_scalar(const char* p, u64 n, u64* at) {
-  u64 i = *at;
-  u32 b = (u8)p[i], c = b, k = b < 0x80 ? 1
-    : b >= 0xc2 && b <= 0xdf ? 2 : b >= 0xe0 && b <= 0xef ? 3
-    : b >= 0xf0 && b <= 0xf4 ? 4 : 0;
-  bool ok = k && k <= n - i;
-  if (k > 1) {
-    c = b & (0x7f >> k);
-    for (u32 j = 1; ok && j < k; j++) {
-      u32 t = (u8)p[i + j]; ok = (t & 0xc0) == 0x80;
-      c = (c << 6) | (t & 63);
-    }
-    ok = ok && c >= (k == 2 ? 0x80u : k == 3 ? 0x800u : 0x10000u)
-      && c <= 0x10ffff && !(c >= 0xd800 && c <= 0xdfff);
-  }
-  *at = i + (ok ? k : 1);
-  return ok ? c : 0xfffd;
-}
-
-// Two passes: the length and the widest scalar, then a payload of exactly
-// that many cells of that width.
+// 1-byte cells until a wider scalar arrives; then the decoded cells move to
+// that width (at most twice).
 static Term io_str(Env e, const char* p, u64 n) {
-  StrParts out = {0, 0, 0};
-  if (n > STR_LIMIT) { err_post(e.mem, ERR_STRS); return str_view_owned(e, out); }
-  u32 len = 0, nar = 2;
-  for (u64 i = 0; i < n; len++) {
-    u32 fit = str_fit(io_scalar(p, n, &i));
-    if (fit < nar) { nar = fit; }
-  }
-  out = str_alloc(e, len, nar);
+  StrParts out = str_alloc(e, n, 2);
   if (err_seen(e.mem)) { return str_view_owned(e, out); }
-  len = 0;
-  for (u64 i = 0; i < n;) { str_put(e, out, len++, io_scalar(p, n, &i)); }
+  u32 len = 0;
+  for (u64 i = 0; i < n;) {
+    u32 b = (u8)p[i], c = b, k = b < 0x80 ? 1
+      : b >= 0xc2 && b <= 0xdf ? 2 : b >= 0xe0 && b <= 0xef ? 3
+      : b >= 0xf0 && b <= 0xf4 ? 4 : 0;
+    bool ok = k && k <= n - i;
+    if (k > 1) {
+      c = b & (0x7f >> k);
+      for (u32 j = 1; ok && j < k; j++) {
+        u32 t = (u8)p[i + j]; ok = (t & 0xc0) == 0x80;
+        c = (c << 6) | (t & 63);
+      }
+      ok = ok && c >= (k == 2 ? 0x80u : k == 3 ? 0x800u : 0x10000u)
+        && c <= 0x10ffff && !(c >= 0xd800 && c <= 0xdfff);
+    }
+    c = ok ? c : 0xfffd;
+    i += ok ? k : 1;
+    if (str_fit(c) < str_nar(out)) {
+      StrParts q = str_alloc(e, len + 1 + (n - i), str_fit(c));
+      out.len = len;
+      if (q.data) { str_copy_cells(e, q, 0, out); }
+      term_sink(e, out.data);
+      out = q;
+      if (err_seen(e.mem)) { break; }
+    }
+    str_put(e, out, len++, c);
+  }
+  out.len = len;
   return str_view_owned(e, out);
 }
 

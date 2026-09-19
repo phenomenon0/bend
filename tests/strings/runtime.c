@@ -343,6 +343,8 @@ static void fault(Env e, const char* op, int after) {
   else if (!strcmp(op, "partition")) { str_partition_take(e, s, needle); }
   else if (!strcmp(op, "splitlines")) { str_splitlines_take(e, lines); }
   else if (!strcmp(op, "pad")) { str_pad_take(e, s, 20, 0xffffffff, 0); }
+  // Decoding widens twice: every payload, count cell and descriptor may fail.
+  else if (!strcmp(op, "decode")) { io_str(e, "a\xce\xbb\xf0\x9f\x98\x80", 7); }
   else { assert(false); }
   assert(e.mem[H_ERROR_CODE] == ERR_HEAP);
   assert(track_kmp_live == 0);
@@ -421,7 +423,8 @@ static void widths(Env e) {
     Term s = io_str(e, text[i], strlen(text[i]));
     StrParts p = str_peek(e, s);
     assert(str_nar(p) == nar[i] && p.len == len[i]);
-    assert(blk_cls(p.data) == cls_fit((len[i] + (1u << nar[i]) - 1) >> nar[i]));
+    // Sized by the bytes left when the width was met, never by 4-byte cells.
+    assert(blk_cls(p.data) <= cls_fit(((u32)strlen(text[i]) + (1u << nar[i]) - 1) >> nar[i]));
     // The same cells in every wider payload are the same string.
     u32 xs[4];
     for (u32 j = 0; j < p.len; j++) { xs[j] = str_at_peek(e, p, j); }

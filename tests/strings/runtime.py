@@ -142,7 +142,7 @@ with tempfile.TemporaryDirectory(prefix="bend-strings-runtime-") as temp:
     fault_ops = dict.fromkeys(["repeat", "prepend", "append", "copy", "transform",
                               "split", "from-list", "join"], 4)
     fault_ops.update(slice=2, find=2, count=1, replace=7, split_on=9, partition=8,
-                     splitlines=12, pad=4)
+                     splitlines=12, pad=4, decode=8)
     for op, allocations in fault_ops.items():
         for offset in range(allocations):
             run([str(binary), "fault-" + op, str(offset)], capture_output=True,
