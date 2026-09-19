@@ -23,6 +23,8 @@ resolution, contract grants and the rank inequalities are all recomputed (`certi
 | R0 | `unreachable` (`Proven`) | a statement that directly follows `return` / `raise` / `break` / `continue` in the same block is never executed | argued on paper, not mechanized. Holds for all Python, no assumptions: each of the four transfers control out of the block; a `finally` body runs, but control never resumes at the next statement of the block |
 | R0 | `unreachable` (`Unknown`) | none: the statement follows `while True:`; deciding it needs break analysis | — |
 | S0 | `shadowed-builtin` (`Advisory`) | none. A `def`, parameter or `Store` name is spelled like a contracted primitive | — |
+| O0 | `ownership` | under A1–A4 the function satisfies B1–B3 of the **IR ownership boundary** below | argued on paper, not mechanized: a *candidate*, like T0. Evidence: `semantics.py` (arguments equal their deep copies after every generated call) |
+| L0 | `alias-mutation`, `alias-escape`, `param-mutation` (`Advisory`) | none. A reasoned note citing the binding and the later read; neither sound nor complete for Python | — |
 | K0 | law `no_certificate_no_proof` | `is_proven(verify(m, cs, [], name)) == False` for every module, contract list and name | **checked by Bend** (`{==}`, in `lint.bend`). A law about the verifier, not about Python |
 
 ## T0 membership (all recomputed by the kernel)
@@ -54,6 +56,42 @@ operation on U terminates in CPython (A4), no user hook (`__add__`, `__iter__`, 
 can run because no value is a user type, `for` iterates a finite unmutated sequence, and calls go
 strictly down in rank.
 
+## The IR ownership boundary (O0) — what the translator's TypedIR may assume
+
+O0 = T0 **and** no `is` / `is not` except against `None`/`True`/`False` (`ident`; `s is "a"` depends
+on interning and is refused). Same kernel, same rank witness: `Lint.own(ast, contracts, witness,
+name)` recomputes T0 membership plus `ident` for **every** witness entry, so every transitive callee
+is in O0 too. Law `no_certificate_no_ownership` is checked by Bend. For a function graded
+`ownership Proven`, under A1–A4, TypedIR may assume:
+
+- **B1 no mutation.** No argument, and nothing reachable from one, is mutated during the call:
+  nothing in T0 mutates, callees are O0 or contracted `pure` (A3).
+- **B2 no retention.** After the call no reference to an argument survives except inside the
+  result (no globals, attributes, closures, containers passed in). The result **may share** with
+  arguments (`return xs`, `[xs, xs]`).
+- **B3 sharing unobservable.** Inside O0 nothing mutates or tests identity, so copy, share and move
+  are indistinguishable: value semantics is faithful, and an affine IR may duplicate or move
+  any binding. Repeated use is legal.
+
+**Outside the boundary — assume nothing:** any function not graded `ownership Proven`
+(`Unknown`/`Refuted`), even when `total Proven` (`same(xs, ys): return xs is ys`); what a non-O0
+caller does with a shared result; arguments violating A1; other threads. B1–B3 are statements
+about verified O0 functions, **never universal Python alias safety**; ownership *certificates*
+for mutating code (verified IR moves) are a later fragment.
+
+## L0 advisories (no certificate)
+
+Per top-level `def`, flow-insensitive may-alias classes from `b = a`, `b: T = a`, `b = a if c else d`,
+`b = a or d` (so branch joins and rebinding both merge). Events: a mutation through a name
+(mutator-method spelling, item/attribute store or `del`, `+=`), or a Name argument escaping to a
+call that is neither a granted pure primitive nor an O0-certified def. An event on `b` is reported
+when a distinct alias `a` is read textually later or is a parameter; `param-mutation` when `b` is
+itself a parameter. Names whose every binding is immutable on exact `str|bool|int|None` (A1; greatest
+fixpoint over constants and operators) are skipped: immutable reuse is safe. **Known misses:** reads
+earlier in the same loop, element/attribute-path aliases (`for x in xs`, `b = a.f`, `b = a[0]`),
+tuple targets, keyword/starred arguments, nested scopes (conflated), methods and module-level code.
+**Known noise:** rebinding does not kill an alias; method spelling is not authority.
+
 ## Assumptions (the trust boundary)
 
 - **A1 exact arguments.** Arguments are exact instances (not subclasses) of the annotated built-in
@@ -76,12 +114,14 @@ strictly down in rank.
 Successful return; resource bounds (a T0 function may build a 2^n-sized string); anything
 concurrent; any argument outside A1; generators/async; classes; recursion (rank/countdown
 certificates are deferred per plan §3); finite-domain `match` coverage (L3); cross-module summaries (L4);
-alias/ownership advisories (L2).
+ownership certificates for mutating code.
 
-## Fixtures per rule (`bash tests/lint/run.sh totality`)
+## Fixtures per rule (`bash tests/lint/run.sh totality`, `bash tests/lint/run.sh alias`)
 
 | rule | positive | negative | Unknown |
 |---|---|---|---|
 | `total` | `totality_proven`, `honest`/`granted` in `totality_forged` | every other case of `totality_forged` (`Refuted`), `totality_shadow` | `totality_unknown`, `no certificate` |
 | `unreachable` | `totality_reach`: after return / continue / break / raise-before-finally | `branch` (return inside `if`) emits nothing | `forever` (after `while True`) |
 | `shadowed-builtin` | `totality_shadow`: def, parameter, local | `fine` (uses `bool` unshadowed) | — (advisory) |
+| `ownership` | `alias_boundary`: `absent`, `share`, `echo`; `honest` in `alias_forged` | every other witness of `alias_forged` (`Refuted`; `identity` is `total Proven`) | `alias_boundary`: `same`, `caller`, `grows`, `interned`; `no certificate` |
+| L0 advisories | `alias_flag`: plan example, method/store/`+=`, if and IfExp joins, chain, container escape | `alias_safe`: repeated use, immutable reuse, copy, move, fresh join, alias passed to an O0 def | — (advisory) |

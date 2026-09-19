@@ -2,7 +2,9 @@
 # T0 and local reachability. `certificate` is the trusted kernel: it recomputes
 # every condition from the actual AST and contracts; a witness only supplies
 # call ranks. `analyze` is untrusted search in front of it. See SOUNDNESS.md.
-# Coverage (finite match domains) is lane L3; module summaries are L4.
+# L2: the ownership fragment O0 (`own`, the same kernel) and the alias/effect
+# advisories (`alias`). Coverage (finite match domains) is lane L3; module
+# summaries are L4.
 import Base
 import ./syntax.bend as S
 import ./nodes.bend as N
@@ -204,20 +206,20 @@ def scan(j: S.Json, +parent: String, +near: S.Json, +env: Env) -> List<&2, Fact>
       []
 
 # Annotations state assumption A1: str, bool, int, list[T], T | None.
-def ann_ok(j: S.Json) -> Bool:
+def ann_ok(j: S.Json, +names: List<&2, String>, +tags: List<&2, String>) -> Bool:
   match j:
     case S.JObj{+fs}:
       +tag = N.string(N.get(fs, "tag"))
-      S.choose(Bool, String.eq(tag, "Name"), u => has(["str", "bool", "int", "list"], N.string(N.get(fs, "id"))), u =>
+      S.choose(Bool, String.eq(tag, "Name"), u => has(names, N.string(N.get(fs, "id"))), u =>
         S.choose(Bool, String.eq(tag, "Constant"), u => String.eq(N.string(N.get(fs, "_raw")), "None"), u =>
-          has(["Subscript", "BinOp", "BitOr", "Load"], tag) && ann_ok(fs)))
+          has(tags, tag) && ann_ok(fs, names, tags)))
     case S.JField{key, value, rest}:
-      ann_ok(value) && ann_ok(rest)
+      ann_ok(value, names, tags) && ann_ok(rest, names, tags)
     case _:
       True{}
 
 def typed(+j: S.Json) -> Bool:
-  Bool.not(is_null(j)) && ann_ok(j)
+  Bool.not(is_null(j)) && ann_ok(j, ["str", "bool", "int", "list"], ["Subscript", "BinOp", "BitOr", "Load"])
 
 def all_typed(xs: S.Json) -> Bool:
   match xs:
@@ -263,14 +265,46 @@ def find_def(xs: S.Json, +name: String) -> S.Json:
     case _:
       S.JNull{}
 
-# Every condition of "name is in T0", recomputed from the AST.
-def check_fn(+body: S.Json, +cs: List<&2, Contract>, +name: String) -> List<&2, Fact>:
+def consts(xs: S.Json) -> Bool:
+  match xs:
+    case S.JItem{+h, t}:
+      String.eq(tag_of(h), "Constant") && has(["None", "True", "False"], N.string(field(h, "_raw"))) && consts(t)
+    case _:
+      True{}
+
+def any_tag(xs: S.Json, +tags: List<&2, String>) -> Bool:
+  match xs:
+    case S.JItem{h, t}:
+      has(tags, tag_of(h)) || any_tag(t, tags)
+    case _:
+      False{}
+
+# O0's extra condition: `is` observes sharing, except against None/True/False.
+def ident(j: S.Json) -> List<&2, Fact>:
+  match j:
+    case S.JObj{+fs}:
+      +loc = N.get(fs, "_loc")
+      bad = String.eq(N.string(N.get(fs, "tag")), "Compare") && any_tag(items(N.get(fs, "ops")), ["Is", "IsNot"]) &&
+        Bool.not(consts(items(N.get(fs, "comparators"))))
+      List.append(&2, Fact, S.choose(List<&2, Fact>, bad, u => [Bad{loc, "identity comparison observes sharing" ++ at(loc)}], u => []), ident(fs))
+    case S.JField{key, value, rest}:
+      List.append(&2, Fact, ident(value), ident(rest))
+    case S.JArr{xs}:
+      ident(xs)
+    case S.JItem{h, t}:
+      List.append(&2, Fact, ident(h), ident(t))
+    case _:
+      []
+
+# Every condition of "name is in T0" (`o`: in O0), recomputed from the AST.
+def check_fn(+body: S.Json, +cs: List<&2, Contract>, +name: String, o: Bool) -> List<&2, Fact>:
   +f = find_def(body, name)
   +defs = def_names(body)
   unique = S.choose(List<&2, Fact>, Nat.is_eq(count(defs, name), 1n), u => [], u =>
     [Bad{field(f, "_loc"), "no unique def " ++ name}])
   List.append(&2, Fact, closed(body), List.append(&2, Fact, unique, List.append(&2, Fact, header(f),
-    scan(field(f, "body"), "", field(f, "_loc"), Env{binds(f), defs, cs}))))
+    List.append(&2, Fact, scan(field(f, "body"), "", field(f, "_loc"), Env{binds(f), defs, cs}),
+      S.choose(List<&2, Fact>, o, u => ident(f), u => [])))))
 
 # ---- verify: the kernel ----
 
@@ -285,38 +319,49 @@ def discharge(fs: List<&2, Fact>, +w: List<&2, Rank>, +r: Nat) -> String:
       S.choose(String, Nat.is_lt(Maybe.default(&2, Nat, rank(w, g), r), r), u => discharge(t, w, r), u =>
         "callee " ++ g ++ " holds no smaller rank")
 
-def entries(es: List<&2, Rank>, +w: List<&2, Rank>, +body: S.Json, +cs: List<&2, Contract>) -> String:
+def entries(es: List<&2, Rank>, +w: List<&2, Rank>, +body: S.Json, +cs: List<&2, Contract>, +o: Bool) -> String:
   match es:
     case Nil{}:
       ""
     case Rank{+name, +r} <> t:
-      +why = discharge(check_fn(body, cs, name), w, r)
-      S.choose(String, String.is_empty(why), u => entries(t, w, body, cs), u => name ++ ": " ++ why)
+      +why = discharge(check_fn(body, cs, name, o), w, r)
+      S.choose(String, String.is_empty(why), u => entries(t, w, body, cs, o), u => name ++ ": " ++ why)
 
 # "" iff every entry of the witness checks against the actual AST/contracts.
 # By induction on rank every entry is then total (SOUNDNESS.md, T0).
-def certificate(m: S.Module, +cs: List<&2, Contract>, +w: List<&2, Rank>) -> String:
+def certificate(m: S.Module, +cs: List<&2, Contract>, +w: List<&2, Rank>, +o: Bool) -> String:
   S.Module{body} = m
-  entries(w, w, body, cs)
+  entries(w, w, body, cs, o)
 
 def def_loc(m: S.Module, name: String) -> S.Json:
   S.Module{body} = m
   field(find_def(body, name), "_loc")
 
+def rule_of(o: Bool) -> String:
+  Bool.pick(String, o, "ownership", "total")
+
+def holds(o: Bool) -> String:
+  Bool.pick(String, o, "value semantics is faithful: no mutation, identity test or retained reference (O0)",
+    "terminates on exact built-in arguments (T0)")
+
 # The witness entry is consulted first, so no entry means no proof by
 # computation alone (the law below).
-def verdict(entry: Maybe<&2, Nat>, +m: S.Module, +cs: List<&2, Contract>, +w: List<&2, Rank>, +name: String) -> Diag:
+def verdict(entry: Maybe<&2, Nat>, +m: S.Module, +cs: List<&2, Contract>, +w: List<&2, Rank>, +name: String, +o: Bool) -> Diag:
   match entry:
     case None{}:
-      Diag{def_loc(m, name), "total", Unknown{}, "no certificate"}
+      Diag{def_loc(m, name), rule_of(o), Unknown{}, "no certificate"}
     case Some{r}:
-      +why = certificate(m, cs, w)
+      +why = certificate(m, cs, w, o)
       S.choose(Diag, String.is_empty(why), u =>
-        Diag{def_loc(m, name), "total", Proven{}, "terminates on exact built-in arguments (T0)"}, u =>
-        Diag{def_loc(m, name), "total", Refuted{}, "certificate refuted: " ++ why})
+        Diag{def_loc(m, name), rule_of(o), Proven{}, holds(o)}, u =>
+        Diag{def_loc(m, name), rule_of(o), Refuted{}, "certificate refuted: " ++ why})
 
 def verify(+m: S.Module, +cs: List<&2, Contract>, +w: List<&2, Rank>, +name: String) -> Diag:
-  verdict(rank(w, name), m, cs, w, name)
+  verdict(rank(w, name), m, cs, w, name, False{})
+
+# The same kernel over O0 = T0 without identity tests (SOUNDNESS.md, O0).
+def own(+m: S.Module, +cs: List<&2, Contract>, +w: List<&2, Rank>, +name: String) -> Diag:
+  verdict(rank(w, name), m, cs, w, name, True{})
 
 def is_proven(d: Diag) -> Bool:
   match d:
@@ -335,6 +380,15 @@ law no_certificate_no_proof:
 def no_certificate_no_proof(m, cs, name):
   {==}
 
+law no_certificate_no_ownership:
+  for +m: S.Module
+  for +cs: List<&2, Contract>
+  for +name: String
+  {is_proven(own(m, cs, Nil{}, name)) == False{} : Bool}
+
+def no_certificate_no_ownership(m, cs, name):
+  {==}
+
 # ---- analyze: untrusted witness search, then the kernel ----
 
 def why_not(fs: List<&2, Fact>, +w: List<&2, Rank>) -> String:
@@ -348,31 +402,31 @@ def why_not(fs: List<&2, Fact>, +w: List<&2, Rank>) -> String:
         "callee " ++ g ++ " is not proven (cycle or Unknown)")
 
 # One round: rank `r` for each unranked def whose callees were ranked earlier.
-def round(names: List<&2, String>, +w: List<&2, Rank>, +body: S.Json, +cs: List<&2, Contract>, +r: Nat) -> List<&2, Rank>:
+def round(names: List<&2, String>, +w: List<&2, Rank>, +body: S.Json, +cs: List<&2, Contract>, +o: Bool, +r: Nat) -> List<&2, Rank>:
   match names:
     case Nil{}:
       []
     case +h <> t:
-      ok = Maybe.is_none(&2, Nat, rank(w, h)) && String.is_empty(why_not(check_fn(body, cs, h), w))
-      List.append(&2, Rank, S.choose(List<&2, Rank>, ok, u => [Rank{h, r}], u => []), round(t, w, body, cs, r))
+      ok = Maybe.is_none(&2, Nat, rank(w, h)) && String.is_empty(why_not(check_fn(body, cs, h, o), w))
+      List.append(&2, Rank, S.choose(List<&2, Rank>, ok, u => [Rank{h, r}], u => []), round(t, w, body, cs, o, r))
 
-def infer(fuel: Nat, +names: List<&2, String>, +w: List<&2, Rank>, +body: S.Json, +cs: List<&2, Contract>, +r: Nat) -> List<&2, Rank>:
+def infer(fuel: Nat, +names: List<&2, String>, +w: List<&2, Rank>, +body: S.Json, +cs: List<&2, Contract>, +o: Bool, +r: Nat) -> List<&2, Rank>:
   match fuel:
     case 0n:
       w
     case 1n+p:
-      infer(p, names, List.append(&2, Rank, w, round(names, w, body, cs, r)), body, cs, 1n+r)
+      infer(p, names, List.append(&2, Rank, w, round(names, w, body, cs, o, r)), body, cs, o, 1n+r)
 
-def totals(names: List<&2, String>, +w: List<&2, Rank>, +valid: Bool, +body: S.Json, +cs: List<&2, Contract>) -> List<&2, Diag>:
+def totals(names: List<&2, String>, +w: List<&2, Rank>, +valid: Bool, +body: S.Json, +cs: List<&2, Contract>, +o: Bool) -> List<&2, Diag>:
   match names:
     case Nil{}:
       []
     case +h <> t:
       +loc = field(find_def(body, h), "_loc")
       d = S.choose(Diag, valid && Maybe.is_some(&2, Nat, rank(w, h)), u =>
-        Diag{loc, "total", Proven{}, "terminates on exact built-in arguments (T0)"}, u =>
-        Diag{loc, "total", Unknown{}, why_not(check_fn(body, cs, h), w)})
-      d <> totals(t, w, valid, body, cs)
+        Diag{loc, rule_of(o), Proven{}, holds(o)}, u =>
+        Diag{loc, rule_of(o), Unknown{}, why_not(check_fn(body, cs, h, o), w)})
+      d <> totals(t, w, valid, body, cs, o)
 
 # Advisory: a binding spelled like a contracted primitive.
 def shadows(j: S.Json, +cs: List<&2, Contract>) -> List<&2, Diag>:
@@ -465,7 +519,313 @@ def render(+path: String, ds: List<&2, Diag>) -> String:
 def analyze(+m: S.Module, +cs: List<&2, Contract>) -> List<&2, Diag>:
   S.Module{+body} = m
   +names = def_names(body)
-  +w = infer(List.length(&2, String, names), names, [], body, cs, 0n)
-  +valid = String.is_empty(certificate(m, cs, w))
-  List.sort(~Diag, ~le, List.append(&2, Diag, totals(names, w, valid, body, cs),
+  +w = infer(List.length(&2, String, names), names, [], body, cs, False{}, 0n)
+  +valid = String.is_empty(certificate(m, cs, w, False{}))
+  List.sort(~Diag, ~le, List.append(&2, Diag, totals(names, w, valid, body, cs, False{}),
     List.append(&2, Diag, shadows(body, cs), dead(body))))
+
+# ---- L2: alias/effect advisories (no certificate, no guarantee) ----
+
+# What one function body says about names. May-alias is flow-insensitive
+# (branch joins and rebinding both merge), so repeated use is never an event.
+type Ev is Data:
+  Edge{x: String, y: String, loc: S.Json}
+  Bind{name: String, val: S.Json, imm: Bool}
+  Mut{name: String, loc: S.Json, how: String}
+  Esc{name: String, loc: S.Json, how: String}
+  Use{name: String, loc: S.Json}
+
+def mutators() -> List<&2, String>:
+  ["append", "extend", "insert", "pop", "remove", "clear", "sort", "reverse", "update", "add", "discard", "setdefault", "popitem"]
+
+# Names an expression may evaluate to: `a`, `a if c else d`, `a or d`.
+def sources(j: S.Json, +parent: String) -> List<&2, String>:
+  match j:
+    case S.JObj{+fs}:
+      +tag = N.string(N.get(fs, "tag"))
+      S.choose(List<&2, String>, String.eq(tag, "Name"), u => [N.string(N.get(fs, "id"))], u =>
+        S.choose(List<&2, String>, has(["IfExp", "BoolOp"], tag), u => sources(fs, tag), u => []))
+    case S.JField{key, value, +rest}:
+      S.choose(List<&2, String>, has(["body", "orelse", "values"], key), u =>
+        List.append(&2, String, sources(value, ""), sources(rest, parent)), u => sources(rest, parent))
+    case S.JArr{xs}:
+      sources(xs, "")
+    case S.JItem{h, t}:
+      List.append(&2, String, sources(h, ""), sources(t, ""))
+    case _:
+      []
+
+def edges(ys: List<&2, String>, +x: String, +loc: S.Json) -> List<&2, Ev>:
+  match ys:
+    case Nil{}:
+      []
+    case y <> t:
+      Edge{x, y, loc} <> edges(t, x, loc)
+
+def first(xs: S.Json) -> S.Json:
+  match xs:
+    case S.JItem{h, t}:
+      h
+    case _:
+      S.JNull{}
+
+# The name bound by `b = v`, `b: T = v` or `b += v`; "" for any other target.
+def bound(+tag: String, +fs: S.Json) -> String:
+  +ts = items(N.get(fs, "targets"))
+  +t = S.choose(S.Json, String.eq(tag, "Assign"), u =>
+    S.choose(S.Json, Nat.is_eq(size(ts), 1n), u => first(ts), u => S.JNull{}), u =>
+    S.choose(S.Json, has(["AnnAssign", "AugAssign"], tag), u => N.get(fs, "target"), u => S.JNull{}))
+  S.choose(String, String.eq(tag_of(t), "Name"), u => N.string(field(t, "id")), u => "")
+
+def quiet(fs: List<&2, Fact>, +safe: List<&2, String>) -> Bool:
+  match fs:
+    case Nil{}:
+      True{}
+    case Bad{loc, why} <> t:
+      False{}
+    case Calls{g} <> t:
+      has(safe, g) && quiet(t, safe)
+
+def escapes(xs: S.Json, +how: String) -> List<&2, Ev>:
+  match xs:
+    case S.JItem{+h, t}:
+      List.append(&2, Ev, S.choose(List<&2, Ev>, String.eq(tag_of(h), "Name"), u =>
+        [Esc{N.string(field(h, "id")), field(h, "_loc"), how}], u => []), escapes(t, how))
+    case _:
+      []
+
+# A call mutates its receiver by method spelling (advisory: spelling is not
+# authority) and lets its Name arguments escape unless the callee is a granted
+# pure primitive or an O0-certified def (`safe`).
+def call(+fs: S.Json, +loc: S.Json, +env: Env, +safe: List<&2, String>) -> List<&2, Ev>:
+  +func = N.get(fs, "func")
+  +recv = field(func, "value")
+  +attr = N.string(field(func, "attr"))
+  +method = String.eq(tag_of(func), "Attribute")
+  how = "passed to " ++ S.choose(String, method, u => "." ++ attr, u =>
+    S.choose(String, String.eq(tag_of(func), "Name"), u => N.string(field(func, "id")), u => "a dynamic call"))
+  List.append(&2, Ev, S.choose(List<&2, Ev>, method && String.eq(tag_of(recv), "Name") && has(mutators(), attr), u =>
+    [Mut{N.string(field(recv, "id")), loc, "." ++ attr}], u => []),
+    S.choose(List<&2, Ev>, quiet(callee(func, N.get(fs, "args"), env), safe), u => [], u => escapes(items(N.get(fs, "args")), how)))
+
+def notes(+tag: String, +fs: S.Json, +env: Env, +safe: List<&2, String>) -> List<&2, Ev>:
+  +loc = N.get(fs, "_loc")
+  +id = N.string(N.get(fs, "id"))
+  +ctx = tag_of(N.get(fs, "ctx"))
+  +b = bound(tag, fs)
+  +held = N.get(fs, "value")
+  +note = N.get(fs, "annotation")
+  S.choose(List<&2, Ev>, String.eq(tag, "arg"), u =>
+    [Bind{N.string(N.get(fs, "arg")), S.JNull{}, Bool.not(is_null(note)) && ann_ok(note, ["str", "bool", "int"], ["BinOp", "BitOr", "Load"])}], u =>
+    S.choose(List<&2, Ev>, Bool.not(String.is_empty(b)), u =>
+      Bind{b, held, False{}} <> List.append(&2, Ev, edges(sources(held, ""), b, loc),
+        S.choose(List<&2, Ev>, String.eq(tag, "AugAssign"), u => [Mut{b, loc, "augmented assignment"}], u => [])), u =>
+      S.choose(List<&2, Ev>, String.eq(tag, "Name"), u =>
+        S.choose(List<&2, Ev>, String.eq(ctx, "Load"), u => [Use{id, loc}], u => [Bind{id, S.JNull{}, False{}}]), u =>
+        S.choose(List<&2, Ev>, has(["Subscript", "Attribute"], tag) && has(["Store", "Del"], ctx) && String.eq(tag_of(held), "Name"), u =>
+          [Mut{N.string(field(held, "id")), loc, "item or attribute store"}], u =>
+          S.choose(List<&2, Ev>, String.eq(tag, "Call"), u => call(fs, loc, env, safe), u => [])))))
+
+# `skip`: the plain Name target of a binding is already a Bind with its value.
+def walk(j: S.Json, +skip: Bool, +env: Env, +safe: List<&2, String>) -> List<&2, Ev>:
+  match j:
+    case S.JObj{+fs}:
+      +tag = N.string(N.get(fs, "tag"))
+      List.append(&2, Ev, notes(tag, fs, env, safe), walk(fs, Bool.not(String.is_empty(bound(tag, fs))), env, safe))
+    case S.JField{key, value, +rest}:
+      S.choose(List<&2, Ev>, skip && has(["targets", "target"], key), u => walk(rest, skip, env, safe), u =>
+        List.append(&2, Ev, walk(value, False{}, env, safe), walk(rest, skip, env, safe)))
+    case S.JArr{xs}:
+      walk(xs, False{}, env, safe)
+    case S.JItem{h, t}:
+      List.append(&2, Ev, walk(h, False{}, env, safe), walk(t, False{}, env, safe))
+    case _:
+      []
+
+# Immutable reuse: an expression over constants, operators and immutable names
+# is immutable on exact str/bool/int/None (A1).
+def imm_expr(j: S.Json, +imm: List<&2, String>) -> Bool:
+  match j:
+    case S.JObj{+fs}:
+      +tag = N.string(N.get(fs, "tag"))
+      S.choose(Bool, String.eq(tag, "Name"), u => has(imm, N.string(N.get(fs, "id"))), u =>
+        has(["Constant", "BinOp", "BoolOp", "UnaryOp", "Compare", "IfExp", "Load", "And", "Or", "Not", "USub", "UAdd", "Add", "Sub",
+          "Mult", "Div", "FloorDiv", "Mod", "Pow", "Eq", "NotEq", "Lt", "LtE", "Gt", "GtE", "Is", "IsNot", "In", "NotIn"], tag) &&
+          imm_expr(fs, imm))
+    case S.JField{key, value, rest}:
+      imm_expr(value, imm) && imm_expr(rest, imm)
+    case S.JArr{xs}:
+      imm_expr(xs, imm)
+    case S.JItem{h, t}:
+      imm_expr(h, imm) && imm_expr(t, imm)
+    case _:
+      True{}
+
+def bound_imm(es: List<&2, Ev>, +n: String, +imm: List<&2, String>) -> Bool:
+  match es:
+    case Nil{}:
+      True{}
+    case Bind{name, +val, ok} <> t:
+      (Bool.not(String.eq(name, n)) || ok || (Bool.not(is_null(val)) && imm_expr(val, imm))) && bound_imm(t, n, imm)
+    case Edge{x, y, loc} <> t:
+      bound_imm(t, n, imm)
+    case Mut{name, loc, how} <> t:
+      bound_imm(t, n, imm)
+    case Esc{name, loc, how} <> t:
+      bound_imm(t, n, imm)
+    case Use{name, loc} <> t:
+      bound_imm(t, n, imm)
+
+def keep(ns: List<&2, String>, +es: List<&2, Ev>, +imm: List<&2, String>) -> List<&2, String>:
+  match ns:
+    case Nil{}:
+      []
+    case +h <> t:
+      List.append(&2, String, S.choose(List<&2, String>, bound_imm(es, h, imm), u => [h], u => []), keep(t, es, imm))
+
+# Greatest fixpoint: start from every bound name, drop what has a mutable binding.
+def settle(fuel: Nat, +es: List<&2, Ev>, +imm: List<&2, String>) -> List<&2, String>:
+  match fuel:
+    case 0n:
+      imm
+    case 1n+p:
+      settle(p, es, keep(imm, es, imm))
+
+def grow(es: List<&2, Ev>, +seen: List<&2, String>) -> List<&2, String>:
+  match es:
+    case Nil{}:
+      seen
+    case Edge{+x, +y, loc} <> t:
+      grow(t, S.choose(List<&2, String>, has(seen, x) && Bool.not(has(seen, y)), u => y <> seen, u =>
+        S.choose(List<&2, String>, has(seen, y) && Bool.not(has(seen, x)), u => x <> seen, u => seen)))
+    case Bind{name, val, ok} <> t:
+      grow(t, seen)
+    case Mut{name, loc, how} <> t:
+      grow(t, seen)
+    case Esc{name, loc, how} <> t:
+      grow(t, seen)
+    case Use{name, loc} <> t:
+      grow(t, seen)
+
+def reach(fuel: Nat, +es: List<&2, Ev>, +seen: List<&2, String>) -> List<&2, String>:
+  match fuel:
+    case 0n:
+      seen
+    case 1n+p:
+      reach(p, es, grow(es, seen))
+
+def num_at(n: Nat, xs: S.Json) -> Nat:
+  match n:
+    case 0n:
+      line(S.JArr{xs})
+    case 1n+p:
+      match xs:
+        case S.JItem{h, t}:
+          num_at(p, t)
+        case _:
+          0n
+
+# `l` starts at or after the end of `e`.
+def past(+l: S.Json, +e: S.Json) -> Bool:
+  +el = num_at(2n, items(e))
+  Nat.is_gt(line(l), el) || (Nat.is_eq(line(l), el) && Bool.not(Nat.is_lt(col(l), num_at(3n, items(e)))))
+
+# ponytail: textual order only; a read earlier in the same loop body is missed.
+# Upgrade path: treat every Use inside an enclosing For/While as later.
+def later(es: List<&2, Ev>, +a: String, +loc: S.Json) -> S.Json:
+  match es:
+    case Nil{}:
+      S.JNull{}
+    case Use{name, +l} <> t:
+      S.choose(S.Json, String.eq(name, a) && past(l, loc), u => l, u => later(t, a, loc))
+    case Edge{x, y, l} <> t:
+      later(t, a, loc)
+    case Bind{name, val, ok} <> t:
+      later(t, a, loc)
+    case Mut{name, l, how} <> t:
+      later(t, a, loc)
+    case Esc{name, l, how} <> t:
+      later(t, a, loc)
+
+def edge_at(es: List<&2, Ev>, +a: String) -> S.Json:
+  match es:
+    case Nil{}:
+      S.JNull{}
+    case Edge{x, y, +l} <> t:
+      S.choose(S.Json, String.eq(x, a) || String.eq(y, a), u => l, u => edge_at(t, a))
+    case Bind{name, val, ok} <> t:
+      edge_at(t, a)
+    case Mut{name, l, how} <> t:
+      edge_at(t, a)
+    case Esc{name, l, how} <> t:
+      edge_at(t, a)
+    case Use{name, l} <> t:
+      edge_at(t, a)
+
+# The first mutable alias of `b` still observable after `loc`: read later, or a
+# parameter (the caller holds it).
+def hazard(cs: List<&2, String>, +b: String, +loc: S.Json, +rule: String, +what: String, +es: List<&2, Ev>, +params: List<&2, String>, +imm: List<&2, String>) -> List<&2, Diag>:
+  match cs:
+    case Nil{}:
+      []
+    case +a <> t:
+      +l = later(es, a, loc)
+      S.choose(List<&2, Diag>, String.eq(a, b) || has(imm, a) || (is_null(l) && Bool.not(has(params, a))), u =>
+        hazard(t, b, loc, rule, what, es, params, imm), u =>
+        [Diag{loc, rule, Advisory{}, what ++ "; " ++ a ++ " may alias it (binding" ++ at(edge_at(es, a)) ++ ") and is " ++
+          S.choose(String, is_null(l), u => "a parameter", u => "read" ++ at(l))}])
+
+def flags(todo: List<&2, Ev>, +es: List<&2, Ev>, +params: List<&2, String>, +imm: List<&2, String>, +n: Nat) -> List<&2, Diag>:
+  match todo:
+    case Nil{}:
+      []
+    case Mut{+name, +loc, +how} <> t:
+      List.append(&2, Diag, S.choose(List<&2, Diag>, has(imm, name), u => [], u =>
+        List.append(&2, Diag, S.choose(List<&2, Diag>, has(params, name), u =>
+          [Diag{loc, "param-mutation", Advisory{}, how ++ " mutates parameter " ++ name ++ ": the caller observes it"}], u => []),
+          hazard(reach(n, es, [name]), name, loc, "alias-mutation", how ++ " mutates " ++ name, es, params, imm))),
+        flags(t, es, params, imm, n))
+    case Esc{+name, +loc, +how} <> t:
+      List.append(&2, Diag, S.choose(List<&2, Diag>, has(imm, name), u => [], u =>
+        hazard(reach(n, es, [name]), name, loc, "alias-escape", name ++ " is " ++ how ++ ", which may mutate or keep it", es, params, imm)),
+        flags(t, es, params, imm, n))
+    case Edge{x, y, loc} <> t:
+      flags(t, es, params, imm, n)
+    case Bind{name, val, ok} <> t:
+      flags(t, es, params, imm, n)
+    case Use{name, loc} <> t:
+      flags(t, es, params, imm, n)
+
+# ponytail: top-level defs only, nested scopes share the def's names, and
+# reach is recomputed per event. Upgrade path: scope-aware walk, memoized classes.
+def fn_flags(xs: S.Json, +defs: List<&2, String>, +cs: List<&2, Contract>, +safe: List<&2, String>) -> List<&2, Diag>:
+  match xs:
+    case S.JItem{+h, t}:
+      +names = binds(h)
+      +es = walk(h, False{}, Env{names, defs, cs}, safe)
+      +n = List.length(&2, String, names)
+      List.append(&2, Diag, S.choose(List<&2, Diag>, String.eq(tag_of(h), "FunctionDef"), u =>
+        flags(es, es, binds(field(h, "args")), settle(n, es, names), n), u => []), fn_flags(t, defs, cs, safe))
+    case _:
+      []
+
+def ranked(w: List<&2, Rank>) -> List<&2, String>:
+  match w:
+    case Nil{}:
+      []
+    case Rank{name, r} <> t:
+      name <> ranked(t)
+
+# `ownership` per def through the kernel (O0), then the advisories. Passing a
+# name to an O0-certified def is not an escape.
+def alias(+m: S.Module, +cs: List<&2, Contract>) -> List<&2, Diag>:
+  S.Module{+body} = m
+  +names = def_names(body)
+  +w = infer(List.length(&2, String, names), names, [], body, cs, True{}, 0n)
+  +valid = String.is_empty(certificate(m, cs, w, True{}))
+  List.sort(~Diag, ~le, List.append(&2, Diag, totals(names, w, valid, body, cs, True{}),
+    fn_flags(body, names, cs, S.choose(List<&2, String>, valid, u => ranked(w), u => []))))
+
+def grade_of(d: Diag) -> String:
+  Diag{loc, rule, g, msg} = d
+  grade(g)
