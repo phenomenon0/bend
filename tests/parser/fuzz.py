@@ -36,6 +36,14 @@ def comprehension(rng, sub):
     return rng.choice(["[{0}{2}]", "{{{0}{2}}}", "{{{0}: {1}{2}}}", "({0}{2})", "f({0}{2})", "f( {0}{2} )(a)"]).format(sub(), sub(), clauses)
 
 
+def annotated(rng, sub):
+    """`target: annotation [= value]`: every target kind (parenthesised or not), any expression as annotation, star-expressions as value; some targets the oracle rejects."""
+    target = rng.choice(["x", "x", "(x)", "((x))", "a.b", "(a.b)", "a[" + sub() + "]", "(" + sub() + ").c", "(" + sub() + ")[1:2]", "f(" + sub() + ").d",
+                         "x, y", "(x, y)", "[x]", "*x", "f()", "(" + sub() + ")"])
+    value = rng.choice(["", "", " = " + sub(), " = " + sub() + ", " + sub(), " = *a, " + sub(), " = " + sub() + ","])
+    return target + rng.choice([": ", ":", " : "]) + sub() + value
+
+
 def expression(rng, depth):
     if depth <= 0 or rng.randrange(5) == 0:
         return rng.choice(["a", "b", "c", "0", "17", "0x10", "1.5", "True", "None", "'é😀'", "..."])
@@ -88,6 +96,12 @@ def main():
                                   "import a.b as c, d\nif " + value + ":\n    from ..e.f import (g as h, i,)\n    from . import j; from k import *\n",
                                   "@" + value + "\nclass A(B, " + value + ", *c, metaclass=" + value + ", **k):\n    'doc'\n    x = " + value + "\n    class C: pass\n    @d\n    def f(self):\n        return " + value + "\nclass D(): y = 1; z = 2\n",
                                   "with (" + value + ") as a, " + value + ":\n    pass\nwith (" + value + " as b, c):\n    nonlocal n\n"]))
+    # A second stream, so the P2-P9 sources above stay what they were.
+    rng = random.Random(0xA57A2010)
+    for i in range(args.count // 4):
+        line = annotated(rng, lambda: expression(rng, rng.randrange(0, 3)))
+        sources.append(rng.choice([line, line, "class A(B):\n    'doc'\n    " + line + "\n    y: int\n    def f(self):\n        self." + line + "\n",
+                                  "if a: " + line + "; " + line + "\nelse:\n    " + line + "\n", "def f():\n    " + line + "\n    return x\n"]))
     # Long lists/chains and nesting deliberately exercise non-consuming transitions.
     for n in [1, 2, 10, 50, 100, 200]:
         sources += ["(" * n + "a" + ")" * n, "[" * n + "a" + "]" * n,
@@ -143,6 +157,7 @@ def main():
     counts = {"generated_and_directed": len(sources), "oracle_accepted": sum("used" in r or "result" in r for r in records),
               "oracle_rejected": sum("oracle-failure" in r for r in records), "fstring_sources": sum("f\"" in s.lower() for s in sources),
               "comprehension_sources": sum(" for " in s or "\n  for " in s for s in sources),
+              "annotated_sources": args.count // 4,
               "no_limit_on_oracle_accepted": not any(f.get("result", {}).get("status") == "limit" for f in failures),
               "normalization_failures": sum("normalization-failure" in r for r in records),
               "negative_cases": len(INVALID) + len(UNSUPPORTED),

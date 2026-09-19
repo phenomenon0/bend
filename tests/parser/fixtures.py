@@ -147,6 +147,29 @@ STATEMENTS += [
     "f(x for x in y)\ng(z for z in w)\n", "if 1:\n    x = [a\n         for a in b]\n    y = 1\n", "[1 for _ in y]", "[... for x in ...]", "[None for None_ in y]", "[x for x in y if 1 if 2 if 3]",
 ]
 
+# P10: annotated assignment. `simple` is 1 only for a bare unparenthesised Name target; `value` is optional for every target kind.
+STATEMENTS += [
+    "x: int", "x: int = 5", "x:int=5", "x : int = 5", "(x): int", "((x)): int = 1", "( x ): int", "self.x: T = v", "a.b: T", "(a.b): T", "(a.b): T = v", "a[0]: T = v", "a[0]: T", "(a[0]): T", "a[1:2]: T", "a[:, 1]: T = v",
+    "a[b, c]: T", "a().b: int", "((a)[0]): T", "((a).b): T = 1", "(a, b)[0]: T", "(a, b).c: T", "(f()).c: T", "((f())).c: T", "(a + b).c: T", "(a,).b: T", "().b: T", "[a][0]: T", "{a}.b: T", "'s'.b: T", "(i for i in y).b: T", "(lambda: a).b: T = 1", "(\n f()\n).c: T", "x.y.z[0].w: int", "a[0][1].b: T = c", "f(x)[0]: T", "match: int = 1", "case: int", "match[0]: int", "match.x: int = 1", "(match): int", "print: int", "_: int = 0",
+    "x: 'str'", "x: 'List[int]' = []", "x: \"a\" \"b\"", "x: f'{a}'", "x: None = None", "x: ... = ...", "x: 1", "x: -1", "x: a.b.c", "x: a[b]", "x: a[b][c]", "x: Optional[List[int]] = None", "x: Dict[str, Tuple[int, ...]] = {}",
+    "x: Callable[[int, str], bool]", "x: Callable[..., Any] = f", "x: Literal['a', 'b'] = 'a'", "x: int | None = None", "x: 'A' | B", "x: a if b else c", "x: a if b else c = d if e else f", "x: lambda: 1", "x: lambda a: a = lambda: 2",
+    "x: not a", "x: a or b", "x: a < b", "x: f(a, k=b)", "x: field(default=1) = 2", "x: [int]", "x: [int, str] = []", "x: {a: b}", "x: {a}", "x: (int)", "x: (int, str)", "x: ()", "x: (a, b) = 1, 2", "x: a[1:2]",
+    "x: [i for i in y] = 3", "x: {k: v for k, v in d}", "x: (t for t in u)", "x: f(t for t in u)", "x: int = 1, 2", "x: int = 1,", "x: int = *a, b", "x: int = *a", "x: int = *a,", "(x): int = 1, *b", "x: Tuple[int, ...] = (1, 2)",
+    "x: int = (1)", "x: int = ()", "x: int = lambda: 1", "x: int = a if b else c", "x: int = [i for i in y]", "x: int = f(i for i in y)", "x: str = f'{a!r:>{w}}'", "x: str = 'a' 'b'", "x: bytes = b'a'", "x: int = a[1:2]", "x: int = not a",
+    "x: int; y: str = 's'", "x: int = 1; y = 2;", "x = 1; y: int", "pass; x: int", "x: int # note", "x: int = 1 # é", "x: 'é😀' = 'é😀'", "x: (\n int\n) = (\n 1)", "x: Dict[\n    str,\n    int,\n] = {\n    'a': 1,\n}\n",
+    "x: int = \\\n    5", "x: \\\n  int", "a.b: (\n    T\n)", "a[\n  0\n]: T = (\n  v\n)", "x: f(\n    a,\n    b,\n)", "x: Optional[\n    int\n]\ny = 1\n", "x: int\ny: str\nz: float = 1.0\n", "x: int\n\n\ny: str\n",
+    "class A:\n    x: int\n    y: str = 's'\n    z: 'A'\n", "class A:\n    x: int = 1\n", "class A: x: int", "class A: x: int = 1; y: str", "class A(B):\n    a.b: int\n    c[0]: int = 1\n    (d): int\n",
+    "@dataclass\nclass P:\n    x: float\n    y: float = 0.0\n    tags: List[str] = field(default_factory=list)\n    def f(self) -> float:\n        r: float = self.x\n        return r\n",
+    "class A(NamedTuple):\n    'doc'\n    x: int\n    y: Optional['A'] = None\n", "class A:\n    class B:\n        x: int\n    y: B\n", "def f(a: int): x: int = 1", "def f():\n    x: int\n    x = 1\n    return x\n",
+    "def f(self):\n    self.x: int = 1\n    self.y: Dict[str, int] = {}\n    self.z[0]: T\n", "def f(a: int = 1, *b: str, c: T = None, **d: U) -> V:\n    e: W = a\n    return e\n", "lambda: x", "f(lambda: x)",
+    "if a: x: int", "if a: x: int = 1\nelse: y: str", "if a:\n    x: int = 1\nelif b:\n    x: str\nelse:\n    x: None = None\n", "while a: x: int", "for a in b: c: int = a", "for a in b:\n    c: int = a\nelse:\n    d: int\n",
+    "try:\n    x: int = 1\nexcept E as e:\n    y: E = e\nelse:\n    z: int\nfinally:\n    w: int = 0\n", "with a as b: c: T = b", "with a:\n    b: T\n", "if TYPE_CHECKING:\n    x: 'T'\n", "x: int = y\nx += 1\nx = y = 2\n",
+    "x: a.b[c](d).e = f", "x: a + b * c = d", "x: a == b", "x: a is not b = c", "x: {**a} = b", "x: [*a] = b", "x: a[*b]", "x: 'a'[1:]", "x: int = {a: b for a in c}", "x: int = a[b[c:d]:e]", "x: T = {'k': [v for v in w]}",
+    "x: int = (a, b)", "x: int =1", "x:int", "x :int", "a . b : T", "a [ 0 ] : T = v", "x: int = a or b and not c", "x: int = -1", "x: float = 1e999", "x: complex = 3j", "x: int = 0x1_f",
+    "class A(B):\n    x: int\n    y: Optional[List[int]] = None\n    def f(self):\n        self.z: 'T' = 1, *y\n        a[0]: T\n(w): int = 0\n",
+    "__all__: List[str] = ['a', 'b']", "VERSION: Final = '1.0'", "T_co: TypeAlias = 'Foo'", "x: ClassVar[int] = 0", "x: 'int'; y: 'str'", "x: int = 1\n# trailing\n", "\nx: int\n", "x: int\n\n", "if 1:\n    x: int = (a,\n              b)\n    y = 1\n",
+]
+
 INVALID = [
     "'\0'", "#\0",
     "b'a' 'b'",
@@ -188,16 +211,25 @@ INVALID = [
     "(x for x in y", "[x for x in y", "{x for x in y", "{a: b for a in c", "f(x for x in y", "[x for x in y)", "(x for x in y]", "{x for x in y]", "f(x for x in y]", "[x for x in y}",
     "x for x in y", "x = y for y in z", "return x for x in y", "[x for x in y] = 1", "(x for x in y) = 1", "{x for x in y} = 1", "{a: b for a in c} = 1", "del [x for x in y]", "del (x for x in y)", "[x for x in y] += 1",
     "for [x for x in y] in z: pass", "with a as [x for x in y]: pass", "[x for x in y for]", "[x for x in y if z for]", "[x for [x for x in y] in z]",
+    "x, y: int", "(x, y): int", "[x]: int", "[x, y]: int = 1", "*x: int", "(*x): int", "x, : int", "(): int", "f(): int", "f(x): int = 1", "1: int", "'a': int", "-x: int", "a + b: int", "None: int", "True: int = 1", "...: int", "lambda: x: int",
+    "a if b else c: int", "not x: int", "{a}: int", "{a: b}: int", "[i for i in y]: int", "(i for i in y): int", "f'{x}': int", "a < b: int", "x: int = y = 1", "x: int = a = b", "x = y: int", "x = y: int = 1", "x: int: str", "x: int: str = 1",
+    "x: a, b", "x: a, b = 1", "x: *a", "x: *a = 1", "x: **a", "x: int = ", "x: ", "x:", "x: = 1", "x: int += 1", "x += 1: int", "x: int = 1 2", "x: int y", "x: int = **a", "x: pass", "x: int = pass", "x: int = return", "x: if", "x: int = 1 = 2",
+    "x: (int", "x: int)", "x: int = (1", "x: a[", "a[0: int", "(x: int)", "[x: int]", "f(x: int)", "f(x: int = 1)", "{x: int = 1}", "x = (y: int)", "return x: int", "del x: int", "assert x: int", "raise x: int", "import a: int", "global x: int",
+    "x: int,", "x: int, = 1", "x: int;; y: int", "class A: x: int = ", "class A:\n    x: int =\n", "def f(): x: int: int", "if a: x: int: pass", "for x: int in y: pass", "with a as b: int: pass", "lambda x: int: 1", "x: int\n  y: int\n",
+    "x: a b", "x: int = a b", "x: 1 2", "x.1: int", "x.: int", ".x: int", "x[]: int", "x[0: int = 1", "@d\nx: int", "(a)[0]: T", "(a).b: T", "(a)[1:2]: T = 1", "(a)(b).c: T", "(a).b.c: T", "((a))[0]: T", "(a.b).c: T", "(a[0])[1]: T", "((a).b).c: T = 1", "(\n a).b: T", "(a)(b): T", "(f().c)(d).e: T", "x: a if b", "x: int = a if b", "x: a for a in b", "x: int = a for a in b",
     "if x: for y in z: pass", "x = for", "lambda: for", "[x for x in y] [z for z in w]", "(x for x in y) (z for z in w) w", "{x: for x in y}", "{x for x in y: z}", "[x for x in y: z]", "f(x for x in y)(", "[x\nfor x in y\n", 'f"{x for x in}"', 'f"{[x for x in y}"', 'f"{x:{y for}}"',
 ]
 
 UNSUPPORTED = [
     "K", "a.K", "f(K=1)", "match x:\n    case _: pass\n",
-    "import é", "import a as é", "from é import a", "from a import é", "from a import b as é", "class é: pass", "class A(é): pass", "class A(é=1): pass", "class A:\n    x: int = 1\n", "class A:\n    async def f(self): pass\n", "@d\nclass A:\n    def f(self): yield\n", "async def f(): pass", "@d\nasync def f(): pass",
+    "import é", "import a as é", "from é import a", "from a import é", "from a import b as é", "class é: pass", "class A(é): pass", "class A(é=1): pass", "class A:\n    x: int = yield\n", "class A:\n    async def f(self): pass\n", "@d\nclass A:\n    def f(self): yield\n", "async def f(): pass", "@d\nasync def f(): pass",
     "async for x in y: pass", "async with a: pass", "def f(): yield", "def f(): x = yield y", "lambda: (yield)", "def f(é): pass", "lambda é: 1",
-    "global é", "try: pass\nexcept E as é: pass", "try: pass\nexcept* E: pass", "def f(): await x", "def f(a: int): x: int = 1", "(x := 1)", "with (x := 1): pass",
+    "global é", "try: pass\nexcept E as é: pass", "try: pass\nexcept* E: pass", "def f(): await x", "def f(a: int): x: int = await a", "(x := 1)", "with (x := 1): pass",
     "a[x:=1]", "a[1:(x:=2)]", "a[é:]", "a[1:é]", "a[::é]", "a[1:, é]", "a[1:2].é", "a[await b:]",
     'f"{(x := 1)}"', 'f"{(yield)}"', 'f"{await x}"', 'f"{é}"', 'f"{a.é}"', 'f"{x:{é}}"',
     "[x async for x in y]", "(x async for x in y)", "{x async for x in y}", "{a: b async for a in c}", "f(x async for x in y)", "[x for x in y async for z in w]", "[await x for x in y]", "[x for x in await y]",
     "[x := 1 for x in y]", "[x for x in (y := z)]", "[x for x in y if (z := x)]", "f(x := 1 for x in y)", "{(k := a): b for a in c}", "[(yield) for x in y]", "[é for x in y]", "[x for é in y]", "[x for x in é]", "[x for x in y if é]", "f(é for x in y)",
+    "x: int = yield", "x: int = yield y", "x: int = yield from y", "x: (yield)", "x: await z", "x: int = await z", "x: (y := 1)", "x: int = (y := 1)", "é: int", "x: é", "x: int = é", "a.é: int", "x: a.é", "(é): int = 1",
+    "match (x):\n    case _: pass\n", "match [x]:\n    case _: pass\n", "match x, y:\n    case _: pass\n", "match (x), y:\n    case _: pass\n", "match x.y:\n    case _: pass\n", "match (x).y[0]:\n    case z: w: int = 1\n", "match -x:\n    case _: pass\n",
+    "match x:\n    case _:\n        y: int = 1\n", "x: [y async for y in z]", "x: int = [await y for y in z]", "class A:\n    x: int = 1\n    async def f(self): pass\n",
 ]

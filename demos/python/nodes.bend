@@ -154,6 +154,34 @@ def is_grouped(e: S.Expr) -> Bool:
   S.Expr{tag, fs, lo, hi, cover, grouped} = e
   grouped
 
+# PEG commitment, CPython 3.11: `'(' single_target ')'` wins the annotated target's first alternative and is
+# never retried, so a target that *starts* with a parenthesised Name/Attribute/Subscript and goes on
+# (`(a).b: T`, `(a)[0]: T`) is "illegal target for annotation", while `((a).b): T` and `(f()).c: T` are fine.
+# Down the leftmost chain, the first node that does not begin at the statement is what those parentheses hold.
+def starts_at(loc: S.Json, +line: Nat, +col: Nat) -> Bool:
+  match loc:
+    case S.JArr{S.JItem{S.JNum{l}, S.JItem{S.JNum{c}, rest}}}:
+      Nat.is_eq(l, line) && Nat.is_eq(c, col)
+    case _:
+      True{}
+
+def group_head(j: S.Json, +line: Nat, +col: Nat) -> Bool:
+  match j:
+    case S.JObj{+fs}:
+      +tag = string(get(fs, "tag"))
+      S.choose(Bool, starts_at(get(fs, "_loc"), line, col), u =>
+        (String.eq(tag, "Attribute") || String.eq(tag, "Subscript") || String.eq(tag, "Call")) && group_head(fs, line, col), u =>
+        String.eq(tag, "Name") || String.eq(tag, "Attribute") || String.eq(tag, "Subscript"))
+    case S.JField{+key, value, rest}:
+      S.choose(Bool, String.eq(key, "value") || String.eq(key, "func"), u => group_head(value, line, col), u => group_head(rest, line, col))
+    case _:
+      False{}
+
+def ann_target(+e: S.Expr, +start: S.Pos) -> Result<&2, &2, S.Error, S.Json>:
+  S.Pos{+line, +col} = start
+  S.choose(Result<&2, &2, S.Error, S.Json>, Bool.not(is_grouped(e)) && group_head(S.expr(e), line, col), u =>
+    Fail{S.PErr{S.Syntax{}, start, "illegal target for annotation"}}, u => target(e, True{}))
+
 def elts(j: S.Json) -> S.Json:
   match j:
     case S.JObj{fs}:
@@ -224,6 +252,9 @@ def is_none(e: S.Expr) -> Bool:
 
 def opt(+e: S.Expr) -> S.Json:
   S.choose(S.Json, is_none(e), u => S.JNull{}, u => S.expr(e))
+
+def annotated(target: S.Json, note: S.Expr, value: S.Expr, simple: Bool, lo: S.Pos, hi: S.Pos) -> S.Expr:
+  node("AnnAssign", S.JField{"target", target, S.JField{"annotation", S.expr(note), S.JField{"value", opt(value), S.JField{"simple", S.JNum{Bool.pick(Nat, simple, 1n, 0n)}, S.JEnd{}}}}}, lo, hi)
 
 def empty(j: S.Json) -> Bool:
   match j:

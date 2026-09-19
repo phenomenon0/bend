@@ -30,7 +30,7 @@ type Mode is Data:
   Line{}
   Simple{statements: S.Json}
   Small{}
-  AfterSmall{first: S.Expr, start: S.Pos}
+  AfterSmall{first: S.Expr, start: S.Pos, soft: Bool}
   Assignment{targets: S.Json, start: S.Pos}
   Compound{kind: String, start: S.Pos}
   Suite{}
@@ -614,8 +614,9 @@ def go(+fuel: Nat, +mode: Mode) -> P.M(S.Expr):
                         return N.node("Raise", S.JField{"exc", N.opt(exc), S.JField{"cause", N.opt(cause), S.JEnd{}}}, P.tok_start(t), end), u =>
                       do P.M<S.Expr>:
                         first : S.Expr <- go(left, TestList{0n})
-                        go(left, AfterSmall{first, P.tok_start(t)}))))))))))
-    case 1n+left AfterSmall{first, start}:
+                        go(left, AfterSmall{first, P.tok_start(t), P.is_text(t, "match")}))))))))))
+    # `target: annotation [= value]`. `match (x):` and `match [x]:` read as a target up to the `:`; only a match header ends the line there.
+    case 1n+left AfterSmall{+first, +start, soft}:
       P.meter(S.Expr, do P.M<S.Expr>:
         +t : S.Tok <- P.peek
         S.choose(P.M(S.Expr), P.is_text(t, "="), u =>
@@ -630,7 +631,21 @@ def go(+fuel: Nat, +mode: Mode) -> P.M(S.Expr):
               value : S.Expr <- go(left, TestList{0n})
               end : S.Pos <- P.end
               return N.augmented(target, O.tag(String.drop_end(P.tok_text(t), 1n)), value, start, end), u =>
-            S.choose(P.M(S.Expr), P.is_text(t, ":"), u => P.unsupported(S.Expr, "annotation"), u =>
+            S.choose(P.M(S.Expr), P.is_text(t, ":"), u =>
+              do P.M<S.Expr>:
+                drop : S.Tok <- P.take
+                next : S.Tok <- P.peek
+                S.choose(P.M(S.Expr), soft && P.is_kind(next, "NEWLINE"), u => P.unsupported(S.Expr, "match statement"), u =>
+                  do P.M<S.Expr>:
+                    target : S.Json <- P.lift(S.Json, N.ann_target(first, start))
+                    note : S.Expr <- go(left, Expression{0n})
+                    eq : S.Tok <- P.peek
+                    value : S.Expr <- S.choose(P.M(S.Expr), P.is_text(eq, "="), u =>
+                      do P.M<S.Expr>:
+                        drop : S.Tok <- P.take
+                        go(left, TestList{0n}), u => P.M.pure(S.Expr, N.none()))
+                    end : S.Pos <- P.end
+                    return N.annotated(target, note, value, String.eq(N.get_tag(first), "Name") && Bool.not(N.is_grouped(first)), start, end)), u =>
               S.choose(P.M(S.Expr), String.eq(N.get_tag(first), "Name") &&
                 String.eq(N.string(N.get(N.get_fields(first), "id")), "match") && Bool.not(O.is_end(t)), u =>
                 P.unsupported(S.Expr, "match statement"), u =>
