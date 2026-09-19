@@ -132,7 +132,6 @@ static void ownership(Env e) {
   assert(track_live == 0);
 }
 
-// The given cells in a fresh payload of 4 >> nar byte cells.
 static Term cells_at(Env e, const u32* xs, u32 n, u32 nar) {
   StrParts p = str_alloc(e, n, nar);
   for (u32 i = 0; i < n; i++) { str_put(e, p, i, xs[i]); }
@@ -168,7 +167,7 @@ static void search_case(Env e, const u32* s, u32 n, const u32* p, u32 m) {
   for (u32 i = 0; i <= n; i++) {
     if (matches(s, n, p, m, i)) { if (first == STR_ABSENT) { first = i; } last = i; }
   }
-  // One left-to-right non-overlapping scan: the count, and the replaced text.
+  // One non-overlapping scan: the count, and the replaced text.
   u32 want[128], used = 0;
   for (u32 i = 0; i <= n;) {
     bool hit = matches(s, n, p, m, i);
@@ -194,7 +193,6 @@ static void search_case(Env e, const u32* s, u32 n, const u32* p, u32 m) {
   Term got = str_replace_take(e, term_keep(e, text), term_keep(e, needle), cells(e, r, 3));
   expect_cells(e, got, want, used); term_sink(e, got);
   assert(track_kmp_builds - builds == kmp);
-  // Split fields: the text between hits, each a view of the one payload.
   Term list = str_split_on_take(e, term_keep(e, text), term_keep(e, needle));
   Term cur = list;
   u32 lo = 0;
@@ -228,7 +226,6 @@ static void search_case(Env e, const u32* s, u32 n, const u32* p, u32 m) {
 static void search_oracle(Env e) {
   u32 s[16], p[16];
   u64 cases = 0;
-  // Exhaustive: every a/b text of <= 6 cells x every a/b needle of <= 4.
   for (u32 n = 0; n <= 6; n++) {
     for (u32 a = 0; a < (1u << n); a++) {
       for (u32 i = 0; i < n; i++) { s[i] = 'a' + ((a >> i) & 1); }
@@ -240,7 +237,6 @@ static void search_oracle(Env e) {
       }
     }
   }
-  // Random: NUL, astral, surrogate and non-scalar cells.
   const u32 alphabet[] = {0, 'a', 'b', 0x1f600, 0xd800, 0xdc00, 0xffffffff};
   u32 rng = 12345;
   for (u32 t = 0; t < 500; t++) {
@@ -254,7 +250,6 @@ static void search_oracle(Env e) {
   printf("KMP/replace/split/partition naive oracle: ok (%llu cases)\n", (ull)cases);
 }
 
-// n - 1 cells of 'a', then 'b', in 1-byte cells.
 static Term a_then_b(Env e, u32 n) {
   StrParts p = str_alloc(e, n, 2);
   for (u32 i = 0; i < n; i++) { str_put(e, p, i, i + 1 < n ? 'a' : 'b'); }
@@ -286,7 +281,6 @@ static void new_ownership(Env e) {
   out = str_pad_take(e, s, 8, '0', 2);
   assert(str_peek(e, out).data != data);
   expect_text(e, alias, "-42"); expect_text(e, out, "-0000042");
-  // Case mapping and the FNV-1a hash pass non-scalar cells through.
   const u32 raw[] = {0xd800, 0xffffffff, 'a', 'B'};
   out = str_transform_take(e, cells(e, raw, 4), 3);
   const u32 lower[] = {0xd800, 0xffffffff, 'a', 'b'};
@@ -323,9 +317,8 @@ static void bulk_builders(Env e) {
   printf("concat/join/repeat: linear payload allocation bounds passed\n");
 }
 
-// Sticky device-style allocation failure, without a huge allocation: the
-// after-th allocation of op fails, and the bank must survive it. runtime.py
-// changes only err_seen and the allocation wrapper for this mode.
+// Sticky device-style allocation failure without a huge allocation.
+// runtime.py changes only err_seen and the allocation wrapper for this mode.
 #define ON(name) if (!strcmp(op, name))
 static void fault(Env e, const char* op, int after) {
   Term s = io_str(e, "abcdef", 6), b = io_str(e, "ghijkl", 6);
@@ -362,7 +355,7 @@ static void fault(Env e, const char* op, int after) {
   }
 }
 
-// Pops a unique Con cell: returns its head, leaves its tail in xs.
+// Pops a unique Con: its head, the tail left in xs.
 static Term pop(Env e, Term* xs) {
   Term f[2]; spare_free(e, 1, ctr_take(e, *xs, 2, f));
   *xs = f[1];
@@ -383,7 +376,6 @@ static void acceptance(Env e) {
     u64 source_allocs = track_allocs - allocs;
     assert(source_allocs <= 4 && track_live <= 4);
 
-    // length/get/slice: one cell read, no copy, a view of the source.
     u64 reads = track_str_reads, copies = track_copy_cells;
     allocs = track_allocs;
     assert(str_length_take(e, term_keep(e, s)) == n);
@@ -396,7 +388,6 @@ static void acceptance(Env e) {
     assert(track_str_reads - reads == 1 && track_copy_cells == copies);
     assert(access_allocs <= 4);
 
-    // The scan: 256-line blocks -> lines -> trimmed -> words, all views.
     u64 payloads = track_payload_words;
     track_peak_live = track_live;
     while (str_peek(e, s).len) {
@@ -472,7 +463,7 @@ static u64 lcg(u64* x) {
 }
 
 static u64 stream_law(Env e) {
-  static const u8 abc[12] = {0x00, 0x41, 0x80, 0xbf, 0xc2, 0xe0, 0xed, 0xf0, 0xf4, 0xa0, 0x90, 0xff};
+  static const u8 abc[12] = "\x00\x41\x80\xbf\xc2\xe0\xed\xf0\xf4\xa0\x90\xff";
   u64 runs = 0;
   // Exhaustive: every string of <= 4 alphabet bytes x every partition.
   for (u32 n = 0; n <= 4; n++) {
@@ -491,17 +482,17 @@ static u64 stream_law(Env e) {
     u8 b[64];
     u32 n = 1 + (u32)(lcg(&x) >> 58);
     for (u32 i = 0; i < n; i++) {
-      u32 r = (u32)(lcg(&x) >> 33);
-      b[i] = r % 3 == 0 ? abc[(r >> 8) % 12] : r % 3 == 1 ? (u8)(0x80 | ((r >> 8) & 0x7f)) : (u8)(r >> 8);
+      u32 r = (u32)(lcg(&x) >> 33), v = r >> 8;
+      b[i] = (u8)(r % 3 == 0 ? abc[v % 12] : r % 3 == 1 ? 0x80 | (v & 0x7f) : v);
     }
     stream_check(e, b, n, lcg(&x)); stream_check(e, b, n, ~0ull); runs += 2;
   }
   // The pinned specimen: every single split point, and 1-byte chunks.
-  static const u8 pin[20] = {0xef, 0xbb, 0xbf, 0x41, 0x00, 0xf0, 0x9f, 0x98, 0x80, 0xc0,
-    0x80, 0xed, 0xa0, 0x80, 0xf4, 0x90, 0x80, 0x80, 0xe2, 0x82};
+  static const u8 pin[20] = "\xef\xbb\xbf\x41\x00\xf0\x9f\x98\x80\xc0"
+    "\x80\xed\xa0\x80\xf4\x90\x80\x80\xe2\x82";
   for (u32 i = 0; i < 20; i++) { stream_check(e, pin, 20, 1ull << i); runs++; }
   stream_check(e, pin, 20, ~0ull); runs++;
-  // Boundary errors, spelled out: bytes, cuts, then the scalars decoded.
+  // Boundary errors, spelled out.
   const u32 F = 0xfffd;
   const struct { const char* b; u64 cuts; u32 len, want[3]; } edge[6] = {
     {"\xe2\x82\xac", 2, 1, {0x20ac}}, {"\xe2\x82\x41", 2, 3, {F, F, 0x41}},
@@ -575,19 +566,17 @@ static void widths(Env e) {
 int main(int argc, char** argv) {
   Corpus h = corpus_setup(false, 1, 0);
   Env e = {h, ALC[0]};
-  if (argc == 2 && !strcmp(argv[1], "limit-pad")) {
-    str_pad_take(e, io_str(e, "a", 1), 1ull << 32, '.', 0); return 1;
-  }
-  if (argc == 2 && !strcmp(argv[1], "limit-repeat")) {
-    str_repeat_take(e, io_str(e, "ab", 2), 1ull << 31); return 1;
-  }
   if (argc == 3 && !strncmp(argv[1], "fault-", 6)) {
     fault(e, argv[1] + 6, atoi(argv[2]));
     return 0;
   }
-  if (argc > 1 && strcmp(argv[1], "raw-output") == 0) {
+  // err_post must end these: the return is the failure.
+  if (argc == 2) {
+    const char* op = argv[1];
     u64 n;
-    free(io_cstr(e, str_prepend_take(e, 0xd800, SNIL), &n));
+    ON("limit-pad") { str_pad_take(e, io_str(e, "a", 1), 1ull << 32, '.', 0); }
+    else ON("limit-repeat") { str_repeat_take(e, io_str(e, "ab", 2), 1ull << 31); }
+    else ON("raw-output") { free(io_cstr(e, str_prepend_take(e, 0xd800, SNIL), &n)); }
     return 1;
   }
   ownership(e);
@@ -596,7 +585,6 @@ int main(int argc, char** argv) {
   new_ownership(e);
   bulk_builders(e);
   acceptance(e);
-  // A NUL is a cell like any other, in and out.
   expect_bytes(e, io_str(e, "a\0b", 3), "a\0b", 3);
   assert(track_live == 0);
   utf8_cases(e);
