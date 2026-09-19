@@ -332,3 +332,25 @@ def joined(values: S.Json, lo: S.Pos, hi: S.Pos) -> S.Expr:
 
 def formatted(value: S.Expr, conversion: S.Json, spec: S.Json, lo: S.Pos, hi: S.Pos) -> S.Expr:
   node("FormattedValue", S.JField{"value", S.expr(value), S.JField{"conversion", conversion, S.JField{"format_spec", spec, S.JEnd{}}}}, lo, hi)
+
+# P9 comprehensions. `comprehension` carries no location; `is_async` stays 0 (`async` is a later slice).
+# `sole`: the one element before `for`, neither starred nor a `**` unpack.
+def sole(items: S.Json) -> Bool:
+  match items:
+    case S.JItem{S.JObj{fs}, S.JEnd{}}:
+      Bool.not(String.eq(string(get(fs, "tag")), "Starred"))
+    case _:
+      False{}
+
+def head(items: S.Json) -> S.Json:
+  match items:
+    case S.JItem{h, t}:
+      h
+    case _:
+      S.JNull{}
+
+def clause(target: S.Json, iter: S.Expr, ifs: S.Json) -> S.Json:
+  plain("comprehension", S.JField{"target", target, S.JField{"iter", S.expr(iter), S.JField{"ifs", ifs, S.JField{"is_async", S.JNum{0n}, S.JEnd{}}}}})
+
+def comp(kind: String, head: S.Json, gens: S.Json, lo: S.Pos, hi: S.Pos) -> S.Expr:
+  node(kind, S.fields_append(head, S.JField{"generators", arr(gens), S.JEnd{}}), lo, hi)

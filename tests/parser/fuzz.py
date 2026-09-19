@@ -27,11 +27,22 @@ def fstring(rng, sub):
     return "(" + rng.choice([" ", "\n  "]).join(tokens) + ")"
 
 
+def comprehension(rng, sub):
+    """All four forms: nested `for` clauses, `if` filters, non-name targets, multi-line, the bare call argument."""
+    gap = rng.choice([" ", " ", "\n  "])
+    target = lambda: rng.choice(["a", "a", "a, b", "a, *b", "*a,", "(a, b)", "[a, (b, *c)]", "a.b", "a[0]", "a[1:2], b.c"])
+    clause = lambda: gap + "for " + target() + " in " + sub() + "".join(gap + "if " + sub() for _ in range(rng.randrange(3)))
+    clauses = "".join(clause() for _ in range(rng.randrange(1, 4)))
+    return rng.choice(["[{0}{2}]", "{{{0}{2}}}", "{{{0}: {1}{2}}}", "({0}{2})", "f({0}{2})", "f( {0}{2} )(a)"]).format(sub(), sub(), clauses)
+
+
 def expression(rng, depth):
     if depth <= 0 or rng.randrange(5) == 0:
         return rng.choice(["a", "b", "c", "0", "17", "0x10", "1.5", "True", "None", "'é😀'", "..."])
     sub = lambda: expression(rng, depth - 1)
-    choice = rng.randrange(15)
+    choice = rng.randrange(18)
+    if choice >= 15:
+        return comprehension(rng, sub)
     if choice >= 13:
         return fstring(rng, sub)
     if choice == 0:
@@ -131,6 +142,7 @@ def main():
                     failures.append({"source": source, "lane": lane, "expected": expected, "got": got})
     counts = {"generated_and_directed": len(sources), "oracle_accepted": sum("used" in r or "result" in r for r in records),
               "oracle_rejected": sum("oracle-failure" in r for r in records), "fstring_sources": sum("f\"" in s.lower() for s in sources),
+              "comprehension_sources": sum(" for " in s or "\n  for " in s for s in sources),
               "no_limit_on_oracle_accepted": not any(f.get("result", {}).get("status") == "limit" for f in failures),
               "normalization_failures": sum("normalization-failure" in r for r in records),
               "negative_cases": len(INVALID) + len(UNSUPPORTED),

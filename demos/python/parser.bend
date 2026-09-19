@@ -23,7 +23,7 @@ type Mode is Data:
   Comma{minimum: Nat, items: S.Json, start: S.Pos, end: S.Pos}
   Sequence{kind: String, start: S.Pos, close: String, items: S.Json, separator: Bool}
   Dictionary{start: S.Pos, keys: S.Json, values: S.Json, separator: Bool}
-  Arguments{fn: S.Expr, args: S.Json, keywords: S.Json, seen_kw: Bool, separator: Bool}
+  Arguments{fn: S.Expr, open: S.Pos, args: S.Json, keywords: S.Json, seen_kw: Bool, separator: Bool}
   Boolean{minimum: Nat, level: Nat, operator: String, values: S.Json, start: S.Pos, end: S.Pos}
   Comparison{minimum: Nat, left: S.Expr, ops: S.Json, values: S.Json, start: S.Pos, end: S.Pos}
   Block{top: Bool, statements: S.Json, end: S.Pos}
@@ -53,6 +53,8 @@ type Mode is Data:
   Slice{}
   Bound{}
   Slices{items: S.Json, start: S.Pos, end: S.Pos}
+  Comp{kind: String, head: S.Json, start: S.Pos, close: String, gens: S.Json}
+  Ifs{items: S.Json}
 
 # Primitive helpers classify unsupported productions before a syntax error.
 def expected(-A: Data, +t: S.Tok, msg: String) -> P.M(A):
@@ -172,10 +174,14 @@ def go(+fuel: Nat, +mode: Mode) -> P.M(S.Expr):
                         return N.group(N.collection("Tuple", S.JEnd{}, P.tok_start(t), P.tok_end(end)), P.tok_start(t), P.tok_end(end)), u =>
                       do P.M<S.Expr>:
                         +inner : S.Expr <- go(left, TestList{0n})
+                        +word : S.Tok <- P.peek
                         S.choose(P.M(S.Expr), String.eq(N.get_tag(inner), "Starred"), u => P.syntax(S.Expr, "starred expression requires tuple comma"), u =>
-                          do P.M<S.Expr>:
-                            end : S.Tok <- P.expect(")")
-                            return N.group(inner, P.tok_start(t), P.tok_end(end)))), u =>
+                          S.choose(P.M(S.Expr), P.is_text(word, "for"), u =>
+                            S.choose(P.M(S.Expr), String.eq(N.get_tag(inner), "Tuple") && Bool.not(N.is_grouped(inner)), u => P.syntax(S.Expr, "unparenthesized comprehension element"), u =>
+                              go(left, Comp{"GeneratorExp", S.JField{"elt", S.expr(inner), S.JEnd{}}, P.tok_start(t), ")", S.JEnd{}})), u =>
+                            do P.M<S.Expr>:
+                              end : S.Tok <- P.expect(")")
+                              return N.group(inner, P.tok_start(t), P.tok_end(end))))), u =>
                   S.choose(P.M(S.Expr), P.is_text(t, "["), u =>
                     do P.M<S.Expr>:
                       drop : S.Tok <- P.take
@@ -283,29 +289,35 @@ def go(+fuel: Nat, +mode: Mode) -> P.M(S.Expr):
                 drop : S.Tok <- P.take
                 go(left, Comma{minimum, S.JItem{S.expr(value), items}, start, P.tok_end(next)}), u =>
               P.M.pure(S.Expr, N.collection("Tuple", S.JItem{S.expr(value), items}, start, N.get_finish(value))))))
-    case 1n+left Sequence{kind, start, close, items, separator}:
+    case 1n+left Sequence{kind, start, close, +items, +separator}:
       P.meter(S.Expr, do P.M<S.Expr>:
         +t : S.Tok <- P.peek
         S.choose(P.M(S.Expr), P.is_text(t, close), u =>
           do P.M<S.Expr>:
             end : S.Tok <- P.take
             return N.collection(kind, items, start, P.tok_end(end)), u =>
-          S.choose(P.M(S.Expr), O.unsupported(t), u => P.unsupported(S.Expr, "comprehension or expression"), u =>
+          S.choose(P.M(S.Expr), P.is_text(t, "for"), u =>
+            S.choose(P.M(S.Expr), separator && N.sole(items), u =>
+              go(left, Comp{kind ++ "Comp", S.JField{"elt", N.head(items), S.JEnd{}}, start, close, S.JEnd{}}), u => P.syntax(S.Expr, "comprehension takes one unstarred element")), u =>
+          S.choose(P.M(S.Expr), O.unsupported(t), u => P.unsupported(S.Expr, "expression"), u =>
             S.choose(P.M(S.Expr), separator, u =>
               do P.M<S.Expr>:
                 drop : S.Tok <- P.expect(",")
                 go(left, Sequence{kind, start, close, items, False{}}), u =>
               do P.M<S.Expr>:
                 value : S.Expr <- go(left, Item{0n})
-                go(left, Sequence{kind, start, close, S.JItem{S.expr(value), items}, True{}})))))
-    case 1n+left Dictionary{start, keys, values, separator}:
+                go(left, Sequence{kind, start, close, S.JItem{S.expr(value), items}, True{}}))))))
+    case 1n+left Dictionary{start, +keys, values, +separator}:
       P.meter(S.Expr, do P.M<S.Expr>:
         +t : S.Tok <- P.peek
         S.choose(P.M(S.Expr), P.is_text(t, "}"), u =>
           do P.M<S.Expr>:
             end : S.Tok <- P.take
             return N.dict(keys, values, start, P.tok_end(end)), u =>
-          S.choose(P.M(S.Expr), O.unsupported(t), u => P.unsupported(S.Expr, "dictionary comprehension"), u =>
+          S.choose(P.M(S.Expr), P.is_text(t, "for"), u =>
+            S.choose(P.M(S.Expr), separator && N.sole(keys), u =>
+              go(left, Comp{"DictComp", S.JField{"key", N.head(keys), S.JField{"value", N.head(values), S.JEnd{}}}, start, "}", S.JEnd{}}), u => P.syntax(S.Expr, "dict comprehension takes one key: value")), u =>
+          S.choose(P.M(S.Expr), O.unsupported(t), u => P.unsupported(S.Expr, "dictionary item"), u =>
             S.choose(P.M(S.Expr), separator, u =>
               do P.M<S.Expr>:
                 drop : S.Tok <- P.expect(",")
@@ -319,7 +331,7 @@ def go(+fuel: Nat, +mode: Mode) -> P.M(S.Expr):
                   key : S.Expr <- go(left, Expression{0n})
                   colon : S.Tok <- P.expect(":")
                   value : S.Expr <- go(left, Expression{0n})
-                  go(left, Dictionary{start, S.JItem{S.expr(key), keys}, S.JItem{S.expr(value), values}, True{}}))))))
+                  go(left, Dictionary{start, S.JItem{S.expr(key), keys}, S.JItem{S.expr(value), values}, True{}})))))))
     case 1n+left Rest{minimum, first}:
       P.meter(S.Expr, do P.M<S.Expr>:
         +t : S.Tok <- P.peek
@@ -333,7 +345,7 @@ def go(+fuel: Nat, +mode: Mode) -> P.M(S.Expr):
           S.choose(P.M(S.Expr), P.is_text(t, "("), u =>
             do P.M<S.Expr>:
               drop : S.Tok <- P.take
-              call : S.Expr <- go(left, Arguments{first, S.JEnd{}, S.JEnd{}, False{}, False{}})
+              call : S.Expr <- go(left, Arguments{first, P.tok_start(t), S.JEnd{}, S.JEnd{}, False{}, False{}})
               go(left, Rest{minimum, call}), u =>
             S.choose(P.M(S.Expr), P.is_text(t, "["), u =>
               do P.M<S.Expr>:
@@ -398,6 +410,31 @@ def go(+fuel: Nat, +mode: Mode) -> P.M(S.Expr):
                 drop : S.Tok <- P.take
                 go(left, Slices{S.JItem{S.expr(value), items}, start, P.tok_end(next)}), u =>
               P.M.pure(S.Expr, N.collection("Tuple", S.JItem{S.expr(value), items}, start, N.get_finish(value))))))
+    # `for` clauses after the head, then the close. A clause's iter and `if`s are disjunctions: no bare ternary or lambda.
+    case 1n+left Comp{kind, head, start, close, gens}:
+      P.meter(S.Expr, do P.M<S.Expr>:
+        t : S.Tok <- P.peek
+        S.choose(P.M(S.Expr), P.is_text(t, "for"), u =>
+          do P.M<S.Expr>:
+            drop : S.Tok <- P.take
+            first : S.Expr <- go(left, TestList{6n})
+            target : S.Json <- P.lift(S.Json, N.target(first, False{}))
+            word : S.Tok <- P.expect("in")
+            iter : S.Expr <- go(left, Expression{2n})
+            ifs : S.Expr <- go(left, Ifs{S.JEnd{}})
+            go(left, Comp{kind, head, start, close, S.JItem{N.clause(target, iter, N.carried(ifs)), gens}}), u =>
+          do P.M<S.Expr>:
+            end : S.Tok <- P.expect(close)
+            return N.comp(kind, head, gens, start, P.tok_end(end))))
+    case 1n+left Ifs{items}:
+      P.meter(S.Expr, do P.M<S.Expr>:
+        t : S.Tok <- P.peek
+        S.choose(P.M(S.Expr), P.is_text(t, "if"), u =>
+          do P.M<S.Expr>:
+            drop : S.Tok <- P.take
+            test : S.Expr <- go(left, Expression{2n})
+            go(left, Ifs{S.JItem{S.expr(test), items}}), u =>
+          P.M.pure(S.Expr, N.carry(N.arr(items)))))
     case 1n+left Boolean{minimum, level, operator, values, start, end}:
       P.meter(S.Expr, do P.M<S.Expr>:
         t : S.Tok <- P.peek
@@ -416,42 +453,48 @@ def go(+fuel: Nat, +mode: Mode) -> P.M(S.Expr):
             +value : S.Expr <- go(left, Expression{6n})
             go(left, Comparison{minimum, first, S.JItem{N.op(operator), ops}, S.JItem{S.expr(value), values}, start, N.get_finish(value)}), u =>
           go(left, Rest{minimum, N.compare(first, ops, values, start, end)})))
-    case 1n+left Arguments{fn, args, keywords, seen_kw, separator}:
+    case 1n+left Arguments{+fn, open, +args, +keywords, seen_kw, +separator}:
       P.meter(S.Expr, do P.M<S.Expr>:
         +t : S.Tok <- P.peek
         S.choose(P.M(S.Expr), P.is_text(t, ")"), u =>
           do P.M<S.Expr>:
             end : S.Tok <- P.take
             return N.call(fn, args, keywords, P.tok_end(end)), u =>
-          S.choose(P.M(S.Expr), O.unsupported(t), u => P.unsupported(S.Expr, "generator or argument"), u =>
+          # A bare generator is a call's only argument; a class takes none.
+          S.choose(P.M(S.Expr), P.is_text(t, "for"), u =>
+            S.choose(P.M(S.Expr), separator && N.sole(args) && N.empty(keywords) && Bool.not(String.eq(N.get_tag(fn), "$json")), u =>
+              do P.M<S.Expr>:
+                +gen : S.Expr <- go(left, Comp{"GeneratorExp", S.JField{"elt", N.head(args), S.JEnd{}}, open, ")", S.JEnd{}})
+                return N.call(fn, N.one(gen), S.JEnd{}, N.get_finish(gen)), u => P.syntax(S.Expr, "generator expression must be parenthesized")), u =>
+          S.choose(P.M(S.Expr), O.unsupported(t), u => P.unsupported(S.Expr, "argument"), u =>
             S.choose(P.M(S.Expr), separator, u =>
               do P.M<S.Expr>:
                 drop : S.Tok <- P.expect(",")
-                go(left, Arguments{fn, args, keywords, seen_kw, False{}}), u =>
+                go(left, Arguments{fn, open, args, keywords, seen_kw, False{}}), u =>
               do P.M<S.Expr>:
                 +next : S.Tok <- P.second
                 S.choose(P.M(S.Expr), P.is_text(t, "**"), u =>
                   do P.M<S.Expr>:
                     drop : S.Tok <- P.take
                     value : S.Expr <- go(left, Expression{0n})
-                    go(left, Arguments{fn, args, S.JItem{N.kw(S.JNull{}, value, P.tok_start(t)), keywords}, True{}, True{}}), u =>
+                    go(left, Arguments{fn, open, args, S.JItem{N.kw(S.JNull{}, value, P.tok_start(t)), keywords}, True{}, True{}}), u =>
                   S.choose(P.M(S.Expr), P.is_kind(t, "NAME") && P.is_text(next, "="), u =>
                     S.choose(P.M(S.Expr), non_ascii(P.tok_text(t)), u => P.unsupported(S.Expr, "Unicode keyword normalization"), u =>
                       do P.M<S.Expr>:
                         drop : S.Tok <- P.take
                         drop : S.Tok <- P.take
                         value : S.Expr <- go(left, Expression{0n})
-                        go(left, Arguments{fn, args, S.JItem{N.kw(S.JStr{P.tok_text(t)}, value, P.tok_start(t)), keywords}, True{}, True{}})), u =>
+                        go(left, Arguments{fn, open, args, S.JItem{N.kw(S.JStr{P.tok_text(t)}, value, P.tok_start(t)), keywords}, True{}, True{}})), u =>
                     S.choose(P.M(S.Expr), seen_kw && Bool.not(P.is_text(t, "*")), u => P.syntax(S.Expr, "positional argument follows keyword"), u =>
                       S.choose(P.M(S.Expr), P.is_text(t, "*"), u =>
                         S.choose(P.M(S.Expr), N.has_unpack(keywords), u => P.syntax(S.Expr, "iterable unpack follows keyword unpack"), u =>
                           do P.M<S.Expr>:
                             drop : S.Tok <- P.take
                             value : S.Expr <- go(left, Expression{0n})
-                            go(left, Arguments{fn, S.JItem{S.expr(N.starred(P.tok_start(t), value)), args}, keywords, seen_kw, True{}})), u =>
+                            go(left, Arguments{fn, open, S.JItem{S.expr(N.starred(P.tok_start(t), value)), args}, keywords, seen_kw, True{}})), u =>
                         do P.M<S.Expr>:
                           value : S.Expr <- go(left, Expression{0n})
-                          go(left, Arguments{fn, S.JItem{S.expr(value), args}, keywords, seen_kw, True{}})))))))))
+                          go(left, Arguments{fn, open, S.JItem{S.expr(value), args}, keywords, seen_kw, True{}}))))))))))
     case 1n+left Block{top, statements, end}:
       P.meter(S.Expr, do P.M<S.Expr>:
         +t : S.Tok <- P.peek
@@ -728,7 +771,7 @@ def go(+fuel: Nat, +mode: Mode) -> P.M(S.Expr):
         bases : S.Expr <- S.choose(P.M(S.Expr), P.is_text(t, "("), u =>
           do P.M<S.Expr>:
             drop : S.Tok <- P.take
-            go(left, Arguments{N.dotted("", start, start), S.JEnd{}, S.JEnd{}, False{}, False{}}), u =>
+            go(left, Arguments{N.dotted("", start, start), start, S.JEnd{}, S.JEnd{}, False{}, False{}}), u =>
           P.M.pure(S.Expr, N.call(N.dotted("", start, start), S.JEnd{}, S.JEnd{}, start)))
         colon : S.Tok <- P.expect(":")
         body : S.Expr <- go(left, Suite{})

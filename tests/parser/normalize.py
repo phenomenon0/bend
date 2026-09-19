@@ -168,7 +168,8 @@ Set Dict UnaryOp UAdd USub Invert Not BinOp Add Sub Mult MatMult Div FloorDiv Mo
 LShift RShift BitOr BitXor BitAnd BoolOp And Or Compare Eq NotEq Lt LtE Gt GtE Is IsNot In NotIn
 IfExp Call keyword Assign AugAssign Expr If While Return Pass Break Continue
 Lambda arguments arg FunctionDef For Global Nonlocal Delete Assert Raise Try ExceptHandler With withitem
-Import ImportFrom alias ClassDef Slice JoinedStr FormattedValue""".split())
+Import ImportFrom alias ClassDef Slice JoinedStr FormattedValue
+ListComp SetComp DictComp GeneratorExp comprehension""".split())
 
 
 def supported(tree, source=None):
@@ -177,5 +178,6 @@ def supported(tree, source=None):
         return False
     return all(type(node).__name__ in SUPPORTED and
                not (isinstance(node, ast.Name) and not node.id.isascii()) and
-               not (isinstance(node, ast.Attribute) and not node.attr.isascii())
+               not (isinstance(node, ast.Attribute) and not node.attr.isascii()) and
+               not (isinstance(node, ast.comprehension) and node.is_async)
                for node in ast.walk(tree))

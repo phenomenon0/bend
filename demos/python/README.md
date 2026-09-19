@@ -35,10 +35,12 @@ assignment, expression statements, `if/elif/else`, `while/else`, `for/else`,
 `class` (bases, keywords, `**kwds`, decorators, nested), and slices
 (`a[i:j:k]`, any bound omitted, slice tuples `a[:, 1]`, in Load/Store/Del), and f-strings
 (`JoinedStr`/`FormattedValue`: fields, `!r`/`!s`/`!a`, the debug `=`, format specs with nested
-fields, nested/raw/triple-quoted f-strings, implicit concatenation). It follows
+fields, nested/raw/triple-quoted f-strings, implicit concatenation), and comprehensions
+(`ListComp`/`SetComp`/`DictComp`/`GeneratorExp`: nested `for` clauses, `if` filters, any
+assignment target, the bare generator as a call's sole argument, inside f-string fields). It follows
 `ast.parse`'s syntax acceptance rather than Python compilation's additional
 scope checks (`*a = 1` parses). `async`/`await`, `yield`,
-`except*`, comprehensions, annotated assignment, walrus, non-ASCII
+`except*`, `async` comprehensions, annotated assignment, walrus, non-ASCII
 identifiers, and other later-slice
 productions report `Unsupported`. Syntax failures and limits have distinct
 `Syntax` and `Limit` kinds. Failure prints `error KIND LINE COL MESSAGE` and
@@ -59,7 +61,7 @@ conversion in Bend. `normalize.py` separates every location from structural
 comparison and maps CPython UTF-8 byte columns to code points per LF-delimited
 physical line. Trivia is dropped; there is no span sampling.
 
-One directly recursive `go` dispatches 41 grammar modes with precedence
+One directly recursive `go` dispatches 43 grammar modes with precedence
 climbing. Every mode entry decrements a residual global budget. The first
 structurally decreasing Nat proves termination independently of the residual
 budget. Sequential parses thread the residual state, never replenish it
