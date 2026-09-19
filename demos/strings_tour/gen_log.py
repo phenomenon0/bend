@@ -4,7 +4,9 @@
 # opening with a stamp line `#block 000000000000123` whose 15 digits spell the
 # block number (what views.bend's scattered visits parse and check). Lines
 # carry emoji usernames, é/ß, combining marks, NBSP, ragged whitespace, some
-# very long lines, and, as line 2 of block 0, one ReDoS-bait line.
+# very long lines, and, as lines 2 and 3 of block 0, one ReDoS-bait line and
+# the line behind Stack Overflow's July 20, 2016 outage, rebuilt from their
+# postmortem: their comment text, 20,000 spaces, one `x`.
 # Deterministic (seeded). Writes the oracles knob.bend / gputext.bend are
 # checked against: tokens split on ASCII whitespace only (NBSP is not a space
 # in Bend's words), each hashed h = h*33 + code point.
@@ -78,7 +80,8 @@ def stats(text):  # tokens, sum of per-token rolling hashes, occurrences of "gpu
 STAMP = "#block 000000000000000\n"  # 7 + 15 digits + newline
 pool = [make_block(STAMP) for _ in range(32)]  # 32 distinct bodies, drawn at random
 pool_stats = [stats(b[len(STAMP) :]) for b in pool]
-first = make_block(STAMP + "bait " + "a" * BAIT + "!\n")
+SO = "-- play happy sound for player to enjoy" + " " * 20000 + "x\n"
+first = make_block(STAMP + "bait " + "a" * BAIT + "!\n" + SO)
 n, h, g = stats(first[len(STAMP) :])
 size = 0
 with open(out, "wb") as f:
