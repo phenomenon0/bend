@@ -1,17 +1,24 @@
-// Included after the generated runtime by runtime.py. Corpus allocations are
-// tracked there, since ASan alone cannot see frees inside the custom heap.
+// Included after the generated runtime by runtime.py, which tracks corpus
+// allocations: ASan alone cannot see frees inside the custom heap.
 #include <assert.h>
 
-static void expect_text(Env e, Term s, const char* text) {
+#define SNIL term_pak(CID_SNIL, 0)
+typedef unsigned long long ull;
+
+static void expect_bytes(Env e, Term s, const char* text, u64 len) {
   u64 n;
   char* bytes = io_cstr(e, s, &n);
-  assert(n == strlen(text) && memcmp(bytes, text, n) == 0 && bytes[n] == 0);
+  assert(n == len && memcmp(bytes, text, n) == 0 && bytes[n] == 0);
   free(bytes);
 }
 
+static void expect_text(Env e, Term s, const char* text) {
+  expect_bytes(e, s, text, strlen(text));
+}
+
 static void ownership(Env e) {
-  // Static image is one class-1 payload of 1-byte cells (one word) + one
-  // descriptor: a literal is packed at the width of its content.
+  // Static image: one descriptor + one class-1 payload of 1-byte cells (one
+  // word), since a literal is packed at the width of its content.
   assert(STAT_LEN == 3);
   Term lit = term_make(TAG_STR, CID_SCON, STAT_OFF + 1);
   assert(str_peek(e, lit).len == 6 && str_nar(str_peek(e, lit)) == 2);
@@ -25,7 +32,7 @@ static void ownership(Env e) {
   expect_text(e, lit, "abcdef");
   assert(track_live == 0);
 
-  // Aliased metadata: the payload still has ONE ref before opening. A
+  // Aliased metadata: the payload still has ONE ref before opening, so a
   // payload-only write test would mutate both aliases here.
   Term s = io_str(e, "abcdef", 6);
   Term data = str_peek(e, s).data;
@@ -37,8 +44,8 @@ static void ownership(Env e) {
   expect_text(e, alias, "abcdef");
   assert(track_live == 0);
 
-  // Unique transforms retain the same payload; snapshots and overlapping
-  // slices detach. Empty windows release both descriptor and payload.
+  // Unique transforms keep the payload; snapshots and overlapping slices
+  // detach. An empty window releases both descriptor and payload.
   s = io_str(e, "abcdef", 6); data = str_peek(e, s).data;
   s = str_transform_take(e, s, 0);
   assert(str_peek(e, s).data == data);
@@ -50,10 +57,10 @@ static void ownership(Env e) {
   expect_text(e, b, "dcba");
   assert(track_live == 0);
   s = str_slice_take(e, io_str(e, "abc", 3), 1ull << 32, ~0ull);
-  assert(s == term_pak(CID_SNIL, 0) && track_live == 0);
+  assert(s == SNIL && track_live == 0);
 
-  // A tiny zero-copy view pins its slab. copy allocates just a class-2
-  // payload, and dropping the old view releases that retained large slab.
+  // A tiny zero-copy view pins its slab: copy allocates just a class-0
+  // payload, and dropping the view releases the large slab.
   s = str_repeat_take(e, lit, 65536);
   data = str_peek(e, s).data;
   u64 cap = str_cap(data);
@@ -68,8 +75,8 @@ static void ownership(Env e) {
   expect_text(e, b, "cde");
   assert(track_live == 0);
 
-  // Unique SCon reconstruction uses existing headroom, including uncons.
-  s = str_prepend_take(e, 'a', term_pak(CID_SNIL, 0));
+  // Unique SCon reconstruction reuses the headroom, uncons included.
+  s = str_prepend_take(e, 'a', SNIL);
   for (u32 i = 0; i < 1000; i++) { s = str_prepend_take(e, 'b', s); }
   data = str_peek(e, s).data;
   Term fields[2]; str_uncons(e, s, fields);
@@ -92,12 +99,12 @@ static void ownership(Env e) {
   // The last cell releases descriptor and payload.
   s = io_str(e, "z", 1);
   str_uncons(e, s, fields);
-  assert(fields[0] == 'z' && fields[1] == term_pak(CID_SNIL, 0));
+  assert(fields[0] == 'z' && fields[1] == SNIL);
   assert(track_live == 0);
 
-  // Growth copies O(n) total payload cells on a unique one-direction chain.
+  // A unique one-direction chain grows by copying O(n) payload cells in all.
   for (u32 front = 0; front < 2; front++) {
-    s = term_pak(CID_SNIL, 0);
+    s = SNIL;
     u64 before = track_payload_words;
     for (u32 i = 0; i < 8192; i++) {
       s = front ? str_prepend_take(e, 'x', s)
@@ -109,8 +116,8 @@ static void ownership(Env e) {
     assert(track_live == 0);
   }
 
-  // Split fields are views of the same payload; dropping their list visits
-  // all descriptors/payload owners without treating off/len as a Term.
+  // Split fields are views of one payload; dropping their list visits every
+  // descriptor and payload owner without reading off/len as a Term.
   s = io_str(e, "ab,,cd,", 7); data = str_peek(e, s).data;
   Term list = str_split_take(e, s, ',', false);
   u32 fields_seen = 0;
@@ -125,13 +132,11 @@ static void ownership(Env e) {
   assert(track_live == 0);
 }
 
-static void roundtrip(Env e) {
-  const char nul[] = {'a', 0, 'b'};
-  u64 n;
-  char* bytes = io_cstr(e, io_str(e, nul, 3), &n);
-  assert(n == 3 && !memcmp(bytes, nul, 3) && bytes[3] == 0);
-  free(bytes);
-  assert(track_live == 0);
+// The given cells in a fresh payload of 4 >> nar byte cells.
+static Term cells_at(Env e, const u32* xs, u32 n, u32 nar) {
+  StrParts p = str_alloc(e, n, nar);
+  for (u32 i = 0; i < n; i++) { str_put(e, p, i, xs[i]); }
+  return str_view_owned(e, p);
 }
 
 // Any width at least as wide as the content is a valid representation: cycle
@@ -141,9 +146,7 @@ static Term cells(Env e, const u32* xs, u32 n) {
   u32 nar = 2;
   for (u32 i = 0; i < n; i++) { if (str_fit(xs[i]) < nar) { nar = str_fit(xs[i]); } }
   if (turn++ % 3 < nar) { nar = turn % 3; }
-  StrParts p = str_alloc(e, n, nar);
-  for (u32 i = 0; i < n; i++) { str_put(e, p, i, xs[i]); }
-  return str_view_owned(e, p);
+  return cells_at(e, xs, n, nar);
 }
 
 static void expect_cells(Env e, Term s, const u32* xs, u32 n) {
@@ -161,20 +164,24 @@ static void search_case(Env e, const u32* s, u32 n, const u32* p, u32 m) {
   const u32 r[] = {'$', '&', 'a'};
   Term text = cells(e, s, n), needle = cells(e, p, m);
   Term data = str_peek(e, text).data;
-  u64 first = STR_ABSENT, last = STR_ABSENT, count = 0;
+  u64 first = STR_ABSENT, last = STR_ABSENT, count = 0, kmp = m > 1 && m <= n;
   for (u32 i = 0; i <= n; i++) {
     if (matches(s, n, p, m, i)) { if (first == STR_ABSENT) { first = i; } last = i; }
   }
+  // One left-to-right non-overlapping scan: the count, and the replaced text.
+  u32 want[128], used = 0;
   for (u32 i = 0; i <= n;) {
     bool hit = matches(s, n, p, m, i);
     count += hit;
+    if (hit) { for (u32 j = 0; j < 3; j++) { want[used++] = r[j]; } }
+    if ((!hit || !m) && i < n) { want[used++] = s[i]; }
     i += hit && m ? m : 1;
   }
   const u64 expected[] = {first, last, count};
   for (u32 mode = 0; mode < 3; mode++) {
     u64 builds = track_kmp_builds;
     assert(str_search_take(e, term_keep(e, text), term_keep(e, needle), mode) == expected[mode]);
-    assert(track_kmp_builds - builds == (m > 1 && m <= n));
+    assert(track_kmp_builds - builds == kmp);
     assert(track_kmp_live == 0);
   }
   for (u32 mode = 0; mode < 2; mode++) {
@@ -183,17 +190,11 @@ static void search_case(Env e, const u32* s, u32 n, const u32* p, u32 m) {
     if (expected[mode] != STR_ABSENT) { assert(e.mem[term_peek(e, got)] == expected[mode]); }
     term_sink(e, got);
   }
-  u32 want[128], used = 0;
-  for (u32 i = 0; i <= n;) {
-    bool hit = matches(s, n, p, m, i);
-    if (hit) { for (u32 j = 0; j < 3; j++) { want[used++] = r[j]; } }
-    if ((!hit || !m) && i < n) { want[used++] = s[i]; }
-    i += hit && m ? m : 1;
-  }
   u64 builds = track_kmp_builds;
   Term got = str_replace_take(e, term_keep(e, text), term_keep(e, needle), cells(e, r, 3));
   expect_cells(e, got, want, used); term_sink(e, got);
-  assert(track_kmp_builds - builds == (m > 1 && m <= n));
+  assert(track_kmp_builds - builds == kmp);
+  // Split fields: the text between hits, each a view of the one payload.
   Term list = str_split_on_take(e, term_keep(e, text), term_keep(e, needle));
   Term cur = list;
   u32 lo = 0;
@@ -218,7 +219,7 @@ static void search_case(Env e, const u32* s, u32 n, const u32* p, u32 m) {
   expect_cells(e, e.mem[inner], p, found ? m : 0);
   expect_cells(e, e.mem[inner + 1], s + end, n - end);
   term_sink(e, got);
-  // None of the consuming helpers may mutate the retained original aliases.
+  // No consuming helper may mutate the retained originals.
   expect_cells(e, text, s, n); expect_cells(e, needle, p, m);
   term_sink(e, text); term_sink(e, needle);
   assert(track_live == 0 && track_kmp_live == 0);
@@ -227,6 +228,7 @@ static void search_case(Env e, const u32* s, u32 n, const u32* p, u32 m) {
 static void search_oracle(Env e) {
   u32 s[16], p[16];
   u64 cases = 0;
+  // Exhaustive: every a/b text of <= 6 cells x every a/b needle of <= 4.
   for (u32 n = 0; n <= 6; n++) {
     for (u32 a = 0; a < (1u << n); a++) {
       for (u32 i = 0; i < n; i++) { s[i] = 'a' + ((a >> i) & 1); }
@@ -238,6 +240,7 @@ static void search_oracle(Env e) {
       }
     }
   }
+  // Random: NUL, astral, surrogate and non-scalar cells.
   const u32 alphabet[] = {0, 'a', 'b', 0x1f600, 0xd800, 0xdc00, 0xffffffff};
   u32 rng = 12345;
   for (u32 t = 0; t < 500; t++) {
@@ -248,18 +251,21 @@ static void search_oracle(Env e) {
     }
     search_case(e, s, n, p, m); cases++;
   }
-  printf("KMP/replace/split/partition naive oracle: ok (%llu cases)\n", (unsigned long long)cases);
+  printf("KMP/replace/split/partition naive oracle: ok (%llu cases)\n", (ull)cases);
+}
+
+// n - 1 cells of 'a', then 'b', in 1-byte cells.
+static Term a_then_b(Env e, u32 n) {
+  StrParts p = str_alloc(e, n, 2);
+  for (u32 i = 0; i < n; i++) { str_put(e, p, i, i + 1 < n ? 'a' : 'b'); }
+  return str_view_owned(e, p);
 }
 
 static void adversarial(Env e) {
   u64 reads[2];
   for (u32 scale = 0; scale < 2; scale++) {
     u32 n = 131072u << scale, m = 8192u << scale;
-    StrParts a = str_alloc(e, n, 2), b = str_alloc(e, m, 2);
-    for (u32 i = 0; i < n; i++) { str_put(e, a, i, 'a'); }
-    for (u32 i = 0; i < m; i++) { str_put(e, b, i, 'a'); }
-    str_put(e, a, n - 1, 'b'); str_put(e, b, m - 1, 'b');
-    Term s = str_view_owned(e, a), p = str_view_owned(e, b);
+    Term s = a_then_b(e, n), p = a_then_b(e, m);
     u64 before = track_str_reads, builds = track_kmp_builds;
     assert(str_search_take(e, s, p, 1) == n - m);
     reads[scale] = track_str_reads - before;
@@ -268,7 +274,7 @@ static void adversarial(Env e) {
   }
   assert(reads[1] <= reads[0] * 2 + 16);
   printf("Adversarial a...ab: %llu / %llu cell reads (2x input), linear bound passed\n",
-    (unsigned long long)reads[0], (unsigned long long)reads[1]);
+    (ull)reads[0], (ull)reads[1]);
 }
 
 static void new_ownership(Env e) {
@@ -280,6 +286,7 @@ static void new_ownership(Env e) {
   out = str_pad_take(e, s, 8, '0', 2);
   assert(str_peek(e, out).data != data);
   expect_text(e, alias, "-42"); expect_text(e, out, "-0000042");
+  // Case mapping and the FNV-1a hash pass non-scalar cells through.
   const u32 raw[] = {0xd800, 0xffffffff, 'a', 'B'};
   out = str_transform_take(e, cells(e, raw, 4), 3);
   const u32 lower[] = {0xd800, 0xffffffff, 'a', 'b'};
@@ -299,7 +306,7 @@ static void bulk_builders(Env e) {
     Term xs = term_pak(CID_NIL, 0);
     for (u32 i = 0; i < 8192; i++) { xs = str_cons(e, term_keep(e, a), xs); }
     u64 before = track_payload_words;
-    Term out = str_join_take(e, xs, separated ? term_keep(e, a) : term_pak(CID_SNIL, 0));
+    Term out = str_join_take(e, xs, separated ? term_keep(e, a) : SNIL);
     u32 size = separated ? 16383 : 8192;
     assert(str_peek(e, out).len == size);
     assert(track_payload_words - before < 2ull * size);
@@ -316,8 +323,10 @@ static void bulk_builders(Env e) {
   printf("concat/join/repeat: linear payload allocation bounds passed\n");
 }
 
-// Exercise sticky device-style allocation failure without a huge allocation.
-// Runtime.py changes only err_seen and the allocation wrapper for this mode.
+// Sticky device-style allocation failure, without a huge allocation: the
+// after-th allocation of op fails, and the bank must survive it. runtime.py
+// changes only err_seen and the allocation wrapper for this mode.
+#define ON(name) if (!strcmp(op, name))
 static void fault(Env e, const char* op, int after) {
   Term s = io_str(e, "abcdef", 6), b = io_str(e, "ghijkl", 6);
   Term cs = str_to_list_take(e, term_keep(e, s));
@@ -325,32 +334,39 @@ static void fault(Env e, const char* op, int after) {
   Term needle = io_str(e, "cd", 2), replacement = io_str(e, "cdcd", 4);
   Term lines = io_str(e, "ab\ncd\r\nef", 9);
   u64 guard[H_BANK];
-  for (u32 i = 0; i < H_BANK; i++) { guard[i] = e.mem[i]; }
+  memcpy(guard, e.mem, sizeof guard);
   track_fail_after = after;
-  if (!strcmp(op, "repeat")) { str_repeat_take(e, s, 8192); }
-  else if (!strcmp(op, "prepend")) { str_prepend_take(e, '!', s); }
-  else if (!strcmp(op, "append")) { str_append_take(e, s, b); }
-  else if (!strcmp(op, "copy")) { str_copy_take(e, s); }
-  else if (!strcmp(op, "transform")) { str_transform_take(e, s, 1); }
-  else if (!strcmp(op, "split")) { str_split_take(e, s, 'c', false); }
-  else if (!strcmp(op, "from-list")) { str_from_list_take(e, cs); }
-  else if (!strcmp(op, "join")) { str_join_take(e, xs, b); }
-  else if (!strcmp(op, "slice")) { str_slice_take(e, s, 1, 4); }
-  else if (!strcmp(op, "find")) { str_find_take(e, s, needle, false); }
-  else if (!strcmp(op, "count")) { str_search_take(e, s, needle, 2); }
-  else if (!strcmp(op, "replace")) { str_replace_take(e, s, needle, replacement); }
-  else if (!strcmp(op, "split_on")) { str_split_on_take(e, s, needle); }
-  else if (!strcmp(op, "partition")) { str_partition_take(e, s, needle); }
-  else if (!strcmp(op, "splitlines")) { str_splitlines_take(e, lines); }
-  else if (!strcmp(op, "pad")) { str_pad_take(e, s, 20, 0xffffffff, 0); }
+  ON("repeat") { str_repeat_take(e, s, 8192); }
+  else ON("prepend") { str_prepend_take(e, '!', s); }
+  else ON("append") { str_append_take(e, s, b); }
+  else ON("copy") { str_copy_take(e, s); }
+  else ON("transform") { str_transform_take(e, s, 1); }
+  else ON("split") { str_split_take(e, s, 'c', false); }
+  else ON("from-list") { str_from_list_take(e, cs); }
+  else ON("join") { str_join_take(e, xs, b); }
+  else ON("slice") { str_slice_take(e, s, 1, 4); }
+  else ON("find") { str_find_take(e, s, needle, false); }
+  else ON("count") { str_search_take(e, s, needle, 2); }
+  else ON("replace") { str_replace_take(e, s, needle, replacement); }
+  else ON("split_on") { str_split_on_take(e, s, needle); }
+  else ON("partition") { str_partition_take(e, s, needle); }
+  else ON("splitlines") { str_splitlines_take(e, lines); }
+  else ON("pad") { str_pad_take(e, s, 20, 0xffffffff, 0); }
   // Decoding widens twice: every payload, count cell and descriptor may fail.
-  else if (!strcmp(op, "decode")) { io_str(e, "a\xce\xbb\xf0\x9f\x98\x80", 7); }
+  else ON("decode") { io_str(e, "a\xce\xbb\xf0\x9f\x98\x80", 7); }
   else { assert(false); }
   assert(e.mem[H_ERROR_CODE] == ERR_HEAP);
   assert(track_kmp_live == 0);
   for (u32 i = 0; i < H_BANK; i++) {
     if (i != H_BUMP && i != H_CAP && i != H_ERROR_CODE) { assert(e.mem[i] == guard[i]); }
   }
+}
+
+// Pops a unique Con cell: returns its head, leaves its tail in xs.
+static Term pop(Env e, Term* xs) {
+  Term f[2]; spare_free(e, 1, ctr_take(e, *xs, 2, f));
+  *xs = f[1];
+  return f[0];
 }
 
 // Structural acceptance at the benchmark's input sizes. Live block counts
@@ -367,6 +383,7 @@ static void acceptance(Env e) {
     u64 source_allocs = track_allocs - allocs;
     assert(source_allocs <= 4 && track_live <= 4);
 
+    // length/get/slice: one cell read, no copy, a view of the source.
     u64 reads = track_str_reads, copies = track_copy_cells;
     allocs = track_allocs;
     assert(str_length_take(e, term_keep(e, s)) == n);
@@ -379,6 +396,7 @@ static void acceptance(Env e) {
     assert(track_str_reads - reads == 1 && track_copy_cells == copies);
     assert(access_allocs <= 4);
 
+    // The scan: 256-line blocks -> lines -> trimmed -> words, all views.
     u64 payloads = track_payload_words;
     track_peak_live = track_live;
     while (str_peek(e, s).len) {
@@ -386,17 +404,14 @@ static void acceptance(Env e) {
       s = str_slice_take(e, s, 21 * 256, STR_LIMIT);
       Term fields = str_split_take(e, block, '\n', false);
       while (term_aux(fields) == CID_CON) {
-        Term f[2]; spare_free(e, 1, ctr_take(e, fields, 2, f));
-        fields = f[1];
-        Term trimmed = str_trim_take(e, f[0], 3);
+        Term trimmed = str_trim_take(e, pop(e, &fields), 3);
         StrParts t = str_peek(e, trimmed);
         assert(!t.len || t.data == p.data);
         Term words = str_split_take(e, trimmed, 0, true);
         while (term_aux(words) == CID_CON) {
-          Term w[2]; spare_free(e, 1, ctr_take(e, words, 2, w));
-          words = w[1];
-          assert(str_peek(e, w[0]).data == p.data);
-          term_sink(e, w[0]);
+          Term w = pop(e, &words);
+          assert(str_peek(e, w).data == p.data);
+          term_sink(e, w);
         }
         term_sink(e, words);
       }
@@ -407,17 +422,16 @@ static void acceptance(Env e) {
     assert(track_payload_words == payloads && track_copy_cells == copies);
     printf("Structural %u cells: source allocations=%llu; length/get/slice "
       "reads=%llu allocations=%llu; scan peak live blocks=%llu; payload copies=0\n",
-      n, (unsigned long long)source_allocs,
-      (unsigned long long)(track_str_reads - reads),
-      (unsigned long long)access_allocs, (unsigned long long)track_peak_live);
+      n, (ull)source_allocs, (ull)(track_str_reads - reads), (ull)access_allocs,
+      (ull)track_peak_live);
   }
 }
 
 // Streaming decode. The law: for every byte string and every partition of
 // it, the chunks decoded through file_read_text_go_dec (carry first), then
 // the end-of-file call, append to io_str of the whole. cuts bit i set means
-// a chunk ends after byte i; every chunk also runs as a 0-byte read first
-// when idle is set, which must change nothing.
+// a chunk ends after byte i; when idle is set, every chunk first runs as a
+// 0-byte read, which must change nothing.
 static u32 stream_run(Env e, const u8* b, u32 n, u64 cuts, bool idle, u32* out) {
   char buf[64 + 4];
   u32 pend = 0, need = 0, len = 0;
@@ -426,17 +440,16 @@ static u32 stream_run(Env e, const u8* b, u32 n, u64 cuts, bool idle, u32* out) 
     while (j < n && !((cuts >> j) & 1)) { j++; }
     j = j < n ? j + 1 : n;
     for (u32 pass = idle ? 0 : 1; pass < 2; pass++) {
-      u32 take = pass ? j - i : 0, had = need;
+      u32 take = pass ? j - i : 0, was_pend = pend, had = need;
       bool eof = pass && i == n;
       for (u32 m = 0; m < had; m++) { buf[m] = (char)(pend >> (8 * m)); }
       memcpy(buf + had, b + i, take);
-      u32 was_pend = pend, was_need = need;
       Term s = file_read_text_go_dec(e, buf, had + take, eof, &pend, &need);
       StrParts p = str_peek(e, s);
-      if (!pass) { assert(p.len == 0 && pend == was_pend && need == was_need); }
+      if (!pass) { assert(p.len == 0 && pend == was_pend && need == had); }
       if (eof) { assert(need == 4 && pend == 0); } else { assert(need <= 3); }
       // Consumed bytes always show: output, or a longer carry.
-      if (take && !eof) { assert(p.len > 0 || need > was_need); }
+      if (take && !eof) { assert(p.len > 0 || need > had); }
       for (u32 k = 0; k < p.len; k++) { out[len++] = str_at_peek(e, p, k); }
       term_sink(e, s);
     }
@@ -450,10 +463,12 @@ static u32 stream_run(Env e, const u8* b, u32 n, u64 cuts, bool idle, u32* out) 
 static void stream_check(Env e, const u8* b, u32 n, u64 cuts) {
   u32 got[64 + 4], len = stream_run(e, b, n, cuts, (cuts ^ n) & 1, got);
   Term s = io_str(e, (const char*)b, n);
-  StrParts p = str_peek(e, s);
-  assert(p.len == len);
-  for (u32 k = 0; k < len; k++) { assert(str_at_peek(e, p, k) == got[k]); }
+  expect_cells(e, s, got, len);
   term_sink(e, s);
+}
+
+static u64 lcg(u64* x) {
+  return *x = *x * 6364136223846793005ull + 1442695040888963407ull;
 }
 
 static u64 stream_law(Env e) {
@@ -469,36 +484,34 @@ static u64 stream_law(Env e) {
       for (u64 cuts = 0; cuts < (1ull << (n ? n - 1 : 0)); cuts++) { stream_check(e, b, n, cuts); runs++; }
     }
   }
-  // Random: 2,000 strings biased to leads and continuations, random cuts,
-  // plus 1-byte chunks.
+  // Random: 2,000 strings biased to leads and continuations, under random
+  // cuts and as 1-byte chunks.
   u64 x = 0xB3D5EED;
   for (u32 t = 0; t < 2000; t++) {
     u8 b[64];
-    u32 n = 0;
-    x = x * 6364136223846793005ull + 1442695040888963407ull; n = 1 + (u32)(x >> 58);
+    u32 n = 1 + (u32)(lcg(&x) >> 58);
     for (u32 i = 0; i < n; i++) {
-      x = x * 6364136223846793005ull + 1442695040888963407ull;
-      u32 r = (u32)(x >> 33);
+      u32 r = (u32)(lcg(&x) >> 33);
       b[i] = r % 3 == 0 ? abc[(r >> 8) % 12] : r % 3 == 1 ? (u8)(0x80 | ((r >> 8) & 0x7f)) : (u8)(r >> 8);
     }
-    x = x * 6364136223846793005ull + 1442695040888963407ull;
-    stream_check(e, b, n, x); stream_check(e, b, n, ~0ull); runs += 2;
+    stream_check(e, b, n, lcg(&x)); stream_check(e, b, n, ~0ull); runs += 2;
   }
   // The pinned specimen: every single split point, and 1-byte chunks.
   static const u8 pin[20] = {0xef, 0xbb, 0xbf, 0x41, 0x00, 0xf0, 0x9f, 0x98, 0x80, 0xc0,
     0x80, 0xed, 0xa0, 0x80, 0xf4, 0x90, 0x80, 0x80, 0xe2, 0x82};
   for (u32 i = 0; i < 20; i++) { stream_check(e, pin, 20, 1ull << i); runs++; }
   stream_check(e, pin, 20, ~0ull); runs++;
-  // Boundary errors, spelled out.
-  u32 got[8];
-  assert(stream_run(e, (const u8*)"\xe2\x82\xac", 3, 2, false, got) == 1 && got[0] == 0x20ac);
-  assert(stream_run(e, (const u8*)"\xe2\x82\x41", 3, 2, false, got) == 3
-    && got[0] == 0xfffd && got[1] == 0xfffd && got[2] == 0x41);
-  assert(stream_run(e, (const u8*)"\xf0\x9f", 2, 0, false, got) == 2 && got[0] == 0xfffd && got[1] == 0xfffd);
-  assert(stream_run(e, (const u8*)"\xe2\x41", 2, 0, false, got) == 2 && got[0] == 0xfffd && got[1] == 0x41);
-  for (u64 cuts = 1; cuts <= 2; cuts++) {
-    assert(stream_run(e, (const u8*)"\xed\xa0\x80", 3, cuts, false, got) == 3
-      && got[0] == 0xfffd && got[1] == 0xfffd && got[2] == 0xfffd);
+  // Boundary errors, spelled out: bytes, cuts, then the scalars decoded.
+  const u32 F = 0xfffd;
+  const struct { const char* b; u64 cuts; u32 len, want[3]; } edge[6] = {
+    {"\xe2\x82\xac", 2, 1, {0x20ac}}, {"\xe2\x82\x41", 2, 3, {F, F, 0x41}},
+    {"\xf0\x9f", 0, 2, {F, F}}, {"\xe2\x41", 0, 2, {F, 0x41}},
+    {"\xed\xa0\x80", 1, 3, {F, F, F}}, {"\xed\xa0\x80", 2, 3, {F, F, F}},
+  };
+  for (u32 i = 0; i < 6; i++) {
+    u32 got[8], n = (u32)strlen(edge[i].b);
+    assert(stream_run(e, (const u8*)edge[i].b, n, edge[i].cuts, false, got) == edge[i].len
+      && !memcmp(got, edge[i].want, 4 * edge[i].len));
   }
   return runs + 6;
 }
@@ -510,18 +523,17 @@ static void widths(Env e) {
   const char* text[] = {"abc", "caf\xc3\xa9", "\xce\xbb\xe6\xbc\xa2", "a\xf0\x9f\x98\x80"};
   const u32 nar[] = {2, 2, 1, 0}, len[] = {3, 4, 2, 2};
   for (u32 i = 0; i < 4; i++) {
-    Term s = io_str(e, text[i], strlen(text[i]));
+    u32 bytes = (u32)strlen(text[i]);
+    Term s = io_str(e, text[i], bytes);
     StrParts p = str_peek(e, s);
     assert(str_nar(p) == nar[i] && p.len == len[i]);
     // Sized by the bytes left when the width was met, never by 4-byte cells.
-    assert(blk_cls(p.data) <= cls_fit(((u32)strlen(text[i]) + (1u << nar[i]) - 1) >> nar[i]));
+    assert(blk_cls(p.data) <= cls_fit((bytes + (1u << nar[i]) - 1) >> nar[i]));
     // The same cells in every wider payload are the same string.
     u32 xs[4];
     for (u32 j = 0; j < p.len; j++) { xs[j] = str_at_peek(e, p, j); }
     for (u32 w = 0; w <= nar[i]; w++) {
-      StrParts q = str_alloc(e, p.len, w);
-      for (u32 j = 0; j < p.len; j++) { str_put(e, q, j, xs[j]); }
-      Term t = str_view_owned(e, q);
+      Term t = cells_at(e, xs, p.len, w);
       assert(str_order_peek(e, s, t) == 1);
       assert(str_hash_take(e, term_keep(e, s)) == str_hash_take(e, term_keep(e, t)));
       for (Nat b = 0; b < 33ull * p.len + 2; b++) {
@@ -557,7 +569,8 @@ static void widths(Env e) {
     Term out[2]; str_uncons(e, joined, out);
     assert(out[0] == both[i]); joined = out[1];
   }
-  assert(joined == term_pak(CID_SNIL, 0) && track_live == 0);}
+  assert(joined == SNIL && track_live == 0);
+}
 
 int main(int argc, char** argv) {
   Corpus h = corpus_setup(false, 1, 0);
@@ -574,7 +587,7 @@ int main(int argc, char** argv) {
   }
   if (argc > 1 && strcmp(argv[1], "raw-output") == 0) {
     u64 n;
-    free(io_cstr(e, str_prepend_take(e, 0xd800, term_pak(CID_SNIL, 0)), &n));
+    free(io_cstr(e, str_prepend_take(e, 0xd800, SNIL), &n));
     return 1;
   }
   ownership(e);
@@ -583,11 +596,14 @@ int main(int argc, char** argv) {
   new_ownership(e);
   bulk_builders(e);
   acceptance(e);
-  roundtrip(e);
+  // A NUL is a cell like any other, in and out.
+  expect_bytes(e, io_str(e, "a\0b", 3), "a\0b", 3);
+  assert(track_live == 0);
   utf8_cases(e);
   u64 parts = stream_law(e);
-  widths(e);  assert(!err_seen(h) && track_live == 0);
-  printf("streaming partition law: ok (%llu partitions, zero live)\n", (unsigned long long)parts);
-  printf("runtime ownership + UTF-8: ok (%llu allocations, zero live)\n", (unsigned long long)track_allocs);
+  widths(e);
+  assert(!err_seen(h) && track_live == 0);
+  printf("streaming partition law: ok (%llu partitions, zero live)\n", (ull)parts);
+  printf("runtime ownership + UTF-8: ok (%llu allocations, zero live)\n", (ull)track_allocs);
   return 0;
 }
