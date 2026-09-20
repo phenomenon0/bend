@@ -9,5 +9,5 @@ def boom() -> Empty:
 def safe(n: Nat) -> Nat:
   n
 
-#|All terms check, but 1 def relies on unsafe:
+#|All terms check, but 1 def relies on unsafe or foreign code:
 #|- boom

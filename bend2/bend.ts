@@ -306,7 +306,7 @@ export type Env = List<HTerm | ((s?: Span) => HTerm)>;
 // Definitions & Book
 export type Ctr  = { k: Name; n: number; T: HTerm }
 export type Ctrs = Array<Ctr>;
-export type ADT  = { $: "ADT"; n: number; g: number; T: HTerm; c: Ctrs; };
+export type ADT  = { $: "ADT"; n: number; g: number; T: HTerm; c: Ctrs; b?: Bool; };
 export type Def  = { $: "Def"; n: number; x: number; T: HTerm; v: HTerm | null; e?: LTerm; b?: Bool; u?: Bool; i?: string[]; };
 export type TLD  = ADT | Def;
 export type Book = { tlds: Record<Name, TLD>; ctrs: Record<Name, Ctr>; order: Name[]; hols: number; open: number; tmps: Record<Name, Record<string, Name>>; };
@@ -1084,10 +1084,7 @@ export async function book_load(book: Book, file: string, ns: string, seen: Map<
   parse_book(book, dir, lines.join("\n"), ns, al);
   if (real === BASE_BEND) {
     for (const k of book.order.slice(n0)) {
-      const tld = book.tlds[k];
-      if (tld.$ === "Def") {
-        tld.b = true;
-      }
+      book.tlds[k].b = true;
     }
   }
   seen.set(real, ns);
@@ -1515,7 +1512,9 @@ export function expr_show(book: Book, x: Expr, bnd: Name[] = []): string {
 }
 
 export function typeless_show(book: Book, ctx: Ctx, tm: HTerm): string {
-  return "non-inferrable term '" + expr_show(book, tm, ctx_scope(ctx)) + "'";
+  return "non-inferrable term '" + expr_show(book, tm, ctx_scope(ctx)) + "'"
+    + (tm.$ === "Ctr" && book.tlds[tm.k]?.$ === "ADT"
+      ? " (" + tm.k + " is a datatype: write its arguments as <>)" : "");
 }
 
 export function err_show(err: Err): string {
@@ -2399,11 +2398,18 @@ export function parse_body(p: Parse, col: number = 0): Body {
   const vs: LTerm[] = [];
   let ts: LTerm[] = [q.$ === "None" ? Var(parse_name(p), 0, parse_span(p, beg)) : parse_term(p)];
   parse_skip(p);
-  while (!parse_nl(p) && (char_is_head(parse_peek(p)) || parse_at(p, "+")) && !KEYWORDS.has(p.str.slice(p.pos).match(/^[A-Za-z0-9_.]*/)?.[0] ?? "")) {
+  while (!parse_nl(p) && (char_is_head(parse_peek(p)) || q.$ === "Lone" && parse_at(p, "+")) && !KEYWORDS.has(p.str.slice(p.pos).match(/^[A-Za-z0-9_.]*/)?.[0] ?? "")) {
     ts.push(parse_term(p));
     parse_skip(p);
   }
-  if (q.$ === "Lone" && ts.length === 1 && !(parse_at(p, "=") && !parse_at(p, "=="))) {
+  // x : T = v is a typed let, its value {v : T}; a reply's : T is a group's
+  const at = p.pos;
+  let T = ts.length === 1 && parse_take(p, ":") ? parse_term(p) : null;
+  parse_skip(p);
+  if (T !== null && !parse_at(p, "=")) {
+    [p.pos, T] = [at, null];
+  }
+  if (T === null && q.$ === "Lone" && ts.length === 1 && !(parse_at(p, "=") && !parse_at(p, "=="))) {
     const w = term_write(ts[0]);
     if (w === null || !parse_more(p, parse_col(p.str, beg))) {
       return { $: "Reply", x: ts[0], s: parse_span(p, beg) };
@@ -2412,6 +2418,7 @@ export function parse_body(p: Parse, col: number = 0): Body {
     ts = [w];
   } else {
     parse_eat(p, "=");
+    T !== null && vs.push(Ann(parse_term(p), T, parse_span(p, beg)));
   }
   while (vs.length < ts.length) {
     vs.push(parse_term(p));
@@ -2844,7 +2851,7 @@ export function body_flatten(b: Body, vars: PVar[], fr: () => number): LTerm {
         }
         g = g.f;
       }
-      const x = Let(ws.map((w) => w.k), ws.map((w) => w.i), b.v, g, ws[0].s, ws.map((w) => quant_join(b.q, w.q)));
+      const x = Let(ws.map((w) => w.k), ws.map((w) => w.i), b.v, g, ws[0].s, ws.map((w) => quant_dem(b.q, w.q)));
       return body_flatten({ $: "Reply", x }, vars, fr);
     }
     case "Match": {
@@ -3340,7 +3347,7 @@ export function term_infer(book: Book, lhs: LHS, tm: HTerm, qt: Quant, ctx: Ctx,
         }
         default: {
           const gen = tld.$ === "Def" && tld.x > 0 && !(book.tlds[lhs.def] as Def).x ? tld : null;
-          if (tld.$ === "Def" && tld.v === null && !tld.i && (tld.b !== true || gen !== null) && k !== lhs.def) {
+          if (tld.$ === "Def" && tld.v === null && !tld.i && (tld.b !== true && lhs.u !== true || gen !== null) && k !== lhs.def) {
             throw Err(book, ctx, "a filled definition (an unfilled law is a dead claim: live code cannot use it)", tm, tm.s, lhs.def);
           }
           if (gen !== null) {
@@ -3766,6 +3773,8 @@ export function def_inst(book: Book, lhs: LHS, tm: Extract<HTerm, { $: "Ref" }>,
     book.tlds[o] = { ...inst, v: null };
     inst.e = def_check(book, o, inst, z);
     book.tlds[o] = inst;
+  } else if (book.tlds[is[key]].v === null && is[key] !== lhs.def) {
+    throw Err(book, ctx, "a decreasing self-call (arguments are read left to right: each passed unchanged until one shrinks)", tm, tm.s, lhs.def);
   }
   return is[key];
 }

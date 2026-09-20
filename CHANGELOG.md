@@ -3,6 +3,59 @@
 Each release names what changed for a user. `bend update` installs the
 latest one; the GitHub release carries the same notes.
 
+## 2.0.21 (2026-09-20)
+
+- A template instance that calls back into an instance whose body is
+  still being checked is refused as a self-call that does not decrease:
+  `loop(~k, u) = bounce(~loop(~k), u)` with `bounce(~f, u) = f(u)` once
+  checked, and inhabited `Empty` (#902).
+
+## 2.0.20 (2026-09-20)
+
+- A `U32` match whose arm is a hand-written bit pattern answers that arm:
+  since 2.0.19 the lookup table filled its gaps with the last default, so
+  `case U32{WCon{True{}, r}}` (every odd word) between literal cases read
+  the `_` case on every lane (#867).
+- An erased let binds erased names only: `-y +z = a b` is a parse error at
+  the `+`, not a let that erases the `+z` it was told to keep.
+- The arena's page cap is published with a release store and read with an
+  acquire load, so a core that sees the new cap also sees the banks at
+  their new place (#881).
+
+## 2.0.19 (2026-09-19)
+
+- A Bend binary starts in 2 ms, not 12: the runtime reserves 8 GiB and
+  grows it in place when a program needs more, instead of mapping the whole
+  8 TiB address space at every run (#881).
+- A record of records compiles: a datatype past 256 machine words is a heap
+  node, the way a recursive type already was, and a constant the compiler
+  folds emits once. Seven levels of an eight-field record took 50 s, 19 GB
+  and 97 MB of C; it now takes 0.06 s, 122 MB and 82 KB (#843).
+- A `match` on dense `U32` literals compiles to a lookup table, as one on
+  `Nat` already did: 256 cases took 1.46 MB of C and 3.5 GB, and now take
+  80 KB and 1.6 GB (#867).
+- The Metal lane computes `sin`, `cos` and `tan` with the GPU's fast trig
+  (#887).
+- A `-` local is erased again: its name is dead in the body, and its value
+  is checked dead, so it may spend a variable twice. Since 2.0.16 the mark
+  was lost on both counts.
+
+## 2.0.18 (2026-09-19)
+
+- A dot inside a field name is a character on the JS lane too: `Outer{a:
+  Inner, a.b: U32}` read its `Inner`'s field, not its own (#868).
+- A value sent through a channel is never read as a parked receiver on the
+  JS lane: sending an erased proof reported a deadlock (#871).
+- A name the compiler encodes itself is refused, not miscompiled: no file
+  may define `Clo.apply`, and a file without `import Base` that declares
+  its own `Nat`, `Bool`, `Array` or another of base.bend's types checks and
+  runs, but does not compile (#870, #875).
+- The verdict names the defs that rely on a foreign def, as it names the
+  ones that rely on `@unsafe`: the checker reads a foreign def's type,
+  never its code (#874).
+- A datatype whose arguments are written in `{}` says to write them in
+  `<>` (#864).
+
 ## 2.0.17 (2026-09-19)
 
 - **Breaking: an operator takes its type from the `( .. : T)` around its own

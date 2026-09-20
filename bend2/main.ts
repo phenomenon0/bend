@@ -29,7 +29,7 @@ import * as Comp from "./comp.ts";
 // Constants
 // =========
 
-const VERSION = "2.0.17";
+const VERSION = "2.0.21";
 
 const HELP = `Bend ${VERSION}: check, run, build and publish Bend programs.
 
@@ -497,15 +497,18 @@ async function pow_mine(hash: string, bytes: number): Promise<number> {
 
 // cli_report prints the verdict of a check on stdout, or a note before a
 // run, an emit or a publish on stderr (silent then when nothing relies on
-// unsafe): the file's own claims (book.order from n0, the loader's mark)
-// that are @unsafe, or whose type, body or constructor fields name a def
-// that relies on unsafe. If the book holds an @unsafe def, a walk from the
-// claims collects who names whom, then the @unsafe defs flood back along
-// those edges.
+// a promise): the file's own claims (book.order from n0, the loader's
+// mark) that are @unsafe or foreign, or whose type, body or constructor
+// fields name a def that relies on one. A foreign def is a promise like
+// @unsafe is: the checker reads its type, never its code. If the book
+// holds one, a walk from the claims collects who names whom, then the
+// promises flood back along those edges.
 function cli_report(book: Bend.Book, n0: number, fd: number): void {
   const own  = [...new Set(book.order.slice(n0))];
-  const bad  = new Set(Object.keys(book.tlds).filter((k) =>
-    (book.tlds[k] as Bend.Def).u === true));
+  const bad  = new Set(Object.keys(book.tlds).filter((k) => {
+    const t = book.tlds[k] as Bend.Def;
+    return t.u === true || (t.i !== undefined && t.b !== true);
+  }));
   const uses: Record<string, string[]> = Object.create(null);
   const seen = new Set<string>();
   for (const q = bad.size === 0 ? [] : own.slice(); q.length > 0;) {
@@ -530,7 +533,8 @@ function cli_report(book: Bend.Book, n0: number, fd: number): void {
   const list = own.filter((k) => bad.has(k));
   if (list.length > 0) {
     cli_say(fd, `All terms check, but ${list.length} def${list.length === 1
-      ? " relies" : "s rely"} on unsafe:\n` + list.map((k) => "- " + k + "\n").join(""));
+      ? " relies" : "s rely"} on unsafe or foreign code:\n`
+      + list.map((k) => "- " + k + "\n").join(""));
   } else if (fd === 1) {
     cli_say(1, "All terms check.\n");
   }
@@ -583,6 +587,7 @@ async function book_read(file: string, base?: Bend.Book,
     cli_fail("PROOF.bend must import ./LAWS.bend");
   }
   Bend.book_valid(book, base?.order.length ?? 0);
+  Comp.book_owned(book, Comp.SYNTH);
   const hols = book.hols + book.open;
   if (hols > 0) {
     throw "Error: " + String(hols) + " TODO" + (hols === 1 ? "" : "s")
@@ -637,18 +642,18 @@ function book_err(e: unknown): string {
 // ====
 
 async function load_js(path: string): Promise<string> {
-  let book: Bend.Book;
   try {
-    [book] = await book_read(path);
+    const [book] = await book_read(path);
+    const outs = [...new Set(book.order)].filter((k) => {
+      const tld = book.tlds[k];
+      return tld.$ === "Def" && tld.v !== null && tld.b !== true
+        && tld.x === 0 && tld.i === undefined
+        && Comp.io_base(book, tld.T) === null;
+    });
+    return Comp.js_lib(book, outs, outs);
   } catch (e) {
     throw new Error(book_err(e));
   }
-  const outs = [...new Set(book.order)].filter((k) => {
-    const tld = book.tlds[k];
-    return tld.$ === "Def" && tld.v !== null && tld.b !== true && tld.x === 0
-      && tld.i === undefined && Comp.io_base(book, tld.T) === null;
-  });
-  return Comp.js_lib(book, outs, outs);
 }
 
 export async function load(u: string, context: unknown,

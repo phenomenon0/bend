@@ -87,6 +87,7 @@ type File = Carb & {
   clos: Set<string>;
   img: string[];
   lits: Map<string, number>;
+  consts: Map<string, Map<HTerm, Val>>;
   reqs: string;
   fuel: number;
 };
@@ -144,6 +145,9 @@ const STRLIT = new RegExp("^\"(?:[^\"\\\\]|\\\\.)*\"$");
 
 const NATIVE_DIE = " does not match the native format of its type";
 
+// The term nodes one segment may gain by folding calls at compile time.
+const FOLD_FUEL = 8192;
+
 // A native with this many lines or more is a call on both lanes: the
 // device inlines every native into every caller (hvm5 under a bang: 32 s
 // of Metal compile, 2.6 s so); at 128 raytrace lost 31% on PAR-CPU.
@@ -158,6 +162,9 @@ const BOX: Lay = { ks: ["box"], arms: null };
 const W64: Lay = { ks: ["w64"], arms: null };
 
 const WORDS: Record<string, Lay> = { U32: W32, F32: W32, F64: W64, Nat: W64 };
+
+// The widest flat datatype: the shader's Tri is 24 words.
+const WIDE = 256;
 
 const ERRS = ("|*|*|out of memory: run again with a bigger span, as in"
   + " --gpu 8GB|a function the device does not hold|a Nat past the"
@@ -487,8 +494,10 @@ const OPTIMIZED: Record<Bend.Name, Native> = Object.setPrototypeOf({
 // Native
 // ------
 
+// sin, cos and tan are fast:: (cheap, the same pixels); the rest precise::
 const SHIMS = "sqrt exp log log2 log10 sin cos tan pow fmod".split(" ")
-  .map((n) => "#define " + n.padEnd(5) + " precise::" + n).join("\n")
+  .map((n) => "#define " + n.padEnd(5) + (["sin", "cos", "tan"].includes(n)
+    ? " fast::" : " precise::") + n).join("\n")
   + "\n#define atan2 atan2_c99";
 
 const NATIVE = {
@@ -1062,6 +1071,8 @@ const SPINES: Map<HTerm, Spine> = new Map();
 
 const NODES: Map<Bend.Name, Lay> = new Map();
 
+const LAYS: Map<HTerm, Lay> = new Map();
+
 const CYCLES: Map<Bend.Name, boolean> = new Map();
 
 const CONSTS: Map<HTerm, boolean> = new Map();
@@ -1253,6 +1264,16 @@ function term_any(cf: Carb, t: HTerm, p: (s: HTerm, tail: boolean) => boolean,
   seen));
 }
 
+// The nodes of a term, its shared parts once. The fold's fuel is the size
+// of what an unfold adds, not a count of unfolds: a wide body and a narrow
+// one do not cost the same, and a loop whose bound is a literal folds every
+// turn, so counting unfolds alone unrolls the whole loop into its caller.
+function term_nodes(cf: Carb, t: HTerm): number {
+  let n = 0;
+  term_any(cf, t, () => (n += 1) < 0);
+  return n;
+}
+
 function term_const(t: HTerm): boolean {
   const s = Bend.term_strip(t);
   return s.$ === "Ctr" && memo(CONSTS, s, () => s.x.every(term_const));
@@ -1384,17 +1405,24 @@ function ty_clo(book: Bend.Book, A: HTerm | null,
 // Lay
 // ===
 
-// An Array is a block, and an IO.OP holds the foreign requests beyond its
-// constructors: boxes.
+// An Array is a block, an IO.OP holds the foreign requests beyond its
+// constructors, and a datatype past WIDE words (a record nested K deep is
+// F^K) is a node: boxes. Memoized on the type's term, which a fill shares.
 function lay_of(book: Bend.Book, A: HTerm | null): Lay {
   const t = ty_adt(book, A);
   if (t === null) {
     return BOX;
   }
-  const tld = book.tlds[t.k];
-  return WORDS[t.k] ?? (t.k === "Array" || t.k === "IO.OP" || tld?.$ !== "ADT"
-    || lay_cyclic(book, t.k) ? BOX : lay_pack(tld.c.map((c): Arm =>
-    ({ k: c.k, fs: lay_fields(book, ctr_doms(book, c, t.x)) }))));
+  return WORDS[t.k] ?? memo(LAYS, A!, () => {
+    const tld = book.tlds[t.k];
+    if (t.k === "Array" || t.k === "IO.OP" || tld?.$ !== "ADT"
+      || lay_cyclic(book, t.k)) {
+      return BOX;
+    }
+    const lay = lay_pack(tld.c.map((c): Arm =>
+      ({ k: c.k, fs: lay_fields(book, ctr_doms(book, c, t.x)) })));
+    return lay.ks.length > WIDE ? BOX : lay;
+  });
 }
 
 function lay_fields(book: Bend.Book, As: (HTerm | null)[]): Field[] {
@@ -1849,7 +1877,9 @@ function def_body(cb: Carb, k: Bend.Name): TLD | undefined {
 // reference used as a value is no call; Clo.apply is never flat), and
 // whether it is flat: no fork, no bang call, self-calls in tail position.
 function carb_book(src: Bend.Book, roots: Bend.Name[]): Carb {
-  [TELES, SRCS, NODES, CYCLES, FLATS, SIGS, BRWS].forEach((m) => m.clear());
+  book_owned(src);
+  [TELES, SRCS, NODES, LAYS, CYCLES, FLATS, SIGS, BRWS].forEach((m) =>
+    m.clear());
   LOCAL.clear();
   for (const [k, tld] of Object.entries(src.tlds)) {
     if (def_foreign(tld)) {
@@ -1962,7 +1992,8 @@ function cid_mac(k: string): string {
 function file_new(cb: Carb, decl: string): File {
   return { ...cb, decl, segs: [], seg: seg_new("", BOX, []), tab: 2,
     cids: new Map(), tabs: new Map(), spins: [], spun: new Map(), clos: new Set(),
-    img: [], lits: new Map(), reqs: "", fuel: 0, fresh: new Map(), spares: [],
+    img: [], lits: new Map(), consts: new Map(), reqs: "", fuel: 0,
+    fresh: new Map(), spares: [],
     uses: new Map(), brwl: new Map(), rest: [], def: "" };
 }
 
@@ -2603,7 +2634,8 @@ function emit_fuse(fl: File, ck: Call, dst: Dst, tail = false): void {
 // Opens a unit of `k`: the unit state fresh, its parameters bound and its
 // segment made.
 function emit_open(fl: File, k: Bend.Name): Val[] {
-  Object.assign(fl, { spares: [], tab: 2, uses: new Map(), fuel: 64, def: k });
+  Object.assign(fl, { spares: [], tab: 2, uses: new Map(),
+    fuel: FOLD_FUEL, def: k });
   const { live, lays, ret } = sig_def(fl, k);
   const vals = lays.map((l, i) =>
     val_new(l.ks.map(() => name_local(fl, live[i][1])), l));
@@ -2768,9 +2800,10 @@ function emit_ctr(fl: File, x: Of<"Ctr">, ty: HTerm | null,
         .join(" | ")})`], lay);
     }
     const ws = vs.map(val_word);
-    return val_new([ws.length === 0 ? "0" : adt.k !== "Nat"
+    const w = ws.length === 0 ? "0" : adt.k !== "Nat"
       ? `term_word(e, ${ws[0]})`
-      : tpl(tpl_nat("ull", "nat_chk(e, $0 + 1)"), ws)], lay);
+      : tpl(tpl_nat("ull", "nat_chk(e, $0 + 1)"), ws);
+    return val_new([w], lay, /^\d/.test(w));
   }
   if (adt.k === "Array") {
     const vs = emit_each(fl, flds, null);
@@ -2781,6 +2814,12 @@ function emit_ctr(fl: File, x: Of<"Ctr">, ty: HTerm | null,
   }
   fl.hot.has(x.k) && facts_ctr(fl, fl.book.ctrs[x.k], adt.x);
   const pos = at ?? lay_of(fl.book, adt);
+  // A folded call is a DAG: a static term emits once per layout.
+  const seen = memo(fl.consts, JSON.stringify(pos), () => new Map());
+  const got = seen.get(x);
+  if (got !== undefined) {
+    return got;
+  }
   const lay = lay_box(pos) ? lay_node(fl.book, x.k) : pos;
   const arm = lay_arm(lay, x.k);
   const vs = emit_each(fl, flds, arm.fs.map((f) => f.lay));
@@ -2790,8 +2829,10 @@ function emit_ctr(fl: File, x: Of<"Ctr">, ty: HTerm | null,
     ws[f.at + n] = w;
   }));
   const v = val_new(ws, lay, adt.k !== "String" && vs.every((f) => f.stat));
-  return lay === pos ? v
+  const out = lay === pos ? v
     : val_new([ctr_build(fl, x.k, val_own(fl, v), v.stat)], BOX, v.stat);
+  out.stat && seen.set(x, out);
+  return out;
 }
 
 function emit_fold(fl: File, t: HTerm): HTerm | null {
@@ -2804,7 +2845,7 @@ function emit_fold(fl: File, t: HTerm): HTerm | null {
     const it = m.t.$ === "Ref" ? intr_of(fl, m.t.k) : undefined;
     if (it === undefined) {
       const b = emit_unfold(fl, s);
-      fl.fuel -= Number(b !== null);
+      fl.fuel -= b === null ? 0 : term_nodes(fl, b);
       return b === null || term_any(fl, b, (y) => {
         if (y.$ === "App" || y.$ === "Ref") {
           emit_fold(fl, y);
@@ -3118,6 +3159,9 @@ function emit_fork(fl: File, x: HLet, ers: HTerm[]): void {
 }
 
 function emit_row(fl: File, t: HTerm, ty: HTerm | null): string | null {
+  if (ty !== null && WORDS[ty_adt(fl.book, ty)?.k ?? ""] === undefined) {
+    return null;
+  }
   let s = Bend.term_strip(t);
   while (s.$ === "Lam") {
     s = Bend.term_strip(term_open(s).b);
@@ -3137,8 +3181,7 @@ function emit_row(fl: File, t: HTerm, ty: HTerm | null): string | null {
 
 function emit_tab(fl: File, rows: Chain, ty: HTerm): number | null {
   const adt = ty_adt(fl.book, ty);
-  const ls = WORDS[adt?.k ?? ""] === undefined ? [null]
-    : rows.map(([t]) => emit_row(fl, t, ty));
+  const ls = rows.map(([t]) => emit_row(fl, t, ty));
   if (ls.includes(null)) {
     return null;
   }
@@ -3150,17 +3193,49 @@ function emit_tab(fl: File, rows: Chain, ty: HTerm): number | null {
   return id;
 }
 
-function emit_nat(x: HTerm): Chain {
-  const ls: Chain = [];
-  for (let m = x, n = 0; ; n++) {
-    const { arms, end } = mat_arms(m);
-    const { Zero, Succ } = Object.fromEntries(arms);
-    ls.push([Zero ?? end, Zero ? null : n]);
-    m = Bend.term_strip(Succ ?? end);
-    if (Succ === undefined || m.$ !== "Mat") {
-      return [...ls, [Succ ?? end, Succ ? n + 1 : n]];
+// A match's rows: Nat counts Succ down its chain, each row a case or the
+// level's default with its residual; U32 walks the 32 bits of its patterns
+// and asks for half of 0..max, and one same row from every default a bit
+// falls off the walk to (a bit pattern's variable is a default too).
+function emit_lits(fl: File, x: HTerm, ty: HTerm, nat: boolean):
+  Chain | null {
+  if (nat) {
+    const ls: Chain = [];
+    for (let m = x, n = 0; ; n++) {
+      const { arms, end } = mat_arms(m);
+      const { Zero, Succ } = Object.fromEntries(arms);
+      ls.push([Zero ?? end, Zero ? null : n]);
+      m = Bend.term_strip(Succ ?? end);
+      if (Succ === undefined || m.$ !== "Mat") {
+        return [...ls, [Succ ?? end, Succ ? n + 1 : n]];
+      }
     }
   }
+  const { arms: [[, root]] } = mat_arms(x);
+  const hit = new Map<number, HTerm>();
+  const out: HTerm[] = [];
+  const walk = (t: HTerm, bit: number, n: number): void => {
+    const h = mat_arms(t).arms[0]?.[1];
+    if (h === undefined) {
+      out.push(t);
+    } else if (bit === 32) {
+      hit.set(n, h);
+    } else {
+      const { arms, end } = mat_arms(h);
+      const { False, True } = Object.fromEntries(arms);
+      arms.length < 2 && out.push(end);
+      False && walk(False, bit + 1, n);
+      True && walk(True, bit + 1, n + 2 ** bit);
+    }
+  };
+  walk(root, 0, 0);
+  const len = Math.max(-1, ...hit.keys()) + 1;
+  const same = (): boolean => {
+    const rs = new Set(out.map((o) => emit_row(fl, o, ty)));
+    return rs.size === 1 && !rs.has(null);
+  };
+  return hit.size * 2 > len && same() ? [...Array(len + 1)]
+    .map((_, i): Chain[number] => [hit.get(i) ?? out[0], null]) : null;
 }
 
 function emit_match(fl: File, x: Of<"Mat"> | Of<"Efq">,
@@ -3173,18 +3248,20 @@ function emit_match(fl: File, x: Of<"Mat"> | Of<"Efq">,
   const adt = mat_adt(fl.book, all.A);
   const word = adt.k === "U32" || adt.k === "F32";
   const lay = word ? lay_node(fl.book, adt.k) : lay_of(fl.book, all.A);
-  const bits = word ? val_hold(fl, val_to(fl, args[0], W32), "u").ws[0] : "";
-  const s = val_hold(fl, word ? val_new(lay.ks.map((_, i) =>
-    `((${bits} >> ${i}) & 1)`), lay) : val_to(fl, args[0], lay), "s");
-  const sw = s.ws[0];
-  const ls = adt.k === "Nat" ? emit_nat(x) : null;
-  const id = ls === null ? null : emit_tab(fl, ls, all.B(DUMMY));
+  const u = val_hold(fl, val_to(fl, args[0], word ? W32 : lay), "s");
+  const ret = all.B(DUMMY);
+  const ls = adt.k === "Nat" ? emit_lits(fl, x, ret, true) : null;
+  const tb = ls ?? (adt.k === "U32" ? emit_lits(fl, x, ret, false) : null);
+  const id = tb === null ? null : emit_tab(fl, tb, ret);
   if (id !== null) {
     bind_dead(fl, []);
     return emit_put(fl, dst, val_new(
-      [`TAB_AT(TAB_${id}, ${sw}, ${ls!.length - 1})`],
-      lay_of(fl.book, all.B(DUMMY))));
+      [`TAB_AT(TAB_${id}, ${u.ws[0]}, ${tb!.length - 1})`],
+      lay_of(fl.book, ret)));
   }
+  const s = word ? val_hold(fl, val_new(lay.ks.map((_, i) =>
+    `((${u.ws[0]} >> ${i}) & 1)`), lay), "s") : u;
+  const sw = s.ws[0];
   const total = Bend.book_adt(fl.book, adt, Bend.Emp()).c.length;
   const { arms, end } = mat_arms(x);
   const lv: Level[] = ls !== null
@@ -3295,6 +3372,22 @@ const TABLES = ["CID_ARITY_T", "CID_HOT_T", "FID_ARITY_T", "FID_FLAG_T", "FID_RE
 // The datatypes whose constructors the runtime or the elaborator lays itself.
 const RUNTIME_ADTS = ["Sigma", "String", "Word.Con", "IO.OP", "Result",
   "Maybe", "Bool", "Unit", "List", "Char", "Cmp", "Inst", "Match"];
+
+// The compiler knows base.bend's types by their names alone, and applies
+// a closure through CLO_APPLY, a def it synthesizes. SYNTH is the name no
+// file may declare; OWNED adds the types a file without `import Base` may
+// declare as its own, which check and run, and which the emitters, whose
+// native shape would not fit, refuse.
+export const SYNTH = [CLO_APPLY];
+const OWNED = [...SYNTH, "IO", ...RUNTIME_ADTS, ...Object.keys(OPTIMIZED)];
+
+export function book_owned(src: Bend.Book, ks = OWNED): void {
+  for (const k of ks) {
+    if (src.tlds[k] !== undefined && src.tlds[k].b !== true) {
+      die(k + " is a name the compiler encodes itself: name yours apart");
+    }
+  }
+}
 
 function compile_tables(fl: File, entries: Seg[]): string[] {
   const defs: string[] = [];
@@ -3593,11 +3686,13 @@ function js_func(fl: File, tm: HTerm, ty0: HTerm | null,
         file_push(fl, "throw " + s + ";");
       });
     }
-    const ls = adt.k === "Nat" ? emit_nat(x) : null;
-    const id = ls === null ? null : emit_tab(fl, ls, all.B(DUMMY));
+    const ret = all.B(DUMMY);
+    const ls = adt.k === "Nat" ? emit_lits(fl, x, ret, true) : null;
+    const tb = ls ?? (adt.k === "U32" ? emit_lits(fl, x, ret, false) : null);
+    const id = tb === null ? null : emit_tab(fl, tb, ret);
     if (id !== null) {
       return file_push(fl, `return TAB_${id}[Math.min(Number(${s}), ${
-        ls!.length - 1})];`);
+        tb!.length - 1})];`);
     }
     if (ls !== null) {
       return emit_chain(fl, (i) => `${s} === ${i}n`, ls.map(([h, n]) => () =>
@@ -3612,7 +3707,7 @@ function js_func(fl: File, tm: HTerm, ty0: HTerm | null,
         die(k + NATIVE_DIE);
       }
       const fields = el?.map((e) => tpl(e, [s]))
-        ?? keys.map((n) => s + "." + n);
+        ?? keys.map((n) => s + "[\"" + n + "\"]");
       js_func(fl, h, null, [...fields, ...rest]);
     });
     if (last !== null) {
@@ -3641,7 +3736,7 @@ function js_func(fl: File, tm: HTerm, ty0: HTerm | null,
 
 function js_def(fl: File, k: Bend.Name, def: Def): void {
   fl.fresh = new Map();
-  fl.fuel = 64;
+  fl.fuel = FOLD_FUEL;
   if (intr_of(fl, k, true) !== undefined) {
     return;
   }
@@ -4272,6 +4367,12 @@ OUTLINE void heap_hand(Env e, Cls cls) {
   ALC_LEN(e, cls)  = 0;
 }
 
+#if DEVICE
+#define corpus_grow(H, n) false
+#else
+static bool corpus_grow(Corpus H, u64 need);
+#endif
+
 OUTLINE Loc heap_alloc_miss(Env e, Cls cls) {
   Corpus H = e.mem;
   Loc  got = 0;
@@ -4286,7 +4387,8 @@ OUTLINE Loc heap_alloc_miss(Env e, Cls cls) {
   if (!got) {
     u32 pages = (n << cls) >> PAGE_BITS;
     u32 p     = a32_add(a32_at(H, H_BUMP), pages);
-    if ((u64)p + pages > a32_load(a32_at(H, H_CAP))) {
+    if ((u64)p + pages > a32_load_acq(a32_at(H, H_CAP))
+      && !corpus_grow(H, (u64)p + pages)) {
       err_post(H, ERR_HEAP);
       p = 0;
     }
@@ -6026,13 +6128,13 @@ static void row_grow(Env e, Stk stk, u32 base, u32 stride, u32 want) {
 // Pool
 // ====
 
-static void* pool_try(u64 bytes) {
-  return mmap(NULL, bytes, PROT_READ | PROT_WRITE,
+static void* pool_try(void* at, u64 bytes) {
+  return mmap(at, bytes, PROT_READ | PROT_WRITE,
     MAP_PRIVATE | MAP_ANON | MAP_NORESERVE, -1, 0);
 }
 
 static void* pool_mmap(u64 bytes) {
-  void* p = pool_try(bytes);
+  void* p = pool_try(NULL, bytes);
   if (p == MAP_FAILED) {
     err_fail("reservation failed");
   }
@@ -6474,28 +6576,73 @@ static void cube_run(Corpus H, bool gpu) {
 // Corpus
 // ======
 
-static Corpus corpus_setup(bool gpu, long threads, u64 bytes) {
-  io_gpu     = gpu;
-  KEEP_WORDS = gpu ? CHUNK : CAP_WORDS;
-  u64 dflt   = gpu ? gpu_span() : 1ull << 43;
-  u64 size   = (gpu && bytes != 0 ? bytes : dflt) & ~16383ull;
-  // The cores reserve the whole Loc space (8 TiB, MAP_NORESERVE). A kernel
-  // with fewer address bits (39-bit arm64, Sv39) or a ulimit -v gets the
-  // largest power of two that fits, down to 8 GiB.
-  CORPUS = gpu ? gpu_map(size) : pool_try(size);
-  while (CORPUS == MAP_FAILED && size > 1ull << 33) {
-    CORPUS = pool_try(size /= 2);
+// The cores map 8 GiB at a high base and double it in place, a hint then
+// a check (MAP_FIXED would replace a neighbour), so one base holds every
+// Loc and a run pays for the room it reaches. The banks lie past the pages
+// and move up at each step. The GPU maps its whole span once.
+
+static u64 corpus_size;
+
+static void* corpus_map(u64 size) {
+  u64   hint = 1ull << 45;
+  void* p    = pool_try((void*)hint, size);
+  while (p != (void*)hint && hint > size) {
+    if (p != MAP_FAILED) {
+      munmap(p, size);
+    }
+    hint /= 2;
+    p     = pool_try((void*)hint, size);
   }
-  if (CORPUS == MAP_FAILED) {
+  if (p == MAP_FAILED) {
     err_fail("reservation failed");
   }
+  return p;
+}
+
+static void corpus_lay(Corpus H, u64 size) {
   u64 span = size / 8;
   u64 cap  = span > HEAP_OFF ? (span - HEAP_OFF) / (PAGE_LEN + 10) : 0;
   if (cap <= CUBE) {
     err_fail("the GPU span is under the rings, stacks and a page per lane");
   }
   cap = cap < ~0u ? cap : ~0u - 1;
-  Corpus H  = CORPUS;
+  u64 at = HEAP_OFF + (cap << PAGE_BITS);
+  for (u32 c = 0; c < NCLS_ALL; c += 1) {
+    Bank* b = bank_at(H, c);
+    memcpy(H + at, H + b->off, b->wr * sizeof(u64));
+    b->off  = at;
+    at     += 2 * (cap >> ((c < NCLS ? NCLS : c) - PAGE_BITS));
+  }
+  corpus_size = size;
+  a32_store_rel(a32_at(H, H_CAP), (u32)cap);
+}
+
+static bool corpus_grow(Corpus H, u64 need) {
+  bool ok = true;
+  LOCK(bank_lock);
+  while (ok && need > a32_load(a32_at(H, H_CAP))) {
+    u64   more = corpus_size;
+    char* at   = (char*)H + more;
+    void* got  = io_gpu || more >= 1ull << 43 ? MAP_FAILED
+      : pool_try(at, more);
+    ok = got == at;
+    if (ok) {
+      corpus_lay(H, more * 2);
+    } else if (got != MAP_FAILED) {
+      munmap(got, more);
+    }
+  }
+  UNLOCK(bank_lock);
+  return ok;
+}
+
+static Corpus corpus_setup(bool gpu, long threads, u64 bytes) {
+  io_gpu     = gpu;
+  KEEP_WORDS = gpu ? CHUNK : CAP_WORDS;
+  u64 dflt   = gpu ? gpu_span() : 1ull << 33;
+  u64 size   = (gpu && bytes != 0 ? bytes : dflt) & ~16383ull;
+  CORPUS     = gpu ? gpu_map(size) : corpus_map(size);
+  Corpus H   = CORPUS;
 #if BEND_CUDA
   if (gpu) {
     cuMemsetD8((CUdeviceptr)(uintptr_t)H, 0, STAK_OFF * 8);
@@ -6503,13 +6650,8 @@ static Corpus corpus_setup(bool gpu, long threads, u64 bytes) {
   }
 #endif
   memcpy(H + STAT_OFF, STAT_IMG, STAT_LEN * sizeof(u64));
-  u64    at = HEAP_OFF + (cap << PAGE_BITS);
-  for (u32 c = 0; c < NCLS_ALL; c += 1) {
-    bank_at(H, c)->off = at;
-    at += 2 * (cap >> ((c < NCLS ? NCLS : c) - PAGE_BITS));
-  }
+  corpus_lay(H, size);
   a32_store(a32_at(H, H_BUMP), 1);
-  a32_store(a32_at(H, H_CAP), (u32)cap);
   if (gpu) {
     gpu_load(size);
   }
@@ -7706,6 +7848,10 @@ function io_run(m) {
 // Chan
 // ====
 
+// A parked receiver holds CHAN_RECV: the C lane parks TERM_HOLE, and a
+// program can make neither. A sent value may be null (an erased proof).
+const CHAN_RECV = Symbol();
+
 function chan_wake(row, x) {
   const w = row.wait.shift();
   io_push(w.cont, x, false);
@@ -7724,7 +7870,7 @@ function chan_take(row) {
 function chan_shut(row) {
   row.shut = true;
   while (row.wait.length > 0) {
-    chan_wake(row, row.wait[0].item === null ? { $: "None" } : false);
+    chan_wake(row, row.wait[0].item === CHAN_RECV ? { $: "None" } : false);
   }
 }
 `.slice(1);

@@ -9,5 +9,5 @@ def innocent() -> Empty:
 def keep(n: Nat) -> Nat:
   L.safe(n)
 
-#|All terms check, but 1 def relies on unsafe:
+#|All terms check, but 1 def relies on unsafe or foreign code:
 #|- innocent
