@@ -5,6 +5,11 @@ set -euo pipefail
 suite_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 cd -- "$suite_dir"
 export LC_ALL=C
+# Pin the environment alongside the bytes: the interpreter's daily check
+# prints a one-line update notice to stderr when upstream has a newer
+# release, and these lanes byte-compare raw stdout+stderr. The notice is
+# network state, not output; the switch is the interpreter's own.
+export BEND_NO_TELEMETRY=1
 
 for tool in bun python3 diff timeout; do
   if ! command -v "$tool" >/dev/null 2>&1; then

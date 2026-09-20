@@ -296,10 +296,10 @@ not time a row until those three agree.
 > mixer. The lesson is the one `POWER.md` already states about the lock: a bench
 > run on a loaded machine measures the load.
 
-A 65,536-document
-universe; the four operations are chosen to be the four *distinct paths* rather
-than four calls — sparse∧sparse is one merge at mode 2, dense∨dense is Bitset's
-cell loop, sparse∧dense is the sieve, sparse∨dense is the paint. `andnot` is not
+A 65,536-document universe; the four operations are chosen to be the four
+*distinct paths* rather than four calls — sparse∧sparse is one merge at mode 2,
+dense∨dense is Bitset's cell loop, sparse∧dense is the sieve, sparse∨dense is
+the paint. `andnot` is not
 a fifth path: it is the same merge at mode 4, the same sieve at `want=False` and
 the same paint through `off`. 512 ids is under the 65,536/32 = 2,048 threshold
 and 4,096 is over it, so `optimize` takes its sparse arm four times a round and
@@ -309,7 +309,19 @@ being assumed.
 `postings` is flat across threads by construction, like `bm25`: one sequential
 round loop with nothing to fork. `postings_par` is the scaling number, and its
 shape is the one this lane already predicted — a `Set` holds an array, an array
-has one owner, so no shard can share a set. 5.2x on 16 threads.
+has one owner, so no shard can share a set. The row above is the measurement;
+this sentence used to repeat the pre-mixer 5.2x and was left behind by the
+correction two paragraphs up, which is the argument for pointing at the table
+rather than restating its numbers in prose.
+
+Measured a third time by the integrator on a verified-quiet machine, as the
+package-wide table in `POWER.md` was taken: `postings` 0.09 / 0.44 / 0.43,
+**5.1x** and 1.0x; `postings_par` 0.18 / 0.87 / 0.12, **4.9x** and **7.2x**.
+The `1T/C` column reproduces to within rounding across all three runs, which is
+what a load-independent number should do. `1T→16T` went 5.2x → 6.4x → 7.2x
+across three progressively quieter machines — the same one-directional drift
+the blockquote diagnosed, and the reason the scaling column is the one to
+distrust when anything else is running.
 
 ### The checksum that agreed three ways and was still wrong
 

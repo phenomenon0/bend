@@ -166,6 +166,92 @@ excellent at one and poor at the other, and several are.
 The lock is not optional. Every lane's numbers were taken under it; a bench run
 on a loaded machine measures the load.
 
+### The table
+
+All 48 rows in one run, Ryzen 7 7700X (8 cores / 16 threads), `--gpu off`,
+medians of three, nothing else on the machine (load 1.8 at start). Every row
+here was timed, which means its twin, its 1T run and its 16T run all agreed on
+the checksum first.
+
+    bench                 C  bend-1T bend-16T    1T/C  1T/16T
+    assign             0.20     0.34     0.34    1.7x    1.0x
+    assign_par         0.26     0.34     0.05    1.3x    7.0x
+    bitset             0.23     0.54     0.54    2.3x    1.0x
+    blake3             0.08     0.20     0.20    2.5x    1.0x
+    blake3_par         0.11     0.24     0.04    2.1x    6.6x
+    bm25               0.60     2.03     2.04    3.4x    1.0x
+    bm25_par           0.31     0.67     0.09    2.1x    7.3x
+    budget             0.15     0.33     0.35    2.2x    0.9x
+    budget_par         0.15     0.31     0.05    2.1x    6.7x
+    bytes              0.19     0.31     0.31    1.6x    1.0x
+    cdc                0.03     0.15     0.15    4.7x    1.0x
+    cdc_par            0.03     0.12     0.02    3.6x    6.1x
+    consequence        0.13     0.25     0.25    1.9x    1.0x
+    consequence_par    0.11     0.16     0.02    1.4x    7.3x
+    delta              0.00     0.01     0.01    1.9x    1.0x
+    delta_full         0.71     0.83     0.84    1.2x    1.0x
+    drift              0.13     0.24     0.23    1.8x    1.0x
+    drift_par          0.13     0.14     0.02    1.0x    8.7x
+    fft                0.08     0.12     0.07    1.4x    1.8x
+    fft_par            0.16     0.32     0.06    2.0x    5.9x
+    grammar            0.29     0.75     0.75    2.6x    1.0x
+    grammar_par        0.25     0.75     0.09    3.0x    8.0x
+    heap               2.08     1.83     1.84    0.9x    1.0x
+    json               0.06     0.34     0.33    5.9x    1.0x
+    json_par           0.05     0.32     0.05    6.0x    6.7x
+    knn                0.11     0.13     0.13    1.2x    1.0x
+    knn_par            0.42     0.49     0.14    1.2x    3.5x
+    postings           0.09     0.44     0.43    5.1x    1.0x
+    postings_par       0.18     0.87     0.12    4.9x    7.2x
+    proof              0.02     0.08     0.08    4.0x    1.0x
+    proof_par          0.02     0.08     0.02    3.9x    4.2x
+    radix              0.16     0.34     0.34    2.1x    1.0x
+    radix_par          0.11     0.25     0.04    2.3x    6.2x
+    rng                0.40     0.39     0.39    1.0x    1.0x
+    rng_normal         0.83     0.69     0.68    0.8x    1.0x
+    rng_normal_par     0.84     0.70     0.08    0.8x    8.6x
+    rng_par            0.40     0.39     0.05    1.0x    8.1x
+    scan               0.39     0.75     0.75    1.9x    1.0x
+    scan_par           0.26     0.43     0.08    1.7x    5.7x
+    select             0.11     0.37     0.37    3.2x    1.0x
+    select_par         0.45     1.45     0.26    3.2x    5.6x
+    sketch             0.03     0.64     0.63   19.1x    1.0x
+    sketch_par         0.03     0.63     0.09   18.1x    6.6x
+    text               0.07     1.01     0.99   15.4x    1.0x
+    text_par           0.06     0.96     0.28   16.1x    3.5x
+    topk               0.28     0.45     0.45    1.6x    1.0x
+    topk_par           0.28     1.40     0.23    5.1x    6.1x
+    vec                0.27     0.57     0.56    2.1x    1.0x
+
+Three primitives beat or match their C twin on one core: `heap` at 0.9x,
+`rng_normal` at 0.8x, `rng` at 1.0x. Most of the package sits between 1.2x and
+3.4x. Forking works: fourteen `_par` rows clear 6x on 16 threads and four clear
+8x, with `drift_par` highest at 8.7x.
+
+**Two `1T/C` outliers, and they are the same cost.** `sketch` (19.1x) and `text`
+(15.4x) are the worst ratios in the library, and both pay it for kind `Data` —
+C stores into a flat register file or binary-searches a flat array, while Bend
+rebuilds the nodes on the descent path each update. Lane 12 named this
+exactly: the gap *is* the cost of `Data`, and what it buys is the refusal, the
+free fork, and the 6.6x.
+
+Two lane reports each claim to hold the worst ratio and **neither does**;
+both are left standing as the measurement each lane actually took.
+`power-5.md` calls `json`'s 5.9x "the worst 1T/C in the library", true when
+written — `sketch` and `text` did not exist yet. `power-15.md` calls `text`'s
+15.6x "the worst ratio in the package", which was already wrong when written:
+lane 12 had reported 17.3x for `sketch`. This table is the authority; a
+comparative claim made from inside one lane is not.
+
+`delta`'s `0.00` C column is the harness hitting its two-decimal floor, not a
+zero — which means the one ratio that lane is actually about cannot be formed
+from this table at all on the C side, and reads only ~83x on the Bend side
+(0.83 / 0.01, where the denominator is a single significant figure). Timed
+properly, `power-16.md` puts incremental-over-full at **192.8x for C and 131.4x
+for Bend**. A package-wide table at fixed resolution is the wrong instrument for
+a per-lane question; it is here to compare primitives against C, not against
+each other's alternatives.
+
 ## Five conventions that bind every file
 
 **No float reaches a printed line.** `F32.log` is `logf` in emitted C and a

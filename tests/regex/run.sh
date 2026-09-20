@@ -5,6 +5,11 @@
 # and passes only if that fixture is DETECTED as failing.
 set -uo pipefail
 cd "$(dirname "$0")/../.."
+# Pin the environment alongside the bytes: the interpreter's daily check
+# prints a one-line update notice to stderr when upstream has a newer
+# release, and these lanes byte-compare raw stdout+stderr. The notice is
+# network state, not output; the switch is the interpreter's own.
+export BEND_NO_TELEMETRY=1
 work=$(mktemp -d /tmp/bend-regex.XXXXXX)
 trap 'rm -rf -- "$work"' EXIT
 pass=0
