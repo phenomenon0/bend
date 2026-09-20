@@ -7,3 +7,4 @@ tests/regex/_out/
 tests/parser/_out/
 tests/lint/_out/
 tests/translate/_out/
+__pycache__/
