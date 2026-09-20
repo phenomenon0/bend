@@ -2673,6 +2673,168 @@ def String.zfill(s: String, w: Nat) -> String:
     case SCon{+h, t}:
       String.zfill.if(h, t, w, Bool.or(Char.is_eq(h, '+'), Char.is_eq(h, '-')))
 
+# Python's str.is* family, ASCII only like case and trim: a non-ASCII code
+# point is never alpha, digit, space, cased or printable. Nonempty and every
+# char passes f
+def String.nonempty_all(~f: Char -> Bool, s: String) -> Bool:
+  match s:
+    case SNil{}:
+      False{}
+    case SCon{h, t}:
+      Bool.and(f(h), List.all(~&2, ~Char, ~f, String.to_list(t)))
+
+# Char.is_alpha with a linear argument, the shape ~f takes
+def Char.is_letter(c: Char) -> Bool:
+  match c:
+    case Chr{+x}:
+      Char.is_alpha(Chr{x})
+
+def String.is_alpha(s: String) -> Bool:
+  String.nonempty_all(~Char.is_letter, s)
+
+def String.is_digit(s: String) -> Bool:
+  String.nonempty_all(~Char.is_digit, s)
+
+# ASCII aliases of is_digit (Python's isdecimal and isnumeric)
+def String.is_decimal(s: String) -> Bool:
+  String.is_digit(s)
+
+def String.is_numeric(s: String) -> Bool:
+  String.is_digit(s)
+
+def Char.is_alnum(c: Char) -> Bool:
+  match c:
+    case Chr{+x}:
+      Bool.or(Char.is_alpha(Chr{x}), Char.is_digit(Chr{x}))
+
+def String.is_alnum(s: String) -> Bool:
+  String.nonempty_all(~Char.is_alnum, s)
+
+# U+0020 and U+0009..U+000D, as trim; Python adds U+001C..U+001F
+def String.is_space(s: String) -> Bool:
+  String.nonempty_all(~Char.is_space, s)
+
+# a cased char exists and none has the other case
+def String.is_lower(+s: String) -> Bool:
+  Bool.and(List.any(~&2, ~Char, ~Char.is_lower, String.to_list(s)),
+    String.eq(String.to_lower(s), s))
+
+def String.is_upper(+s: String) -> Bool:
+  Bool.and(String.is_lower(String.to_lower(s)), String.eq(String.to_upper(s), s))
+
+def Char.is_ascii(c: Char) -> Bool:
+  U32.is_lt(Char.to_u32(c), 128)
+
+def Char.is_printable(c: Char) -> Bool:
+  U32.is_lt(U32.sub(Char.to_u32(c), 32), 95)
+
+# the empty string is ASCII and printable, as in Python
+def String.is_ascii(s: String) -> Bool:
+  List.all(~&2, ~Char, ~Char.is_ascii, String.to_list(s))
+
+# U+0020..U+007E
+def String.is_printable(s: String) -> Bool:
+  List.all(~&2, ~Char, ~Char.is_printable, String.to_list(s))
+
+def Char.is_word(c: Char) -> Bool:
+  match c:
+    case Chr{+x}:
+      Bool.or(Char.is_alnum(Chr{x}), U32.is_eq(x, 95))
+
+# [A-Za-z_][A-Za-z0-9_]*; keywords are identifiers, as in Python
+def String.is_identifier(+s: String) -> Bool:
+  Bool.and(String.nonempty_all(~Char.is_word, s),
+    Bool.not(String.is_digit(String.take(s, 1n))))
+
+def String.is_title.go(s: String, +prev: Bool) -> Bool:
+  match s:
+    case SNil{}:
+      True{}
+    case SCon{+h, t}:
+      Bool.and(Bool.or(Bool.not(Char.is_alpha(h)), Bool.xor(Char.is_upper(h), prev)),
+        String.is_title.go(t, Char.is_alpha(h)))
+
+# a letter exists; uppercase only after a non-letter, lowercase only after one
+def String.is_title(+s: String) -> Bool:
+  Bool.and(List.any(~&2, ~Char, ~Char.is_letter, String.to_list(s)),
+    String.is_title.go(s, False{}))
+
+def String.remove_prefix(+s: String, +p: String) -> String:
+  Bool.pick(String, String.starts_with(s, p), String.drop(s, String.length(p)), s)
+
+def String.remove_suffix(+s: String, +p: String) -> String:
+  Bool.pick(String, String.ends_with(s, p), String.drop_end(s, String.length(p)), s)
+
+# CPython's rule: the odd pad cell goes left only when the width is odd too
+def String.center(+s: String, +w: Nat, +c: Char) -> String:
+  +n = String.length(s)
+  +m = Nat.sub(w, n)
+  String.pad_end(String.pad_start(s, Nat.add(n, Nat.add(Nat.div(m, 2n),
+    Nat.mod(Nat.mul(m, w), 2n))), c), w, c)
+
+def String.swapcase(s: String) -> String:
+  match s:
+    case SNil{}:
+      SNil{}
+    case SCon{+h, t}:
+      SCon{Bool.pick(Char, Char.is_upper(h), Char.to_lower(h), Char.to_upper(h)),
+        String.swapcase(t)}
+
+def String.title.go(s: String, prev: Bool) -> String:
+  match s:
+    case SNil{}:
+      SNil{}
+    case SCon{+h, t}:
+      SCon{Bool.pick(Char, prev, Char.to_lower(h), Char.to_upper(h)),
+        String.title.go(t, Char.is_alpha(h))}
+
+# uppercase after any non-letter ("they're" -> "They'Re"), lowercase elsewhere
+def String.title(s: String) -> String:
+  String.title.go(s, False{})
+
+# on ASCII, casefold is to_lower
+def String.casefold(s: String) -> String:
+  String.to_lower(s)
+
+def String.expandtabs.go(s: String, +n: Nat, +col: Nat) -> String:
+  match s:
+    case SNil{}:
+      SNil{}
+    case SCon{+h, t}:
+      +tab = Char.is_eq(h, '\t')
+      +k = Bool.pick(Nat, tab, Nat.sub(n, Nat.mod(col, n)), 1n)
+      String.append(
+        Bool.pick(String, tab, String.pad_start(SNil{}, k, ' '), SCon{h, SNil{}}),
+        String.expandtabs.go(t, n, Bool.pick(Nat,
+          Bool.or(Char.is_eq(h, '\n'), Char.is_eq(h, '\r')), 0n, Nat.add(col, k))))
+
+# a tab pads to the next multiple of n (none when n is 0); '\n' and '\r'
+# restart the column, as in Python; a column is a code point
+def String.expandtabs(s: String, n: Nat) -> String:
+  String.expandtabs.go(s, n, 0n)
+
+# split_on scanning from the right: "aaa" on "aa" is ["a", ""]
+def String.rsplit.push(ws: List<&2, String>, w: String) -> List<&2, String>:
+  String.reverse(w) <> ws
+
+def String.rsplit(s: String, sep: String) -> List<&2, String>:
+  List.foldl(~&2, ~String, ~List<&2, String>, ~String.rsplit.push,
+    String.split_on(String.reverse(s), String.reverse(sep)), [])
+
+def String.rpartition.at(+s: String, +sep: String, i: Maybe<&2, Nat>) ->
+  String & (String & String):
+  match i:
+    case None{}:
+      (SNil{}, (SNil{}, s))
+    case Some{k}:
+      String.partition.at(s, sep, Some{k})
+
+# (before, sep, after) at the last match; absent, or the empty separator,
+# gives ("", "", s)
+def String.rpartition(+s: String, +sep: String) -> String & (String & String):
+  String.rpartition.at(s, sep, Bool.pick(Maybe<&2, Nat>, String.is_empty(sep),
+    None{}, String.find_last(s, sep)))
+
 def String.hash.byte(h: U32, b: U32) -> U32:
   U32.mul(U32.xor(h, b), 16777619)
 
@@ -3923,6 +4085,72 @@ def U32.read(s: String) -> Maybe<&2, U32>:
       None{}
     case SCon{h, t}:
       U32.read.go(SCon{h, t}, 0)
+
+law String.format.go:
+  for s: String
+  for +args: List<&2, String>
+  for +i: Nat
+  for +man: Bool
+  Maybe<&2, String>
+
+def String.format.put(a: String, r: Maybe<&2, String>) -> Maybe<&2, String>:
+  match r:
+    case None{}:
+      None{}
+    case Some{x}:
+      Some{String.append(a, x)}
+
+def String.format.sub(v: Maybe<&2, String>, r: Maybe<&2, String>) ->
+  Maybe<&2, String>:
+  match v:
+    case None{}:
+      None{}
+    case Some{x}:
+      String.format.put(x, r)
+
+# the field after '{': i counts the {} seen, man is whether a {n} was
+def String.format.field(+args: List<&2, String>, +i: Nat, +man: Bool,
+  parts: String & (String & String)) -> Maybe<&2, String>:
+  (+spec, (sep, rest)) = parts
+  +auto = String.is_empty(spec)
+  +k = U32.read(spec)
+  String.format.sub(
+    Bool.pick(Maybe<&2, String>,
+      Bool.and(Bool.not(String.is_empty(sep)), Bool.pick(Bool, auto, Bool.not(man),
+        Bool.and(Nat.is_eq(i, 0n), Maybe.is_some(&2, U32, k)))),
+      List.get(&2, String, args, Bool.pick(Nat, auto, i,
+        U32.to_nat(Maybe.default(&2, U32, k, 0)))), None{}),
+    String.format.go(rest, args, Bool.pick(Nat, auto, 1n+i, i), Bool.or(man, Bool.not(auto))))
+
+def String.format.step(+h: Char, t: String, args: List<&2, String>, i: Nat,
+  man: Bool, skip: Nat, lit: Bool, open: Bool) -> Maybe<&2, String>:
+  match lit:
+    case True{}:
+      String.format.put(SCon{h, SNil{}},
+        String.format.go(String.drop(t, skip), args, i, man))
+    case False{}:
+      match open:
+        case True{}:
+          String.format.field(args, i, man, String.partition(t, "}"))
+        case False{}:
+          None{}
+
+def String.format.go(s, args, i, man):
+  match s:
+    case SNil{}:
+      Some{SNil{}}
+    case SCon{+h, +t}:
+      +open = Char.is_eq(h, '{')
+      +brace = Bool.or(open, Char.is_eq(h, '}'))
+      +dbl = Bool.and(brace, String.starts_with(t, SCon{h, SNil{}}))
+      String.format.step(h, t, args, i, man, Bool.pick(Nat, dbl, 1n, 0n),
+        Bool.or(dbl, Bool.not(brace)), open)
+
+# Python's str.format, v1: {} takes the next arg, {n} the nth, {{ and }} are
+# the braces. None on a lone brace, an index past args, {} mixed with {n}, or
+# anything else in a field: no names, no !r, no :spec mini-language (future)
+def String.format(s: String, args: List<&2, String>) -> Maybe<&2, String>:
+  String.format.go(s, args, 0n, False{})
 
 def Bool.show(b: Bool) -> String:
   match b:

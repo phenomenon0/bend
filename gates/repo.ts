@@ -37,7 +37,7 @@ allow("README.md", 3000);
 allow("WONTFIX.txt", 1500);
 allow("LICENSE", 4000);
 allow("flake.nix", 1500);
-allow("bend2/base.bend", 44000);
+allow("bend2/base.bend", 46470);
 allow("bend2/bend.lean", 400000);
 allow("bend2/bend.ts", 42100);
 allow("bend2/comp.ts", 81600);

@@ -67,5 +67,8 @@ for t in tests/strings/*.bend; do
     fail=$((fail + 1))
   fi
 done
+# gaps.bend is generated: CPython's str methods are its oracle
+name=gaps
+run oracle tests/strings/gaps.bend python3 tests/strings/gaps_gen.py
 printf '\nStrings PASS: %d, FAIL: %d\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
