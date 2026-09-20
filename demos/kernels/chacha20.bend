@@ -85,17 +85,26 @@ def little(+x: U32) -> List<&2, U32>:
   [U32.and(x, 255), U32.and(U32.shrn(x, 8n), 255),
    U32.and(U32.shrn(x, 16n), 255), U32.shrn(x, 24n)]
 
-def feed(xs: List<&2, U32>, ys: List<&2, U32>) -> List<&2, U32>:
-  match xs ys:
-    case x <> xt y <> yt:
-      List.append(&2, U32, little(U32.add(x, y)), feed(xt, yt))
-    case _ _:
-      []
+# Fixed state fields preserve the word boundary before little-endian presentation.
+def feed_state(x: State, y: State) -> State:
+  match x y:
+    case State{a0, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11, a12, a13, a14, a15} State{b0, b1, b2, b3, b4, b5, b6, b7, b8, b9, b10, b11, b12, b13, b14, b15}:
+      State{U32.add(a0, b0), U32.add(a1, b1), U32.add(a2, b2), U32.add(a3, b3), U32.add(a4, b4), U32.add(a5, b5), U32.add(a6, b6), U32.add(a7, b7), U32.add(a8, b8), U32.add(a9, b9), U32.add(a10, b10), U32.add(a11, b11), U32.add(a12, b12), U32.add(a13, b13), U32.add(a14, b14), U32.add(a15, b15)}
 
-# 64 bytes, including the original-state feed-forward and serialization.
-def block(key: ChaKey, counter: U32, nonce: Nonce) -> List<&2, U32>:
+def block_words(key: ChaKey, counter: U32, nonce: Nonce) -> State:
   +s = initial(key, counter, nonce)
-  feed(words(s), words(rounds(10n, s)))
+  feed_state(s, rounds(10n, s))
+
+def bytes(ws: List<&2, U32>) -> List<&2, U32>:
+  match ws:
+    case Nil{}:
+      []
+    case w <> rest:
+      List.append(&2, U32, little(w), bytes(rest))
+
+# A ChaCha block is keystream, not a cryptographic digest.
+def block(key: ChaKey, counter: U32, nonce: Nonce) -> List<&2, U32>:
+  bytes(words(block_words(key, counter, nonce)))
 
 # One byte per step; Nil keystream obtains a fresh block. An exhausted
 # counter can still consume the rest of its last block, but never a new one.

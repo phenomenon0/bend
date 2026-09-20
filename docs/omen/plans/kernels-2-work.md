@@ -7,7 +7,7 @@ packed proof, objective, orchestrator and history. Reference tree stays read-onl
 
 - [x] 1. Mutation anchors first; strict-valid mutants, wrong pinned output;
   fix the two inherited repo allows and admit new harnesses explicitly.
-- [ ] 2. Packed SHA input/word output, ChaCha word block, legacy compatibility.
+- [x] 2. Packed SHA input/word output, ChaCha word block, legacy compatibility.
 - [ ] 3. Sixteen named schedule registers; all retained pins in four lanes.
 - [ ] 4. Independent specs, seeded differentials before laws; proof-only gate,
   closed universal claims, negative proof checks, explicit remaining conjectures.
@@ -25,3 +25,5 @@ Source-level proofs trust Bend/Base and spec transcription, not compiler/hardwar
 Checkpoint 1: control 84/84; 8/8 strict-valid mutants killed in all three
 execution lanes. Evidence: ../lanes/kernels-2-evidence/mutations.json.
 Next action: validated packed word API; existing hex compatibility.
+
+Checkpoint 2: packed API + ChaCha word block, 24 fixtures x four lanes = 96/96.

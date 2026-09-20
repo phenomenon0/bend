@@ -170,6 +170,16 @@ def show(st: Hash) -> String:
         hex_word(8n, c, ""), hex_word(8n, d, ""), hex_word(8n, e, ""),
         hex_word(8n, f, ""), hex_word(8n, g, ""), hex_word(8n, h, "")])
 
+# Word output is the computational API; hex is presentation of the same state.
+def digest_state(st: Hash) -> Array<U32>:
+  match st:
+    case Hash{a, b, c, d, e, f, g, h}:
+      ANode{ANode{ANode{ALeaf{a}, ALeaf{b}}, ANode{ALeaf{c}, ALeaf{d}}},
+        ANode{ANode{ALeaf{e}, ALeaf{f}}, ANode{ALeaf{g}, ALeaf{h}}}}
+
+def digest(msg: List<&2, U32>) -> Array<U32>:
+  digest_state(absorb(msg, 64n, [], initial(), 0, 0))
+
 def hash(msg: List<&2, U32>) -> String:
   show(absorb(msg, 64n, [], initial(), 0, 0))
 
