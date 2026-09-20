@@ -9,12 +9,12 @@ packed proof, objective, orchestrator and history. Reference tree stays read-onl
   fix the two inherited repo allows and admit new harnesses explicitly.
 - [x] 2. Packed SHA input/word output, ChaCha word block, legacy compatibility.
 - [x] 3. Sixteen named schedule registers; all retained pins in four lanes.
-- [ ] 4. Independent specs, seeded differentials before laws; proof-only gate,
+- [x] 4. Independent specs, seeded differentials before laws; proof-only gate,
   closed universal claims, negative proof checks, explicit remaining conjectures.
-- [ ] 5. Fixed-corpus benchmark, raw samples and hashlib checks, million-a bound.
-- [ ] 6. Proof-backing policy and FLOW pointer.
-- [ ] 7. Research lessons with history evidence and independent review mechanics.
-- [ ] 8. Final report, exact caps, review and clean commit checkpoint.
+- [x] 5. Fixed-corpus benchmark, raw samples and hashlib checks, million-a bound.
+- [x] 6. Proof-backing policy and FLOW pointer.
+- [x] 7. Research lessons with history evidence and independent review mechanics.
+- [x] 8. Final report, exact caps, review and clean commit checkpoint.
 
 Every slice: stage only its scoped files, run bun gates/repo.ts and diff --check,
 then commit with the requested codex identity. No cap raises for existing files.
@@ -29,3 +29,12 @@ Next action: validated packed word API; existing hex compatibility.
 Checkpoint 2: packed API + ChaCha word block, 24 fixtures x four lanes = 96/96.
 
 Checkpoint 3: sixteen schedule registers and direct packed block reads; 96/96.
+
+Checkpoint 4: independent specs, 16 public laws under a dedicated proof gate,
+seeded differentials, fixed-corpus benchmark, proof-backing policy and lessons.
+The codex pass stopped on a usage limit at checkpoint 3; fable reviewed its
+uncommitted work, fixed the proof-mutation hole probe it had never run to
+completion, proved xor associativity to close the five round-function laws it
+left open, added their falsifying mutants, and committed the rest as landed.
+Final: 96/96 battery, 8/8 vector mutants, 11/11 proof probes, 54/54 repo rules.
+Report: ../lanes/kernels-2.md.

@@ -1,0 +1,43 @@
+{
+  "verdict": "checked-by-Bend",
+  "entry": "demos/kernels/PROOF.bend",
+  "laws": [
+    "sha_words_shape",
+    "sha_none_iff_oversize",
+    "sha_legacy_words_length",
+    "sha_digest_order",
+    "sha_initial",
+    "sha_constants",
+    "sha_rotation",
+    "sha_choice",
+    "sha_majority",
+    "sha_small0",
+    "sha_small1",
+    "sha_big0",
+    "sha_big1",
+    "sha_feed",
+    "chacha_words_length",
+    "chacha_block_bytes_length"
+  ],
+  "definitions": 911,
+  "pure_dependencies": 244,
+  "holes": 0,
+  "open": 0,
+  "unsafe": 0,
+  "foreign": 0,
+  "source_sha256": {
+    "bend2/base.bend": "97418bece94638b73b8211aba988beb07635e39ceb89854082f54ac30675ad8a",
+    "demos/kernels/LAWS.bend": "998ad76c8daeebb2e1bb2f0debeffa9ed918e61c7c2ef23d66a33350ab363934",
+    "demos/kernels/PROOF.bend": "0c3375c036f58fa0dfb4f5324a5777853329135537f71e74083fb731ff6738a1",
+    "demos/kernels/buffer.bend": "87b9dbee697a358e38aa398c4445744d98d30e670951c89cdc30e9f07aef567c",
+    "demos/kernels/chacha20.bend": "74063b5dc3f8222ff7b215a3e85cdf9a8ae73029c6eee2cab7c9c3bef5cb98a8",
+    "demos/kernels/fips.bend": "68617069e3d26dfee48ddc7926a5b23ee76942216dae6d676b2388cb279bff6f",
+    "demos/kernels/observations.bend": "a84a9de93c9b0b29e0a27be1ac8174bd0ca25e110ad8c46769ce3d1756c588ea",
+    "demos/kernels/sha256.bend": "d8d28af6c76015b3b21048abbe585f96d636b1c4d67bca6075d3b85aeb2caedf",
+    "demos/kernels/spec_state.bend": "6b4121ff946d7ec6451b51cd1c1be3c7d9478d5b59f36fd19c95366db3219dd0",
+    "bend2/bend.ts": "0c61ced47793ffbb641809f3e293a75e095d32ea17a37796111d66ac2466064f",
+    "tests/kernels/proof.ts": "a5c2de4e257adf4804c80547ffe7ded4f503cd1f7ec11fdd891e335c7290715b"
+  },
+  "git_head": "d21b8f9b854973609330d2327b7b5e12d7919e8e",
+  "trust": "Bend checker, Base semantics, spec transcription; not compiler, hardware or timing"
+}
