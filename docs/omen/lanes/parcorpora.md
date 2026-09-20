@@ -126,3 +126,32 @@ first file is the parser demo's own AST: ok  958951799 …/lib/python3.11/__futu
 
 So the number in the table is not the driver agreeing with itself: it is the parser demo's tree,
 hashed by a third implementation.
+
+## Demo 2 — `search_corpus.bend`, `run_search.sh` (run by the orchestrator after the lane exited)
+
+The same fork/join tree with a cheaper leaf: count the lines containing the needle
+(`PAR_NEEDLE=import`), carried up the tree in a `Tally`. Two manifests: **all** (the three
+corpora, 1,209 files / 23.3 MB) and **all8** (a wider walk, 9,672 files / 186.7 MB).
+36 runs per manifest, every one byte-identical to the sequential run (`cmp` in the loop;
+corpus hashes `1808723388`, `3571213227`).
+
+| corpus | mode | threads | wall_s | search_s | speedup | files_s | MB_s |
+|---|---|---:|---:|---:|---:|---:|---:|
+| all | seq | 1 | 0.22 | 0.12 | 1.00× | 5421.5 | 104.7 |
+| all | par | 8 | 0.16 | 0.06 | 1.42× | 7700.6 | 148.6 |
+| all | par | 16 | 0.16 | 0.06 | 1.41× | 7651.9 | 147.7 |
+| all8 | seq | 1 | 1.75 | 0.97 | 1.00× | 5517.4 | 106.5 |
+| all8 | par | 2 | 1.42 | 0.63 | 1.24× | 6830.5 | 131.9 |
+| all8 | par | 4 | 1.28 | 0.50 | 1.36× | 7526.8 | 145.3 |
+| all8 | par | 8 | 1.23 | 0.44 | 1.42× | 7844.3 | 151.4 |
+| all8 | par | 16 | 1.24 | 0.44 | 1.41× | 7793.7 | 150.4 |
+
+**Honest reading.** Search is **IO-bound**: wall saturates at ~1.4× while the in-tree time
+improves 2.0–2.2×, because reading the bytes dominates and the per-file leaf is tiny
+(one warm pass, ~150 MB/s through the IO effects). `par @1 == seq` again (the tree is free).
+For pure text scanning, `grep -c` on the same file list stays faster than either mode
+(**0.02 s** for `all`, **0.16 s** for `all8` — one tuned C process, no tree, page-cache warm) —
+that is the honest baseline, not a competitor we beat. The parallel win is for
+**compute-shaped** work (parsing: 5.3–6.2×), not for IO-shaped scans; a future chunked
+single-file search with a KMP carry is where search parallelism would earn more, and that
+is design-noted, not claimed.
