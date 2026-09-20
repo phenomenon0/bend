@@ -251,7 +251,7 @@ async function cli_file(args: string[]): Promise<void> {
       cli_emit(book, out);
     }
   } catch (e) {
-    cli_say(2, book_err(e) + "\n");
+    cli_say(2, book_err(e) + "\n" + (e instanceof Error && e.stack ? e.stack : ""));
     process.exitCode = 1;
   }
 }
@@ -274,7 +274,7 @@ async function cli_checkup(file: string): Promise<void> {
       const own = /^import Base$/m.test(fs.readFileSync(at, "utf8"));
       code = book_run(...await book_read(at, own ? base : undefined), []);
     } catch (e) {
-      cli_say(2, book_err(e) + "\n");
+      cli_say(2, book_err(e) + "\n" + (e instanceof Error && e.stack ? e.stack : ""));
     }
     if (code !== 0) {
       cli_say(1, "exit " + String(code) + "\n");

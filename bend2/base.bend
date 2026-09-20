@@ -1829,6 +1829,110 @@ def F32.from_nat(n: Nat) -> F32:
 def F32.to_nat(a: F32) -> Nat:
   U32.to_nat(F32.to_u32(a))
 
+# U64
+# ---
+#
+# The 64-bit word as a number: the same Word(64n) slot F64 uses, with integer
+# operations. The compiler lowers these natively (the u64_ op family), so a
+# call is one machine operation, not the width-64 bit walk. The add_comm law
+# and the signed twin live in the bend-u64 / bend-i64 packages until they
+# earn their place here.
+
+type U64 is Data:
+  U64{data: Word(64n)}
+
+def U64.inc(a: U64) -> U64:
+  match a:
+    case U64{x}:
+      U64{Word.inc(64n, x)}
+
+def U64.add(a: U64, b: U64) -> U64:
+  match a b:
+    case U64{x} U64{y}:
+      U64{Word.add(64n, x, y)}
+
+def U64.sub(a: U64, b: U64) -> U64:
+  match a b:
+    case U64{x} U64{y}:
+      U64{Word.sub(64n, x, y)}
+
+def U64.mul(a: U64, b: U64) -> U64:
+  match a b:
+    case U64{x} U64{y}:
+      U64{Word.mul(64n, x, y)}
+
+def U64.not(a: U64) -> U64:
+  match a:
+    case U64{x}:
+      U64{Word.not(64n, x)}
+
+def U64.and(a: U64, b: U64) -> U64:
+  match a b:
+    case U64{x} U64{y}:
+      U64{Word.and(64n, x, y)}
+
+def U64.or(a: U64, b: U64) -> U64:
+  match a b:
+    case U64{x} U64{y}:
+      U64{Word.or(64n, x, y)}
+
+def U64.xor(a: U64, b: U64) -> U64:
+  match a b:
+    case U64{x} U64{y}:
+      U64{Word.xor(64n, x, y)}
+
+def U64.shl(a: U64) -> U64:
+  match a:
+    case U64{x}:
+      U64{Word.shl(64n, x)}
+
+def U64.shr(a: U64) -> U64:
+  match a:
+    case U64{x}:
+      U64{Word.shr(64n, x)}
+
+def U64.shln(a: U64, n: Nat) -> U64:
+  match n:
+    case 0n:
+      a
+    case 1n+p:
+      U64.shl(U64.shln(a, p))
+
+def U64.shrn(a: U64, n: Nat) -> U64:
+  match n:
+    case 0n:
+      a
+    case 1n+p:
+      U64.shr(U64.shrn(a, p))
+
+def U64.cmp(a: U64, b: U64) -> Cmp:
+  match a b:
+    case U64{x} U64{y}:
+      Word.cmp(64n, x, y)
+
+def U64.is_eq(a: U64, b: U64) -> Bool:
+  Cmp.is_eq(U64.cmp(a, b))
+
+def U64.is_ne(a: U64, b: U64) -> Bool:
+  Bool.not(Cmp.is_eq(U64.cmp(a, b)))
+
+def U64.is_lt(a: U64, b: U64) -> Bool:
+  Cmp.is_lt(U64.cmp(a, b))
+
+def U64.is_le(a: U64, b: U64) -> Bool:
+  Cmp.is_le(U64.cmp(a, b))
+
+def U64.is_gt(a: U64, b: U64) -> Bool:
+  Cmp.is_gt(U64.cmp(a, b))
+
+def U64.is_ge(a: U64, b: U64) -> Bool:
+  Cmp.is_ge(U64.cmp(a, b))
+
+def U64.is_zero(a: U64) -> Bool:
+  match a:
+    case U64{x}:
+      Cmp.is_eq(Word.cmp(64n, x, Word.zero(64n)))
+
 # F64
 # ---
 

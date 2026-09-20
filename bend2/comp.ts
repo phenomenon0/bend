@@ -157,7 +157,7 @@ const BOX: Lay = { ks: ["box"], arms: null };
 
 const W64: Lay = { ks: ["w64"], arms: null };
 
-const WORDS: Record<string, Lay> = { U32: W32, F32: W32, F64: W64, Nat: W64 };
+const WORDS: Record<string, Lay> = { U32: W32, F32: W32, F64: W64, Nat: W64, U64: W64 };
 
 const ERRS = ("|*|*|out of memory: run again with a bigger span, as in"
   + " --gpu 8GB|a function the device does not hold|a Nat past the"
@@ -214,6 +214,32 @@ const OPERATIONS: Record<string, Intr> = Object.setPrototypeOf({
   u32_from_nat: {
     C:  "((u64)(u32)($0))",
     JS: "Number($0 & 0xFFFFFFFFn)",
+  },
+  ...tpl_ops("u64_", "add:+ sub:- and:& or:| xor:^",
+    "((u64)($0) $o (u64)($1))",
+    "(($0 $o $1) & 0xFFFFFFFFFFFFFFFFn)"),
+  u64_mul: {
+    C:  "((u64)($0) * (u64)($1))",
+    JS: "(($0 * $1) & 0xFFFFFFFFFFFFFFFFn)",
+  },
+  ...tpl_ops("u64_", CMPS, "((u64)((u64)($0) $o (u64)($1)))", "($0 $o $1)"),
+  ...tpl_ops("u64_", "inc:+ shl:<< shr:>>",
+    "((u64)((u64)($0) $o 1))",
+    "(($0 $o 1n) & 0xFFFFFFFFFFFFFFFFn)"),
+  ...tpl_ops("u64_", "shln:<< shrn:>>",
+    "($1 >= 64 ? 0 : ((u64)($0) $o $1))",
+    "($1 >= 64n ? 0n : (($0 $o $1) & 0xFFFFFFFFFFFFFFFFn))"),
+  u64_not: {
+    C:  "((u64)~(u64)($0))",
+    JS: "(~(($0)) & 0xFFFFFFFFFFFFFFFFn)",
+  },
+  u64_is_zero: {
+    C:  "((u64)((u64)($0) == 0))",
+    JS: "($0 === 0n)",
+  },
+  u64_cmp: {
+    C:  "(((u64)($0) > (u64)($1)) + ((u64)($0) >= (u64)($1)))",
+    JS: "cmp_new($0, $1)",
   },
   ...tpl_ops("f32_", "add:+ sub:- mul:* div:/",
     "f32_rewrap(f32_unbox($0) $o f32_unbox($1))", "Math.fround($0 $o $1)"),
@@ -3171,9 +3197,10 @@ function emit_match(fl: File, x: Of<"Mat"> | Of<"Efq">,
   const rest = args.slice(1);
   const all = ty_all(fl.book, ty) ?? die("an untyped match");
   const adt = mat_adt(fl.book, all.A);
-  const word = adt.k === "U32" || adt.k === "F32";
+  const word = adt.k === "U32" || adt.k === "F32" || adt.k === "U64";
+  const wlay = adt.k === "U64" ? W64 : W32;
   const lay = word ? lay_node(fl.book, adt.k) : lay_of(fl.book, all.A);
-  const bits = word ? val_hold(fl, val_to(fl, args[0], W32), "u").ws[0] : "";
+  const bits = word ? val_hold(fl, val_to(fl, args[0], wlay), "u").ws[0] : "";
   const s = val_hold(fl, word ? val_new(lay.ks.map((_, i) =>
     `((${bits} >> ${i}) & 1)`), lay) : val_to(fl, args[0], lay), "s");
   const sw = s.ws[0];
