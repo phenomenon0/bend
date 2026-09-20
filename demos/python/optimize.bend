@@ -208,18 +208,21 @@ def steps(e: Tr.Ir) -> String:
 
 # ---- emit ----
 
+# The rewritten body is a different body, so its postconditions are recomputed
+# rather than carried: a rule that reshapes a literal must not smuggle a claim.
 def rewrite(f: Tr.Fn) -> Tr.Fn:
-  Tr.Fn{name, ps, ret, eff, body, loc} = f
-  Tr.Fn{name, ps, ret, eff, opt(body), loc}
+  Tr.Fn{name, ps, +ret, post, eff, body, loc} = f
+  +b = opt(body)
+  Tr.Fn{name, ps, ret, Tr.sure(b, ret), eff, b, loc}
 
 def log_of(f: Tr.Fn) -> String:
-  Tr.Fn{name, ps, ret, eff, body, loc} = f
+  Tr.Fn{name, ps, ret, post, eff, body, loc} = f
   steps(body)
 
 # Line 1 names this file, one line for one, so the span map's lines stand.
 def framed(f: Tr.Fn, +cs: List<&2, Tr.Contract>, +log: String) -> String:
-  Tr.Fn{+name, ps, ret, eff, body, +loc} = f
-  +text = Tr.render(Tr.Fn{name, ps, ret, eff, body, loc}, cs)
+  Tr.Fn{+name, ps, ret, post, eff, body, +loc} = f
+  +text = Tr.render(Tr.Fn{name, ps, ret, post, eff, body, loc}, cs)
   S.choose(String, String.is_empty(log), u => text, u =>
     "# Optimized translation (tier 3) of Python `" ++ name ++ "` " ++ Lint.span(loc) ++ " by demos/python/optimize.bend; the rewrite log ends the file.\n" ++
       Pair.snd(String, String, Pair.snd(String, String & String, String.partition(text, "\n"))) ++ "# rewrites: rule, Python span, grade: evidence\n" ++ log)
