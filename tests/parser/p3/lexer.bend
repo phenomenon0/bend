@@ -27,7 +27,7 @@ def prepare(st: L.State, cursor: Cursor) -> Cursor:
   L.State{+rest, S.Pos{+line, +col}, levels, brackets, bol, logical, out, done} = st
   Cursor{oldline, oldcol, tail} = cursor
   S.choose(Cursor, Nat.is_eq(line, oldline), u =>
-    Cursor{line, col, String.drop(tail, col - oldcol)}, u =>
+    Cursor{line, col, String.drop(tail, (col - oldcol : Nat))}, u =>
     new_cursor(C.span(rest, 2n, S.Pos{line, col}, ""), line, col))
 
 def tail(c: Cursor) -> String:
@@ -67,7 +67,7 @@ def go(fuel: Nat, +st: L.State, +patterns: Patterns, cursor: Cursor) -> Result<&
           go(left, next, patterns, prepared))
 
 def lex_with(+s: String, patterns: Patterns) -> Result<&2, &2, S.Error, List<&2, S.Tok>>:
-  go(3n * (String.length(s) + 1n), L.State{s, S.Pos{1n, 0n}, [L.Indent{0n, 0n}], [], True{}, False{}, [], False{}}, patterns, Cursor{0n, 0n, ""})
+  go((3n * (String.length(s) + 1n) : Nat), L.State{s, S.Pos{1n, 0n}, [L.Indent{0n, 0n}], [], True{}, False{}, [], False{}}, patterns, Cursor{0n, 0n, ""})
 
 def compiled(s: String, result: Result<&2, &2, Regex.Error, Patterns>) -> Result<&2, &2, S.Error, List<&2, S.Tok>>:
   match result:

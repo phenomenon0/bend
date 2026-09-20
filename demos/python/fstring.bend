@@ -38,14 +38,14 @@ def prefix_len(s: String, +n: Nat) -> Nat:
     case SNil{}:
       n
     case SCon{+h, t}:
-      S.choose(Nat, C.is_quote(h), u => n, u => prefix_len(t, 1n+n))
+      S.choose(Nat, C.is_quote(h), u => n, u => prefix_len(t, (1n+n : Nat)))
 
 def open(+raw: String) -> Open:
   +n = prefix_len(raw, 0n)
   +s = String.drop(raw, n)
   +q = {SCon{C.head(s), ""} : String}
   +d = Bool.pick(Nat, String.starts_with(s, q ++ q ++ q), 3n, 1n)
-  Open{String.contains(String.to_lower(String.take(raw, n)), "r"), String.drop_end(String.drop(s, d), d), n + d}
+  Open{String.contains(String.to_lower(String.take(raw, n)), "r"), String.drop_end(String.drop(s, d), d), (n + d : Nat)}
 
 def is_raw(o: Open) -> Bool:
   Open{r, b, n} = o
@@ -61,7 +61,7 @@ def offset(o: Open) -> Nat:
 
 def shift(p: S.Pos, n: Nat) -> S.Pos:
   S.Pos{ln, col} = p
-  S.Pos{ln, col + n}
+  S.Pos{ln, (col + n : Nat)}
 
 # A literal whose value is the empty string: nothing, or only backslash-newlines.
 def vanishes(s: String) -> Bool:
@@ -117,10 +117,10 @@ def extent(s: String, +quote: String, +stack: String, +skip: Nat, +at: S.Pos, ac
       +next = C.advance(at, h)
       +q = {SCon{h, ""} : String}
       S.choose(Result<&2, &2, S.Error, Cut>, Char.is_eq(h, Chr{92}), u => fail(Cut, at, "f-string expression part cannot include a backslash"), u =>
-        S.choose(Result<&2, &2, S.Error, Cut>, Bool.not(Nat.is_eq(skip, 0n)), u => extent(t, quote, stack, skip - 1n, next, a), u =>
+        S.choose(Result<&2, &2, S.Error, Cut>, Bool.not(Nat.is_eq(skip, 0n)), u => extent(t, quote, stack, (skip - 1n : Nat), next, a), u =>
           S.choose(Result<&2, &2, S.Error, Cut>, Bool.not(String.is_empty(quote)), u =>
             S.choose(Result<&2, &2, S.Error, Cut>, String.starts_with(here, quote), u =>
-              extent(t, "", stack, String.length(quote) - 1n, next, a), u => extent(t, quote, stack, 0n, next, a)), u =>
+              extent(t, "", stack, (String.length(quote) - 1n : Nat), next, a), u => extent(t, quote, stack, 0n, next, a)), u =>
             S.choose(Result<&2, &2, S.Error, Cut>, C.is_quote(h), u =>
               S.choose(Result<&2, &2, S.Error, Cut>, String.starts_with(here, q ++ q ++ q), u =>
                 extent(t, q ++ q ++ q, stack, 2n, next, a), u => extent(t, q, stack, 0n, next, a)), u =>

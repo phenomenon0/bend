@@ -91,7 +91,7 @@ def quoted_start(+s: String, +pos: S.Pos, prefix: String) -> Result<&2, &2, S.Er
   +delim = Bool.pick(String, triple, q ++ q ++ q, q)
   +n = String.length(delim)
   quoted(String.drop(s, n), delim, triple, False{},
-    S.Pos{pos_line(pos), pos_col(pos) + n}, String.reverse(prefix ++ delim))
+    S.Pos{pos_line(pos), Nat.add(pos_col(pos), n)}, String.reverse(prefix ++ delim))
 
 
 def digit(+c: Char) -> Bool:

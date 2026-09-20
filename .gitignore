@@ -1,5 +1,6 @@
 .tmp/
 .claude/
+.agents/
 node_modules/
 *.tgz
 tests/regex/_out/

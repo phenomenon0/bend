@@ -199,10 +199,10 @@ def elts(j: S.Json) -> S.Json:
 
 # `del a, b` deletes two targets; `del (a, b)` deletes one Tuple.
 def del_targets(+e: S.Expr) -> Result<&2, &2, S.Error, S.Json>:
-  +bare = String.eq(get_tag(e), "Tuple") && Bool.not(is_grouped(e))
+  +many = String.eq(get_tag(e), "Tuple") && Bool.not(is_grouped(e))
   do Result<&2, &2, S.Error, S.Json>:
     +j : S.Json <- target_with(e, False{}, True{})
-    return S.choose(S.Json, bare, u => elts(j), u => S.JArr{S.JItem{j, S.JEnd{}}})
+    return S.choose(S.Json, many, u => elts(j), u => S.JArr{S.JItem{j, S.JEnd{}}})
 
 def block(items: S.Json, +end: S.Pos) -> S.Expr:
   node("$block", items, end, end)

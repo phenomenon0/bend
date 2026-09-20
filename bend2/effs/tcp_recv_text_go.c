@@ -41,7 +41,7 @@ static Term tcp_recv_text_go_more(Env e, IoWork* w) {
   int fd  = (int)w->hand;
   w->size = io_sys_end(w, recv(fd, w->data + w->made, (size_t)w->word, 0));
   if (w->code == EAGAIN) {
-    return io_wait_on(w, fd, POLLIN, tcp_recv_text_go_more);
+    return io_wait_on(w, fd, POLLIN, 0, tcp_recv_text_go_more);
   }
   if (w->code) {
     return tcp_recv_text_go_pack(e, w, 0, 0, false);
@@ -51,7 +51,7 @@ static Term tcp_recv_text_go_more(Env e, IoWork* w) {
   u64  cut = eof ? 0 : tcp_recv_text_go_cut(w->data, n);
   if (w->size > 0 && cut == n) {
     w->made = (intptr_t)n;
-    return io_wait_on(w, fd, POLLIN, tcp_recv_text_go_more);
+    return io_wait_on(w, fd, POLLIN, 0, tcp_recv_text_go_more);
   }
   return tcp_recv_text_go_pack(e, w, n, cut, eof);
 }

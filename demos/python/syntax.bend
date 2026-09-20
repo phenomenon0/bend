@@ -191,4 +191,5 @@ def fuel_weight(ts: List<&2, Tok>, count: Nat) -> Nat:
       count
     case Con{h, tail}:
       Tok{k, text, lo, hi} = h
-      fuel_weight(tail, 1n + count + Bool.pick(Nat, String.eq(k, "STRING"), String.length(text), 0n))
+      fuel_weight(tail, (1n + count
+        + Bool.pick(Nat, String.eq(k, "STRING"), String.length(text), 0n) : Nat))

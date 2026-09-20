@@ -172,7 +172,7 @@ def fuel_k() -> Nat:
   32n
 
 def budget(ts: List<&2, S.Tok>) -> Nat:
-  fuel_k() * (S.fuel_weight(ts, 0n) + 1n)
+  Nat.mul(fuel_k(), Nat.add(S.fuel_weight(ts, 0n), 1n))
 
 def go(+fuel: Nat, +mode: Mode) -> P.M(S.Expr):
   match fuel mode:
@@ -952,7 +952,7 @@ def go(+fuel: Nat, +mode: Mode) -> P.M(S.Expr):
         S.choose(P.M(S.Expr), P.is_text(t, ".") || P.is_text(t, "..."), u =>
           do P.M<S.Expr>:
             drop : S.Tok <- P.take
-            go(left, From{start, level + Bool.pick(Nat, P.is_text(t, "."), 1n, 3n)}), u =>
+            go(left, From{start, (level + Bool.pick(Nat, P.is_text(t, "."), 1n, 3n) : Nat)}), u =>
           do P.M<S.Expr>:
             module : S.Json <- S.choose(P.M(S.Json), P.is_text(t, "import") && Bool.not(Nat.is_eq(level, 0n)), u => P.M.pure(S.Json, S.JNull{}), u =>
               do P.M<S.Json>:
@@ -1240,7 +1240,7 @@ def parse(+ts: List<&2, S.Tok>) -> Result<&2, &2, S.Error, S.Module>:
 def statistics(count: Nat, +fuel: Nat, r: P.Reply<S.Expr>) -> S.Json:
   P.Reply{body, P.State{ts, end, remaining}} = r
   S.JObj{S.JField{"tokens", S.JNum{count}, S.JField{"budget", S.JNum{fuel},
-    S.JField{"used", S.JNum{fuel - remaining}, S.JEnd{}}}}}
+    S.JField{"used", S.JNum{(fuel - remaining : Nat)}, S.JEnd{}}}}}
 
 def stats(+ts: List<&2, S.Tok>) -> Result<&2, &2, S.Error, S.Json>:
   do Result<&2, &2, S.Error, S.Json>:

@@ -31,11 +31,11 @@ def widths(s: String, width: Nat, alt: Nat) -> Indent:
     case SNil{}:
       Indent{width, alt}
     case SCon{'\t', tail}:
-      widths(tail, ((width / 8n) + 1n) * 8n, 1n+alt)
+      widths(tail, (((width / 8n) + 1n) * 8n : Nat), (1n+alt : Nat))
     case SCon{Chr{12}, tail}:
       widths(tail, 0n, 0n)
     case SCon{h, tail}:
-      widths(tail, 1n+width, 1n+alt)
+      widths(tail, (1n+width : Nat), (1n+alt : Nat))
 
 def layout_go(levels: List<&2, Indent>, +width: Nat, +alt: Nat, +popped: Bool,
   +tail: String, +lo: S.Pos, +hi: S.Pos, +raw: String, +out: List<&2, S.Tok>) -> Result<&2, &2, S.Error, State>:
@@ -71,7 +71,7 @@ def nl(st: State, scan: C.Scan) -> State:
   C.Scan{+raw, tail, +hi} = scan
   +real = logical && List.is_empty(&2, Char, brackets)
   State{tail, hi, levels, brackets, True{}, Bool.pick(Bool, real, False{}, logical),
-    Bool.pick(List<&2, S.Tok>, real, S.Tok{"NEWLINE", raw, lo, S.Pos{C.pos_line(lo), C.pos_col(lo) + String.length(raw)}} <> out, out), False{}}
+    Bool.pick(List<&2, S.Tok>, real, S.Tok{"NEWLINE", raw, lo, S.Pos{C.pos_line(lo), Nat.add(C.pos_col(lo), String.length(raw))}} <> out, out), False{}}
 
 def eof_levels(levels: List<&2, Indent>, +pos: S.Pos, out: List<&2, S.Tok>) -> List<&2, S.Tok>:
   match levels:
@@ -84,9 +84,9 @@ def eof(st: State) -> Result<&2, &2, S.Error, State>:
   State{rest, +lo, +levels, +brackets, bol, +logical, +out, done} = st
   +line = C.pos_line(lo)
   +col = C.pos_col(lo)
-  +ep = {S.Pos{Bool.pick(Nat, Nat.is_gt(col, 0n), 1n+line, line), 0n} : S.Pos}
+  +ep = {S.Pos{Bool.pick(Nat, Nat.is_gt(col, 0n), (1n+line : Nat), line), 0n} : S.Pos}
   +last = Bool.pick(List<&2, S.Tok>, logical,
-    S.Tok{"NEWLINE", "", lo, S.Pos{line, 1n+col}} <> out, out)
+    S.Tok{"NEWLINE", "", lo, S.Pos{line, (1n+col : Nat)}} <> out, out)
   S.choose(Result<&2, &2, S.Error, State>, List.is_empty(&2, Char, brackets), u =>
     Done{State{"", ep, [], [], False{}, False{}, eof_levels(levels, ep, last), True{}}}, u =>
     fail(lo, "unclosed bracket"))
@@ -180,8 +180,8 @@ def go(fuel: Nat, +st: State) -> Result<&2, &2, S.Error, List<&2, S.Tok>>:
           go(left, next))
 
 def lex(+s: String) -> Result<&2, &2, S.Error, List<&2, S.Tok>>:
-  go(3n * (String.length(s) + 1n), State{s, S.Pos{1n, 0n}, [Indent{0n, 0n}], [], True{}, False{}, [], False{}})
+  go((3n * (String.length(s) + 1n) : Nat), State{s, S.Pos{1n, 0n}, [Indent{0n, 0n}], [], True{}, False{}, [], False{}})
 
 # An f-string field: `(expr)` lexed mid-line from the `{`, so every token keeps its source position.
 def lex_at(+s: String, pos: S.Pos) -> Result<&2, &2, S.Error, List<&2, S.Tok>>:
-  go(3n * (String.length(s) + 1n), State{s, pos, [Indent{0n, 0n}], [], False{}, True{}, [], False{}})
+  go((3n * (String.length(s) + 1n) : Nat), State{s, pos, [Indent{0n, 0n}], [], False{}, True{}, [], False{}})
