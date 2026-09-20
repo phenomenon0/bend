@@ -284,15 +284,24 @@ DEMOS = {
     # (surveyed by ast: the candidates want dicts, isinstance, Path, subprocess, sqlite3 or sets),
     # so this is the labeled composite the plan allows: two pinned real defs, each judged on its
     # own above, and a caller written here. `module` names the parts; the caller is the top of the
-    # chain and every fixture goes through it. Both calls are real: `fm_sources` as the
-    # comprehension's iterable (list[str]) and `normalize_stem` inside its body (str).
+    # chain and every fixture goes through it. All three calls are real: `fm_sources` under
+    # `keyed_sources` (list[str]), `keyed_sources` bound by the caller's let, and `normalize_stem`
+    # inside the comprehension's body (str). T5 put `keyed_sources` between the other two so one
+    # fact crosses a call; `('stem:' + s).split(':', 1)[1] == s` for every s, so the answers are
+    # the same answers, and the 200 fixtures below are unchanged.
     "source_stems": {
         "module": ["fm_sources", "normalize_stem"],
-        "caller": "def source_stems(text: str) -> list[str]:\n    return [normalize_stem(s) for s in fm_sources(text)]\n",
+        "caller": "def source_stems(text: str) -> list[str]:\n    v = keyed_sources(text)\n"
+        "    return [normalize_stem(s.split(':', 1)[1]) for s in v]\n"
+        "\ndef keyed_sources(text: str) -> list[str]:\n    return ['stem:' + s for s in fm_sources(text)]\n",
         "sig": "import re\ndef fm_sources(text: str) -> list[str]:\n    pass\n",
         "builtins": {"str": str, "list": list},
         "globals": {"re": re},
-        "wrong": ("normalize_stem(s)", "s", "the comprehension that calls nothing"),
+        "wrong": ('normalize_stem(Py.after(s, ":"))', 'Py.after(s, ":")', "the comprehension that normalizes nothing"),
+        # T5: the fact that crosses the call is one character of Python. Drop the key's colon and
+        # `keyed_sources` still type-checks, still returns list[str] -- and the caller's guarded
+        # split is granted by nothing, so the module does not emit at all.
+        "refuse": ("'stem:' + s", "'stem' + s", "the key without its colon", "Py.after is not granted by a contract"),
         "examples": [
             (("---\nsources: [a, b]\n---\nbody",), ["a", "b"]),
             (('---\ntitle: t\nsources: ["x", "y"]\n---\n',), ["x", "y"]),
@@ -312,11 +321,14 @@ DEMOS = {
             "---\nsources: -\n---",
         ],
         "generate": fm_text,
-        "c3": "tested fragment, no theorem. The module is the claim: two calls between three defs, ranked by the "
+        "c3": "tested fragment, no theorem. The module is the claim: three calls between four defs, ranked by the "
         "kernel (a callee is granted only against the defs it has already accepted, so the rank is the list "
         "position and a cycle cannot be stated). Each call is the plain Bend call; the parts' own contracts are "
         "unchanged and were judged apart above. The caller is written in this file and labeled, not mined: it "
-        "carries no reviewed source, so nothing is assumed of it beyond what the fragment already grants.",
+        "carries no reviewed source, so nothing is assumed of it beyond what the fragment already grants. One fact "
+        "crosses a call: `keyed_sources` puts every item of its result under the `stem:` key, the kernel "
+        "recomputes that from its body and mints it into the signature, and the caller's `split(':', 1)[1]` is "
+        "granted by that postcondition and by nothing else -- its own text never says the colon is there.",
     },
 }
 
@@ -647,6 +659,15 @@ def judge(name, show):
         (work / "wrong" / "demo.bend").write_text(test, encoding="utf-8")
         wrong = sh("bun", "bend2/main.ts", str(work / "wrong" / "demo.bend"))[1]
 
+        # A postcondition control: the same module with the claim made false in the PYTHON, which
+        # the kernel must refuse outright -- an emission the caller could not have had.
+        refused = None
+        if "refuse" in demo:
+            rold, rnew, _, rerr = demo["refuse"]
+            assert rold in text, "the refusal control does not apply to this source"
+            rc, out = emit("translate", work / "refuse", name, demo, text.replace(rold, rnew))
+            refused = rc != 0 and rerr in out
+
         # The doctest laws: the checker decides each by computation; a falsified want must fail.
         lawful = lied = None
         if laws:
@@ -661,6 +682,7 @@ def judge(name, show):
         and (not laws or "All terms check." not in lied)
         and wrong != want
         and wrong.startswith('"')
+        and refused in (None, True)
     )
 
     c1 = (
@@ -705,7 +727,9 @@ def judge(name, show):
             print(f"  laws: {lawful[:400]}")
     print(
         f"controls              : {'ok' if controls else 'FAIL'} (injected hole rejected by C1; {what} rejected by C2"
-        + ("; falsified doctest laws rejected by the checker)" if laws else ")")
+        + ("; falsified doctest laws rejected by the checker" if laws else "")
+        + (f"; {demo['refuse'][2]} refused by the kernel" if "refuse" in demo else "")
+        + ")"
     )
     for k, v in got.items():
         if (k == "check" and v != "All terms check.") or (k != "check" and v != want):
