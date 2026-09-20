@@ -161,7 +161,8 @@ const BOX: Lay = { ks: ["box"], arms: null };
 
 const W64: Lay = { ks: ["w64"], arms: null };
 
-const WORDS: Record<string, Lay> = { U32: W32, F32: W32, F64: W64, Nat: W64, U64: W64 };
+const WORDS: Record<string, Lay> =
+  { U32: W32, F32: W32, F64: W64, Nat: W64, U64: W64, I64: W64 };
 
 // The widest flat datatype: the shader's Tri is 24 words.
 const WIDE = 256;
@@ -222,31 +223,36 @@ const OPERATIONS: Record<string, Intr> = Object.setPrototypeOf({
     C:  "((u64)(u32)($0))",
     JS: "Number($0 & 0xFFFFFFFFn)",
   },
-  ...tpl_ops("u64_", "add:+ sub:- and:& or:| xor:^",
-    "((u64)($0) $o (u64)($1))",
-    "(($0 $o $1) & 0xFFFFFFFFFFFFFFFFn)"),
-  u64_mul: {
-    C:  "((u64)($0) * (u64)($1))",
-    JS: "(($0 * $1) & 0xFFFFFFFFFFFFFFFFn)",
-  },
+  ...tpl_w64("u64_"),
   ...tpl_ops("u64_", CMPS, "((u64)((u64)($0) $o (u64)($1)))", "($0 $o $1)"),
-  ...tpl_ops("u64_", "inc:+ shl:<< shr:>>",
-    "((u64)((u64)($0) $o 1))",
-    "(($0 $o 1n) & 0xFFFFFFFFFFFFFFFFn)"),
-  ...tpl_ops("u64_", "shln:<< shrn:>>",
-    "($1 >= 64 ? 0 : ((u64)($0) $o $1))",
-    "($1 >= 64n ? 0n : (($0 $o $1) & 0xFFFFFFFFFFFFFFFFn))"),
-  u64_not: {
-    C:  "((u64)~(u64)($0))",
-    JS: "(~$0 & 0xFFFFFFFFFFFFFFFFn)",
-  },
-  u64_is_zero: {
-    C:  "((u64)((u64)($0) == 0))",
-    JS: "($0 === 0n)",
-  },
   u64_cmp: {
     C:  "(((u64)($0) > (u64)($1)) + ((u64)($0) >= (u64)($1)))",
     JS: "cmp_new($0, $1)",
+  },
+  ...tpl_w64("i64_"),
+  ...tpl_ops("i64_", CMPS, "((u64)((int64_t)($0) $o (int64_t)($1)))",
+    "(BigInt.asIntN(64, $0) $o BigInt.asIntN(64, $1))"),
+  i64_cmp: {
+    C:  "(((int64_t)($0) > (int64_t)($1))"
+      + " + ((int64_t)($0) >= (int64_t)($1)))",
+    JS: "cmp_new(BigInt.asIntN(64, $0), BigInt.asIntN(64, $1))",
+  },
+  i64_neg: {
+    C:  "((u64)(-(int64_t)($0)))",
+    JS: "((-$0) & 0xFFFFFFFFFFFFFFFFn)",
+  },
+  i64_shr_s: {
+    C:  "((u64)((int64_t)($0) >> 1))",
+    JS: "BigInt.asUintN(64, BigInt.asIntN(64, $0) >> 1n)",
+  },
+  i64_shr_s_n: {
+    C:  "((u64)((int64_t)($0) >> ($1 >= 64 ? 63 : $1)))",
+    JS: "BigInt.asUintN(64,"
+      + " BigInt.asIntN(64, $0) >> ($1 >= 64n ? 63n : $1))",
+  },
+  i64_is_neg: {
+    C:  "((u64)((int64_t)($0) < 0))",
+    JS: "(BigInt.asIntN(64, $0) < 0n)",
   },
   ...tpl_ops("f32_", "add:+ sub:- mul:* div:/",
     "f32_rewrap(f32_unbox($0) $o f32_unbox($1))", "Math.fround($0 $o $1)"),
@@ -477,6 +483,14 @@ const OPTIMIZED: Record<Bend.Name, Native> = Object.setPrototypeOf({
     },
     elim: {
       U64: ["u64_to_word($0)"],
+    },
+  },
+  I64: {
+    intr: {
+      I64: "word_to_u64($0)",
+    },
+    elim: {
+      I64: ["u64_to_word($0)"],
     },
   },
   Char: {
@@ -1150,6 +1164,31 @@ function tpl_ops(pre: string, names: string, C: string, JS: string, call = false
     out[pre + k] = { C: C.replaceAll("$o", o), JS: JS.replaceAll("$o", jo), call };
   }
   return out;
+}
+
+// The bit-level 64-bit integer ops, shared by U64 and I64: two's complement
+// makes add, sub, mul, the bitwise ops and the logical shifts sign-agnostic,
+// so only the comparisons, the negation and the arithmetic shift differ.
+function tpl_w64(p: string): Record<string, Intr> {
+  return {
+    ...tpl_ops(p, "add:+ sub:- mul:* and:& or:| xor:^",
+      "((u64)($0) $o (u64)($1))",
+      "(($0 $o $1) & 0xFFFFFFFFFFFFFFFFn)"),
+    ...tpl_ops(p, "inc:+ shl:<< shr:>>",
+      "((u64)((u64)($0) $o 1))",
+      "(($0 $o 1n) & 0xFFFFFFFFFFFFFFFFn)"),
+    ...tpl_ops(p, "shln:<< shrn:>>",
+      "($1 >= 64 ? 0 : ((u64)($0) $o $1))",
+      "($1 >= 64n ? 0n : (($0 $o $1) & 0xFFFFFFFFFFFFFFFFn))"),
+    [p + "not"]: {
+      C:  "((u64)~(u64)($0))",
+      JS: "(~$0 & 0xFFFFFFFFFFFFFFFFn)",
+    },
+    [p + "is_zero"]: {
+      C:  "((u64)((u64)($0) == 0))",
+      JS: "($0 === 0n)",
+    },
+  };
 }
 
 function tpl(t: Gen, xs: string[]): string {
@@ -3280,7 +3319,8 @@ function emit_match(fl: File, x: Of<"Mat"> | Of<"Efq">,
   const rest = args.slice(1);
   const all = ty_all(fl.book, ty) ?? die("an untyped match");
   const adt = mat_adt(fl.book, all.A);
-  const word = adt.k === "U32" || adt.k === "F32" || adt.k === "U64";
+  const word = adt.k === "U32" || adt.k === "F32"
+    || adt.k === "U64" || adt.k === "I64";
   const lay = word ? lay_node(fl.book, adt.k) : lay_of(fl.book, all.A);
   const u = val_hold(fl, val_to(fl, args[0], word ? WORDS[adt.k] : lay), "s");
   const ret = all.B(DUMMY);
@@ -3999,6 +4039,7 @@ using namespace metal;
 
 #ifdef __METAL_VERSION__
 typedef ulong u64;
+typedef long  int64_t;
 typedef uint  u32;
 typedef uchar u8;
 typedef float f32;
