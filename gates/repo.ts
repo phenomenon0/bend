@@ -73,6 +73,7 @@ allow(/^gates\/(_lib|_run|perf|ping|repo|test)\.ts$/, 6000);
 allow(/^tests\/[a-z]+\/[a-z0-9_]+\.bend$/, 16000);
 allow(/^tests\/[a-z]+\/[a-z0-9_]+\.(c|js)$/, 8500);
 allow(/^tests\/(f64|strings|codex)\/[a-zA-Z0-9_.-]+$/, 16000);
+allow(/^tests\/kernels\/(run\.sh|mutations\.sh|slow\/sha_million\.bend)$/, 16000);
 allow(/^tests\/(regex|parser|lint|translate|translator)\/[A-Za-z0-9_\/.-]+$/, 16000);
 allow(/^docs\/omen\/[A-Za-z0-9_\/.-]+$/, 16000);
 allow(/^tests\/strings\/utf8\.bin$/, 200000, true);

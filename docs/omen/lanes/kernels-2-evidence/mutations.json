@@ -1,0 +1,106 @@
+[
+  {
+    "kernel": "sha256",
+    "mutation": "initial state",
+    "fixture": "sha_abc",
+    "strict_check": true,
+    "rejected_lanes": [
+      "interpret",
+      "js",
+      "c"
+    ],
+    "seconds": 3.8963947200099938,
+    "log": "ok   sha_abc [check]\nFAIL sha_abc [interpret] status=0\n\"5effb081b68436d82671e77e3da4ca6bc21be34e9a52795bfecdfe5918005f2c\"\n--- /tmp/bend-kernels.98LIoZ/expected\t2026-09-20 10:35:34.310146179 -0500\n+++ /tmp/bend-kernels.98LIoZ/actual\t2026-09-20 10:35:36.368165621 -0500\n@@ -1 +1 @@\n-\"ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad\"\n+\"5effb081b68436d82671e77e3da4ca6bc21be34e9a52795bfecdfe5918005f2c\"\nFAIL sha_abc [js] status=0\n\"5effb081b68436d82671e77e3da4ca6bc21be34e9a52795bfecdfe5918005f2c\"\n--- /tmp/bend-kernels.98LIoZ/expected\t2026-09-20 10:35:34.310146179 -0500\n+++ /tmp/bend-kernels.98LIoZ/actual\t2026-09-20 10:35:36.820169891 -0500\n@@ -1 +1 @@\n-\"ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad\"\n+\"5effb081b68436d82671e77e3da4ca6bc21be34e9a52795bfecdfe5918005f2c\"\nFAIL sha_abc [c] status=0\n\"5effb081b68436d82671e77e3da4ca6bc21be34e9a52795bfecdfe5918005f2c\"\n--- /tmp/bend-kernels.98LIoZ/expected\t2026-09-20 10:35:34.310146179 -0500\n+++ /tmp/bend-kernels.98LIoZ/actual\t2026-09-20 10:35:38.197182899 -0500\n@@ -1 +1 @@\n-\"ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad\"\n+\"5effb081b68436d82671e77e3da4ca6bc21be34e9a52795bfecdfe5918005f2c\"\n\nKernels PASS: 1, FAIL: 3\n"
+  },
+  {
+    "kernel": "sha256",
+    "mutation": "rotation",
+    "fixture": "sha_abc",
+    "strict_check": true,
+    "rejected_lanes": [
+      "interpret",
+      "js",
+      "c"
+    ],
+    "seconds": 3.682541066009435,
+    "log": "ok   sha_abc [check]\nFAIL sha_abc [interpret] status=0\n\"071cf09cee9dd797561a81ee615488b7b7086149d014cec2dae8748498e9617b\"\n--- /tmp/bend-kernels.700J7w/expected\t2026-09-20 10:35:38.207182994 -0500\n+++ /tmp/bend-kernels.700J7w/actual\t2026-09-20 10:35:40.213201944 -0500\n@@ -1 +1 @@\n-\"ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad\"\n+\"071cf09cee9dd797561a81ee615488b7b7086149d014cec2dae8748498e9617b\"\nFAIL sha_abc [js] status=0\n\"071cf09cee9dd797561a81ee615488b7b7086149d014cec2dae8748498e9617b\"\n--- /tmp/bend-kernels.700J7w/expected\t2026-09-20 10:35:38.207182994 -0500\n+++ /tmp/bend-kernels.700J7w/actual\t2026-09-20 10:35:40.688206432 -0500\n@@ -1 +1 @@\n-\"ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad\"\n+\"071cf09cee9dd797561a81ee615488b7b7086149d014cec2dae8748498e9617b\"\nFAIL sha_abc [c] status=0\n\"071cf09cee9dd797561a81ee615488b7b7086149d014cec2dae8748498e9617b\"\n--- /tmp/bend-kernels.700J7w/expected\t2026-09-20 10:35:38.207182994 -0500\n+++ /tmp/bend-kernels.700J7w/actual\t2026-09-20 10:35:41.881217702 -0500\n@@ -1 +1 @@\n-\"ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad\"\n+\"071cf09cee9dd797561a81ee615488b7b7086149d014cec2dae8748498e9617b\"\n\nKernels PASS: 1, FAIL: 3\n"
+  },
+  {
+    "kernel": "sha256",
+    "mutation": "padding marker",
+    "fixture": "sha_empty",
+    "strict_check": true,
+    "rejected_lanes": [
+      "interpret",
+      "js",
+      "c"
+    ],
+    "seconds": 3.1888420410105027,
+    "log": "ok   sha_empty [check]\nFAIL sha_empty [interpret] status=0\n\"da5698be17b9b46962335799779fbeca8ce5d491c0d26243bafef9ea1837a9d8\"\n--- /tmp/bend-kernels.heJGgD/expected\t2026-09-20 10:35:41.890217787 -0500\n+++ /tmp/bend-kernels.heJGgD/actual\t2026-09-20 10:35:43.614234074 -0500\n@@ -1 +1 @@\n-\"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\"\n+\"da5698be17b9b46962335799779fbeca8ce5d491c0d26243bafef9ea1837a9d8\"\nFAIL sha_empty [js] status=0\n\"da5698be17b9b46962335799779fbeca8ce5d491c0d26243bafef9ea1837a9d8\"\n--- /tmp/bend-kernels.heJGgD/expected\t2026-09-20 10:35:41.890217787 -0500\n+++ /tmp/bend-kernels.heJGgD/actual\t2026-09-20 10:35:43.986237588 -0500\n@@ -1 +1 @@\n-\"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\"\n+\"da5698be17b9b46962335799779fbeca8ce5d491c0d26243bafef9ea1837a9d8\"\nFAIL sha_empty [c] status=0\n\"da5698be17b9b46962335799779fbeca8ce5d491c0d26243bafef9ea1837a9d8\"\n--- /tmp/bend-kernels.heJGgD/expected\t2026-09-20 10:35:41.890217787 -0500\n+++ /tmp/bend-kernels.heJGgD/actual\t2026-09-20 10:35:45.071247838 -0500\n@@ -1 +1 @@\n-\"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\"\n+\"da5698be17b9b46962335799779fbeca8ce5d491c0d26243bafef9ea1837a9d8\"\n\nKernels PASS: 1, FAIL: 3\n"
+  },
+  {
+    "kernel": "sha256",
+    "mutation": "padding boundary",
+    "fixture": "sha_448",
+    "strict_check": true,
+    "rejected_lanes": [
+      "interpret",
+      "js",
+      "c"
+    ],
+    "seconds": 3.3440663139917888,
+    "log": "ok   sha_448 [check]\nFAIL sha_448 [interpret] status=0\n\"20f9b0fcd4bcf4b22a7ff166454292e93e8139a97f0ebb309b1c0a25008d383d\"\n--- /tmp/bend-kernels.6aulrN/expected\t2026-09-20 10:35:45.080247923 -0500\n+++ /tmp/bend-kernels.6aulrN/actual\t2026-09-20 10:35:46.837264522 -0500\n@@ -1 +1 @@\n-\"248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1\"\n+\"20f9b0fcd4bcf4b22a7ff166454292e93e8139a97f0ebb309b1c0a25008d383d\"\nFAIL sha_448 [js] status=0\n\"20f9b0fcd4bcf4b22a7ff166454292e93e8139a97f0ebb309b1c0a25008d383d\"\n--- /tmp/bend-kernels.6aulrN/expected\t2026-09-20 10:35:45.080247923 -0500\n+++ /tmp/bend-kernels.6aulrN/actual\t2026-09-20 10:35:47.267268584 -0500\n@@ -1 +1 @@\n-\"248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1\"\n+\"20f9b0fcd4bcf4b22a7ff166454292e93e8139a97f0ebb309b1c0a25008d383d\"\nFAIL sha_448 [c] status=0\n\"20f9b0fcd4bcf4b22a7ff166454292e93e8139a97f0ebb309b1c0a25008d383d\"\n--- /tmp/bend-kernels.6aulrN/expected\t2026-09-20 10:35:45.080247923 -0500\n+++ /tmp/bend-kernels.6aulrN/actual\t2026-09-20 10:35:48.416279439 -0500\n@@ -1 +1 @@\n-\"248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1\"\n+\"20f9b0fcd4bcf4b22a7ff166454292e93e8139a97f0ebb309b1c0a25008d383d\"\n\nKernels PASS: 1, FAIL: 3\n"
+  },
+  {
+    "kernel": "chacha20",
+    "mutation": "rotation",
+    "fixture": "chacha_quarter",
+    "strict_check": true,
+    "rejected_lanes": [
+      "interpret",
+      "js",
+      "c"
+    ],
+    "seconds": 1.4882470989978174,
+    "log": "ok   chacha_quarter [check]\nFAIL chacha_quarter [interpret] status=0\n\"6910d159350ccbee4c6a602c71f11968\"\n--- /tmp/bend-kernels.92EatY/expected\t2026-09-20 10:35:48.425279524 -0500\n+++ /tmp/bend-kernels.92EatY/actual\t2026-09-20 10:35:48.992284880 -0500\n@@ -1 +1 @@\n-\"f4922aeacef81ccb2e478145bbc48158\"\n+\"6910d159350ccbee4c6a602c71f11968\"\nFAIL chacha_quarter [js] status=0\n\"6910d159350ccbee4c6a602c71f11968\"\n--- /tmp/bend-kernels.92EatY/expected\t2026-09-20 10:35:48.425279524 -0500\n+++ /tmp/bend-kernels.92EatY/actual\t2026-09-20 10:35:49.327288045 -0500\n@@ -1 +1 @@\n-\"f4922aeacef81ccb2e478145bbc48158\"\n+\"6910d159350ccbee4c6a602c71f11968\"\nFAIL chacha_quarter [c] status=0\n\"6910d159350ccbee4c6a602c71f11968\"\n--- /tmp/bend-kernels.92EatY/expected\t2026-09-20 10:35:48.425279524 -0500\n+++ /tmp/bend-kernels.92EatY/actual\t2026-09-20 10:35:49.904293496 -0500\n@@ -1 +1 @@\n-\"f4922aeacef81ccb2e478145bbc48158\"\n+\"6910d159350ccbee4c6a602c71f11968\"\n\nKernels PASS: 1, FAIL: 3\n"
+  },
+  {
+    "kernel": "chacha20",
+    "mutation": "round count",
+    "fixture": "chacha_block",
+    "strict_check": true,
+    "rejected_lanes": [
+      "interpret",
+      "js",
+      "c"
+    ],
+    "seconds": 2.315304231000482,
+    "log": "ok   chacha_block [check]\nFAIL chacha_block [interpret] status=0\n\"4bf62818b6c521cd47c5e70c404c36b422c235dfa794e79f04f2056b97582306c30dd43bb1a4c9dbef0efd9ea7d6429c238b0721a3e793ba8993f4fc2660de6c\"\n--- /tmp/bend-kernels.HefBMR/expected\t2026-09-20 10:35:49.914293590 -0500\n+++ /tmp/bend-kernels.HefBMR/actual\t2026-09-20 10:35:51.111304898 -0500\n@@ -1 +1 @@\n-\"10f1e7e4d13b5915500fdd1fa32071c4c7d1f4c733c068030422aa9ac3d46c4ed2826446079faa0914c2d705d98b02a2b5129cd1de164eb9cbd083e8a2503c4e\"\n+\"4bf62818b6c521cd47c5e70c404c36b422c235dfa794e79f04f2056b97582306c30dd43bb1a4c9dbef0efd9ea7d6429c238b0721a3e793ba8993f4fc2660de6c\"\nFAIL chacha_block [js] status=0\n\"4bf62818b6c521cd47c5e70c404c36b422c235dfa794e79f04f2056b97582306c30dd43bb1a4c9dbef0efd9ea7d6429c238b0721a3e793ba8993f4fc2660de6c\"\n--- /tmp/bend-kernels.HefBMR/expected\t2026-09-20 10:35:49.914293590 -0500\n+++ /tmp/bend-kernels.HefBMR/actual\t2026-09-20 10:35:51.518308743 -0500\n@@ -1 +1 @@\n-\"10f1e7e4d13b5915500fdd1fa32071c4c7d1f4c733c068030422aa9ac3d46c4ed2826446079faa0914c2d705d98b02a2b5129cd1de164eb9cbd083e8a2503c4e\"\n+\"4bf62818b6c521cd47c5e70c404c36b422c235dfa794e79f04f2056b97582306c30dd43bb1a4c9dbef0efd9ea7d6429c238b0721a3e793ba8993f4fc2660de6c\"\nFAIL chacha_block [c] status=0\n\"4bf62818b6c521cd47c5e70c404c36b422c235dfa794e79f04f2056b97582306c30dd43bb1a4c9dbef0efd9ea7d6429c238b0721a3e793ba8993f4fc2660de6c\"\n--- /tmp/bend-kernels.HefBMR/expected\t2026-09-20 10:35:49.914293590 -0500\n+++ /tmp/bend-kernels.HefBMR/actual\t2026-09-20 10:35:52.221315385 -0500\n@@ -1 +1 @@\n-\"10f1e7e4d13b5915500fdd1fa32071c4c7d1f4c733c068030422aa9ac3d46c4ed2826446079faa0914c2d705d98b02a2b5129cd1de164eb9cbd083e8a2503c4e\"\n+\"4bf62818b6c521cd47c5e70c404c36b422c235dfa794e79f04f2056b97582306c30dd43bb1a4c9dbef0efd9ea7d6429c238b0721a3e793ba8993f4fc2660de6c\"\n\nKernels PASS: 1, FAIL: 3\n"
+  },
+  {
+    "kernel": "chacha20",
+    "mutation": "constant",
+    "fixture": "chacha_zero",
+    "strict_check": true,
+    "rejected_lanes": [
+      "interpret",
+      "js",
+      "c"
+    ],
+    "seconds": 2.3321817260002717,
+    "log": "ok   chacha_zero [check]\nFAIL chacha_zero [interpret] status=0\n\"b52369ef3e408795ccc43f398e642e602ae79e255c0f634d9bd374350cc8205968eaec1221dbb7d74347892737c4ed89e8a6124c2eea6579fd7f5b5ecd730836\"\n--- /tmp/bend-kernels.69ZqqQ/expected\t2026-09-20 10:35:52.230315470 -0500\n+++ /tmp/bend-kernels.69ZqqQ/actual\t2026-09-20 10:35:53.558328015 -0500\n@@ -1 +1 @@\n-\"76b8e0ada0f13d90405d6ae55386bd28bdd219b8a08ded1aa836efcc8b770dc7da41597c5157488d7724e03fb8d84a376a43b8f41518a11cc387b669b2ee6586\"\n+\"b52369ef3e408795ccc43f398e642e602ae79e255c0f634d9bd374350cc8205968eaec1221dbb7d74347892737c4ed89e8a6124c2eea6579fd7f5b5ecd730836\"\nFAIL chacha_zero [js] status=0\n\"b52369ef3e408795ccc43f398e642e602ae79e255c0f634d9bd374350cc8205968eaec1221dbb7d74347892737c4ed89e8a6124c2eea6579fd7f5b5ecd730836\"\n--- /tmp/bend-kernels.69ZqqQ/expected\t2026-09-20 10:35:52.230315470 -0500\n+++ /tmp/bend-kernels.69ZqqQ/actual\t2026-09-20 10:35:53.914331378 -0500\n@@ -1 +1 @@\n-\"76b8e0ada0f13d90405d6ae55386bd28bdd219b8a08ded1aa836efcc8b770dc7da41597c5157488d7724e03fb8d84a376a43b8f41518a11cc387b669b2ee6586\"\n+\"b52369ef3e408795ccc43f398e642e602ae79e255c0f634d9bd374350cc8205968eaec1221dbb7d74347892737c4ed89e8a6124c2eea6579fd7f5b5ecd730836\"\nFAIL chacha_zero [c] status=0\n\"b52369ef3e408795ccc43f398e642e602ae79e255c0f634d9bd374350cc8205968eaec1221dbb7d74347892737c4ed89e8a6124c2eea6579fd7f5b5ecd730836\"\n--- /tmp/bend-kernels.69ZqqQ/expected\t2026-09-20 10:35:52.230315470 -0500\n+++ /tmp/bend-kernels.69ZqqQ/actual\t2026-09-20 10:35:54.553337415 -0500\n@@ -1 +1 @@\n-\"76b8e0ada0f13d90405d6ae55386bd28bdd219b8a08ded1aa836efcc8b770dc7da41597c5157488d7724e03fb8d84a376a43b8f41518a11cc387b669b2ee6586\"\n+\"b52369ef3e408795ccc43f398e642e602ae79e255c0f634d9bd374350cc8205968eaec1221dbb7d74347892737c4ed89e8a6124c2eea6579fd7f5b5ecd730836\"\n\nKernels PASS: 1, FAIL: 3\n"
+  },
+  {
+    "kernel": "chacha20",
+    "mutation": "counter advance",
+    "fixture": "chacha_65",
+    "strict_check": true,
+    "rejected_lanes": [
+      "interpret",
+      "js",
+      "c"
+    ],
+    "seconds": 3.584590598999057,
+    "log": "ok   chacha_65 [check]\nFAIL chacha_65 [interpret] status=0\n\"224f51f3401bd9e12fde276fb8631ded8c131f823d2c06e27e4fcaec9ef3cf788a3b0aa372600a92b57974cded2b9334794cba40c63e34cdea212c4cf07d41b7c8\"\n--- /tmp/bend-kernels.uaS1SR/expected\t2026-09-20 10:35:54.563545530 -0500\n+++ /tmp/bend-kernels.uaS1SR/actual\t2026-09-20 10:35:56.813358766 -0500\n@@ -1 +1 @@\n-\"224f51f3401bd9e12fde276fb8631ded8c131f823d2c06e27e4fcaec9ef3cf788a3b0aa372600a92b57974cded2b9334794cba40c63e34cdea212c4cf07d41b769\"\n+\"224f51f3401bd9e12fde276fb8631ded8c131f823d2c06e27e4fcaec9ef3cf788a3b0aa372600a92b57974cded2b9334794cba40c63e34cdea212c4cf07d41b7c8\"\nFAIL chacha_65 [js] status=0\n\"224f51f3401bd9e12fde276fb8631ded8c131f823d2c06e27e4fcaec9ef3cf788a3b0aa372600a92b57974cded2b9334794cba40c63e34cdea212c4cf07d41b7c8\"\n--- /tmp/bend-kernels.uaS1SR/expected\t2026-09-20 10:35:54.563545530 -0500\n+++ /tmp/bend-kernels.uaS1SR/actual\t2026-09-20 10:35:57.253362922 -0500\n@@ -1 +1 @@\n-\"224f51f3401bd9e12fde276fb8631ded8c131f823d2c06e27e4fcaec9ef3cf788a3b0aa372600a92b57974cded2b9334794cba40c63e34cdea212c4cf07d41b769\"\n+\"224f51f3401bd9e12fde276fb8631ded8c131f823d2c06e27e4fcaec9ef3cf788a3b0aa372600a92b57974cded2b9334794cba40c63e34cdea212c4cf07d41b7c8\"\nFAIL chacha_65 [c] status=0\n\"224f51f3401bd9e12fde276fb8631ded8c131f823d2c06e27e4fcaec9ef3cf788a3b0aa372600a92b57974cded2b9334794cba40c63e34cdea212c4cf07d41b7c8\"\n--- /tmp/bend-kernels.uaS1SR/expected\t2026-09-20 10:35:54.563545530 -0500\n+++ /tmp/bend-kernels.uaS1SR/actual\t2026-09-20 10:35:58.138371283 -0500\n@@ -1 +1 @@\n-\"224f51f3401bd9e12fde276fb8631ded8c131f823d2c06e27e4fcaec9ef3cf788a3b0aa372600a92b57974cded2b9334794cba40c63e34cdea212c4cf07d41b769\"\n+\"224f51f3401bd9e12fde276fb8631ded8c131f823d2c06e27e4fcaec9ef3cf788a3b0aa372600a92b57974cded2b9334794cba40c63e34cdea212c4cf07d41b7c8\"\n\nKernels PASS: 1, FAIL: 3\n"
+  }
+]
