@@ -2,7 +2,7 @@
 
 Branch `lane-translator-t5`, worktree `bend-work-translator-t5`, off `omen` @ `ac994157` (sync 2.0.17 + T4 + all reports in tree).
 T5 = **facts that cross a call boundary.** T4's deviation 4 was the wall: *"No caller-side fact crosses a call, and no callee postcondition comes back."* A caller of `fm_sources` that wanted "each item is under the `sources:` key" had to re-derive it from text it cannot see. T5 puts a **postcondition slot on `Sig`**, recomputed at the callee end from the body alone and granted at the call site by the existing call rule.
-Semantic pin: CPython 3.11.15. Acceptance: `bash tests/translator/run.sh` → **`Translator PASS: 40, FAIL: 0`**, ending with five judge demos, each now also with `--optimize`: **`normalize_stem: C1 ok · C2 191/191`**, **`repo_of: C1 ok · C2 186/186`** (+ **C4 1 step Proven**), **`first_dash: C1 ok · C2 168/168 · 2/2 closed doctest laws`**, **`fm_sources: C1 ok · C2 194/194`**, **`source_stems: C1 ok · C2 200/200`** (all C3 tested-fragment; the four no-step demos, the module among them, **C4 no step · identical**).
+Semantic pin: CPython 3.11.15. Acceptance: `bash tests/translator/run.sh` → **`Translator PASS: 40, FAIL: 0`**, ending with seven judge demos, each also with `--optimize`: **`normalize_stem: C1 ok · C2 191/191`**, **`repo_of: C1 ok · C2 186/186`** (+ **C4 1 step Proven**), **`first_dash: C1 ok · C2 168/168 · 2/2 closed doctest laws`**, **`fm_sources: C1 ok · C2 194/194`**, **`source_stems: C1 ok · C2 200/200`**, **`html_file_name: C1 ok · C2 189/189`**, **`page_tail: C1 ok · C2 187/187`** (all C3 tested-fragment; the six no-step demos, both modules among them, **C4 no step · identical**).
 
 Untouched, as instructed: `bend2/**`, `gates/**`, `tests/caps.sh`, `demos/python/syntax.bend`, every other namespace. Faithful mode only, plus the brief's optional tail in tier ③: `optimize.bend` was touched where the widened record forced it, and then given its module door. No pushes.
 
@@ -15,7 +15,8 @@ Untouched, as instructed: `bend2/**`, `gates/**`, `tests/caps.sh`, `demos/python
 | judge | `7e671664` | `judge.py`: `keyed_sources` between the caller and `fm_sources`, and the false-claim control |
 | report | `1a057b87` | `docs/omen/lanes/translator-t5.md`, and the brief it was executed from |
 | module door (optional tail) | `26a1d920` | `optimize.bend`: `whole`, `optimize_all`, `rewrite_all`, `logs_of`, `framed` on a list; `opt_module.bend` (new pin); `run.sh` runs the `source_stems` module with `--optimize` |
-| report, second pass | this commit | the door, in the same report |
+| report, second pass | `66b281df` | the door, in the same report |
+| real-program showcase | this commit | `judge.py`: `html_file_name` (mined, sha256-pinned) judged apart, then the `page_tail` module that consumes its carried literal, with two refusal controls; `run.sh` runs both |
 
 ## What changed
 
@@ -101,6 +102,69 @@ def one(text: str) -> str:
 - **The log is `logs_of`** — the defs' logs concatenated in **rank** order. A line names its site by the Python span, so the def it came from is not in doubt; `opt_module.bend` pins a module whose two sites log callee-first, which is not the source's order.
 - **`run.sh` now runs `source_stems` with `--optimize`** like the other four demos. No rule fires on that module, so C4 is the byte-identity claim the three no-step demos already make: **`source_stems --optimize: C4 no step · identical`**. `judge.py` needed no change — its `--optimize` path already sets `PY_DEF=""` for a `module` demo and takes the no-log branch.
 
+## The real-program showcase (a mined producer, and the guard its literal unlocks)
+
+`source_stems` proves the rule, but both halves of its crossing pair are written in `judge.py` — deviation 10 of the first pass said so. This slice pays that down as far as the corpus allows: **the producer is mined and sha256-pinned**, and the fact that crosses the call is recomputed off *its* body.
+
+**The producer.** `html_file_name`, from LLVM's opt-viewer (`…/llvm/tools/opt-viewer/optrecord.py:53`), sha256 `f8270a39f647ca17…`:
+
+```python
+def html_file_name(filename):
+    return filename.replace("/", "_").replace("#", "_") + ".html"
+```
+
+One return, no control flow, every primitive already in the fragment. It is judged **apart first**, as its own demo — `html_file_name: C1 ok · C2 189/189 · C3 tested-fragment`, C4 no step · identical — so the pair's evidence is not one file's. The def is unannotated in the source, so the judge supplies the reviewed signature as a **type stub** (`def html_file_name(filename: str) -> str: pass`), exactly as the other mined demos do. A stub is types, and **there is no Python syntax for a postcondition**: the claim cannot be smuggled in through it. `verify_in` mints it off the body or it does not exist.
+
+**The consumer.** `page_tail` binds the call and splits on the dot:
+
+```python
+def page_tail(filename: str) -> str:
+    page = html_file_name(filename)
+    return page.split(".", 1)[1]
+```
+
+`split(sep, 1)[1]` is the guarded contract — `Py.after` is emitted only under a known `String.contains(page, ".")` — and this is the **same split `repo_of` writes**, three lines under a hand-written `'.' not in pid` test that pays for it. Here there is no test to write, and nothing in `page_tail`'s own text says a dot is there. The chain, end to end:
+
+```
+carries(body)          String.append(String.replace(String.replace(filename,…),…), ".html")  ->  [".html"]
+sure / verify_in       PHas{".html"}, recomputed from the mined body, not read from the stub
+fresh                  the checked claim is minted into html_file_name's Sig
+lets                   page = html_file_name(filename) is an ICall, so the fact lands on `page`
+gives                  contains ".html"  widens to  contains "."   (the split's guard; "." ⊂ ".html")
+```
+
+**Two controls, each one character of Python**, and each demanding that **nothing be emitted**:
+
+| substitution | what it kills | result |
+|---|---|---|
+| `+ ".html"` → `+ "html"` | the producer stops putting the dot there — the claim is gone | `primitive Py.after is not granted by a contract (or its guard is not known here) at 3:11` |
+| `split(".", 1)` → `split("!", 1)` | the consumer asks for a separator the claim does not contain — the widening is gone | same diagnostic, same span |
+
+Both mutants still parse, still type-check as Python and still return `str`; CPython runs them happily. Each control asserts its substitution applies before it runs, so neither can pass by matching nothing.
+
+```
+$ python3 tests/translator/judge.py --demo page_tail --optimize
+source   …/llvm/tools/opt-viewer/optrecord.py:53 html_file_name sha256 f8270a39f647ca17 (ast extraction; module never imported)
+source   tests/translator/judge.py page_tail caller written here (labeled composite: 1 pinned def + the caller; the module is never imported)
+fixtures 7 literal examples + 20 contract edges + 160 generated (seed 20260919) = 187
+C1 checker acceptance : ok (no hole/open goal/@unsafe; strict check; lanes check+interpret+js+c all ran)
+C2 source parity      : ok interpret 187/187 js 187/187 c 187/187; lanes identical: True
+C3 theorem status     : tested fragment, no theorem. Two defs, one call, and one fact across it. …
+controls              : ok (injected hole rejected by C1; the tail that never splits rejected by C2;
+                        the page name without its dot refused by the kernel; a separator the claim
+                        does not hold refused by the kernel)
+page_tail: C1 ok · C2 187/187 · C3 tested-fragment
+optimized             : ok no rewrite logged; byte-identical to the faithful file: True
+page_tail --optimize: C4 no step · identical
+```
+
+**Why the caller is still written here** (and what the mining actually found). The corpus has no in-fragment **call site**. `html_file_name`'s own caller in `optrecord.py` is `make_link`, which does `'"{}#L{}"'.format(html_file_name(File), Line)`: `str.format` is outside the fragment, and the result is never bound to a name — deviation 7 requires the binding, because `lets` is where facts are born and it takes a name. An independent AST join over all **11,003** `.py` files reachable in the tree found **zero** same-file pairs where a literal-carrying producer's result is bound and then split on a separator that literal contains, which reproduces the survey handed to this lane (6,810 files, ~5,100 bound-name guard sites, 116 `"literal" + x` producers, zero perfect pairs). The two candidates offered with the brief were both read and both rejected on the fragment, not on taste:
+
+- **`daemon.py:485 _recent_conversation`** — out of fragment as written (`Compare LtE`, `.find`, `\n` escapes, dynamic slice bounds), and *even repaired* it would claim nothing: its early `return text` path means `shared` intersects two arms to the empty set. Its guard site is `startswith`, which carries **no** `pre` in the contract list, so that consumer never needed a postcondition at all.
+- **`lerobot.py:57 block_name`** — five return paths carrying five different literals (`"action/ctrl"`, `"reward"`, `"done"`, `"signal/…"`); `shared` intersects them to empty. Its consumers at 172/228 are `startswith` again.
+
+So the honest shape of the deliverable: **the producer is real, the fact is real and machine-derived, the guard is the corpus's own shape** (`repo_of` writes the identical split), and the two-line caller that binds them is written here and labeled as such on every run.
+
 ## Span-map notes
 
 **T5 adds no node, so it adds no row kind.** The postcondition is not in the emitted text and has no span of its own; it is a fact about a `let`-bound name, and the `let` already has its row. In `emit_post.bend`:
@@ -159,6 +223,7 @@ source_stems --optimize: C4 no step · identical
 | `refuse.bend` | +12 | T5 source-path rows (`mod(label, body)` = `translate(body, contracts(), "")`) |
 | `ir_forged.bend` | +12 | T5 forged TypedIR modules and claims (`mod(label, fs)` = `emit_all(fs, contracts())`) |
 | `judge.py` | +1 control | the false claim in the Python, refused by the kernel |
+| `judge.py` | +2 demos | `html_file_name` (mined producer, judged apart) and `page_tail` (the module that consumes its claim), with two refusal controls |
 | `emit_normalize`, `emit_repo_of`, `emit_fm_sources`, `emit_module`, `opt_repo_of`, `opt_rules` | — | untouched: T1–T4 emission is byte-identical, re-run not re-pinned |
 
 **`refuse.bend`, 12 T5 rows.** Three positive, nine refusals. Every row uses the same two callees — `keyed` (a comprehension under the `stem:` key, `PEach`) and `one` (`'stem:' + text.strip()`, `PHas`) — so the false rows differ from the true ones by **one character of Python**, the key's colon.
@@ -199,7 +264,7 @@ No T5 forgery found a hole: every one was refused by the rule as first written. 
 |---|---|---|---|
 | `demos/python/translate.bend` | 100,241 | **32,471** | 64,000 |
 | `demos/python/optimize.bend` | 11,207 | **3,666** | 64,000 |
-| `tests/translator/judge.py` | 44,727 | **12,718** | 16,000 |
+| `tests/translator/judge.py` | 50,326 | **14,156** | 16,000 |
 | `tests/translator/ir_forged.bend` | 27,974 | **9,595** | 16,000 |
 | `tests/translator/refuse.bend` | 25,525 | **7,862** | 16,000 |
 | `tests/translator/emit_post.bend` | 4,037 | **1,595** | 16,000 |
@@ -212,7 +277,7 @@ No T5 forgery found a hole: every one was refused by the rule as first written. 
 
 **New paths:** `tests/translator/emit_post.bend` (4,037 bytes), `tests/translator/opt_module.bend` (4,749 bytes) and `docs/omen/lanes/translator-t5.md`. All match existing allow rules (`tests/translator/**`, `docs/omen/**`) — **no gate rejection**. `optimize.bend` grew 1,384 bytes / **416 ttok** for the door, to 6% of its cap.
 
-GATESTABLE
+**`judge.py` is the file to watch.** The two demos cost 5,599 bytes / **1,438 ttok**, taking it to **88%** of its 16,000 cap — 1,844 ttok of headroom, or roughly one more demo of this size. The cap was **not** moved and `gates/**` was not touched; the next lane that wants a demo should expect to split the file instead.
 
 ## Deviations (honest list)
 
@@ -225,7 +290,7 @@ GATESTABLE
 7. **The fact is about a name, so the call's result must be bound.** `one(text).split(':', 1)[1]` is refused; `k = one(text)` then `k.split(…)` is not. `lets` is where facts are born and it takes a name. A fact about an anonymous subexpression would need a different carrier.
 8. **`Sig.post` is `[]` on the elaborator's header-only signatures.** `signature` builds the arity/type row for the ranking pass before any body exists. Only `fresh`, after `verify_in`, ever fills the slot — which is the point, but it means the *ranking* search cannot use postconditions to choose an order.
 9. **`Py.every` is a fact with no primitive.** Like `Py.took`, it exists only inside the fact environment; a body that writes it is refused. It renders nowhere and has no runtime.
-10. **The judge's crossing fact is in the labeled caller, not in mined source.** `keyed_sources` is written in `judge.py` like the T4 caller and printed as written-here on every run. The `llm-wiki` tree has no in-fragment def pair where one's postcondition unlocks the other's guard — the same survey T4 recorded.
+10. **The producer is mined; the two-line caller is not.** `page_tail`'s `html_file_name` is real source, sha256-pinned, judged apart and never annotated — its claim is recomputed by `verify_in` off the body. The caller that binds it is written in `judge.py` and printed as written-here on every run, because no corpus file *calls* an in-fragment producer and binds the result: `make_link`, `html_file_name`'s own caller, goes through `str.format`. An 11,003-file AST join found zero same-file pairs, reproducing the survey handed to this lane. `source_stems`' `keyed_sources` remains written-here at both ends and is kept as the `PEach` half of the rule.
 11. **`optimize.bend` recomputes the claim on every rewrite** rather than proving a rule preserves it. Cheap and always right. With the module door open, a caller *is* in scope: a rewrite that destroys a postcondition another def depends on is refused at that caller's guard, by `optimize_all`'s second `Tr.ordered`, and not at the rule that did it. The diagnostic names the wrong def — the repair is a rule-level obligation, and no rule needs one yet.
 12. **Claims are recomputed twice per def** — once by `with_sig` to propose, once by `verify_in` to check. On a module that is `2N` traversals of bodies that have already been walked. The `ponytail:` rule applies: a module is a handful of defs, and the duplication is what keeps the elaborator untrusted.
 
