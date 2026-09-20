@@ -126,7 +126,7 @@ Location: shout
   case crown. And the miss: reading 64 MiB ASCII costs 133 MB RSS (2.03× input) against a 1.5× target — shown as a miss,
   not a rounding.</p>
   <p class="sub" style="margin-top:10px">Not a versus: differences live in the footnotes. Artifacts:
-  <code>demos/strings_tour/</code> (selftest 11/11 · repo gate 45/45).</p>
+  <code>demos/strings_tour/</code> (selftest 13/13 · repo gate 53/53).</p>
 </section>
 
 <p class="sub" style="margin-top:16px">strings_tour · rendered live from the Bend→JS lane · served from the working machine</p>
@@ -185,8 +185,11 @@ doCodepoints();
 
 // ---- ② fuel ----
 function logOf(len) {
+  // what gen_log.py writes as lines 2 and 3 of block 0: the ReDoS bait, then the
+  // line behind Stack Overflow's 2016-07-20 outage (their comment, 20,000 spaces, one x).
   const bait = "bait " + "a".repeat(len) + "!";
-  const lines = [bait];
+  const so = "-- play happy sound for player to enjoy" + " ".repeat(20000) + "x";
+  const lines = [bait, so];
   for (let i = 0; i < 120; i++) lines.push("line " + String(i).padStart(4, "0") + " hello world é😀 — user" + i);
   return lines.join("\n") + "\n";
 }
