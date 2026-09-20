@@ -42,6 +42,7 @@ benches. Rule of record: artifacts under `$HOME`, dated, no `/tmp`.
 | `bend2/**` (base, comp, effs, pack) | A — capped, battery-gated |
 | `demos/python/**`, `tests/{parser,lint,translator}/**` | B — ours |
 | `demos/{text,text_stream,parallel,regex,strings_tour}/**` | B — showcase, lifts with the package |
+| `power/**`, `tests/power/**` | B — the power-tools library: pure Bend over Base, never in `base.bend`; each primitive held to a CPython oracle on four lanes (`tests/power/run.sh`) |
 | `tests/{f64,strings,regex,codex}/**` | A-adjacent — core feature suites |
 | `docs/omen/**`, `gates/**` | governance — stays in the fork |
 | video-kit, libscout, corpora | C — outside |
