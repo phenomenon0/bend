@@ -231,7 +231,7 @@ const OPERATIONS: Record<string, Intr> = Object.setPrototypeOf({
     "($1 >= 64n ? 0n : (($0 $o $1) & 0xFFFFFFFFFFFFFFFFn))"),
   u64_not: {
     C:  "((u64)~(u64)($0))",
-    JS: "(~(($0)) & 0xFFFFFFFFFFFFFFFFn)",
+    JS: "(~$0 & 0xFFFFFFFFFFFFFFFFn)",
   },
   u64_is_zero: {
     C:  "((u64)((u64)($0) == 0))",
@@ -462,6 +462,14 @@ const OPTIMIZED: Record<Bend.Name, Native> = Object.setPrototypeOf({
     },
     elim: {
       F64: ["u64_to_word(f64_bits($0))"],
+    },
+  },
+  U64: {
+    intr: {
+      U64: "word_to_u64($0)",
+    },
+    elim: {
+      U64: ["u64_to_word($0)"],
     },
   },
   Char: {
@@ -2795,7 +2803,7 @@ function emit_ctr(fl: File, x: Of<"Ctr">, ty: HTerm | null,
     }
     const ws = vs.map(val_word);
     return val_new([ws.length === 0 ? "0" : adt.k !== "Nat"
-      ? `term_word(e, ${ws[0]})`
+      ? `term_word(e, ${ws[0]}, ${lay.ks[0] === "w64" ? 64 : 32})`
       : tpl(tpl_nat("ull", "nat_chk(e, $0 + 1)"), ws)], lay);
   }
   if (adt.k === "Array") {
@@ -3198,9 +3206,9 @@ function emit_match(fl: File, x: Of<"Mat"> | Of<"Efq">,
   const all = ty_all(fl.book, ty) ?? die("an untyped match");
   const adt = mat_adt(fl.book, all.A);
   const word = adt.k === "U32" || adt.k === "F32" || adt.k === "U64";
-  const wlay = adt.k === "U64" ? W64 : W32;
   const lay = word ? lay_node(fl.book, adt.k) : lay_of(fl.book, all.A);
-  const bits = word ? val_hold(fl, val_to(fl, args[0], wlay), "u").ws[0] : "";
+  const bits = word
+    ? val_hold(fl, val_to(fl, args[0], WORDS[adt.k]), "u").ws[0] : "";
   const s = val_hold(fl, word ? val_new(lay.ks.map((_, i) =>
     `((${bits} >> ${i}) & 1)`), lay) : val_to(fl, args[0], lay), "s");
   const sw = s.ws[0];
@@ -4592,12 +4600,12 @@ INLINE Loc ctr_take(Env e, Term t, u32 n, THR Term* out) {
   return 0;
 }
 
-INLINE Term term_word(Env e, Term w) {
-  u32 x = 0;
+INLINE Term term_word(Env e, Term w, u32 n) {
+  u64 x = 0;
   Term t = w;
-  for (u32 i = 0; i < 32 && term_aux(t) == CID_WCON; i += 1) {
+  for (u32 i = 0; i < n && term_aux(t) == CID_WCON; i += 1) {
     Loc l = term_peek(e, t);
-    x |= (u32)(e.mem[l] & 1) << i;
+    x |= (u64)(e.mem[l] & 1) << i;
     t = e.mem[l + 1];
   }
   term_sink(e, w);
