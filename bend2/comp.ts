@@ -161,7 +161,7 @@ const BOX: Lay = { ks: ["box"], arms: null };
 
 const W64: Lay = { ks: ["w64"], arms: null };
 
-const WORDS: Record<string, Lay> = { U32: W32, F32: W32, F64: W64, Nat: W64 };
+const WORDS: Record<string, Lay> = { U32: W32, F32: W32, F64: W64, Nat: W64, U64: W64 };
 
 // The widest flat datatype: the shader's Tri is 24 words.
 const WIDE = 256;
@@ -221,6 +221,32 @@ const OPERATIONS: Record<string, Intr> = Object.setPrototypeOf({
   u32_from_nat: {
     C:  "((u64)(u32)($0))",
     JS: "Number($0 & 0xFFFFFFFFn)",
+  },
+  ...tpl_ops("u64_", "add:+ sub:- and:& or:| xor:^",
+    "((u64)($0) $o (u64)($1))",
+    "(($0 $o $1) & 0xFFFFFFFFFFFFFFFFn)"),
+  u64_mul: {
+    C:  "((u64)($0) * (u64)($1))",
+    JS: "(($0 * $1) & 0xFFFFFFFFFFFFFFFFn)",
+  },
+  ...tpl_ops("u64_", CMPS, "((u64)((u64)($0) $o (u64)($1)))", "($0 $o $1)"),
+  ...tpl_ops("u64_", "inc:+ shl:<< shr:>>",
+    "((u64)((u64)($0) $o 1))",
+    "(($0 $o 1n) & 0xFFFFFFFFFFFFFFFFn)"),
+  ...tpl_ops("u64_", "shln:<< shrn:>>",
+    "($1 >= 64 ? 0 : ((u64)($0) $o $1))",
+    "($1 >= 64n ? 0n : (($0 $o $1) & 0xFFFFFFFFFFFFFFFFn))"),
+  u64_not: {
+    C:  "((u64)~(u64)($0))",
+    JS: "(~$0 & 0xFFFFFFFFFFFFFFFFn)",
+  },
+  u64_is_zero: {
+    C:  "((u64)((u64)($0) == 0))",
+    JS: "($0 === 0n)",
+  },
+  u64_cmp: {
+    C:  "(((u64)($0) > (u64)($1)) + ((u64)($0) >= (u64)($1)))",
+    JS: "cmp_new($0, $1)",
   },
   ...tpl_ops("f32_", "add:+ sub:- mul:* div:/",
     "f32_rewrap(f32_unbox($0) $o f32_unbox($1))", "Math.fround($0 $o $1)"),
@@ -443,6 +469,14 @@ const OPTIMIZED: Record<Bend.Name, Native> = Object.setPrototypeOf({
     },
     elim: {
       F64: ["u64_to_word(f64_bits($0))"],
+    },
+  },
+  U64: {
+    intr: {
+      U64: "word_to_u64($0)",
+    },
+    elim: {
+      U64: ["u64_to_word($0)"],
     },
   },
   Char: {
@@ -2801,7 +2835,7 @@ function emit_ctr(fl: File, x: Of<"Ctr">, ty: HTerm | null,
     }
     const ws = vs.map(val_word);
     const w = ws.length === 0 ? "0" : adt.k !== "Nat"
-      ? `term_word(e, ${ws[0]})`
+      ? `term_word(e, ${ws[0]}, ${lay.ks[0] === "w64" ? 64 : 32})`
       : tpl(tpl_nat("ull", "nat_chk(e, $0 + 1)"), ws);
     return val_new([w], lay, /^\d/.test(w));
   }
@@ -3246,9 +3280,9 @@ function emit_match(fl: File, x: Of<"Mat"> | Of<"Efq">,
   const rest = args.slice(1);
   const all = ty_all(fl.book, ty) ?? die("an untyped match");
   const adt = mat_adt(fl.book, all.A);
-  const word = adt.k === "U32" || adt.k === "F32";
+  const word = adt.k === "U32" || adt.k === "F32" || adt.k === "U64";
   const lay = word ? lay_node(fl.book, adt.k) : lay_of(fl.book, all.A);
-  const u = val_hold(fl, val_to(fl, args[0], word ? W32 : lay), "s");
+  const u = val_hold(fl, val_to(fl, args[0], word ? WORDS[adt.k] : lay), "s");
   const ret = all.B(DUMMY);
   const ls = adt.k === "Nat" ? emit_lits(fl, x, ret, true) : null;
   const tb = ls ?? (adt.k === "U32" ? emit_lits(fl, x, ret, false) : null);
@@ -4667,12 +4701,12 @@ INLINE Loc ctr_take(Env e, Term t, u32 n, THR Term* out) {
   return 0;
 }
 
-INLINE Term term_word(Env e, Term w) {
-  u32 x = 0;
+INLINE Term term_word(Env e, Term w, u32 n) {
+  u64 x = 0;
   Term t = w;
-  for (u32 i = 0; i < 32 && term_aux(t) == CID_WCON; i += 1) {
+  for (u32 i = 0; i < n && term_aux(t) == CID_WCON; i += 1) {
     Loc l = term_peek(e, t);
-    x |= (u32)(e.mem[l] & 1) << i;
+    x |= (u64)(e.mem[l] & 1) << i;
     t = e.mem[l + 1];
   }
   term_sink(e, w);
