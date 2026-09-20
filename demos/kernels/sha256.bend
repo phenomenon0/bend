@@ -55,27 +55,9 @@ def constants() -> List<&2, U32>:
 def at(ws: List<&2, U32>, n: Nat) -> U32:
   Maybe.default(&2, U32, List.get(&2, U32, ws, n), 0)
 
-# The schedule is newest first: indices 1, 6, 14, 15 are t-2, t-7,
-# t-15, t-16. Reverse once, after appending its remaining 48 words.
-def expand(n: Nat, +ws: List<&2, U32>) -> List<&2, U32>:
-  match n:
-    case 0n:
-      List.reverse(&2, U32, ws)
-    case 1n+p:
-      w = U32.add(U32.add(small1(at(ws, 1n)), at(ws, 6n)),
-        U32.add(small0(at(ws, 14n)), at(ws, 15n)))
-      expand(p, w <> ws)
-
 def load(+bs: List<&2, U32>) -> U32:
   U32.or(U32.or(U32.shln(at(bs, 0n), 24n), U32.shln(at(bs, 1n), 16n)),
     U32.or(U32.shln(at(bs, 2n), 8n), at(bs, 3n)))
-
-def words(n: Nat, +bs: List<&2, U32>, acc: List<&2, U32>) -> List<&2, U32>:
-  match n:
-    case 0n:
-      expand(48n, acc)
-    case 1n+p:
-      words(p, List.drop(&2, U32, bs, 4n), load(bs) <> acc)
 
 def step(k: U32, w: U32, st: Hash) -> Hash:
   match st:
@@ -85,12 +67,14 @@ def step(k: U32, w: U32, st: Hash) -> Hash:
       t2 = U32.add(big0(a), majority(a, b, c))
       Hash{U32.add(t1, t2), a, b, c, U32.add(d, t1), e, f, g}
 
-def rounds(ks: List<&2, U32>, ws: List<&2, U32>, st: Hash) -> Hash:
-  match ks ws:
-    case k <> kt w <> wt:
-      rounds(kt, wt, step(k, w, st))
-    case _ _:
+# The head is W[t]; shifting in W[t+16] retains exactly the four recurrence lags.
+def rounds(ks: List<&2, U32>, +w0: U32, +w1: U32, +w2: U32, +w3: U32, +w4: U32, +w5: U32, +w6: U32, +w7: U32, +w8: U32, +w9: U32, +w10: U32, +w11: U32, +w12: U32, +w13: U32, +w14: U32, +w15: U32, st: Hash) -> Hash:
+  match ks:
+    case Nil{}:
       st
+    case k <> rest:
+      next = U32.add(U32.add(small1(w14), w9), U32.add(small0(w1), w0))
+      rounds(rest, w1, w2, w3, w4, w5, w6, w7, w8, w9, w10, w11, w12, w13, w14, w15, next, step(k, w0, st))
 
 def feed(x: Hash, y: Hash) -> Hash:
   match x y:
@@ -98,8 +82,12 @@ def feed(x: Hash, y: Hash) -> Hash:
       Hash{U32.add(a, i), U32.add(b, j), U32.add(c, k), U32.add(d, l),
         U32.add(e, m), U32.add(f, n), U32.add(g, o), U32.add(h, p)}
 
-def compress(bs: List<&2, U32>, +st: Hash) -> Hash:
-  feed(st, rounds(constants(), words(16n, bs, []), st))
+def compress16(w0: U32, w1: U32, w2: U32, w3: U32, w4: U32, w5: U32, w6: U32, w7: U32, w8: U32, w9: U32, w10: U32, w11: U32, w12: U32, w13: U32, w14: U32, w15: U32, +st: Hash) -> Hash:
+  feed(st, rounds(constants(), w0, w1, w2, w3, w4, w5, w6, w7, w8, w9, w10, w11, w12, w13, w14, w15, st))
+
+# The legacy byte API buffers one block; it shares the register compressor.
+def compress(+bs: List<&2, U32>, st: Hash) -> Hash:
+  compress16(load(bs), load(List.drop(&2, U32, bs, 4n)), load(List.drop(&2, U32, bs, 8n)), load(List.drop(&2, U32, bs, 12n)), load(List.drop(&2, U32, bs, 16n)), load(List.drop(&2, U32, bs, 20n)), load(List.drop(&2, U32, bs, 24n)), load(List.drop(&2, U32, bs, 28n)), load(List.drop(&2, U32, bs, 32n)), load(List.drop(&2, U32, bs, 36n)), load(List.drop(&2, U32, bs, 40n)), load(List.drop(&2, U32, bs, 44n)), load(List.drop(&2, U32, bs, 48n)), load(List.drop(&2, U32, bs, 52n)), load(List.drop(&2, U32, bs, 56n)), load(List.drop(&2, U32, bs, 60n)), st)
 
 def big_endian(+x: U32) -> List<&2, U32>:
   [U32.shrn(x, 24n), U32.and(U32.shrn(x, 16n), 255),
