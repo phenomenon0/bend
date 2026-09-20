@@ -1,0 +1,46 @@
+{
+  "status": "pass",
+  "command": [
+    "bash",
+    "tests/kernels/run.sh"
+  ],
+  "sha256_cases": 26,
+  "sha256_observations_per_case": 5,
+  "chacha20_cases": 11,
+  "chacha20_observations_per_case": 2,
+  "lanes": [
+    "strict check",
+    "interpret",
+    "JS",
+    "C"
+  ],
+  "seed": 39224377,
+  "elapsed_seconds": 128.98273759600124,
+  "python": "3.11.15 (main, Jul 18 2026, 17:02:49) [Clang 22.1.3 ]",
+  "host": "Linux-6.17.12-300.fc43.x86_64-x86_64-with-glibc2.42",
+  "hashlib": "CPython hashlib.sha256",
+  "source_hashes": {
+    "demos/kernels/sha256.bend": "d8d28af6c76015b3b21048abbe585f96d636b1c4d67bca6075d3b85aeb2caedf",
+    "demos/kernels/buffer.bend": "87b9dbee697a358e38aa398c4445744d98d30e670951c89cdc30e9f07aef567c",
+    "demos/kernels/chacha20.bend": "74063b5dc3f8222ff7b215a3e85cdf9a8ae73029c6eee2cab7c9c3bef5cb98a8",
+    "demos/kernels/fips.bend": "68617069e3d26dfee48ddc7926a5b23ee76942216dae6d676b2388cb279bff6f",
+    "demos/kernels/spec_state.bend": "6b4121ff946d7ec6451b51cd1c1be3c7d9478d5b59f36fd19c95366db3219dd0",
+    "demos/kernels/rfc8439.bend": "4756cbaa875c37e3bc84db3c1d3ff8cbbe3032499d3b90170e6176413c838224",
+    "tests/kernels/differential.py": "309215b9af6bfb53870d72e06d33a24cedf4a868e3fadabdb30a67f5d1473ea5",
+    "tests/kernels/run.sh": "a494b4360d3b97a0c77f31e21df821208817ab3eb4b2175a97926f0db69e95bc",
+    "bend2/bend.ts": "0c61ced47793ffbb641809f3e293a75e095d32ea17a37796111d66ac2466064f",
+    "bend2/comp.ts": "bddc6e1a64afd2cec97e3a110b6fedfa3ae621d89534a1e98a930c0ed1e5bda3",
+    "bend2/base.bend": "97418bece94638b73b8211aba988beb07635e39ceb89854082f54ac30675ad8a"
+  },
+  "source_stable": true,
+  "batch_exit_codes": {
+    "chacha": 0,
+    "sha_00": 0,
+    "sha_06": 0,
+    "sha_12": 0,
+    "sha_18": 0,
+    "sha_24": 0
+  },
+  "max_parallel_batches": 3,
+  "evidence": "finite differential execution; no universal equivalence theorem"
+}
