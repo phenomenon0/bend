@@ -103,6 +103,93 @@ def L.sha_feed(x, y):
   match x y:
     case S.Hash{a,b,c,d,e,f,g,h} S.Hash{i,j,k,l,m,n,o,p}: {==}
 
+# Base proves Word.add_comm but no xor law; bit-level induction supplies the
+# rewrite the differently associated spec/production round functions need.
+law word_xor_assoc:
+  for n: Nat
+  for a: Word(n)
+  for b: Word(n)
+  for c: Word(n)
+  {Word.xor(n, Word.xor(n, a, b), c) == Word.xor(n, a, Word.xor(n, b, c)) : Word(n)}
+
+def word_xor_assoc(n, a, b, c):
+  match n:
+    case 0n:
+      match a b c:
+        case WNil{} WNil{} WNil{}:
+          {==}
+    case 1n+p:
+      match a b c:
+        case WCon{False{}, at} WCon{False{}, bt} WCon{False{}, ct}:
+          Equal.cong(Word(p), Word(1n+p), w => WCon{False{}, w},
+            Word.xor(p, Word.xor(p, at, bt), ct),
+            Word.xor(p, at, Word.xor(p, bt, ct)),
+            word_xor_assoc(p, at, bt, ct))
+        case WCon{False{}, at} WCon{False{}, bt} WCon{True{}, ct}:
+          Equal.cong(Word(p), Word(1n+p), w => WCon{True{}, w},
+            Word.xor(p, Word.xor(p, at, bt), ct),
+            Word.xor(p, at, Word.xor(p, bt, ct)),
+            word_xor_assoc(p, at, bt, ct))
+        case WCon{False{}, at} WCon{True{}, bt} WCon{False{}, ct}:
+          Equal.cong(Word(p), Word(1n+p), w => WCon{True{}, w},
+            Word.xor(p, Word.xor(p, at, bt), ct),
+            Word.xor(p, at, Word.xor(p, bt, ct)),
+            word_xor_assoc(p, at, bt, ct))
+        case WCon{False{}, at} WCon{True{}, bt} WCon{True{}, ct}:
+          Equal.cong(Word(p), Word(1n+p), w => WCon{False{}, w},
+            Word.xor(p, Word.xor(p, at, bt), ct),
+            Word.xor(p, at, Word.xor(p, bt, ct)),
+            word_xor_assoc(p, at, bt, ct))
+        case WCon{True{}, at} WCon{False{}, bt} WCon{False{}, ct}:
+          Equal.cong(Word(p), Word(1n+p), w => WCon{True{}, w},
+            Word.xor(p, Word.xor(p, at, bt), ct),
+            Word.xor(p, at, Word.xor(p, bt, ct)),
+            word_xor_assoc(p, at, bt, ct))
+        case WCon{True{}, at} WCon{False{}, bt} WCon{True{}, ct}:
+          Equal.cong(Word(p), Word(1n+p), w => WCon{False{}, w},
+            Word.xor(p, Word.xor(p, at, bt), ct),
+            Word.xor(p, at, Word.xor(p, bt, ct)),
+            word_xor_assoc(p, at, bt, ct))
+        case WCon{True{}, at} WCon{True{}, bt} WCon{False{}, ct}:
+          Equal.cong(Word(p), Word(1n+p), w => WCon{False{}, w},
+            Word.xor(p, Word.xor(p, at, bt), ct),
+            Word.xor(p, at, Word.xor(p, bt, ct)),
+            word_xor_assoc(p, at, bt, ct))
+        case WCon{True{}, at} WCon{True{}, bt} WCon{True{}, ct}:
+          Equal.cong(Word(p), Word(1n+p), w => WCon{True{}, w},
+            Word.xor(p, Word.xor(p, at, bt), ct),
+            Word.xor(p, at, Word.xor(p, bt, ct)),
+            word_xor_assoc(p, at, bt, ct))
+
+law u32_xor_assoc:
+  for a: U32
+  for b: U32
+  for c: U32
+  {U32.xor(U32.xor(a, b), c) == U32.xor(a, U32.xor(b, c)) : U32}
+
+def u32_xor_assoc(a, b, c):
+  match a b c:
+    case U32{x} U32{y} U32{z}:
+      Equal.cong(Word(32n), U32, w => U32{w},
+        Word.xor(32n, Word.xor(32n, x, y), z),
+        Word.xor(32n, x, Word.xor(32n, y, z)),
+        word_xor_assoc(32n, x, y, z))
+
+def L.sha_majority(x, y, z):
+  u32_xor_assoc(U32.and(x, y), U32.and(x, z), U32.and(y, z))
+
+def L.sha_small0(x):
+  u32_xor_assoc(S.rotr(x, 7n), S.rotr(x, 18n), U32.shrn(x, 3n))
+
+def L.sha_small1(x):
+  u32_xor_assoc(S.rotr(x, 17n), S.rotr(x, 19n), U32.shrn(x, 10n))
+
+def L.sha_big0(x):
+  u32_xor_assoc(S.rotr(x, 2n), S.rotr(x, 13n), S.rotr(x, 22n))
+
+def L.sha_big1(x):
+  u32_xor_assoc(S.rotr(x, 6n), S.rotr(x, 11n), S.rotr(x, 25n))
+
 law chacha_state_size:
   for s: C.State
   {List.length(&2, U32, C.words(s)) == 16n : Nat}

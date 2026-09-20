@@ -22,7 +22,11 @@ SHA-256's eight U32 words represent 32 bytes, or 64 hexadecimal characters.
 
 Additional checked claims cover legacy word-result size, state-to-digest word
 order against the independent spec, initial state, constants, arbitrary rotation,
-choice, feed-forward, and actual ChaCha public word/block lengths (16/64).
+choice, majority, both sigma and both Sigma round functions, feed-forward, and
+actual ChaCha public word/block lengths (16/64). The five round-function laws
+quantify over arbitrary U32 inputs and are proved, not conversions: production
+and spec associate their xor chains differently, so each one consumes the
+`u32_xor_assoc` lemma below.
 A zero-valued eight-word digest could still satisfy shape: content equivalence
 must not be inferred from these claims. The initialization/order lemmas connect
 specific components to the spec, not the entire compression/padding composition.
@@ -54,9 +58,14 @@ source-bound receipt and the retained corpus for exact cases and outcomes.
 The SHA spec uses a chronological list schedule and whole-message padding;
 the production code uses sixteen registers and packed reads. Closing conformance
 requires a window invariant relating each register to the chronological schedule,
-a round-state simulation, and induction across blocks. Different grouping in
-independent U32 arithmetic also needs associativity lemmas, not assumed rewrites.
-Then prove partial-byte masking, padding count and high/low length encoding;
+a round-state simulation, and induction across blocks. The grouping obligation is
+now discharged: `PROOF.bend` proves `word_xor_assoc` by induction on the bit
+spine, with eight explicit head cases because `Word.xor` recurses structurally
+and Base proves no xor law; `u32_xor_assoc` lifts it through the `U32` wrapper.
+Those two lemmas close all five round-function laws with no assumed rewrites.
+Addition regrouping is not needed yet and has no lemma. The schedule/padding
+obligations remain: prove partial-byte masking, padding count and high/low
+length encoding;
 compose these with word serialization and the already-checked capacity wrapper.
 The packed-to-byte bridge is its own obligation; importing a packed model's
 proof would not discharge it. Preserve the public statements while replacing

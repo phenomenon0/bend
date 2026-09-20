@@ -28,6 +28,8 @@ MUTATIONS = [
      'Nat.is_lt(length, Nat.mul(4n, U32.to_nat(capacity)))'),
     ('accept oversize', 'buffer.bend', 'Nat.is_le(length, Nat.mul(4n, U32.to_nat(capacity)))', 'True{}'),
     ('wrong initialization', 'sha256.bend', '1779033703, 3144134277', '1779033702, 3144134277'),
+    ('wrong sigma0 rotation', 'sha256.bend', 'rotr(x, 7n), rotr(x, 18n)', 'rotr(x, 8n), rotr(x, 18n)'),
+    ('majority drops a term', 'sha256.bend', 'U32.and(x, z)), U32.and(y, z))', 'U32.and(y, z)), U32.and(y, z))'),
 ]
 # A weakened or falsified public statement must also be rejected: the gate is
 # sensitive to the law text, not only to the implementation the text constrains.
@@ -113,7 +115,7 @@ def main():
             rows.append(dict(gate_probe=name, verdict='gate rejected', log=log))
             print(name + ': gate rejected', flush=True)
     args.output.write_text(json.dumps(rows, indent=2) + '\n')
-    print('Proof mutations PASS: 4 theorem probes, 2 statement probes, 3 gate probes')
+    print('Proof mutations PASS: 6 theorem probes, 2 statement probes, 3 gate probes')
 
 
 if __name__ == '__main__':

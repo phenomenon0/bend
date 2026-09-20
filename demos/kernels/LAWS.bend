@@ -48,6 +48,30 @@ law sha_choice:
   for +z: U32
   {S.choose(x, y, z) == F.choice(x, y, z) : U32}
 
+# The two transcriptions associate their xor chains differently, so these
+# need U32 xor associativity; they are not definitional conversions.
+law sha_majority:
+  for +x: U32
+  for +y: U32
+  for +z: U32
+  {S.majority(x, y, z) == F.majority(x, y, z) : U32}
+
+law sha_small0:
+  for +x: U32
+  {S.small0(x) == F.sigma0(x) : U32}
+
+law sha_small1:
+  for +x: U32
+  {S.small1(x) == F.sigma1(x) : U32}
+
+law sha_big0:
+  for +x: U32
+  {S.big0(x) == F.sum0(x) : U32}
+
+law sha_big1:
+  for +x: U32
+  {S.big1(x) == F.sum1(x) : U32}
+
 law sha_feed:
   for +x: S.Hash
   for +y: S.Hash
