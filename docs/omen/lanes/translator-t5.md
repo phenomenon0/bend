@@ -2,9 +2,9 @@
 
 Branch `lane-translator-t5`, worktree `bend-work-translator-t5`, off `omen` @ `ac994157` (sync 2.0.17 + T4 + all reports in tree).
 T5 = **facts that cross a call boundary.** T4's deviation 4 was the wall: *"No caller-side fact crosses a call, and no callee postcondition comes back."* A caller of `fm_sources` that wanted "each item is under the `sources:` key" had to re-derive it from text it cannot see. T5 puts a **postcondition slot on `Sig`**, recomputed at the callee end from the body alone and granted at the call site by the existing call rule.
-Semantic pin: CPython 3.11.15. Acceptance: `bash tests/translator/run.sh` → **`Translator PASS: 36, FAIL: 0`**, ending with five judge demos: **`normalize_stem: C1 ok · C2 191/191`**, **`repo_of: C1 ok · C2 186/186`** (+ C4 1 step Proven), **`first_dash: C1 ok · C2 168/168 · 2/2 closed doctest laws`**, **`fm_sources: C1 ok · C2 194/194`**, **`source_stems: C1 ok · C2 200/200`** (all C3 tested-fragment).
+Semantic pin: CPython 3.11.15. Acceptance: `bash tests/translator/run.sh` → **`Translator PASS: 40, FAIL: 0`**, ending with five judge demos, each now also with `--optimize`: **`normalize_stem: C1 ok · C2 191/191`**, **`repo_of: C1 ok · C2 186/186`** (+ **C4 1 step Proven**), **`first_dash: C1 ok · C2 168/168 · 2/2 closed doctest laws`**, **`fm_sources: C1 ok · C2 194/194`**, **`source_stems: C1 ok · C2 200/200`** (all C3 tested-fragment; the four no-step demos, the module among them, **C4 no step · identical**).
 
-Untouched, as instructed: `bend2/**`, `gates/**`, `tests/caps.sh`, `demos/python/syntax.bend`, every other namespace. Faithful mode only; `optimize.bend` was touched only where the widened record forced it. No pushes.
+Untouched, as instructed: `bend2/**`, `gates/**`, `tests/caps.sh`, `demos/python/syntax.bend`, every other namespace. Faithful mode only, plus the brief's optional tail in tier ③: `optimize.bend` was touched where the widened record forced it, and then given its module door. No pushes.
 
 ## Slices
 
@@ -13,7 +13,9 @@ Untouched, as instructed: `bend2/**`, `gates/**`, `tests/caps.sh`, `demos/python
 | T5 core | `b46a5b2e` | `demos/python/translate.bend`: the `Post` type, `sure`/`carries`/`carries_each`, the claim check in `verify_in`, the grant at `lets`, the item fact at `IMap`, the widened `gives`; `demos/python/optimize.bend` recomputes rather than carries |
 | T5 tests | `dcb7d72d` | `refuse.bend` (+12 rows), `ir_forged.bend` (+12 rows), `emit_post.bend` (new pin) |
 | judge | `7e671664` | `judge.py`: `keyed_sources` between the caller and `fm_sources`, and the false-claim control |
-| report | this commit | `docs/omen/lanes/translator-t5.md` |
+| report | `1a057b87` | `docs/omen/lanes/translator-t5.md`, and the brief it was executed from |
+| module door (optional tail) | `26a1d920` | `optimize.bend`: `whole`, `optimize_all`, `rewrite_all`, `logs_of`, `framed` on a list; `opt_module.bend` (new pin); `run.sh` runs the `source_stems` module with `--optimize` |
+| report, second pass | this commit | the door, in the same report |
 
 ## What changed
 
@@ -89,6 +91,16 @@ def one(text: str) -> str:
     return 'stem:' + text.strip()
 ```
 
+## The module door (the brief's optional tail)
+
+`optimize.bend` took one def. `PY_DEF=""` — translate.bend's "the whole module" — reached `Tr.elaborate`, which wants a name, so a program could be judged (C1–C3) but not rewritten (C4). The door is `translate.bend`'s own, mirrored:
+
+- **`whole(m, g, on, name)`** branches on `String.is_empty(name)` exactly as `Tr.whole` does: `Tr.elaborate_all` + `optimize_all` for a module, `Tr.elaborate` + `optimize` for a def. `optimize_as` and `main` are unchanged above it, so `PY_DEF` already meant this.
+- **`optimize_all(fs, cs)` is `optimize` at module scale.** `Tr.ordered(fs, cs)` — the kernel's rank, each def verified against the signatures of the defs ranked above it — then `rewrite_all`, then **`Tr.ordered` again on the rewritten defs**. The rank is recomputed, not carried, which is the same discipline as the single def's second `verify` and the reason a rewrite that dropped a postcondition is refused *at the caller that reads it* rather than smuggled into the file.
+- **`framed` now takes the list.** `Tr.render_all` and `Tr.titles` are what `translate.bend` renders a module with; line 1 is still one line — for one def or for four — so the span map's line numbers stand. `optimize(f, cs) = optimize_all([f], cs)`: `Tr.ordered` on a singleton *is* `Tr.verify`, and `fresh` against no signatures cannot fail, so the single-def file is byte-identical. `opt_repo_of.bend` and `opt_rules.bend` were re-run, not re-pinned.
+- **The log is `logs_of`** — the defs' logs concatenated in **rank** order. A line names its site by the Python span, so the def it came from is not in doubt; `opt_module.bend` pins a module whose two sites log callee-first, which is not the source's order.
+- **`run.sh` now runs `source_stems` with `--optimize`** like the other four demos. No rule fires on that module, so C4 is the byte-identity claim the three no-step demos already make: **`source_stems --optimize: C4 no step · identical`**. `judge.py` needed no change — its `--optimize` path already sets `PY_DEF=""` for a `module` demo and takes the no-log branch.
+
 ## Span-map notes
 
 **T5 adds no node, so it adds no row kind.** The postcondition is not in the emitted text and has no span of its own; it is a fact about a `let`-bound name, and the `let` already has its row. In `emit_post.bend`:
@@ -115,7 +127,7 @@ The span is the def's own, which is right: a claim is made by the signature, not
 ## Judge
 
 ```
-$ python3 tests/translator/judge.py --demo source_stems
+$ python3 tests/translator/judge.py --demo source_stems --optimize
 source   …/llm-wiki/tools/synapse.py:77 fm_sources sha256 e40787adf3abbb71 (ast extraction; module never imported)
 source   …/llm-wiki/tools/wiki.py:92 normalize_stem sha256 4af82c046d8931ed (ast extraction; module never imported)
 source   tests/translator/judge.py source_stems caller written here (labeled composite: 2 pinned defs + the caller; the module is never imported)
@@ -130,6 +142,8 @@ C3 theorem status     : tested fragment, no theorem. The module is the claim: th
 controls              : ok (injected hole rejected by C1; the comprehension that normalizes nothing rejected
                         by C2; the key without its colon refused by the kernel)
 source_stems: C1 ok · C2 200/200 · C3 tested-fragment
+optimized             : ok no rewrite logged; byte-identical to the faithful file: True
+source_stems --optimize: C4 no step · identical
 ```
 
 - **Same 200 fixtures, same 200 answers.** The oracle is the same composite text `exec`'d in CPython; it now has four defs and three calls. C2 is 200/200 on all three lanes and the lanes agree with each other.
@@ -141,6 +155,7 @@ source_stems: C1 ok · C2 200/200 · C3 tested-fragment
 | file | rows | what |
 |---|---|---|
 | `emit_post.bend` | new pin | four defs, both kinds, 68 emitted lines + 33 span rows, four lanes |
+| `opt_module.bend` | new pin | the module door: a module with no site left byte for byte, two sites logged callee-first, a caller refused when the callee drops the key's colon, and the optimized file of a module whose rewrite and whose crossing fact are in different defs |
 | `refuse.bend` | +12 | T5 source-path rows (`mod(label, body)` = `translate(body, contracts(), "")`) |
 | `ir_forged.bend` | +12 | T5 forged TypedIR modules and claims (`mod(label, fs)` = `emit_all(fs, contracts())`) |
 | `judge.py` | +1 control | the false claim in the Python, refused by the kernel |
@@ -183,18 +198,19 @@ No T5 forgery found a hole: every one was refused by the rule as first written. 
 | file | bytes | ttok | cap (`gates/repo.ts`) |
 |---|---|---|---|
 | `demos/python/translate.bend` | 100,241 | **32,471** | 64,000 |
-| `demos/python/optimize.bend` | 9,823 | **3,250** | 64,000 |
+| `demos/python/optimize.bend` | 11,207 | **3,666** | 64,000 |
 | `tests/translator/judge.py` | 44,727 | **12,718** | 16,000 |
 | `tests/translator/ir_forged.bend` | 27,974 | **9,595** | 16,000 |
 | `tests/translator/refuse.bend` | 25,525 | **7,862** | 16,000 |
 | `tests/translator/emit_post.bend` | 4,037 | **1,595** | 16,000 |
+| `tests/translator/opt_module.bend` | 4,749 | **1,716** | 16,000 |
 | `tests/translator/emit_module.bend` | 9,163 | 3,694 | 16,000 |
 
 `translate.bend` grew 6,898 bytes / **2,077 ttok** over T4 (93,343 / 30,394), and holds **51%** of its cap. **No cap was moved**, in `gates/repo.ts` or in `tests/caps.sh`; the brief's "prefer not" held, and nothing in `gates/**` was touched.
 
 **`SOUNDNESS.md` was not extended**, and stands where T4 left it at 3,997 of 4,000 ttok. T5 adds no assumption: the postcondition is a kernel rule with twelve forge rows, recomputed from the IR like every other rule. The three tokens of headroom are still the next lane's problem.
 
-**New paths:** `tests/translator/emit_post.bend` (4,037 bytes) and `docs/omen/lanes/translator-t5.md`. Both match existing allow rules (`tests/translator/**`, `docs/omen/**`) — **no gate rejection**.
+**New paths:** `tests/translator/emit_post.bend` (4,037 bytes), `tests/translator/opt_module.bend` (4,749 bytes) and `docs/omen/lanes/translator-t5.md`. All match existing allow rules (`tests/translator/**`, `docs/omen/**`) — **no gate rejection**. `optimize.bend` grew 1,384 bytes / **416 ttok** for the door, to 6% of its cap.
 
 GATESTABLE
 
@@ -210,12 +226,12 @@ GATESTABLE
 8. **`Sig.post` is `[]` on the elaborator's header-only signatures.** `signature` builds the arity/type row for the ranking pass before any body exists. Only `fresh`, after `verify_in`, ever fills the slot — which is the point, but it means the *ranking* search cannot use postconditions to choose an order.
 9. **`Py.every` is a fact with no primitive.** Like `Py.took`, it exists only inside the fact environment; a body that writes it is refused. It renders nowhere and has no runtime.
 10. **The judge's crossing fact is in the labeled caller, not in mined source.** `keyed_sources` is written in `judge.py` like the T4 caller and printed as written-here on every run. The `llm-wiki` tree has no in-fragment def pair where one's postcondition unlocks the other's guard — the same survey T4 recorded.
-11. **`optimize.bend` recomputes the claim on every rewrite** rather than proving a rule preserves it. Cheap and always right; it also means a rewrite that *destroys* a postcondition a caller depends on would be refused at the caller, not at the rule — but the optimizer still has no module door (T4 deviation 10), so no caller is in scope for it to break.
+11. **`optimize.bend` recomputes the claim on every rewrite** rather than proving a rule preserves it. Cheap and always right. With the module door open, a caller *is* in scope: a rewrite that destroys a postcondition another def depends on is refused at that caller's guard, by `optimize_all`'s second `Tr.ordered`, and not at the rule that did it. The diagnostic names the wrong def — the repair is a rule-level obligation, and no rule needs one yet.
 12. **Claims are recomputed twice per def** — once by `with_sig` to propose, once by `verify_in` to check. On a module that is `2N` traversals of bodies that have already been walked. The `ponytail:` rule applies: a module is a handful of defs, and the duplication is what keeps the elaborator untrusted.
 
 ## What T6 and `optimize.bend` (tier ③) inherit
 
-1. **The optimizer's module door is still open work** (T4 item 3, unclaimed here). `optimize.bend` takes one def through `PY_DEF`; `emit_all`'s door is what it needs to run C4 on a program. T5 made it slightly more interesting: with postconditions in `Sig`, a cross-def rewrite has a fact environment to preserve, not just types.
+1. **The module door is closed; the module *rule* is not.** `optimize.bend` now rewrites a program (T4 item 3, taken as this brief's optional tail), but its one rule, `hoist_append`, is a within-expression rewrite: on the `source_stems` module nothing fires, so C4 there is byte identity and nothing more. The first rule that reads across a call — fusion (item 4), or a callee inlined at one site — is what makes the door pay, and it is the first rewrite whose obligation is the *fact* environment, not just the types.
 2. **Preconditions are the mirror, and the harder half.** T5 sends facts *out* of a def. A def that wants "my argument contains `:`" needs the caller to discharge it — which means a `pre` slot on `Sig`, checked at every call site and *granted* inside the body. The machinery is symmetric (`gives` already takes a guard and a fact), but the failure mode is not: an unbacked postcondition is refused at one def, an undischarged precondition at every caller.
 3. **Transitivity through a call** (deviation 5) is the cheapest real extension, and the first one that forces `sure` to read the signature table — i.e. the first time the *claim* depends on something other than the body.
 4. **Map/map fusion across a call** (T4 item 4) now has a fact to preserve as well as a value: `source_stems.comp_3_11 ∘ keyed_sources.comp_6_11` is exactly the pair, and the `Py.after`/`String.append` cancellation in the fused body is a law about the postcondition, not about the types.
