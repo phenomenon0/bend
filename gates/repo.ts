@@ -58,7 +58,7 @@ allow(/^bench\/runtime\/_pin_\/[a-z0-9_]+\.txt$/, 2000);
 allow(/^demos\/[a-z0-9_]+\/[A-Za-z0-9_]+\.bend$/, 64000);
 allow(/^demos\/[a-z0-9_]+\/[A-Za-z_]+\.(c|sh|md)$/, 4000);
 allow(/^demos\/[a-z0-9_]+\/[A-Za-z0-9_]+\.py$/, 8000);
-allow(/^demos\/[a-z0-9_]+\/web\/(index\.html|main\.js|bunfig\.toml)$/, 4000);
+allow(/^demos\/[a-z0-9_]+\/web\/(index\.html|[a-z_]+\.js|serve\.sh|bunfig\.toml)$/, 4000);
 allow("guide/GUIDE.md", 12000);
 allow("guide/EFFECTS.md", 1600);
 allow("guide/SHADERS.md", 4200);
