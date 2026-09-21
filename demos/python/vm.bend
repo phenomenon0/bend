@@ -61,12 +61,12 @@ type Run is Data:
       fault: String}
 
 # Opcodes, dense and contiguous:
-#   0 CONST a        6 ADD        11 LT        17 NOT       23 CALL a b
-#   1 LOAD_L a       7 SUB        12 LTE        18 JUMP a   24 RET
-#   2 STORE_L a      8 MUL        13 GT         19 JIF a     25 PRINT b
-#   3 LOAD_G a       9 DIV        14 GTE        20 JIT a     26 HALT
-#   4 STORE_G a     10 MOD        15 EQ         21 JIFK a
-#   5 POP                          16 NEQ        22 JITK a
+#   0 CONST a      6 ADD      11 LT     17 NOT      23 CALL a b
+#   1 LOAD_L a     7 SUB      12 LTE    18 JUMP a   24 RET
+#   2 STORE_L a    8 MUL      13 GT     19 JIF a    25 PRINT b
+#   3 LOAD_G a     9 DIV      14 GTE    20 JIT a    26 HALT
+#   4 STORE_G a   10 MOD      15 EQ     21 JIFK a
+#   5 POP                     16 NEQ    22 JITK a
 
 # S.Json access
 # ===========
