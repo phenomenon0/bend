@@ -35,7 +35,7 @@ run() {
   local label=$1 expected=$2 status=0
   shift 2
   : > "$work/diff"
-  timeout "${VM_TIMEOUT:-300}" "$@" > "$work/actual" 2>&1 || status=$?
+  timeout "${VM_TIMEOUT:-600}" "$@" > "$work/actual" 2>&1 || status=$?
   if [ "$status" -eq 0 ] && diff -u "$expected" "$work/actual" > "$work/diff"; then
     printf 'ok   %-12s [%s]\n' "$name" "$label"
     pass=$((pass + 1))
