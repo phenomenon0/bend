@@ -108,3 +108,6 @@ Every raise books a debt row naming the R-lane that retires it.
 - **Proofs:** when law/proof entries enter, gate them per
   `docs/omen/PROOF-GATE.md` — dedicated proof entry bound to shipped sources,
   dependency-closure check for `@unsafe`, exit code ≠ verdict (audit P05–P08).
+
+- **Conversions:** ship vector evidence, an independent spec where feasible, and
+  explicitly graded laws under [the proof-backing policy](plans/proof-policy.md).

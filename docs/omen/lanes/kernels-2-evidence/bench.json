@@ -1,0 +1,891 @@
+{
+  "schema": 1,
+  "started_utc": "2026-09-20T15:59:11.541851+00:00",
+  "scope": "end-to-end process: input construction + hash + hex + startup/output; compile excluded",
+  "api": "B.hex(B.hash(Array<U32>, byte_length))",
+  "oracle": "CPython hashlib.sha256; all successful warmups and samples checked",
+  "host": {
+    "node": "fedora",
+    "platform": "Linux-6.17.12-300.fc43.x86_64-x86_64-with-glibc2.42",
+    "machine": "x86_64",
+    "cpu": "AMD Ryzen 7 7700X 8-Core Processor",
+    "logical_cpus": 16
+  },
+  "python": "3.11.15 (main, Jul 18 2026, 17:02:49) [Clang 22.1.3 ]",
+  "bun": {
+    "path": "/home/omen/.bun/bin/bun",
+    "version": "1.3.4"
+  },
+  "compiler": {
+    "path": "/home/omen/opt/clang21/usr/bin/clang-21",
+    "version": "clang version 21.1.7 (Fedora 21.1.7-1.fc43)\nTarget: x86_64-redhat-linux-gnu\nThread model: posix\nInstalledDir: /home/omen/opt/clang21/usr/bin",
+    "sha256": "2426dcca7983817b07e9f5fe93074d19a16b8240fabd33bfe6014edd8758e80e",
+    "CC": "/home/omen/opt/clang21/usr/bin/clang-21"
+  },
+  "git_head": "c6a236baf751d0ede21f4812a9f1a5e7be16fe62",
+  "git_status": "M docs/omen/FLOW.md\n M gates/repo.ts\n?? demos/kernels/LAWS.bend\n?? demos/kernels/PROOF.bend\n?? demos/kernels/fips.bend\n?? demos/kernels/observations.bend\n?? demos/kernels/rfc8439.bend\n?? demos/kernels/spec_state.bend\n?? docs/omen/lanes/kernels-2-evidence/bench-exploratory.json\n?? docs/omen/lanes/kernels-2-evidence/differential.json\n?? docs/omen/lanes/kernels-2-evidence/proof-mutations.json\n?? docs/omen/lanes/kernels-2-evidence/proof.json\n?? docs/omen/lanes/kernels-2-lessons.md\n?? docs/omen/plans/kernels-2-proof-design.md\n?? docs/omen/plans/proof-policy.md\n?? tests/kernels/__pycache__/\n?? tests/kernels/bench.py\n?? tests/kernels/differential.py\n?? tests/kernels/proof.ts\n?? tests/kernels/proof_mutations.py",
+  "warmups": 1,
+  "samples": 3,
+  "cases": [
+    {
+      "name": "empty",
+      "bytes": 0,
+      "expected_hashlib_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "input_rule": "byte[i] = (73*i+19) & 255",
+      "generated_source_sha256": "ebec9a6f7167f1754ad0097f756579b3c05fd953a98a0222956ef2d02c78eef4",
+      "raw_samples": [
+        {
+          "status": "ok",
+          "returncode": 0,
+          "stdout": "\"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\"\n",
+          "stderr": "",
+          "command": [
+            "/tmp/bend-kernel-bench-zvvhkowx/empty",
+            "--threads",
+            "1",
+            "--gpu",
+            "off"
+          ],
+          "wall_seconds": 0.00104903,
+          "wall_limit_seconds": 30,
+          "phase": "warmup",
+          "index": 0,
+          "digest_checked": true,
+          "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        {
+          "status": "ok",
+          "returncode": 0,
+          "stdout": "\"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\"\n",
+          "stderr": "",
+          "command": [
+            "/tmp/bend-kernel-bench-zvvhkowx/empty",
+            "--threads",
+            "1",
+            "--gpu",
+            "off"
+          ],
+          "wall_seconds": 0.000925776,
+          "wall_limit_seconds": 30,
+          "phase": "measured",
+          "index": 1,
+          "digest_checked": true,
+          "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        {
+          "status": "ok",
+          "returncode": 0,
+          "stdout": "\"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\"\n",
+          "stderr": "",
+          "command": [
+            "/tmp/bend-kernel-bench-zvvhkowx/empty",
+            "--threads",
+            "1",
+            "--gpu",
+            "off"
+          ],
+          "wall_seconds": 0.000791901,
+          "wall_limit_seconds": 30,
+          "phase": "measured",
+          "index": 2,
+          "digest_checked": true,
+          "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        {
+          "status": "ok",
+          "returncode": 0,
+          "stdout": "\"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\"\n",
+          "stderr": "",
+          "command": [
+            "/tmp/bend-kernel-bench-zvvhkowx/empty",
+            "--threads",
+            "1",
+            "--gpu",
+            "off"
+          ],
+          "wall_seconds": 0.000742798,
+          "wall_limit_seconds": 30,
+          "phase": "measured",
+          "index": 3,
+          "digest_checked": true,
+          "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        }
+      ],
+      "strict_check": {
+        "status": "ok",
+        "returncode": 0,
+        "stdout": "All terms check.\n",
+        "stderr": "",
+        "command": [
+          "/home/omen/.bun/bin/bun",
+          "-e",
+          "\nimport * as B from './bend2/bend.ts';\ntry {\n  const book = B.book_nil();\n  await B.book_load(book, process.argv[1], '', new Map());\n  B.book_valid(book);\n  if (book.hols + book.open) throw new Error('hole/open goal');\n  console.log('All terms check.');\n} catch (e) {\n  console.error(e?.$ === 'Err' ? B.err_show(e) : String(e));\n  process.exit(1);\n}\n",
+          "/tmp/bend-kernel-bench-zvvhkowx/empty.bend"
+        ],
+        "wall_seconds": 0.291008242,
+        "wall_limit_seconds": 120
+      },
+      "build": {
+        "status": "ok",
+        "returncode": 0,
+        "stdout": "",
+        "stderr": "",
+        "command": [
+          "/home/omen/.bun/bin/bun",
+          "bend2/main.ts",
+          "/tmp/bend-kernel-bench-zvvhkowx/empty.bend",
+          "-o",
+          "/tmp/bend-kernel-bench-zvvhkowx/empty"
+        ],
+        "wall_seconds": 0.91311905,
+        "wall_limit_seconds": 120
+      },
+      "binary_sha256": "325612d1ee91730c0bf3ceff14082ffee0d040bda2a46dacf05e4c82e617a866",
+      "status": "ok",
+      "median_seconds": 0.000791901,
+      "end_to_end_bytes_per_second": 0.0
+    },
+    {
+      "name": "abc",
+      "bytes": 3,
+      "expected_hashlib_sha256": "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+      "input_rule": "abc",
+      "generated_source_sha256": "bfc9727e8a61ffb335b69225ae6ef896db00a3ec967582b991d7804339567a1c",
+      "raw_samples": [
+        {
+          "status": "ok",
+          "returncode": 0,
+          "stdout": "\"ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad\"\n",
+          "stderr": "",
+          "command": [
+            "/tmp/bend-kernel-bench-zvvhkowx/abc",
+            "--threads",
+            "1",
+            "--gpu",
+            "off"
+          ],
+          "wall_seconds": 0.000921067,
+          "wall_limit_seconds": 30,
+          "phase": "warmup",
+          "index": 0,
+          "digest_checked": true,
+          "digest": "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        },
+        {
+          "status": "ok",
+          "returncode": 0,
+          "stdout": "\"ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad\"\n",
+          "stderr": "",
+          "command": [
+            "/tmp/bend-kernel-bench-zvvhkowx/abc",
+            "--threads",
+            "1",
+            "--gpu",
+            "off"
+          ],
+          "wall_seconds": 0.000795709,
+          "wall_limit_seconds": 30,
+          "phase": "measured",
+          "index": 1,
+          "digest_checked": true,
+          "digest": "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        },
+        {
+          "status": "ok",
+          "returncode": 0,
+          "stdout": "\"ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad\"\n",
+          "stderr": "",
+          "command": [
+            "/tmp/bend-kernel-bench-zvvhkowx/abc",
+            "--threads",
+            "1",
+            "--gpu",
+            "off"
+          ],
+          "wall_seconds": 0.000759861,
+          "wall_limit_seconds": 30,
+          "phase": "measured",
+          "index": 2,
+          "digest_checked": true,
+          "digest": "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        },
+        {
+          "status": "ok",
+          "returncode": 0,
+          "stdout": "\"ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad\"\n",
+          "stderr": "",
+          "command": [
+            "/tmp/bend-kernel-bench-zvvhkowx/abc",
+            "--threads",
+            "1",
+            "--gpu",
+            "off"
+          ],
+          "wall_seconds": 0.000724193,
+          "wall_limit_seconds": 30,
+          "phase": "measured",
+          "index": 3,
+          "digest_checked": true,
+          "digest": "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        }
+      ],
+      "strict_check": {
+        "status": "ok",
+        "returncode": 0,
+        "stdout": "All terms check.\n",
+        "stderr": "",
+        "command": [
+          "/home/omen/.bun/bin/bun",
+          "-e",
+          "\nimport * as B from './bend2/bend.ts';\ntry {\n  const book = B.book_nil();\n  await B.book_load(book, process.argv[1], '', new Map());\n  B.book_valid(book);\n  if (book.hols + book.open) throw new Error('hole/open goal');\n  console.log('All terms check.');\n} catch (e) {\n  console.error(e?.$ === 'Err' ? B.err_show(e) : String(e));\n  process.exit(1);\n}\n",
+          "/tmp/bend-kernel-bench-zvvhkowx/abc.bend"
+        ],
+        "wall_seconds": 0.28595018,
+        "wall_limit_seconds": 120
+      },
+      "build": {
+        "status": "ok",
+        "returncode": 0,
+        "stdout": "",
+        "stderr": "",
+        "command": [
+          "/home/omen/.bun/bin/bun",
+          "bend2/main.ts",
+          "/tmp/bend-kernel-bench-zvvhkowx/abc.bend",
+          "-o",
+          "/tmp/bend-kernel-bench-zvvhkowx/abc"
+        ],
+        "wall_seconds": 0.903166165,
+        "wall_limit_seconds": 120
+      },
+      "binary_sha256": "4f4a994b2fad9000883b05b3304d74d1180dc824e365d23d3e339f3c5bd8c3e5",
+      "status": "ok",
+      "median_seconds": 0.000759861,
+      "end_to_end_bytes_per_second": 3948.09050602676
+    },
+    {
+      "name": "pattern-55",
+      "bytes": 55,
+      "expected_hashlib_sha256": "0c43a30970ee9525a6603d5656803c325bded148fa65bbd363df54cb3ac3dee5",
+      "input_rule": "byte[i] = (73*i+19) & 255",
+      "generated_source_sha256": "b794aa82c56295e1cb7bf4a8803ccb3af52f59651f2408223ca436e9c71e91cc",
+      "raw_samples": [
+        {
+          "status": "ok",
+          "returncode": 0,
+          "stdout": "\"0c43a30970ee9525a6603d5656803c325bded148fa65bbd363df54cb3ac3dee5\"\n",
+          "stderr": "",
+          "command": [
+            "/tmp/bend-kernel-bench-zvvhkowx/pattern-55",
+            "--threads",
+            "1",
+            "--gpu",
+            "off"
+          ],
+          "wall_seconds": 0.001087111,
+          "wall_limit_seconds": 30,
+          "phase": "warmup",
+          "index": 0,
+          "digest_checked": true,
+          "digest": "0c43a30970ee9525a6603d5656803c325bded148fa65bbd363df54cb3ac3dee5"
+        },
+        {
+          "status": "ok",
+          "returncode": 0,
+          "stdout": "\"0c43a30970ee9525a6603d5656803c325bded148fa65bbd363df54cb3ac3dee5\"\n",
+          "stderr": "",
+          "command": [
+            "/tmp/bend-kernel-bench-zvvhkowx/pattern-55",
+            "--threads",
+            "1",
+            "--gpu",
+            "off"
+          ],
+          "wall_seconds": 0.000759159,
+          "wall_limit_seconds": 30,
+          "phase": "measured",
+          "index": 1,
+          "digest_checked": true,
+          "digest": "0c43a30970ee9525a6603d5656803c325bded148fa65bbd363df54cb3ac3dee5"
+        },
+        {
+          "status": "ok",
+          "returncode": 0,
+          "stdout": "\"0c43a30970ee9525a6603d5656803c325bded148fa65bbd363df54cb3ac3dee5\"\n",
+          "stderr": "",
+          "command": [
+            "/tmp/bend-kernel-bench-zvvhkowx/pattern-55",
+            "--threads",
+            "1",
+            "--gpu",
+            "off"
+          ],
+          "wall_seconds": 0.000735254,
+          "wall_limit_seconds": 30,
+          "phase": "measured",
+          "index": 2,
+          "digest_checked": true,
+          "digest": "0c43a30970ee9525a6603d5656803c325bded148fa65bbd363df54cb3ac3dee5"
+        },
+        {
+          "status": "ok",
+          "returncode": 0,
+          "stdout": "\"0c43a30970ee9525a6603d5656803c325bded148fa65bbd363df54cb3ac3dee5\"\n",
+          "stderr": "",
+          "command": [
+            "/tmp/bend-kernel-bench-zvvhkowx/pattern-55",
+            "--threads",
+            "1",
+            "--gpu",
+            "off"
+          ],
+          "wall_seconds": 0.000704446,
+          "wall_limit_seconds": 30,
+          "phase": "measured",
+          "index": 3,
+          "digest_checked": true,
+          "digest": "0c43a30970ee9525a6603d5656803c325bded148fa65bbd363df54cb3ac3dee5"
+        }
+      ],
+      "strict_check": {
+        "status": "ok",
+        "returncode": 0,
+        "stdout": "All terms check.\n",
+        "stderr": "",
+        "command": [
+          "/home/omen/.bun/bin/bun",
+          "-e",
+          "\nimport * as B from './bend2/bend.ts';\ntry {\n  const book = B.book_nil();\n  await B.book_load(book, process.argv[1], '', new Map());\n  B.book_valid(book);\n  if (book.hols + book.open) throw new Error('hole/open goal');\n  console.log('All terms check.');\n} catch (e) {\n  console.error(e?.$ === 'Err' ? B.err_show(e) : String(e));\n  process.exit(1);\n}\n",
+          "/tmp/bend-kernel-bench-zvvhkowx/pattern-55.bend"
+        ],
+        "wall_seconds": 0.301642278,
+        "wall_limit_seconds": 120
+      },
+      "build": {
+        "status": "ok",
+        "returncode": 0,
+        "stdout": "",
+        "stderr": "",
+        "command": [
+          "/home/omen/.bun/bin/bun",
+          "bend2/main.ts",
+          "/tmp/bend-kernel-bench-zvvhkowx/pattern-55.bend",
+          "-o",
+          "/tmp/bend-kernel-bench-zvvhkowx/pattern-55"
+        ],
+        "wall_seconds": 0.889136229,
+        "wall_limit_seconds": 120
+      },
+      "binary_sha256": "c6ee6a8537b1efc9bfe895d0822a83a9fed667fdb965b7b63f2511d3d7971d4b",
+      "status": "ok",
+      "median_seconds": 0.000735254,
+      "end_to_end_bytes_per_second": 74804.08131067631
+    },
+    {
+      "name": "pattern-56",
+      "bytes": 56,
+      "expected_hashlib_sha256": "f4dcdc09c846d1b3621701516b300055c1e7875e216ba019dd4423f5a420f2d0",
+      "input_rule": "byte[i] = (73*i+19) & 255",
+      "generated_source_sha256": "8434bcb9ddbc6f8e70aa7fca33e73c6a70ec025974f18fdda5f469d8b7c2638e",
+      "raw_samples": [
+        {
+          "status": "ok",
+          "returncode": 0,
+          "stdout": "\"f4dcdc09c846d1b3621701516b300055c1e7875e216ba019dd4423f5a420f2d0\"\n",
+          "stderr": "",
+          "command": [
+            "/tmp/bend-kernel-bench-zvvhkowx/pattern-56",
+            "--threads",
+            "1",
+            "--gpu",
+            "off"
+          ],
+          "wall_seconds": 0.000913793,
+          "wall_limit_seconds": 30,
+          "phase": "warmup",
+          "index": 0,
+          "digest_checked": true,
+          "digest": "f4dcdc09c846d1b3621701516b300055c1e7875e216ba019dd4423f5a420f2d0"
+        },
+        {
+          "status": "ok",
+          "returncode": 0,
+          "stdout": "\"f4dcdc09c846d1b3621701516b300055c1e7875e216ba019dd4423f5a420f2d0\"\n",
+          "stderr": "",
+          "command": [
+            "/tmp/bend-kernel-bench-zvvhkowx/pattern-56",
+            "--threads",
+            "1",
+            "--gpu",
+            "off"
+          ],
+          "wall_seconds": 0.000839231,
+          "wall_limit_seconds": 30,
+          "phase": "measured",
+          "index": 1,
+          "digest_checked": true,
+          "digest": "f4dcdc09c846d1b3621701516b300055c1e7875e216ba019dd4423f5a420f2d0"
+        },
+        {
+          "status": "ok",
+          "returncode": 0,
+          "stdout": "\"f4dcdc09c846d1b3621701516b300055c1e7875e216ba019dd4423f5a420f2d0\"\n",
+          "stderr": "",
+          "command": [
+            "/tmp/bend-kernel-bench-zvvhkowx/pattern-56",
+            "--threads",
+            "1",
+            "--gpu",
+            "off"
+          ],
+          "wall_seconds": 0.000870962,
+          "wall_limit_seconds": 30,
+          "phase": "measured",
+          "index": 2,
+          "digest_checked": true,
+          "digest": "f4dcdc09c846d1b3621701516b300055c1e7875e216ba019dd4423f5a420f2d0"
+        },
+        {
+          "status": "ok",
+          "returncode": 0,
+          "stdout": "\"f4dcdc09c846d1b3621701516b300055c1e7875e216ba019dd4423f5a420f2d0\"\n",
+          "stderr": "",
+          "command": [
+            "/tmp/bend-kernel-bench-zvvhkowx/pattern-56",
+            "--threads",
+            "1",
+            "--gpu",
+            "off"
+          ],
+          "wall_seconds": 0.000804917,
+          "wall_limit_seconds": 30,
+          "phase": "measured",
+          "index": 3,
+          "digest_checked": true,
+          "digest": "f4dcdc09c846d1b3621701516b300055c1e7875e216ba019dd4423f5a420f2d0"
+        }
+      ],
+      "strict_check": {
+        "status": "ok",
+        "returncode": 0,
+        "stdout": "All terms check.\n",
+        "stderr": "",
+        "command": [
+          "/home/omen/.bun/bin/bun",
+          "-e",
+          "\nimport * as B from './bend2/bend.ts';\ntry {\n  const book = B.book_nil();\n  await B.book_load(book, process.argv[1], '', new Map());\n  B.book_valid(book);\n  if (book.hols + book.open) throw new Error('hole/open goal');\n  console.log('All terms check.');\n} catch (e) {\n  console.error(e?.$ === 'Err' ? B.err_show(e) : String(e));\n  process.exit(1);\n}\n",
+          "/tmp/bend-kernel-bench-zvvhkowx/pattern-56.bend"
+        ],
+        "wall_seconds": 0.286054367,
+        "wall_limit_seconds": 120
+      },
+      "build": {
+        "status": "ok",
+        "returncode": 0,
+        "stdout": "",
+        "stderr": "",
+        "command": [
+          "/home/omen/.bun/bin/bun",
+          "bend2/main.ts",
+          "/tmp/bend-kernel-bench-zvvhkowx/pattern-56.bend",
+          "-o",
+          "/tmp/bend-kernel-bench-zvvhkowx/pattern-56"
+        ],
+        "wall_seconds": 0.861533813,
+        "wall_limit_seconds": 120
+      },
+      "binary_sha256": "c533be4e033a7b30eabe5b28d5564c4a301045a61a6d650db1e7ec1a0d9cbbc6",
+      "status": "ok",
+      "median_seconds": 0.000839231,
+      "end_to_end_bytes_per_second": 66727.75433700615
+    },
+    {
+      "name": "pattern-64",
+      "bytes": 64,
+      "expected_hashlib_sha256": "cb6862268ca7c02e7b6af558f0e3d236ce9ec7ff41cc746b2848c04c582da94e",
+      "input_rule": "byte[i] = (73*i+19) & 255",
+      "generated_source_sha256": "6a6288ce92b734f2bbf9c6d02852bb9f66c14e07963cc4251939b92c48c6c026",
+      "raw_samples": [
+        {
+          "status": "ok",
+          "returncode": 0,
+          "stdout": "\"cb6862268ca7c02e7b6af558f0e3d236ce9ec7ff41cc746b2848c04c582da94e\"\n",
+          "stderr": "",
+          "command": [
+            "/tmp/bend-kernel-bench-zvvhkowx/pattern-64",
+            "--threads",
+            "1",
+            "--gpu",
+            "off"
+          ],
+          "wall_seconds": 0.000986331,
+          "wall_limit_seconds": 30,
+          "phase": "warmup",
+          "index": 0,
+          "digest_checked": true,
+          "digest": "cb6862268ca7c02e7b6af558f0e3d236ce9ec7ff41cc746b2848c04c582da94e"
+        },
+        {
+          "status": "ok",
+          "returncode": 0,
+          "stdout": "\"cb6862268ca7c02e7b6af558f0e3d236ce9ec7ff41cc746b2848c04c582da94e\"\n",
+          "stderr": "",
+          "command": [
+            "/tmp/bend-kernel-bench-zvvhkowx/pattern-64",
+            "--threads",
+            "1",
+            "--gpu",
+            "off"
+          ],
+          "wall_seconds": 0.000840283,
+          "wall_limit_seconds": 30,
+          "phase": "measured",
+          "index": 1,
+          "digest_checked": true,
+          "digest": "cb6862268ca7c02e7b6af558f0e3d236ce9ec7ff41cc746b2848c04c582da94e"
+        },
+        {
+          "status": "ok",
+          "returncode": 0,
+          "stdout": "\"cb6862268ca7c02e7b6af558f0e3d236ce9ec7ff41cc746b2848c04c582da94e\"\n",
+          "stderr": "",
+          "command": [
+            "/tmp/bend-kernel-bench-zvvhkowx/pattern-64",
+            "--threads",
+            "1",
+            "--gpu",
+            "off"
+          ],
+          "wall_seconds": 0.000800748,
+          "wall_limit_seconds": 30,
+          "phase": "measured",
+          "index": 2,
+          "digest_checked": true,
+          "digest": "cb6862268ca7c02e7b6af558f0e3d236ce9ec7ff41cc746b2848c04c582da94e"
+        },
+        {
+          "status": "ok",
+          "returncode": 0,
+          "stdout": "\"cb6862268ca7c02e7b6af558f0e3d236ce9ec7ff41cc746b2848c04c582da94e\"\n",
+          "stderr": "",
+          "command": [
+            "/tmp/bend-kernel-bench-zvvhkowx/pattern-64",
+            "--threads",
+            "1",
+            "--gpu",
+            "off"
+          ],
+          "wall_seconds": 0.000829874,
+          "wall_limit_seconds": 30,
+          "phase": "measured",
+          "index": 3,
+          "digest_checked": true,
+          "digest": "cb6862268ca7c02e7b6af558f0e3d236ce9ec7ff41cc746b2848c04c582da94e"
+        }
+      ],
+      "strict_check": {
+        "status": "ok",
+        "returncode": 0,
+        "stdout": "All terms check.\n",
+        "stderr": "",
+        "command": [
+          "/home/omen/.bun/bin/bun",
+          "-e",
+          "\nimport * as B from './bend2/bend.ts';\ntry {\n  const book = B.book_nil();\n  await B.book_load(book, process.argv[1], '', new Map());\n  B.book_valid(book);\n  if (book.hols + book.open) throw new Error('hole/open goal');\n  console.log('All terms check.');\n} catch (e) {\n  console.error(e?.$ === 'Err' ? B.err_show(e) : String(e));\n  process.exit(1);\n}\n",
+          "/tmp/bend-kernel-bench-zvvhkowx/pattern-64.bend"
+        ],
+        "wall_seconds": 0.314267992,
+        "wall_limit_seconds": 120
+      },
+      "build": {
+        "status": "ok",
+        "returncode": 0,
+        "stdout": "",
+        "stderr": "",
+        "command": [
+          "/home/omen/.bun/bin/bun",
+          "bend2/main.ts",
+          "/tmp/bend-kernel-bench-zvvhkowx/pattern-64.bend",
+          "-o",
+          "/tmp/bend-kernel-bench-zvvhkowx/pattern-64"
+        ],
+        "wall_seconds": 0.877769613,
+        "wall_limit_seconds": 120
+      },
+      "binary_sha256": "32bbfd732ad625988ddf6b795770284dfbf1ac7e5da3d388808c5c93d545ffc9",
+      "status": "ok",
+      "median_seconds": 0.000829874,
+      "end_to_end_bytes_per_second": 77120.14112985827
+    },
+    {
+      "name": "pattern-1024",
+      "bytes": 1024,
+      "expected_hashlib_sha256": "e051d1007607de494c073da3c29903d6c0abfee7a4c0609f560a340a1947b470",
+      "input_rule": "byte[i] = (73*i+19) & 255",
+      "generated_source_sha256": "9e2f9f80ec5dcc8d1e387033eefb34814aff43229edd14ad2f04d56c59071568",
+      "raw_samples": [
+        {
+          "status": "ok",
+          "returncode": 0,
+          "stdout": "\"e051d1007607de494c073da3c29903d6c0abfee7a4c0609f560a340a1947b470\"\n",
+          "stderr": "",
+          "command": [
+            "/tmp/bend-kernel-bench-zvvhkowx/pattern-1024",
+            "--threads",
+            "1",
+            "--gpu",
+            "off"
+          ],
+          "wall_seconds": 0.001150612,
+          "wall_limit_seconds": 30,
+          "phase": "warmup",
+          "index": 0,
+          "digest_checked": true,
+          "digest": "e051d1007607de494c073da3c29903d6c0abfee7a4c0609f560a340a1947b470"
+        },
+        {
+          "status": "ok",
+          "returncode": 0,
+          "stdout": "\"e051d1007607de494c073da3c29903d6c0abfee7a4c0609f560a340a1947b470\"\n",
+          "stderr": "",
+          "command": [
+            "/tmp/bend-kernel-bench-zvvhkowx/pattern-1024",
+            "--threads",
+            "1",
+            "--gpu",
+            "off"
+          ],
+          "wall_seconds": 0.001000727,
+          "wall_limit_seconds": 30,
+          "phase": "measured",
+          "index": 1,
+          "digest_checked": true,
+          "digest": "e051d1007607de494c073da3c29903d6c0abfee7a4c0609f560a340a1947b470"
+        },
+        {
+          "status": "ok",
+          "returncode": 0,
+          "stdout": "\"e051d1007607de494c073da3c29903d6c0abfee7a4c0609f560a340a1947b470\"\n",
+          "stderr": "",
+          "command": [
+            "/tmp/bend-kernel-bench-zvvhkowx/pattern-1024",
+            "--threads",
+            "1",
+            "--gpu",
+            "off"
+          ],
+          "wall_seconds": 0.000892302,
+          "wall_limit_seconds": 30,
+          "phase": "measured",
+          "index": 2,
+          "digest_checked": true,
+          "digest": "e051d1007607de494c073da3c29903d6c0abfee7a4c0609f560a340a1947b470"
+        },
+        {
+          "status": "ok",
+          "returncode": 0,
+          "stdout": "\"e051d1007607de494c073da3c29903d6c0abfee7a4c0609f560a340a1947b470\"\n",
+          "stderr": "",
+          "command": [
+            "/tmp/bend-kernel-bench-zvvhkowx/pattern-1024",
+            "--threads",
+            "1",
+            "--gpu",
+            "off"
+          ],
+          "wall_seconds": 0.000884197,
+          "wall_limit_seconds": 30,
+          "phase": "measured",
+          "index": 3,
+          "digest_checked": true,
+          "digest": "e051d1007607de494c073da3c29903d6c0abfee7a4c0609f560a340a1947b470"
+        }
+      ],
+      "strict_check": {
+        "status": "ok",
+        "returncode": 0,
+        "stdout": "All terms check.\n",
+        "stderr": "",
+        "command": [
+          "/home/omen/.bun/bin/bun",
+          "-e",
+          "\nimport * as B from './bend2/bend.ts';\ntry {\n  const book = B.book_nil();\n  await B.book_load(book, process.argv[1], '', new Map());\n  B.book_valid(book);\n  if (book.hols + book.open) throw new Error('hole/open goal');\n  console.log('All terms check.');\n} catch (e) {\n  console.error(e?.$ === 'Err' ? B.err_show(e) : String(e));\n  process.exit(1);\n}\n",
+          "/tmp/bend-kernel-bench-zvvhkowx/pattern-1024.bend"
+        ],
+        "wall_seconds": 0.279676141,
+        "wall_limit_seconds": 120
+      },
+      "build": {
+        "status": "ok",
+        "returncode": 0,
+        "stdout": "",
+        "stderr": "",
+        "command": [
+          "/home/omen/.bun/bin/bun",
+          "bend2/main.ts",
+          "/tmp/bend-kernel-bench-zvvhkowx/pattern-1024.bend",
+          "-o",
+          "/tmp/bend-kernel-bench-zvvhkowx/pattern-1024"
+        ],
+        "wall_seconds": 0.912613401,
+        "wall_limit_seconds": 120
+      },
+      "binary_sha256": "ac14ba4c4c50fbc8dc21e6f1a379944bd4c6832e0eacb4a6af8fba66e0348117",
+      "status": "ok",
+      "median_seconds": 0.000892302,
+      "end_to_end_bytes_per_second": 1147593.527751815
+    },
+    {
+      "name": "million-a",
+      "bytes": 1000000,
+      "expected_hashlib_sha256": "cdc76e5c9914fb9281a1c7e284d73e67f1809a48a497200e046d39ccc7112cd0",
+      "input_rule": "repeat 0x61",
+      "generated_source_sha256": "734ea7682cc9672ab19854e2cb5063b66ec1cc0f893bf4c2bb5e3f09ac3536e8",
+      "raw_samples": [
+        {
+          "status": "ok",
+          "returncode": 0,
+          "stdout": "\"cdc76e5c9914fb9281a1c7e284d73e67f1809a48a497200e046d39ccc7112cd0\"\n",
+          "stderr": "",
+          "command": [
+            "/tmp/bend-kernel-bench-zvvhkowx/million-a",
+            "--threads",
+            "1",
+            "--gpu",
+            "off"
+          ],
+          "wall_seconds": 0.010775866,
+          "wall_limit_seconds": 30,
+          "phase": "warmup",
+          "index": 0,
+          "digest_checked": true,
+          "digest": "cdc76e5c9914fb9281a1c7e284d73e67f1809a48a497200e046d39ccc7112cd0"
+        },
+        {
+          "status": "ok",
+          "returncode": 0,
+          "stdout": "\"cdc76e5c9914fb9281a1c7e284d73e67f1809a48a497200e046d39ccc7112cd0\"\n",
+          "stderr": "",
+          "command": [
+            "/tmp/bend-kernel-bench-zvvhkowx/million-a",
+            "--threads",
+            "1",
+            "--gpu",
+            "off"
+          ],
+          "wall_seconds": 0.010372841,
+          "wall_limit_seconds": 30,
+          "phase": "measured",
+          "index": 1,
+          "digest_checked": true,
+          "digest": "cdc76e5c9914fb9281a1c7e284d73e67f1809a48a497200e046d39ccc7112cd0"
+        },
+        {
+          "status": "ok",
+          "returncode": 0,
+          "stdout": "\"cdc76e5c9914fb9281a1c7e284d73e67f1809a48a497200e046d39ccc7112cd0\"\n",
+          "stderr": "",
+          "command": [
+            "/tmp/bend-kernel-bench-zvvhkowx/million-a",
+            "--threads",
+            "1",
+            "--gpu",
+            "off"
+          ],
+          "wall_seconds": 0.010028398,
+          "wall_limit_seconds": 30,
+          "phase": "measured",
+          "index": 2,
+          "digest_checked": true,
+          "digest": "cdc76e5c9914fb9281a1c7e284d73e67f1809a48a497200e046d39ccc7112cd0"
+        },
+        {
+          "status": "ok",
+          "returncode": 0,
+          "stdout": "\"cdc76e5c9914fb9281a1c7e284d73e67f1809a48a497200e046d39ccc7112cd0\"\n",
+          "stderr": "",
+          "command": [
+            "/tmp/bend-kernel-bench-zvvhkowx/million-a",
+            "--threads",
+            "1",
+            "--gpu",
+            "off"
+          ],
+          "wall_seconds": 0.010405573,
+          "wall_limit_seconds": 30,
+          "phase": "measured",
+          "index": 3,
+          "digest_checked": true,
+          "digest": "cdc76e5c9914fb9281a1c7e284d73e67f1809a48a497200e046d39ccc7112cd0"
+        }
+      ],
+      "strict_check": {
+        "status": "ok",
+        "returncode": 0,
+        "stdout": "All terms check.\n",
+        "stderr": "",
+        "command": [
+          "/home/omen/.bun/bin/bun",
+          "-e",
+          "\nimport * as B from './bend2/bend.ts';\ntry {\n  const book = B.book_nil();\n  await B.book_load(book, process.argv[1], '', new Map());\n  B.book_valid(book);\n  if (book.hols + book.open) throw new Error('hole/open goal');\n  console.log('All terms check.');\n} catch (e) {\n  console.error(e?.$ === 'Err' ? B.err_show(e) : String(e));\n  process.exit(1);\n}\n",
+          "/tmp/bend-kernel-bench-zvvhkowx/million-a.bend"
+        ],
+        "wall_seconds": 0.284831508,
+        "wall_limit_seconds": 120
+      },
+      "build": {
+        "status": "ok",
+        "returncode": 0,
+        "stdout": "",
+        "stderr": "",
+        "command": [
+          "/home/omen/.bun/bin/bun",
+          "bend2/main.ts",
+          "/tmp/bend-kernel-bench-zvvhkowx/million-a.bend",
+          "-o",
+          "/tmp/bend-kernel-bench-zvvhkowx/million-a"
+        ],
+        "wall_seconds": 0.896137136,
+        "wall_limit_seconds": 120
+      },
+      "binary_sha256": "c2289d8bcb7bffab48265a5df732219822a619eeef926766397c980abd68c8d0",
+      "status": "ok",
+      "median_seconds": 0.010372841,
+      "end_to_end_bytes_per_second": 96405603.82637697,
+      "interpreter_probe": {
+        "status": "timeout",
+        "returncode": null,
+        "stdout": "",
+        "stderr": "",
+        "command": [
+          "/home/omen/.bun/bin/bun",
+          "bend2/main.ts",
+          "/tmp/bend-kernel-bench-zvvhkowx/million-a.bend"
+        ],
+        "wall_seconds": 30.1256174,
+        "wall_limit_seconds": 30,
+        "phase": "resource-probe",
+        "index": 0,
+        "digest_checked": false,
+        "resource_bound": {
+          "completion_seconds_greater_than": 30,
+          "completion_rate_bytes_per_second_less_than": 33333.333333333336,
+          "scope": "interpreter includes loading/checking; no completed digest available"
+        }
+      }
+    }
+  ],
+  "status": "ok",
+  "complete_corpus": true,
+  "source_sha256": {
+    "bend2/base.bend": "97418bece94638b73b8211aba988beb07635e39ceb89854082f54ac30675ad8a",
+    "bend2/bend.ts": "0c61ced47793ffbb641809f3e293a75e095d32ea17a37796111d66ac2466064f",
+    "bend2/comp.ts": "bddc6e1a64afd2cec97e3a110b6fedfa3ae621d89534a1e98a930c0ed1e5bda3",
+    "bend2/main.ts": "16672e44cc43891dc2fc76e0f72fcd53b90584fc6f4a6b423ec25067d4f6d264",
+    "demos/kernels/buffer.bend": "87b9dbee697a358e38aa398c4445744d98d30e670951c89cdc30e9f07aef567c",
+    "demos/kernels/sha256.bend": "d8d28af6c76015b3b21048abbe585f96d636b1c4d67bca6075d3b85aeb2caedf"
+  },
+  "driver_sha256": "3e3f5bc7325c06b08dc805f53e83317dd3a8a59557deea958585e319ab0d4c10",
+  "CLANG_MODULE_CACHE_PATH": "/tmp/bend-kernel-bench-zvvhkowx/clang-module-cache",
+  "finished_utc": "2026-09-20T15:59:50.064387+00:00"
+}

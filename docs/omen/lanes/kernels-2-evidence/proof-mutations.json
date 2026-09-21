@@ -1,0 +1,71 @@
+[
+  {
+    "mutation": "seven actual digest leaves",
+    "strict_valid": true,
+    "verdict": "proof rejected",
+    "seconds": 0.31833107699640095,
+    "log": "Error:\n- expected : 7n\n- observed : 8n\nContext:\n- a : U32\n- b : U32\n- c : U32\n- d : U32\n- e : U32\n- f : U32\n- g : U32\n- h : U32\nLocation: digest_size\n15 |   match s:\n16>|     case S.Hash{a,b,c,d,e,f,g,h}: {==}\n17 | \nProof FAIL\n"
+  },
+  {
+    "mutation": "reject exact capacity",
+    "strict_valid": true,
+    "verdict": "proof rejected",
+    "seconds": 0.33500307898793835,
+    "log": "Error:\n- expected : {observations.result_size(buffer.checked(Cmp.is_lt(Nat.cmp(length, Nat.add(U32.to_nat(capacity), Nat.add(U32.to_nat(capacity), Nat.add(U32.to_nat(capacity), Nat.add(U32.to_nat(capacity), 0n)))))), a, length)) == observations.expected_size(Cmp.is_le(Nat.cmp(length, Nat.add(U32.to_nat(capacity), Nat.add(U32.to_nat(capacity), Nat.add(U32.to_nat(capacity), Nat.add(U32.to_nat(capacity), 0n))))))) : Maybe<&2, Nat>}\n- observed : {observations.result_size(buffer.checked(Cmp.is_le(Nat.cmp(length, Nat.add(U32.to_nat(capacity), Nat.add(U32.to_nat(capacity), Nat.add(U32.to_nat(capacity), Nat.add(U32.to_nat(capacity), 0n)))))), a, length)) == observations.expected_size(Cmp.is_le(Nat.cmp(length, Nat.add(U32.to_nat(capacity), Nat.add(U32.to_nat(capacity), Nat.add(U32.to_nat(capacity), Nat.add(U32.to_nat(capacity), 0n))))))) : Maybe<&2, Nat>}\nContext:\n- length   : Nat\n- a        : Array<U32>\n- capacity : U32\nLocation: sized_shape\n38 |   (a, capacity) = pair\n39>|   checked_shape(Nat.is_le(length, Nat.mul(4n, U32.to_nat(capacity))), a, length)\n40 | \nProof FAIL\n"
+  },
+  {
+    "mutation": "accept oversize",
+    "strict_valid": true,
+    "verdict": "proof rejected",
+    "seconds": 0.3176965650054626,
+    "log": "Error:\n- expected : {Some{List.length(&2, U32, observations.words(sha256.digest_state(Pair.snd(Array<U32>, sha256.Hash, buffer.blocks(Nat.div.fin(Nat.divmod.go(length, 63n, 0n, 0n)), 0, Nat.mod.fin(Nat.divmod.go(length, 63n, 0n, 0n)), length, (a, sha256.Hash{1779033703, 3144134277, 1013904242, 2773480762, 1359893119, 2600822924, 528734635, 1541459225}))))))} == observations.expected_size(Cmp.is_le(Nat.cmp(length, Nat.add(U32.to_nat(capacity), Nat.add(U32.to_nat(capacity), Nat.add(U32.to_nat(capacity), Nat.add(U32.to_nat(capacity), 0n))))))) : Maybe<&2, Nat>}\n- observed : {observations.result_size(buffer.checked(Cmp.is_le(Nat.cmp(length, Nat.add(U32.to_nat(capacity), Nat.add(U32.to_nat(capacity), Nat.add(U32.to_nat(capacity), Nat.add(U32.to_nat(capacity), 0n)))))), a, length)) == observations.expected_size(Cmp.is_le(Nat.cmp(length, Nat.add(U32.to_nat(capacity), Nat.add(U32.to_nat(capacity), Nat.add(U32.to_nat(capacity), Nat.add(U32.to_nat(capacity), 0n))))))) : Maybe<&2, Nat>}\nContext:\n- length   : Nat\n- a        : Array<U32>\n- capacity : U32\nLocation: sized_shape\n38 |   (a, capacity) = pair\n39>|   checked_shape(Nat.is_le(length, Nat.mul(4n, U32.to_nat(capacity))), a, length)\n40 | \nProof FAIL\n"
+  },
+  {
+    "mutation": "wrong initialization",
+    "strict_valid": true,
+    "verdict": "proof rejected",
+    "seconds": 0.32784668599197175,
+    "log": "Error:\n- expected : spec_state.H{1779033702, 3144134277, 1013904242, 2773480762, 1359893119, 2600822924, 528734635, 1541459225}\n- observed : spec_state.H{1779033703, 3144134277, 1013904242, 2773480762, 1359893119, 2600822924, 528734635, 1541459225}\nLocation: LAWS.sha_initial\n90 | def L.sha_initial():\n91>|   {==}\n92 | \nProof FAIL\n"
+  },
+  {
+    "mutation": "wrong sigma0 rotation",
+    "strict_valid": true,
+    "verdict": "proof rejected",
+    "seconds": 0.3354858230013633,
+    "log": "Error:\n- expected : {U32.xor(U32.xor(U32.or(U32.shr(U32.shr(U32.shr(U32.shr(U32.shr(U32.shr(U32.shr(U32.shr(x)))))))), U32.shl(U32.shl(U32.shl(U32.shl(U32.shl(U32.shl(U32.shl(U32.shl(U32.shl(U32.shl(U32.shl(U32.shl(U32.shl(U32.shl(U32.shl(U32.shl(U32.shl(U32.shl(U32.shl(U32.shl(U32.shl(U32.shl(U32.shl(U32.shl(x))))))))))))))))))))))))), U32.or(U32.shr(U32.shr(U32.shr(U32.shr(U32.shr(U32.shr(U32.shr(U32.shr(U32.shr(U32.shr(U32.shr(U32.shr(U32.shr(U32.shr(U32.shr(U32.shr(U32.shr(U32.shr(x)))))))))))))))))), U32.shl(U32.shl(U32.shl(U32.shl(U32.shl(U32.shl(U32.shl(U32.shl(U32.shl(U32.shl(U32.shl(U32.shl(U32.shl(U32.shl(x)))))))))))))))), U32.shr(U32.shr(U32.shr(x)))) == U32.xor(U32.or(U32.shr(U32.shr(U32.shr(U32.shr(U32.shr(U32.shr(U32.shr(x))))))), U32.shl(U32.shl(U32.shl(U32.shl(U32.shl(U32.shl(U32.shl(U32.shl(U32.shl(U32.shl(U32.shl(U32.shl(U32.shl(U32.shl(U32.shl(U32.shl(U32.shl(U32.shl(U32.shl(U32.shl(U32.shl(U32.shl(U32.shl(U32.shl(U32.shl(x)))))))))))))))))))))))))), U32.xor(U32.or(U32.shr(U32.shr(U32.shr(U32.shr(U32.shr(U32.shr(U32.shr(U32.shr(U32.shr(U32.shr(U32.shr(U32.shr(U32.shr(U32.shr(U32.shr(U32.shr(U32.shr(U32.shr(x)))))))))))))))))), U32.shl(U32.shl(U32.shl(U32.shl(U32.shl(U32.shl(U32.shl(U32.shl(U32.shl(U32.shl(U32.shl(U32.shl(U32.shl(U32.shl(x))))))))))))))), U32.shr(U32.shr(U32.shr(x))))) : U32}\n- observed : {U32.xor(U32.xor(U32.or(U32.shr(U32.shr(U32.shr(U32.shr(U32.shr(U32.shr(U32.shr(x))))))), U32.shl(U32.shl(U32.shl(U32.shl(U32.shl(U32.shl(U32.shl(U32.shl(U32.shl(U32.shl(U32.shl(U32.shl(U32.shl(U32.shl(U32.shl(U32.shl(U32.shl(U32.shl(U32.shl(U32.shl(U32.shl(U32.shl(U32.shl(U32.shl(U32.shl(x)))))))))))))))))))))))))), U32.or(U32.shr(U32.shr(U32.shr(U32.shr(U32.shr(U32.shr(U32.shr(U32.shr(U32.shr(U32.shr(U32.shr(U32.shr(U32.shr(U32.shr(U32.shr(U32.shr(U32.shr(U32.shr(x)))))))))))))))))), U32.shl(U32.shl(U32.shl(U32.shl(U32.shl(U32.shl(U32.shl(U32.shl(U32.shl(U32.shl(U32.shl(U32.shl(U32.shl(U32.shl(x)))))))))))))))), U32.shr(U32.shr(U32.shr(x)))) == U32.xor(U32.or(U32.shr(U32.shr(U32.shr(U32.shr(U32.shr(U32.shr(U32.shr(x))))))), U32.shl(U32.shl(U32.shl(U32.shl(U32.shl(U32.shl(U32.shl(U32.shl(U32.shl(U32.shl(U32.shl(U32.shl(U32.shl(U32.shl(U32.shl(U32.shl(U32.shl(U32.shl(U32.shl(U32.shl(U32.shl(U32.shl(U32.shl(U32.shl(U32.shl(x)))))))))))))))))))))))))), U32.xor(U32.or(U32.shr(U32.shr(U32.shr(U32.shr(U32.shr(U32.shr(U32.shr(U32.shr(U32.shr(U32.shr(U32.shr(U32.shr(U32.shr(U32.shr(U32.shr(U32.shr(U32.shr(U32.shr(x)))))))))))))))))), U32.shl(U32.shl(U32.shl(U32.shl(U32.shl(U32.shl(U32.shl(U32.shl(U32.shl(U32.shl(U32.shl(U32.shl(U32.shl(U32.shl(x))))))))))))))), U32.shr(U32.shr(U32.shr(x))))) : U32}\nContext:\n- x : U32\nLocation: LAWS.sha_small0\n181 | def L.sha_small0(x):\n182>|   u32_xor_assoc(S.rotr(x, 7n), S.rotr(x, 18n), U32.shrn(x, 3n))\n183 | \nProof FAIL\n"
+  },
+  {
+    "mutation": "majority drops a term",
+    "strict_valid": true,
+    "verdict": "proof rejected",
+    "seconds": 0.33759978599846363,
+    "log": "Error:\n- expected : {U32.xor(U32.xor(U32.and(x, y), U32.and(y, z)), U32.and(y, z)) == U32.xor(U32.and(x, y), U32.xor(U32.and(x, z), U32.and(y, z))) : U32}\n- observed : {U32.xor(U32.xor(U32.and(x, y), U32.and(x, z)), U32.and(y, z)) == U32.xor(U32.and(x, y), U32.xor(U32.and(x, z), U32.and(y, z))) : U32}\nContext:\n- x : U32\n- y : U32\n- z : U32\nLocation: LAWS.sha_majority\n178 | def L.sha_majority(x, y, z):\n179>|   u32_xor_assoc(U32.and(x, y), U32.and(x, z), U32.and(y, z))\n180 | \nProof FAIL\n"
+  },
+  {
+    "statement": "digest size claimed seven",
+    "well_typed": true,
+    "verdict": "proof rejected",
+    "log": "Error:\n- expected : {List.length(&2, U32, observations.words(sha256.digest_state(sha256.absorb(msg, 64n, [], sha256.Hash{1779033703, 3144134277, 1013904242, 2773480762, 1359893119, 2600822924, 528734635, 1541459225}, 0, 0)))) == 7n : Nat}\n- observed : {List.length(&2, U32, observations.words(sha256.digest_state(sha256.absorb(msg, 64n, [], sha256.Hash{1779033703, 3144134277, 1013904242, 2773480762, 1359893119, 2600822924, 528734635, 1541459225}, 0, 0)))) == 8n : Nat}\nContext:\n- msg : List<&2, U32>\nLocation: LAWS.sha_legacy_words_length\n83 | def L.sha_legacy_words_length(msg):\n84>|   digest_size(S.absorb(msg, 64n, [], S.initial(), 0, 0))\n85 | \nProof FAIL\n"
+  },
+  {
+    "statement": "rejection claims nothing",
+    "well_typed": true,
+    "verdict": "proof rejected",
+    "log": "Error:\n- expected : {Bool.not(Maybe.is_some(&1, Array<U32>, buffer.sized(length, Array.size(U32, a)))) == False{} : Bool}\n- observed : {Bool.not(Maybe.is_some(&1, Array<U32>, buffer.sized(length, Array.size(U32, a)))) == observations.too_long(length, Array.size(U32, a)) : Bool}\nContext:\n- a      : Array<U32>\n- length : Nat\nLocation: LAWS.sha_none_iff_oversize\n80 | def L.sha_none_iff_oversize(a, length):\n81>|   sized_none(length, Array.size(U32, a))\n82 | \nProof FAIL\n"
+  },
+  {
+    "gate_probe": "unsafe",
+    "verdict": "gate rejected",
+    "log": "Error: unsafe dependency: poison\nProof FAIL\n"
+  },
+  {
+    "gate_probe": "open",
+    "verdict": "gate rejected",
+    "log": "Error: holes=0, open=1\nProof FAIL\n"
+  },
+  {
+    "gate_probe": "hole",
+    "verdict": "gate rejected",
+    "log": "Error:\n- expected : U32\n- observed : ?unfilled_value\nLocation: unfinished\n215 | def unfinished() -> U32:\n216>|   ?unfilled_value\n217 | \nProof FAIL\n"
+  }
+]
