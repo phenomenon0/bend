@@ -495,7 +495,7 @@ def bop_put(+frags: List<&2, Frg>, +end: Nat, +is_and: Bool, +first: Nat, +acc: 
     case Con{Frg{c, l, op}, t} 0n:
       bop_put(t, end, is_and, 1n, join(c, acc))
     case Con{Frg{c, l, op}, t} 1n+p:
-      bop_put(t, end, is_and, 1n+p, join(acc, Con{Instr{5, 0n, 0n}, Con{Instr{Bool.pick(U32, is_and, 21, 22), end, 0n}, c}}))
+      bop_put(t, end, is_and, 1n+p, join(acc, Con{Instr{Bool.pick(U32, is_and, 21, 22), end, 0n}, c}))
 
 # Chained comparisons: a < b < c asks (a<b) and (b<c); the middle operand is
 # evaluated twice (the subset's middles are pure; noted in the report).
@@ -567,13 +567,13 @@ def cexp(+fuel: Nat, +job: Job, +base: Nat, +env: Env) -> Cx:
     case 1n++left BOp{js, base0, acc, sum, n, flt, is_and}:
       match js:
         case S.JEnd{}:
-          +extra : Nat = Nat.sub((2n * n : Nat), 2n)
+          +extra : Nat = Nat.sub(n, 1n)
           +total = (sum + extra : Nat)
           Cx{bop_put(acc, (total + base0 : Nat), is_and, 0n, Nil{}), total, env, flt}
         case S.JItem{+one, +rest}:
           +head : Cx = cexp(left, One{one}, base, env)
           cexp(left, BOp{rest, base0, Con{Frg{cx_code(head), cx_len(head), 0}, acc}, (sum + cx_len(head) : Nat), 1n+n, pick_fault(flt, cx_fault(head)), is_and},
-            (cx_len(head) + base + 2n : Nat), cx_env(head))
+            (cx_len(head) + base + 1n : Nat), cx_env(head))
         case _:
           Cx{Nil{}, 0n, env, flt}
     case 1n++left CmpJ{ops, vals, base0, acc, sum, n, flt}:
@@ -1310,7 +1310,7 @@ def vm_run(+prog: Prog) -> Run:
 def finish(+r: Run) -> IO(Unit):
   match r:
     case Run{+funcs, +consts, +stack, +here, +rest, +locals, +globals, +frames, +out, +fault}:
-      S.choose(IO(Unit), String.is_empty(fault), u => IO.print(String.concat(List.reverse(&2, String, out))), u =>
+      S.choose(IO(Unit), String.is_empty(fault), u => IO.write(String.concat(List.reverse(&2, String, out))), u =>
         IO.die(Unit, 1, String.append("vm: ", fault)))
 
 def main() -> IO(Unit):
