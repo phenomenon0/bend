@@ -970,14 +970,23 @@ def mask.close(+s: St, zero: Bool) -> Mask:
     case False{}:
       mask.sep(top(s))
 
+# a value start at the ceiling is vstart less `[` and `{`: push refuses a 65th
+# container, and a mask that still offered them would pass a byte the step kills
+def mask.val(deep: Bool) -> Mask:
+  match deep:
+    case True{}:
+      Mask{0, 67051524, 0, 1065024, 0, 0, 0, 0}
+    case False{}:
+      M.vstart()
+
 def mask.at(m: Node, +s: St) -> Mask:
   match m:
     case Dead{}:
       M.none()
     case Val{}:
-      Mask.or(M.ws(), M.vstart())
+      Mask.or(M.ws(), mask.val(U32.is_ge(depth(s), 64)))
     case Vale{}:
-      Mask.or(M.ws(), Mask.or(M.vstart(), M.rbrack()))
+      Mask.or(M.ws(), Mask.or(mask.val(U32.is_ge(depth(s), 64)), M.rbrack()))
     case Keye{}:
       Mask.or(M.ws(), Mask.or(M.quote(), M.rbrace()))
     case Key{}:

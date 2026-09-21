@@ -181,6 +181,9 @@ masks when `depth(s) >= 64`, and add a depth-64 `pin` row to
 move, as its header says: `[` refuses (`empty`), `]` passes (`ok`), and the
 mask loses 91 and 123.
 
+**Fixed** on `lane-grammar-fix`, as scoped here; the pins moved as predicted.
+See [grammar-fix.md](grammar-fix.md).
+
 ## Demo output
 
 `bun bend2/main.ts demos/decode/main.bend` prints the following, with seed
@@ -263,7 +266,7 @@ row moved, so neither `gates/repo.ts` nor `tests/caps.sh` changed a cap.
 ## Residuals
 
 1. The depth-64 grammar bug above: one def and one pin row, in the grammar's
-   lane.
+   lane. Fixed: [grammar-fix.md](grammar-fix.md).
 2. The JS lane runs at about 7 k steps/s against 352 k for one C thread,
    unexplained.
 3. The bench is not in `bench/runtime/` and has no perf pin; the minis,

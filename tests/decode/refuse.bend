@@ -1,16 +1,15 @@
-# Refusals and the one real bug. Where nothing legal has weight, the decoder
+# Refusals and the nesting ceiling. Where nothing legal has weight, the decoder
 # returns a refusal value and never falls back to some other token. That
 # includes a legal one it was given no weight for. The checker, handed a step
 # forged at such a point, rejects it.
 #
 # The last rows are not forged. Sixty-four `[` put the grammar at its nesting
-# ceiling, where the mask still offers `[` but the step kills the state:
-# allows(s, c) == live(step(s, c)) fails on a reachable state, in
-# power/grammar.bend. The decoder trusts the mask, so it emits the token, and
-# the certificate is what catches it (split). A step there that picks the legal
-# `]` splits too: the frontier pass tests the law on every token, not only on
-# the one drawn. When grammar.bend is fixed, the `[` row refuses (empty), the
-# `]` row passes (ok), and the mask loses 91 and 123.
+# ceiling, where the step kills a 65th container and the mask agrees: it holds
+# neither 91 `[` nor 123 `{`. So a step with only `[` weighted refuses (empty),
+# and one that picks the legal `]` passes, with the frontier pass holding
+# allows(s, c) == live(step(s, c)) on every token. Before power/grammar.bend
+# was fixed the mask offered both, the decoder emitted `[` to dead/0, and the
+# certificate caught it (split); docs/omen/lanes/grammar-fix.md has the rows.
 import Base
 import ../../power/grammar.bend as Gr
 import ../../power/heap.bend as Heap
@@ -119,6 +118,6 @@ def main() -> IO(Unit):
 #|mass 2^32 refused heavy
 #|forged at refusal, empty cert draw
 #|forged at refusal, weightless legal illegal
-#|depth 64 vale/64 mask  9-10 13 32 34 45 48-57 91 93 102 110 116 123
-#|depth 64, `[` weighted `[` -> dead/0 split
-#|depth 64, `]` weighted `]` -> sep/63 split
+#|depth 64 vale/64 mask  9-10 13 32 34 45 48-57 93 102 110 116
+#|depth 64, `[` weighted refused empty
+#|depth 64, `]` weighted `]` -> sep/63 ok

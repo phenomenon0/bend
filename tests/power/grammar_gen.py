@@ -404,6 +404,10 @@ for pre in [
     "0.",
     "0.5",
     "[0",
+    # the ceiling, in both nodes that start a value: push kills `[` and `{`
+    # here, so the mask must not offer them
+    "[" * 64,
+    "[" * 63 + '{"a":',
 ]:
     s = run(pre)
     if live(s) and s not in seen:
