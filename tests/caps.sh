@@ -18,7 +18,7 @@ check() {
     rc=1
   fi
 }
-check bend2/base.bend 48700
+check bend2/base.bend 48928
 check bend2/bend.ts 42300
 check bend2/comp.ts 84100
 check bend2/main.ts 10000

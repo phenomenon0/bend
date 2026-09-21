@@ -1851,6 +1851,17 @@ def U64.add(a: U64, b: U64) -> U64:
     case U64{x} U64{y}:
       U64{Word.add(64n, x, y)}
 
+law U64.add_comm:
+  for a: U64
+  for b: U64
+  {U64.add(a, b) == U64.add(b, a) : U64}
+
+def U64.add_comm(a, b):
+  match a b:
+    case U64{x} U64{y}:
+      Equal.cong(Word(64n), U64, w => U64{w}, Word.add(64n, x, y),
+        Word.add(64n, y, x), Word.add_comm(64n, x, y))
+
 def U64.sub(a: U64, b: U64) -> U64:
   match a b:
     case U64{x} U64{y}:
@@ -1959,6 +1970,19 @@ def I64.add(a: I64, b: I64) -> I64:
   match a b:
     case I64{x} I64{y}:
       I64{Word.add(64n, x, y)}
+
+law I64.add_comm:
+  for a: I64
+  for b: I64
+  {I64.add(a, b) == I64.add(b, a) : I64}
+
+# The signed twin of U32.add_comm, and the same citation: two's complement
+# means I64.add IS Word.add(64n) -- the proof is the unsigned one, repacked.
+def I64.add_comm(a, b):
+  match a b:
+    case I64{x} I64{y}:
+      Equal.cong(Word(64n), I64, w => I64{w}, Word.add(64n, x, y),
+        Word.add(64n, y, x), Word.add_comm(64n, x, y))
 
 def I64.sub(a: I64, b: I64) -> I64:
   match a b:
