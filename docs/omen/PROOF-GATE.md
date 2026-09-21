@@ -25,6 +25,23 @@ preservation clause (P12) admits absurd implementations.
    and state explicitly in the file what is NOT guaranteed.
 6. **Deployment binds to the checked revision** — the artifact carries the
    source hash the gate passed on.
+7. **Negative controls (well-typed mutations).** A gate that has never rejected
+   anything is unproven. Every gate keeps a mutation table —
+   `(file, exact snippet, replacement, label)` — applied to **isolated copies**
+   (production files never change), where each mutation is **well-typed**: it
+   compiles, only the proof/oracle machinery can catch it. Two hard parts:
+   the snippet must occur exactly once (source drift breaks the test loudly,
+   never silently), and the harness must refuse to run with assertions
+   disabled. "It passed on good code" is half a test.
+
+## Organization: module triples (pattern taken from the wild)
+
+Tom Aylott's tau-fluidics course (`subtleGradient/rccm`, `bend/`) ships every
+concept as `X.bend` + `X-laws.bend` + `X-proof.bend` with umbrella `LAWS.bend`
+/ `PROOF.bend` entries — laws as literature, module by module; its verifier
+runs the negative-control pattern above. The whole tree (22 modules) checks on
+our tip. Adopt the triple shape for future base lanes; adopt the mutation
+table when L1 (lint/verifier) lands.
 
 ## Status here
 
