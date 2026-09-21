@@ -69,7 +69,7 @@ type Run is Data:
 #   2 STORE_L a    8 MUL      13 GT     19 JIF a    25 PRINT b
 #   3 LOAD_G a     9 DIV      14 GTE    20 JIT a    26 HALT
 #   4 STORE_G a   10 MOD      15 EQ     21 JIFK a   27 LEN
-#   5 POP                     16 NEQ    22 JITK a
+#   5 POP                     16 NEQ    22 JITK a   28 GETITEM  29 SLICE a b
 
 # S.Json access
 # ===========
@@ -666,6 +666,9 @@ def name_cx(+env: Env, +name: String, +is_store: Bool) -> Cx:
   Env{+cs, nc, +gs, ng, +fs, +ns, nn} = env
   slot_put(local_find(ns, name, 0n), Env{cs, nc, gs, ng, fs, ns, nn}, name, is_store)
 
+def is_usub(+j: S.Json) -> Bool:
+  String.eq(jtag(j), "UnaryOp") && String.eq(jstr(jfield(jfield(j, "op"), "tag")), "USub")
+
 def store_target(+j: S.Json, +base: Nat, +env: Env) -> Cx:
   S.choose(Cx, String.eq(jtag(j), "Name"), u => name_cx(env, jstr(jfield(j, "id")), True{}), u =>
     Cx{Nil{}, 0n, env, "the assignment target is outside the subset"})
@@ -784,6 +787,30 @@ def cexp(+fuel: Nat, +job: Job, +base: Nat, +env: Env) -> Cx:
               join(cx_code(body), join(one(19, (cx_len(test) + base + cx_len(body) + 2n : Nat), 0n), cx_code(test))))),
             (cx_len(test) + cx_len(body) + cx_len(other) + 2n : Nat), cx_env(other),
             pick_fault(cx_fault(test), pick_fault(cx_fault(body), cx_fault(other)))}
+        case "Subscript":
+          +val_j = jfield(j, "value")
+          +slc_j = jfield(j, "slice")
+          S.choose(Cx, String.eq(jtag(slc_j), "Slice"), u =>
+            +lo_j = jfield(slc_j, "lower")
+            +hi_j = jfield(slc_j, "upper")
+            +st_j = jfield(slc_j, "step")
+            S.choose(Cx, Bool.not(jnull(st_j)), u => Cx{Nil{}, 0n, env, "slice steps are outside the subset"}, u =>
+              S.choose(Cx, is_usub(lo_j) || is_usub(hi_j), u => Cx{Nil{}, 0n, env, "negative indices are outside the subset"}, u =>
+                +has_lo = Bool.not(jnull(lo_j))
+                +has_hi = Bool.not(jnull(hi_j))
+                +vs : Cx = cexp(left, One{val_j}, base, env)
+                +lo_cx : Cx = S.choose(Cx, has_lo, u => cexp(left, One{lo_j}, (cx_len(vs) + base : Nat), cx_env(vs)), u => Cx{Nil{}, 0n, cx_env(vs), ""})
+                +hi_cx : Cx = S.choose(Cx, has_hi, u => cexp(left, One{hi_j}, (cx_len(vs) + cx_len(lo_cx) + base : Nat), cx_env(lo_cx)), u => Cx{Nil{}, 0n, cx_env(lo_cx), ""})
+                Cx{join(one(29, Bool.pick(Nat, has_lo, 1n, 0n), Bool.pick(Nat, has_hi, 1n, 0n)), join(cx_code(hi_cx), join(cx_code(lo_cx), cx_code(vs)))),
+                  (1n + (cx_len(vs) + (cx_len(lo_cx) + cx_len(hi_cx) : Nat) : Nat) : Nat), cx_env(hi_cx),
+                  pick_fault(cx_fault(vs), pick_fault(cx_fault(lo_cx), cx_fault(hi_cx)))})), u =>
+            S.choose(Cx, is_usub(slc_j), u => Cx{Nil{}, 0n, env, "negative indices are outside the subset"}, u =>
+              S.choose(Cx, String.eq(jtag(slc_j), "Tuple"), u => Cx{Nil{}, 0n, env, "the subscript is outside the subset"}, u =>
+                +vs : Cx = cexp(left, One{val_j}, base, env)
+                +idx : Cx = cexp(left, One{slc_j}, (cx_len(vs) + base : Nat), cx_env(vs))
+                Cx{join(one(28, 0n, 0n), join(cx_code(idx), cx_code(vs))),
+                  (1n + (cx_len(vs) + cx_len(idx) : Nat) : Nat), cx_env(idx),
+                  pick_fault(cx_fault(vs), cx_fault(idx))})))
         case "List":
           Cx{Nil{}, 0n, env, "lists are outside the subset"}
         case "Dict":
@@ -1015,6 +1042,11 @@ def pop_second(+p: Pop) -> Val:
     case Pop{args, more}:
       val_at(args, 1n)
 
+def pop_third(+p: Pop) -> Val:
+  match p:
+    case Pop{args, more}:
+      val_at(args, 2n)
+
 def frames_ok(+fs: List<&2, VFrame>) -> Bool:
   match fs:
     case Nil{}:
@@ -1191,6 +1223,67 @@ def ss_y(+p: SS) -> String:
     case SS{x, y}:
       y
 
+def is_num(+v: Val) -> Bool:
+  match v:
+    case VInt{n}:
+      True{}
+    case VBool{b}:
+      True{}
+    case _:
+      False{}
+
+def num_of(+v: Val) -> Nat:
+  match v:
+    case VInt{n}:
+      n
+    case VBool{b}:
+      Bool.pick(Nat, b, 1n, 0n)
+    case _:
+      0n
+
+def char_at(+s: String, +idx: Nat) -> String:
+  String.take(String.drop(s, idx), 1n)
+
+type SliceArgs is Data:
+  SliceArgs{s: Val, lo: Val, hi: Val}
+
+def slice_args(+picked: Pop, +a: Nat, +b: Nat) -> SliceArgs:
+  match a b:
+    case 0n 0n:
+      SliceArgs{pop_head(picked), VNone{}, VNone{}}
+    case 1n+p 0n:
+      SliceArgs{pop_second(picked), pop_head(picked), VNone{}}
+    case 0n 1n+q:
+      SliceArgs{pop_second(picked), VNone{}, pop_head(picked)}
+    case 1n+p 1n+q:
+      SliceArgs{pop_third(picked), pop_second(picked), pop_head(picked)}
+
+def sa_s(+sa: SliceArgs) -> Val:
+  match sa:
+    case SliceArgs{s, lo, hi}:
+      s
+
+def sa_lo(+sa: SliceArgs) -> Val:
+  match sa:
+    case SliceArgs{s, lo, hi}:
+      lo
+
+def sa_hi(+sa: SliceArgs) -> Val:
+  match sa:
+    case SliceArgs{s, lo, hi}:
+      hi
+
+def slice_str(+s: String, +has_lo: Nat, +has_hi: Nat, +lo_val: Val, +hi_val: Val) -> String:
+  match has_lo has_hi:
+    case 0n 0n:
+      s
+    case 1n+p 0n:
+      String.drop(s, num_of(lo_val))
+    case 0n 1n+q:
+      String.take(s, num_of(hi_val))
+    case 1n+p 1n+q:
+      String.slice(s, num_of(lo_val), num_of(hi_val))
+
 def line(+vs: List<&2, Val>, acc: String, first: Bool) -> String:
   match vs:
     case Nil{}:
@@ -1238,6 +1331,8 @@ type OpKind is Data:
   KPrint{}
   KHalt{}
   KLen{}
+  KGetItem{}
+  KSlice{}
   KBad{}
 
 def op_kind(op: U32) -> OpKind:
@@ -1298,6 +1393,10 @@ def op_kind(op: U32) -> OpKind:
       KHalt{}
     case 27:
       KLen{}
+    case 28:
+      KGetItem{}
+    case 29:
+      KSlice{}
     case _:
       KBad{}
 
@@ -1488,6 +1587,26 @@ def step(+fuel: Nat, +job: Step) -> Run:
           S.choose(Run, pop_any(picked) && is_str(pop_head(picked)), u =>
             step(left, Go{Run{funcs, consts, Con{VInt{String.length(str_of(pop_head(picked)))}, pop_more(picked)}, here, more, locals, globals, frames, out, fault}}), u =>
             fault_run(funcs, consts, stack, here, locals, globals, frames, out, "a non-string in len()"))
+        case KGetItem{}:
+          +picked : Pop = pop_args(2n, stack)
+          S.choose(Run, pop_any(picked) && is_str(pop_second(picked)), u =>
+            S.choose(Run, is_num(pop_head(picked)), u =>
+              +str : String = str_of(pop_second(picked))
+              +idx : Nat = num_of(pop_head(picked))
+              S.choose(Run, Nat.is_lt(idx, String.length(str)), u =>
+                step(left, Go{Run{funcs, consts, Con{VStr{char_at(str, idx)}, pop_more(picked)}, here, more, locals, globals, frames, out, fault}}), u =>
+                fault_run(funcs, consts, stack, here, locals, globals, frames, out, "an out-of-range index is outside the subset")), u =>
+              fault_run(funcs, consts, stack, here, locals, globals, frames, out, "a non-integer index is outside the subset")), u =>
+            fault_run(funcs, consts, stack, here, locals, globals, frames, out, "a non-string in indexing"))
+        case KSlice{}:
+          +picked : Pop = pop_args((a + b + 1n : Nat), stack)
+          +sa : SliceArgs = slice_args(picked, a, b)
+          S.choose(Run, is_str(sa_s(sa)), u =>
+            S.choose(Run, (Nat.is_eq(a, 0n) || is_num(sa_lo(sa))) && (Nat.is_eq(b, 0n) || is_num(sa_hi(sa))), u =>
+              +res : String = slice_str(str_of(sa_s(sa)), a, b, sa_lo(sa), sa_hi(sa))
+              step(left, Go{Run{funcs, consts, Con{VStr{res}, pop_more(picked)}, here, more, locals, globals, frames, out, fault}}), u =>
+              fault_run(funcs, consts, stack, here, locals, globals, frames, out, "a non-integer slice bound is outside the subset")), u =>
+            fault_run(funcs, consts, stack, here, locals, globals, frames, out, "a non-string in slicing"))
         case KHalt{}:
           Run{funcs, consts, stack, here, more, locals, globals, frames, out, fault}
         case KBad{}:
