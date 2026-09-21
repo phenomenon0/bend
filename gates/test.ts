@@ -144,7 +144,11 @@ function shard_script(shard: Test[], tag: number): string {
   const probe = (kind: string, cmd: string): string =>
     `echo "${MARK} ${kind} $m"; perl -e 'alarm 5; exec @ARGV' ${cmd} 2>&1;`
     + ` echo "${MARK} exit $?";`;
+  // The mini pins the environment alongside the bytes: the interpreter's
+  // daily check prints an update notice on stderr, and these lanes compare
+  // raw stdout+stderr. The notice is network state, not output.
   return `export BUN_JSC_maxPerThreadStackUsage=33554432;`
+    + ` export BEND_NO_TELEMETRY=1;`
     + ` d=$HOME/bend-test/${tag}; rm -rf $d; mkdir -p $d; cd $d; tar -xzf -;`
     + ` echo "${MARK} checkup"; ${BUN} bend2/main.ts main.bend --checkup 2>&1;`
     + ` xargs -P 10 -L 1 sh -c 'm=$1; shift; ${BUN} bend2/main.ts "$@"`

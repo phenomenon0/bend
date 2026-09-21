@@ -231,7 +231,10 @@ function cell_pack(dir: string): Buffer {
 
 function cell_script(c: Cell): string {
   const run = "./cell " + FLAGS[c.mode].replace("$gm", MEMORY[c.bench] ?? "on");
-  return `d=$HOME/bend-perf/${c.bench}-${String(c.mode)}; rm -rf $d;`
+  // BEND_NO_TELEMETRY keeps the daily update notice out of build.txt, which
+  // this cell echoes back: the notice is network state, not build output.
+  return `export BEND_NO_TELEMETRY=1;`
+    + ` d=$HOME/bend-perf/${c.bench}-${String(c.mode)}; rm -rf $d;`
     + ` mkdir -p $d; cd $d; tar -xzf -; ${THREADS} ${lib.BUN} bend2/main.ts`
     + ` main.bend -o main > /dev/null 2>&1; t0=$(${CLOCK}); ${lib.BUN}`
     + ` bend2/main.ts main.bend -o main > build.txt 2>&1; b=$?;`
@@ -284,7 +287,8 @@ async function cell_run(c: Cell, node: number): Promise<void> {
 // ===
 
 async function chk_run(c: Chk, node: number): Promise<void> {
-  const script = `d=$HOME/bend-perf/chk-${c.bench}; rm -rf $d; mkdir -p $d;`
+  const script = `export BEND_NO_TELEMETRY=1;`
+    + ` d=$HOME/bend-perf/chk-${c.bench}; rm -rf $d; mkdir -p $d;`
     + ` cd $d; tar -xzf -; for i in 1 2 3; do t0=$(${CLOCK}); ${lib.BUN}`
     + ` bend2/main.ts main.bend > out.txt 2>&1; e=$?; t1=$(${CLOCK}); echo`
     + ` "${MARK} check $e $t0 $t1"; cat out.txt; done; cd; rm -rf $d`;
