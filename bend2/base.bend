@@ -4448,15 +4448,6 @@ def Regex.parse.open(t: String, +n: Nat, +stack: Regex.parse.Stack()) -> Regex.p
     case SNil{}:
       Regex.parse.open.cap(SNil{}, n, stack)
 
-def Regex.parse.close(+t: String, n: Nat, stack: Regex.parse.Stack()) -> Regex.parse.State():
-  match stack:
-    case fr <> Nil{}:
-      Fail{RErr{1n+String.length(t), "unbalanced parenthesis"}}
-    case fr <> rest:
-      Regex.parse.push.q(t, n, rest, Regex.parse.fin(fr), 1n)
-    case Nil{}:
-      Fail{RErr{1n+String.length(t), "unbalanced parenthesis"}}
-
 def Regex.parse.bar(t: String, n: Nat, stack: Regex.parse.Stack()) -> Regex.parse.State():
   match stack:
     case Frame{cap, alts, cat, q} <> rest:
@@ -4740,7 +4731,13 @@ def Regex.parse.char(kind: Nat, +x: U32, t: String, n: Nat, stack: Regex.parse.S
     case 1n:
       Regex.parse.open(t, n, stack)
     case 2n:
-      Regex.parse.close(t, n, stack)
+      match stack:
+        case fr <> Nil{}:
+          Fail{RErr{1n+String.length(t), "unbalanced parenthesis"}}
+        case fr <> rest:
+          Regex.parse.push.q(t, n, rest, Regex.parse.fin(fr), 1n)
+        case Nil{}:
+          Fail{RErr{1n+String.length(t), "unbalanced parenthesis"}}
     case 3n:
       Regex.parse.bar(t, n, stack)
     case 4n:
