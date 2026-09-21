@@ -21,6 +21,10 @@
 #     | λ! f               pair eliminator
 #     | @ref               reference
 #     | @ref(a,b,..)       reference applied to arguments
+#     | 123                number
+#     | (a + b)            operator node: + - * / % && || ^ << >> ~
+#                          == != < <= > >=, and === .&. .|.
+#     | ↑x                 increment, a collapse-priority marker
 #
 # Terms are Bend constructors, so term memory is Bend's own: erasing a
 # term is dropping it. A run of #0/#1 is one word: 24 bits and their
@@ -65,11 +69,20 @@
 # looks ahead before it reads more terms resumes as a phase (Ph) of
 # term, the one recursive parser.
 #
+# The numeric machine is hvm4's, ported rule for rule. A number is a
+# word (Val: hvm5.c's Num is the free list's link, so the term takes
+# the other name), and one node, Op2, is every operator: the code it
+# carries is hvm4's, 0..16 its OP2 opcodes and 17, 18, 19 the three
+# nodes that are no OP2 at all. All four are strict in their left
+# operand and share its rules; only === reads the right one whatever
+# it is. INC is a whnf that every eliminator lifts itself through. A
+# constructor run is compared one bit at a time, which is what
+# hvm4's arity-1 EQL-CTR does once the run is unpacked.
+#
 # Names and labels are codes, as in hvm5.c: six bits per character of
 # the display alphabet, first character highest. The program to run
 # is the src constant, since a Bend binary takes no arguments; the
-# output is hvm5 -s's. A literal holds λ as one code point (955); the
-# output writes it as its two UTF-8 bytes.
+# output is hvm5 -s's.
 
 import Base
 
@@ -98,6 +111,9 @@ type Tpl is Data:
   TGet{f: Tpl}
   TMat{f: Tpl, g: Tpl}
   TRef{+n: U32}
+  TVal{+n: U32}
+  TOp2{+o: U32, a: Tpl, b: Tpl}
+  TInc{x: Tpl}
 
 # Term: a runtime term. Abs and Nam appear in normal forms only: a
 # lambda shown with its display name.
@@ -120,6 +136,9 @@ type Term is Data:
   Ref{+n: U32}
   Abs{+n: U32, f: Term}
   Nam{+n: U32}
+  Val{+n: U32}
+  Op2{+o: U32, a: Term, b: Term}
+  Inc{x: Term}
 
 # Cell: an env slot: a substitution, a dup value not yet copied (both
 # sides live, or the twin dead), a free-list link, nothing, a dup
@@ -141,18 +160,23 @@ type Sh1 is Data:
   SDrp{}
   SLam{+n: U32}
   SPak{+p: U32}
+  SInc{}
 
 type Sh2 is Data:
   STup{}
   SMat{}
   SApp{}
   SSup{+l: U32}
+  SOp2{+o: U32}
 
 # Kont: the stack. Arg: a pending argument. Usk, Mtk, Gtk: an
 # eliminator waiting for its scrutinee. Dpk: dup cell i (label l)
 # waiting for its value, side sd asking, fl: is the twin alive. Rfk:
-# a deferred eliminator @ref. NfK: the whnf arriving gets normalized
-# deeper. The N-frames rebuild a node from its normalized children.
+# a deferred eliminator @ref. Opk: an operator node waiting for its
+# left operand. Opn, Eqr: waiting for its right one, holding the left
+# as a word (arithmetic) or whole (===). NfK: the whnf arriving gets
+# normalized deeper. The N-frames rebuild a node from its normalized
+# children.
 type Kont is Data:
   Arg{x: Term, k: Kont}
   Usk{f: Term, k: Kont}
@@ -160,6 +184,9 @@ type Kont is Data:
   Gtk{f: Term, k: Kont}
   Dpk{+l: U32, +i: U32, +sd: U32, +fl: U32, k: Kont}
   Rfk{+r: U32, k: Kont}
+  Opk{+o: U32, y: Term, k: Kont}
+  Opn{+o: U32, +x: U32, k: Kont}
+  Eqr{a: Term, k: Kont}
   NfK{k: Kont}
   NSupA{+l: U32, b: Term, k: Kont}
   NSupB{+l: U32, a: Term, k: Kont}
@@ -172,6 +199,9 @@ type Kont is Data:
   NGet{k: Kont}
   NDrp{k: Kont}
   NAbs{+n: U32, k: Kont}
+  NOpA{+o: U32, b: Term, k: Kont}
+  NOpB{+o: U32, a: Term, k: Kont}
+  NInc{k: Kont}
   End{}
 
 # Mode: a term to evaluate, a whnf to deliver, a stuck term unwinding
@@ -267,7 +297,17 @@ type Hc is Data:
   HGet{}
   HUse{}
   HLam{}
+  HNum{}
+  HInc{}
   HOth{}
+
+# Ok: what an operator code names: an arithmetic or comparison OP2,
+# "===", ".&." or ".|.".
+type Ok is Data:
+  Oar{}
+  Oeq{}
+  Oan{}
+  Oor{}
 
 # Ws: the source head as whitespace: a blank, a comment, or neither.
 type Ws is Data:
@@ -307,7 +347,9 @@ type Dp is Data:
 
 # Ph: the parser phase: a term; a term whose head form is known; a
 # reference with or without arguments; a call after "(", closed or
-# not; a call after an argument, with a comma or not; a dup's body.
+# not; a call after an argument, with a comma or not; a dup's body; a
+# form after "(" and its first term, an operator token read or not
+# (no token: it was an application after all).
 type Ph is Data:
   Trm{}
   PAt{h: Hc}
@@ -315,6 +357,7 @@ type Ph is Data:
   PCls{cl: Bool, f: Tpl}
   PSep{m: Bool, f: Tpl}
   PDup{d: Dp, v: Tpl}
+  POp{hit: Bool, +o: U32, f: Tpl}
 
 # Constants
 # =========
@@ -323,11 +366,13 @@ type Ph is Data:
 def alphabet() -> String:
   "_abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789$"
 
-# "λ" as the two bytes the output writes: the one place a code stands
-# for a character, since a Char literal is the code point (955) and
-# IO.print writes one byte per Char
+# "λ", the one character of the display alphabet that is not ASCII
 def lam() -> String:
-  SCon{Chr{206}, SCon{Chr{187}, ""}}
+  "λ"
+
+# "↑", the other one
+def inc() -> String:
+  "↑"
 
 # the program: hvm5 -s of this file prints the same
 def program() -> String:
@@ -358,6 +403,10 @@ def chr_code(ch: Char) -> U32:
 # is code c the character ch
 def chr_is(c: U32, ch: Char) -> Bool:
   U32.is_eq(c, chr_code(ch))
+
+# is code c a decimal digit: the head of a number literal
+def chr_digit(+c: U32) -> Bool:
+  U32.is_le(chr_code('0'), c) && U32.is_le(c, chr_code('9'))
 
 # Str
 # ===
@@ -480,6 +529,113 @@ def opens(s: String) -> Nat:
     case SCon{Chr{c}, t}:
       opens.go(chr_is(c, '{'), opens(t))
 
+# Op
+# ==
+#
+# The operators, hvm4's codes: 0..16 are the OP2 opcodes in its own
+# order (add, sub, mul, div, mod, and, or, xor, lsh, rsh, not, eq, ne,
+# lt, le, gt, ge), and 17, 18, 19 name the three nodes that are not an
+# OP2 at all: "===" (Eql), ".&." (And), ".|." (Or). A token read off
+# the source is one word, as a run word is: the code in the low five
+# bits, the characters it spells above them, so 0 is no token (every
+# real one spells at least one character).
+
+def op_w(+n: U32, +o: U32) -> U32:
+  ((n << 5n) .|. o : U32)
+
+def op_num(+v: U32) -> U32:
+  (v .&. 31 : U32)
+
+def op_len(+v: U32) -> Nat:
+  U32.to_nat((v >> 5n : U32))
+
+# the one-character tokens. Not "~", hvm4's bitwise NOT: hvm5.c's
+# lexer counts it a blank (str_ws), so opcode 10 has no spelling
+# here, though op_u32 and op_show still carry it.
+def op_tok.one(+c: U32) -> U32:
+  pick(U32, chr_is(c, '+'), op_w(1, 0),
+  pick(U32, chr_is(c, '-'), op_w(1, 1),
+  pick(U32, chr_is(c, '*'), op_w(1, 2),
+  pick(U32, chr_is(c, '/'), op_w(1, 3),
+  pick(U32, chr_is(c, '%'), op_w(1, 4),
+  pick(U32, chr_is(c, '^'), op_w(1, 7),
+  pick(U32, chr_is(c, '<'), op_w(1, 13),
+  pick(U32, chr_is(c, '>'), op_w(1, 15), 0))))))))
+
+# the two-character tokens
+def op_tok.two(+c: U32, +d: U32) -> U32:
+  pick(U32, chr_is(c, '=') && chr_is(d, '='), op_w(2, 11),
+  pick(U32, chr_is(c, '!') && chr_is(d, '='), op_w(2, 12),
+  pick(U32, chr_is(c, '<') && chr_is(d, '='), op_w(2, 14),
+  pick(U32, chr_is(c, '>') && chr_is(d, '='), op_w(2, 16),
+  pick(U32, chr_is(c, '<') && chr_is(d, '<'), op_w(2, 8),
+  pick(U32, chr_is(c, '>') && chr_is(d, '>'), op_w(2, 9),
+  pick(U32, chr_is(c, '&') && chr_is(d, '&'), op_w(2, 5),
+  pick(U32, chr_is(c, '|') && chr_is(d, '|'), op_w(2, 6),
+  op_tok.one(c)))))))))
+
+# the token the three characters c, d, e open: the longest wins, so a
+# lone "&" stays a superposition and a lone "!" stays a duplication
+def op_tok(+c: U32, +d: U32, +e: U32) -> U32:
+  pick(U32, chr_is(c, '=') && chr_is(d, '=') && chr_is(e, '='), op_w(3, 17),
+  pick(U32, chr_is(c, '.') && chr_is(d, '&') && chr_is(e, '.'), op_w(3, 18),
+  pick(U32, chr_is(c, '.') && chr_is(d, '|') && chr_is(e, '.'), op_w(3, 19),
+  op_tok.two(c, d))))
+
+# a shift count: clamped to 32, so a wide shift answers 0 and the
+# unary count stays small (hvm4 leaves a wide shift to C)
+def op_sh(+b: U32) -> Nat:
+  U32.to_nat(U32.min(b, 32))
+
+# hvm4's term_op2_u32: one OP2 code over two words. A zero divisor
+# answers 0 for both / and %, as the reference does.
+def op_u32(+o: U32, +a: U32, +b: U32) -> U32:
+  pick(U32, U32.is_eq(o, 0), U32.add(a, b),
+  pick(U32, U32.is_eq(o, 1), U32.sub(a, b),
+  pick(U32, U32.is_eq(o, 2), U32.mul(a, b),
+  pick(U32, U32.is_eq(o, 3), U32.div(a, b),
+  pick(U32, U32.is_eq(o, 4), pick(U32, U32.is_zero(b), 0, U32.mod(a, b)),
+  pick(U32, U32.is_eq(o, 5), U32.and(a, b),
+  pick(U32, U32.is_eq(o, 6), U32.or(a, b),
+  pick(U32, U32.is_eq(o, 7), U32.xor(a, b),
+  pick(U32, U32.is_eq(o, 8), U32.shln(a, op_sh(b)),
+  pick(U32, U32.is_eq(o, 9), U32.shrn(a, op_sh(b)),
+  pick(U32, U32.is_eq(o, 10), U32.not(b),
+  pick(U32, U32.is_eq(o, 11), pick(U32, U32.is_eq(a, b), 1, 0),
+  pick(U32, U32.is_eq(o, 12), pick(U32, U32.is_ne(a, b), 1, 0),
+  pick(U32, U32.is_eq(o, 13), pick(U32, U32.is_lt(a, b), 1, 0),
+  pick(U32, U32.is_eq(o, 14), pick(U32, U32.is_le(a, b), 1, 0),
+  pick(U32, U32.is_eq(o, 15), pick(U32, U32.is_gt(a, b), 1, 0),
+  pick(U32, U32.is_eq(o, 16), pick(U32, U32.is_ge(a, b), 1, 0),
+  0)))))))))))))))))
+
+def op_kind(+o: U32) -> Ok:
+  pick(Ok, U32.is_lt(o, 17), Oar{},
+  pick(Ok, U32.is_eq(o, 17), Oeq{},
+  pick(Ok, U32.is_eq(o, 18), Oan{}, Oor{})))
+
+# the operator's spelling, hvm4's op_syms
+def op_show(+o: U32) -> String:
+  pick(String, U32.is_eq(o, 0), "+",
+  pick(String, U32.is_eq(o, 1), "-",
+  pick(String, U32.is_eq(o, 2), "*",
+  pick(String, U32.is_eq(o, 3), "/",
+  pick(String, U32.is_eq(o, 4), "%",
+  pick(String, U32.is_eq(o, 5), "&&",
+  pick(String, U32.is_eq(o, 6), "||",
+  pick(String, U32.is_eq(o, 7), "^",
+  pick(String, U32.is_eq(o, 8), "<<",
+  pick(String, U32.is_eq(o, 9), ">>",
+  pick(String, U32.is_eq(o, 10), "~",
+  pick(String, U32.is_eq(o, 11), "==",
+  pick(String, U32.is_eq(o, 12), "!=",
+  pick(String, U32.is_eq(o, 13), "<",
+  pick(String, U32.is_eq(o, 14), "<=",
+  pick(String, U32.is_eq(o, 15), ">",
+  pick(String, U32.is_eq(o, 16), ">=",
+  pick(String, U32.is_eq(o, 17), "===",
+  pick(String, U32.is_eq(o, 18), ".&.", ".|.")))))))))))))))))))
+
 # Hc
 # ==
 
@@ -499,7 +655,9 @@ def hc_new(+c: U32, +d: U32) -> Hc:
   pick(Hc, chr_is(c, '#'), hc_hash(d),
   pick(Hc, chr_is(c, '@'), HRef{},
   pick(Hc, chr_is(c, '('), pick(Hc, chr_is(d, ')'), HOne{}, HApp{}),
-  pick(Hc, chr_is(c, 'λ'), hc_lam(d), HOth{}))))))
+  pick(Hc, chr_is(c, 'λ'), hc_lam(d),
+  pick(Hc, chr_is(c, '↑'), HInc{},
+  pick(Hc, chr_digit(c), HNum{}, HOth{}))))))))
 
 # St
 # ==
@@ -576,6 +734,34 @@ def skip(ch: Char) -> P(Unit):
   do P<Unit>:
     hit : Bool <- opt(ch)
     return Unit{}
+
+def oper.go(+v: U32, hit: Bool, k: U32 -> St -> IO(Unit), s: St, t: String) -> IO(Unit):
+  match hit:
+    case True{}:
+      St{h, src, sc, vc, ns} = s
+      k(v, st_new(t, sc, vc, ns))
+    case False{}:
+      k(v, s)
+
+# the operator token at the head, consumed when there is one; the
+# answer is the whole token word, which is 0 when there is none (a
+# token that is there spells at least one character)
+def oper(k: U32 -> St -> IO(Unit), s: St) -> IO(Unit):
+  St{h, +src, sc, vc, ns} = s
+  +v = op_tok(str_at(src, 0n), str_at(src, 1n), str_at(src, 2n))
+  oper.go(v, U32.is_ne(v, 0), k, St{h, src, sc, vc, ns},
+    str_drop(src, op_len(v)))
+
+def digits.go(k: U32 -> St -> IO(Unit), s: St, m: Maybe<&2, U32>) -> IO(Unit):
+  match m:
+    case Some{n}:
+      k(n, s)
+    case None{}:
+      IO.print("parse error: not a number")
+
+# a word read as a decimal number
+def digits(w: String, k: U32 -> St -> IO(Unit), s: St) -> IO(Unit):
+  digits.go(k, s, U32.read(w))
 
 def sym.go(hit: Bool, ch: Char) -> P(Unit):
   match hit:
@@ -759,6 +945,11 @@ def run_push(+p: U32, +b: U32) -> U32:
 def run_full(+p: U32) -> Bool:
   U32.is_eq((p >> 24n : U32), 24)
 
+# the phase after "(" and its first term: an operator node when a
+# token was read, an application when none was
+def op_ph(+v: U32, f: Tpl) -> Ph:
+  POp{U32.is_ne(v, 0), op_num(v), f}
+
 def term_pak.pak(full: Bool, +b: U32, +p: U32, t: Tpl) -> Tpl:
   match full:
     case True{}:
@@ -852,9 +1043,18 @@ def term(ph: Ph) -> P(Tpl):
       do P<Tpl>:
         Unit <- drop(1n)
         f : Tpl <- term(Trm{})
+        v : U32 <- oper()
+        term(op_ph(v, f))
+    case PAt{HNum{}}:
+      do P<Tpl>:
+        w : String <- name
+        n : U32 <- digits(w)
+        return TVal{n}
+    case PAt{HInc{}}:
+      do P<Tpl>:
+        Unit <- drop(1n)
         x : Tpl <- term(Trm{})
-        Unit <- sym(')')
-        return TApp{f, x}
+        return TInc{x}
     case PAt{HMat{}}:
       do P<Tpl>:
         Unit <- drop(2n)
@@ -918,6 +1118,16 @@ def term(ph: Ph) -> P(Tpl):
       do P<Tpl>:
         Unit <- sym(')')
         return f
+    case POp{False{}, o, f}:
+      do P<Tpl>:
+        x : Tpl <- term(Trm{})
+        Unit <- sym(')')
+        return TApp{f, x}
+    case POp{True{}, o, f}:
+      do P<Tpl>:
+        b : Tpl <- term(Trm{})
+        Unit <- sym(')')
+        return TOp2{o, f, b}
     case PDup{Dead{}, v}:
       do P<Tpl>:
         q : Tpl <- term(Trm{})
@@ -1129,6 +1339,10 @@ def free_run(s: FS) -> Fr:
       free_run(FS{env, f, k, fh})
     case Pak{p, f}:
       free_run(FS{env, f, k, fh})
+    case Inc{f}:
+      free_run(FS{env, f, k, fh})
+    case Op2{o, a, b}:
+      free_run(FS{env, a, FNxt{b, k}, fh})
     case _:
       match k:
         case FEnd{}:
@@ -1154,6 +1368,8 @@ def node1(sh: Sh1, x: Term) -> Term:
       Lam{n, x}
     case SPak{p}:
       Pak{p, x}
+    case SInc{}:
+      Inc{x}
 
 def node2(sh: Sh2, a: Term, b: Term) -> Term:
   match sh:
@@ -1165,6 +1381,8 @@ def node2(sh: Sh2, a: Term, b: Term) -> Term:
       Cal{a, b}
     case SSup{l}:
       Sup{l, a, b}
+    case SOp2{o}:
+      Op2{o, a, b}
 
 # Instantiation
 # =============
@@ -1350,6 +1568,12 @@ def inst(m: IM, t: Tpl, s: Tpl) -> Ins:
           Ins{env, One{}, k, c, fh, nx}
         case TRef{n}:
           Ins{env, Ref{n}, k, c, fh, nx}
+        case TVal{n}:
+          Ins{env, Val{n}, k, c, fh, nx}
+        case TInc{x}:
+          inst(IUn{SInc{}, env, fh, nx, k, c}, x, TEra{})
+        case TOp2{o, a, b}:
+          inst(ITw{SOp2{o}, env, fh, nx, k, c}, a, b)
         case _:
           Ins{env, Era{}, k, c, fh, nx}
     case IUn{sh, env, fh, nx, k, c}:
@@ -1495,6 +1719,8 @@ def app(env: Array<Cell>, book: Array<Tpl>, k: Kont, +c: U32, +fh: U32, +nx: U32
       S{env, book, Go{x}, Mtk{f, g, k}, c, fh, nx}
     case Get{f}:
       S{env, book, Go{x}, Gtk{f, k}, c, fh, nx}
+    case Inc{f}:
+      S{env, book, Kn{Inc{Cal{f, x}}}, k, (c + 1 : U32), fh, nx}
     case u:
       S{env, book, Sk{Cal{u, x}}, k, c, fh, nx}
 
@@ -1512,6 +1738,8 @@ def use(env: Array<Cell>, book: Array<Tpl>, k: Kont, +c: U32, +fh: U32, +nx: U32
       freed(book, k, c, nx, Kn{Era{}}, free(env, f, fh))
     case Sup{m, x, y}:
       eli_sup(book, k, c, m, x, y, SUse{}, alloc(env, fh, nx, Sha{f}))
+    case Inc{x}:
+      S{env, book, Kn{Inc{Cal{Use{f}, x}}}, k, (c + 1 : U32), fh, nx}
     case u:
       S{env, book, Sk{Cal{Use{f}, u}}, k, c, fh, nx}
 
@@ -1537,6 +1765,8 @@ def mat(env: Array<Cell>, book: Array<Tpl>, k: Kont, +c: U32, +fh: U32, +nx: U32
       freed(book, k, c, nx, Kn{Era{}}, free(env, Mat{f, g}, fh))
     case Sup{m, x, y}:
       mat_sup(book, k, c, m, x, y, alloc2(env, fh, nx, Sha{f}, Sha{g}))
+    case Inc{x}:
+      S{env, book, Kn{Inc{Cal{Mat{f, g}, x}}}, k, (c + 1 : U32), fh, nx}
     case u:
       S{env, book, Sk{Cal{Mat{f, g}, u}}, k, c, fh, nx}
 
@@ -1550,6 +1780,142 @@ def get(env: Array<Cell>, book: Array<Tpl>, k: Kont, +c: U32, +fh: U32, +nx: U32
       eli_sup(book, k, c, m, x, y, SGet{}, alloc(env, fh, nx, Sha{f}))
     case u:
       S{env, book, Sk{Cal{Get{f}, u}}, k, c, fh, nx}
+
+# Numbers
+# -------
+#
+# One node, Op2, is every operator: 0..16 are hvm4's OP2 opcodes, 17
+# is "===", 18 is ".&." and 19 is ".|.". All four are strict in the
+# left operand and share its rules -- OP2-ERA, OP2-SUP, OP2-INC-X and
+# their AND, OR and EQL twins are the same rewrite; they part only on
+# a number, where .&. and .|. answer and the others read on.
+
+def opl_sup(book: Array<Tpl>, k: Kont, +c: U32, +o: U32, +l: U32, a: Term, b: Term, al: Al) -> S:
+  Al{env, n, fh, nx} = al
+  S{env, book, Kn{Sup{l, Op2{o, a, Co0{l, n}}, Op2{o, b, Co1{l, n}}}}, k, (c + 1 : U32), fh, nx}
+
+# AND-ZER and OR-ONE answer z and drop y; AND-ONE and OR-ZER answer y
+def opl_zo(env: Array<Cell>, book: Array<Tpl>, k: Kont, +c: U32, +fh: U32, +nx: U32, +z: U32, out: Bool, y: Term) -> S:
+  match out:
+    case True{}:
+      freed(book, k, c, nx, Kn{Val{z}}, free(env, y, fh))
+    case False{}:
+      S{env, book, Go{y}, k, (c + 1 : U32), fh, nx}
+
+# the left operand is a number: arithmetic and === read the right one
+def opl_num(kd: Ok, env: Array<Cell>, book: Array<Tpl>, k: Kont, +c: U32, +fh: U32, +nx: U32, +o: U32, +n: U32, y: Term) -> S:
+  match kd:
+    case Oan{}:
+      opl_zo(env, book, k, c, fh, nx, 0, U32.is_zero(n), y)
+    case Oor{}:
+      opl_zo(env, book, k, c, fh, nx, 1, U32.is_ne(n, 0), y)
+    case Oeq{}:
+      S{env, book, Go{y}, Eqr{Val{n}, k}, c, fh, nx}
+    case Oar{}:
+      S{env, book, Go{y}, Opn{o, n, k}, c, fh, nx}
+
+# any other left whnf: === still reads the right one, the rest stick
+def opl_oth(kd: Ok, env: Array<Cell>, book: Array<Tpl>, k: Kont, +c: U32, +fh: U32, +nx: U32, +o: U32, w: Term, y: Term) -> S:
+  match kd:
+    case Oeq{}:
+      S{env, book, Go{y}, Eqr{w, k}, c, fh, nx}
+    case _:
+      S{env, book, Sk{Op2{o, w, y}}, k, c, fh, nx}
+
+def opl(env: Array<Cell>, book: Array<Tpl>, k: Kont, +c: U32, +fh: U32, +nx: U32, +o: U32, w: Term, y: Term) -> S:
+  match w:
+    case Era{}:
+      freed(book, k, c, nx, Kn{Era{}}, free(env, y, fh))
+    case Sup{l, a, b}:
+      opl_sup(book, k, c, o, l, a, b, alloc(env, fh, nx, Sha{y}))
+    case Inc{x}:
+      S{env, book, Kn{Inc{Op2{o, x, y}}}, k, (c + 1 : U32), fh, nx}
+    case Val{n}:
+      opl_num(op_kind(o), env, book, k, c, fh, nx, o, n, y)
+    case u:
+      opl_oth(op_kind(o), env, book, k, c, fh, nx, o, u, y)
+
+# x op []: x is a word, and a word costs nothing to copy, so hvm4
+# writes it into both sides of a sup and OP2-NUM-SUP takes no cell
+def opn(env: Array<Cell>, book: Array<Tpl>, k: Kont, +c: U32, +fh: U32, +nx: U32, +o: U32, +x: U32, w: Term) -> S:
+  match w:
+    case Val{b}:
+      S{env, book, Kn{Val{op_u32(o, x, b)}}, k, (c + 1 : U32), fh, nx}
+    case Era{}:
+      S{env, book, Kn{Era{}}, k, (c + 1 : U32), fh, nx}
+    case Sup{l, a, b}:
+      S{env, book, Kn{Sup{l, Op2{o, Val{x}, a}, Op2{o, Val{x}, b}}}, k, (c + 1 : U32), fh, nx}
+    case Inc{y}:
+      S{env, book, Kn{Inc{Op2{o, Val{x}, y}}}, k, (c + 1 : U32), fh, nx}
+    case u:
+      S{env, book, Sk{Op2{o, Val{x}, u}}, k, c, fh, nx}
+
+# both lambdas take one fresh display name, as nf_lam gives one
+def eql_lam(book: Array<Tpl>, k: Kont, +c: U32, +fh: U32, +nx: U32, +i: U32, +j: U32, f: Term, g: Term, p: Array<Cell> & Cell) -> S:
+  (env, q) = p
+  +n = (num(q) + 1 : U32)
+  S{subst(subst(subst(env, 0, Num{n}), i, Sub{Nam{n}}), j, Sub{Nam{n}}), book, Go{Op2{17, f, g}}, k, (c + 1 : U32), fh, nx}
+
+# two constructor runs: their outermost bits agree, and the rests are
+# compared behind an INC as hvm4's arity-1 EQL-CTR does, or they do
+# not and the runs are unequal
+def eql_bit(env: Array<Cell>, book: Array<Tpl>, k: Kont, +c: U32, +fh: U32, +nx: U32, same: Bool, x: Term, y: Term) -> S:
+  match same:
+    case True{}:
+      S{env, book, Kn{Inc{Op2{17, x, y}}}, k, (c + 1 : U32), fh, nx}
+    case False{}:
+      freed(book, k, c, nx, Kn{Val{0}}, free(env, Tup{x, y}, fh))
+
+def eql_val(env: Array<Cell>, book: Array<Tpl>, k: Kont, +c: U32, +fh: U32, +nx: U32, z: Bool) -> S:
+  S{env, book, Kn{Val{pick(U32, z, 1, 0)}}, k, (c + 1 : U32), fh, nx}
+
+# both operands are whnf. hvm4's EQL-CTR is general in the arity: a
+# pair compares its fields behind INCs, a constructor run one bit at
+# a time, a unit is equal at once. Shapes it does not list are not
+# equal (EQL-NOT), which is also the answer for the two shapes it has
+# no rule for at all: a pair eliminator and a drop.
+def eql_go(env: Array<Cell>, book: Array<Tpl>, k: Kont, +c: U32, +fh: U32, +nx: U32, a: Term, b: Term) -> S:
+  match a b:
+    case Val{x} Val{y}:
+      eql_val(env, book, k, c, fh, nx, U32.is_eq(x, y))
+    case Nam{x} Nam{y}:
+      eql_val(env, book, k, c, fh, nx, U32.is_eq(x, y))
+    case One{} One{}:
+      eql_val(env, book, k, c, fh, nx, True{})
+    case Lam{i, f} Lam{j, g}:
+      eql_lam(book, k, c, fh, nx, i, j, f, g, Array.swap(Cell, env, 0, Nul{}))
+    case Use{f} Use{g}:
+      S{env, book, Go{Op2{17, f, g}}, k, (c + 1 : U32), fh, nx}
+    case Mat{f, g} Mat{p, q}:
+      S{env, book, Go{Op2{18, Op2{17, f, p}, Op2{17, g, q}}}, k, (c + 1 : U32), fh, nx}
+    case Tup{x, y} Tup{p, q}:
+      S{env, book, Kn{Inc{Op2{18, Op2{17, x, p}, Inc{Op2{17, y, q}}}}}, k, (c + 1 : U32), fh, nx}
+    case Pak{p, x} Pak{q, y}:
+      eql_bit(env, book, k, c, fh, nx, U32.is_eq(U32.and(p, 1), U32.and(q, 1)), pak_pop(p, x), pak_pop(q, y))
+    case Pak{p, x} Won{q}:
+      eql_bit(env, book, k, c, fh, nx, U32.is_eq(U32.and(p, 1), U32.and(q, 1)), pak_pop(p, x), won_pop(q))
+    case Won{p} Pak{q, y}:
+      eql_bit(env, book, k, c, fh, nx, U32.is_eq(U32.and(p, 1), U32.and(q, 1)), won_pop(p), pak_pop(q, y))
+    case Won{p} Won{q}:
+      eql_bit(env, book, k, c, fh, nx, U32.is_eq(U32.and(p, 1), U32.and(q, 1)), won_pop(p), won_pop(q))
+    case u v:
+      freed(book, k, c, nx, Kn{Val{0}}, free(env, Tup{u, v}, fh))
+
+def eqr_sup(book: Array<Tpl>, k: Kont, +c: U32, +l: U32, a: Term, b: Term, al: Al) -> S:
+  Al{env, n, fh, nx} = al
+  S{env, book, Kn{Sup{l, Op2{17, Co0{l, n}, a}, Op2{17, Co1{l, n}, b}}}, k, (c + 1 : U32), fh, nx}
+
+# a === []
+def eqr(env: Array<Cell>, book: Array<Tpl>, k: Kont, +c: U32, +fh: U32, +nx: U32, a: Term, w: Term) -> S:
+  match w:
+    case Era{}:
+      freed(book, k, c, nx, Kn{Era{}}, free(env, a, fh))
+    case Sup{l, x, y}:
+      eqr_sup(book, k, c, l, x, y, alloc(env, fh, nx, Sha{a}))
+    case Inc{y}:
+      S{env, book, Kn{Inc{Op2{17, a, y}}}, k, (c + 1 : U32), fh, nx}
+    case u:
+      eql_go(env, book, k, c, fh, nx, a, u)
 
 # Duplication
 # -----------
@@ -1649,6 +2015,12 @@ def dup(env: Array<Cell>, book: Array<Tpl>, k: Kont, +c: U32, +fh: U32, +nx: U32
       dup_two(book, k, c, i, sd, fl, l, STup{}, alloc2(env, fh, nx, Sha{a}, Sha{b}))
     case Mat{f, g}:
       dup_two(book, k, c, i, sd, fl, l, SMat{}, alloc2(env, fh, nx, Sha{f}, Sha{g}))
+    case Val{n}:
+      settle(env, book, k, c, fh, nx, i, sd, fl, Val{n}, Val{n})
+    case Inc{x}:
+      dup_one(book, k, c, i, sd, fl, l, SInc{}, alloc(env, fh, nx, Sha{x}))
+    case Op2{o, a, b}:
+      dup_two(book, k, c, i, sd, fl, l, SOp2{o}, alloc2(env, fh, nx, Sha{a}, Sha{b}))
     case u:
       S{env, book, Sk{u}, Dpk{l, i, sd, fl, k}, c, fh, nx}
 
@@ -1677,6 +2049,10 @@ def nf(env: Array<Cell>, book: Array<Tpl>, k: Kont, +c: U32, +fh: U32, +nx: U32,
       S{env, book, Go{f}, NfK{NGet{k}}, c, fh, nx}
     case Drp{f}:
       S{env, book, Go{f}, NfK{NDrp{k}}, c, fh, nx}
+    case Op2{o, a, b}:
+      S{env, book, Go{a}, NfK{NOpA{o, b, k}}, c, fh, nx}
+    case Inc{x}:
+      S{env, book, Go{x}, NfK{NInc{k}}, c, fh, nx}
     case Lam{i, f}:
       nf_lam(book, k, c, fh, nx, i, f, Array.swap(Cell, env, 0, Nul{}))
     case u:
@@ -1699,6 +2075,8 @@ def run(s: S) -> Out:
           run(go_cov(book, k, c, fh, nx, l, i, 0, Array.swap(Cell, env, i, Nul{})))
         case Co1{l, +i}:
           run(go_cov(book, k, c, fh, nx, l, i, 1, Array.swap(Cell, env, i, Nul{})))
+        case Op2{o, a, b}:
+          run(S{env, book, Go{a}, Opk{o, b, k}, c, fh, nx})
         case Ref{r}:
           Exp{env, book, k, c, fh, nx, r}
         case u:
@@ -1717,6 +2095,12 @@ def run(s: S) -> Out:
           run(S{subst(env, i, park(fl, w)), book, Sk{cov(sd, l, i)}, q, c, fh, nx})
         case Rfk{r, q}:
           run(S{env, book, Sk{Cal{Ref{r}, w}}, q, c, fh, nx})
+        case Opk{o, y, q}:
+          run(S{env, book, Sk{Op2{o, w, y}}, q, c, fh, nx})
+        case Opn{o, x, q}:
+          run(S{env, book, Sk{Op2{o, Val{x}, w}}, q, c, fh, nx})
+        case Eqr{a, q}:
+          run(S{env, book, Sk{Op2{17, a, w}}, q, c, fh, nx})
         case q:
           run(S{env, book, Kn{w}, q, c, fh, nx})
     case Kn{w}:
@@ -1733,6 +2117,12 @@ def run(s: S) -> Out:
           run(dup(env, book, q, c, fh, nx, l, i, sd, fl, w))
         case Rfk{r, q}:
           Dsp{env, book, q, c, fh, nx, r, w}
+        case Opk{o, y, q}:
+          run(opl(env, book, q, c, fh, nx, o, w, y))
+        case Opn{o, x, q}:
+          run(opn(env, book, q, c, fh, nx, o, x, w))
+        case Eqr{a, q}:
+          run(eqr(env, book, q, c, fh, nx, a, w))
         case NfK{q}:
           run(nf(env, book, q, c, fh, nx, w))
         case NSupA{l, b, q}:
@@ -1757,6 +2147,12 @@ def run(s: S) -> Out:
           run(S{env, book, Kn{Drp{w}}, q, c, fh, nx})
         case NAbs{n, q}:
           run(S{env, book, Kn{Abs{n, w}}, q, c, fh, nx})
+        case NOpA{o, b, q}:
+          run(S{env, book, Go{b}, NfK{NOpB{o, w, q}}, c, fh, nx})
+        case NOpB{o, a, q}:
+          run(S{env, book, Kn{Op2{o, a, w}}, q, c, fh, nx})
+        case NInc{q}:
+          run(S{env, book, Kn{Inc{w}}, q, c, fh, nx})
         case _:
           Fin{env, book, w, c}
 
@@ -1847,6 +2243,12 @@ def term_show(t: Term) -> String:
       bits_open(run_len(p), p) ++ "()" ++ bits_close(run_len(p))
     case Cal{f, x}:
       "(" ++ term_show(f) ++ " " ++ term_show(x) ++ ")"
+    case Val{n}:
+      U32.show(n)
+    case Inc{x}:
+      inc() ++ term_show(x)
+    case Op2{o, a, b}:
+      "(" ++ term_show(a) ++ " " ++ op_show(o) ++ " " ++ term_show(b) ++ ")"
     case u:
       "<var>"
 

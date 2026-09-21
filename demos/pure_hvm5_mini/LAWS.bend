@@ -2,9 +2,12 @@
 # evaluator: the lexer (a word and the rest re-form the source, a
 # blank skip only moves the cursor), the parser's cursor (drops
 # compose, a read past a drop is a read at the sum), the printer (a
-# pack of n constructors prints n more braces than its body), and
-# the closed facts about run words, name codes and the book's depth.
-# PROOF.bend proves them.
+# pack of n constructors prints n more braces than its body), the
+# closed facts about run words, name codes and the book's depth, and
+# the numeric machine (the operator table mirrors the U32 primitive
+# it names, the edges answer zero, OP2-NUM-SUP distributes for free,
+# the codes split where hvm4 splits its nodes, the operator lexer
+# takes neither a lone "&" nor a lone "!"). PROOF.bend proves them.
 
 import Base
 import ./main.bend as Hvm
@@ -70,3 +73,75 @@ law book_depth_fits:
   {(Hvm.book_depth(32n, 1, 0n), Hvm.book_depth(32n, 5, 0n), Hvm.book_depth(32n, 8, 0n),
     Hvm.book_depth(32n, 9, 0n))
    == (0n, 3n, 3n, 4n) : Nat & Nat & Nat & Nat}
+
+# The numeric machine
+# -------------------
+
+# LAW: an operator code is the U32 primitive it names, so it carries
+# the primitive's algebra: hvm4's code 0 is addition, and addition
+# commutes.
+law op_add_comm:
+  for +a: U32
+  for +b: U32
+  {Hvm.op_u32(0, a, b) == Hvm.op_u32(0, b, a) : U32}
+
+# LAW: the comparisons reflect U32's own order into hvm4's 1 and 0:
+# code 11 is ==, code 13 is <. This pins the numbering -- move a code
+# and the law stops holding.
+law op_cmp_reflect:
+  for +a: U32
+  for +b: U32
+  {(Hvm.op_u32(11, a, b), Hvm.op_u32(13, a, b))
+   == (Hvm.pick(U32, U32.is_eq(a, b), 1, 0), Hvm.pick(U32, U32.is_lt(a, b), 1, 0))
+   : U32 & U32}
+
+# LAW: the edges answer zero, at the two places the C reference is
+# undefined or platform-shaped: a zero divisor for / and for %, and a
+# shift of 32 or wider (op_sh clamps the count).
+law op_edges_zero:
+  for +a: U32
+  {(Hvm.op_u32(3, a, 0), Hvm.op_u32(4, a, 0),
+    Hvm.op_u32(8, 1, 32), Hvm.op_u32(9, 1, 32))
+   == (0, 0, 0, 0) : U32 & U32 & U32 & U32}
+
+# LAW: OP2-NUM-SUP distributes for free. A word costs nothing to
+# copy, so the rule writes it into both sides of the superposition
+# and leaves the env, the free list and the fresh counter exactly as
+# it found them -- no cell is taken -- for one interaction.
+law op2_num_sup:
+  for env: Array<Hvm.Cell>
+  for book: Array<Hvm.Tpl>
+  for k: Hvm.Kont
+  for +c: U32
+  for +fh: U32
+  for +nx: U32
+  for +o: U32
+  for +x: U32
+  for +l: U32
+  for a: Hvm.Term
+  for b: Hvm.Term
+  {Hvm.opn(env, book, k, c, fh, nx, o, x, Hvm.Sup{l, a, b})
+   == Hvm.S{env, book,
+        Hvm.Kn{Hvm.Sup{l, Hvm.Op2{o, Hvm.Val{x}, a}, Hvm.Op2{o, Hvm.Val{x}, b}}},
+        k, (c + 1 : U32), fh, nx} : Hvm.S}
+
+# LAW: the four kinds split the codes where hvm4 splits its nodes:
+# 0..16 read the right operand on as an OP2, 17 is ===, 18 is .&., 19
+# is .|. (sanity).
+law op_kind_splits:
+  {(Hvm.op_kind(0), Hvm.op_kind(16), Hvm.op_kind(17), Hvm.op_kind(18),
+    Hvm.op_kind(19))
+   == (Hvm.Oar{}, Hvm.Oar{}, Hvm.Oeq{}, Hvm.Oan{}, Hvm.Oor{})
+   : Hvm.Ok & Hvm.Ok & Hvm.Ok & Hvm.Ok & Hvm.Ok}
+
+# LAW: the longest token wins, and the operator lexer takes neither a
+# lone "&" nor a lone "!", so a superposition and a duplication still
+# parse as themselves (sanity).
+law op_tok_longest:
+  {(Hvm.op_tok(Hvm.chr_code('&'), Hvm.chr_code('{'), Hvm.chr_code('1')),
+    Hvm.op_tok(Hvm.chr_code('!'), Hvm.chr_code(' '), Hvm.chr_code('&')),
+    Hvm.op_tok(Hvm.chr_code('='), Hvm.chr_code('='), Hvm.chr_code('=')),
+    Hvm.op_tok(Hvm.chr_code('='), Hvm.chr_code('='), Hvm.chr_code(' ')),
+    Hvm.op_tok(Hvm.chr_code('.'), Hvm.chr_code('&'), Hvm.chr_code('.')))
+   == (0, 0, Hvm.op_w(3, 17), Hvm.op_w(2, 11), Hvm.op_w(3, 18))
+   : U32 & U32 & U32 & U32 & U32}

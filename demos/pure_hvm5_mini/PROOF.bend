@@ -9,7 +9,12 @@
 # run (bits_open_opens, an induction over the run's length with the
 # bit's digit split by pick_opens) and the none of its closing
 # braces (bits_close_opens). The cursor laws are inductions over the
-# source and the position; the closed laws compute.
+# source and the position; the closed laws compute. The numeric laws
+# are the machine's own definitions read back: op_add_comm lifts
+# U32.add_comm through the code table, op_edges_zero opens the word
+# so the zero-divisor guard can fire, and the rest hold by
+# unfolding -- which is the claim, that no rule adds anything the
+# primitive or the rewrite did not already say.
 
 import Base
 import ./main.bend as Hvm
@@ -209,4 +214,28 @@ def Laws.name_round_trip():
   {==}
 
 def Laws.book_depth_fits():
+  {==}
+
+# The numeric machine
+# -------------------
+
+def Laws.op_add_comm(a, b):
+  U32.add_comm(a, b)
+
+def Laws.op_cmp_reflect(a, b):
+  {==}
+
+# the guard reads U32.is_zero on the divisor, which needs the word
+def Laws.op_edges_zero(a):
+  match a:
+    case U32{w}:
+      {==}
+
+def Laws.op2_num_sup(env, book, k, c, fh, nx, o, x, l, a, b):
+  {==}
+
+def Laws.op_kind_splits():
+  {==}
+
+def Laws.op_tok_longest():
   {==}
