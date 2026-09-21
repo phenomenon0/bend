@@ -59,6 +59,7 @@ allow(/^bench\/nbench[a-z_]*\.(bend|c)$/, 2000);
 allow(/^demos\/[a-z0-9_]+\/[A-Za-z0-9_]+\.bend$/, 64000);
 allow(/^demos\/[a-z0-9_]+\/[A-Za-z_]+\.(c|sh|md)$/, 4000);
 allow(/^demos\/[a-z0-9_]+\/[A-Za-z0-9_]+\.py$/, 8000);
+allow(/^demos\/python\/pending\/[A-Za-z0-9_]+\.(py|md)$/, 8000);
 allow(/^demos\/[a-z0-9_]+\/web\/(index\.html|[a-z_]+\.js|serve\.sh|bunfig\.toml)$/, 4000);
 allow("guide/GUIDE.md", 12000);
 allow("guide/EFFECTS.md", 1600);
