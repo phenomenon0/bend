@@ -64,7 +64,7 @@ run check "$work/checked" bash -c 'check "$1"' _ "$vm"
 for lane in js c; do
   target="$work/vm.js"
   [ "$lane" = c ] && target="$work/vm.bin"
-  if ! timeout 600 bun bend2/main.ts "$vm" -o "$target" > "$work/build" 2>&1; then
+  if ! timeout "${VM_BUILD_TIMEOUT:-1800}" bun bend2/main.ts "$vm" -o "$target" > "$work/build" 2>&1; then
     printf 'FAIL %-12s [%s build]\n' vm "$lane"
     head -20 "$work/build"
     fail=$((fail + 1))
@@ -118,7 +118,7 @@ refused() {
   fi
 }
 refused 'print(1 < 2 < 3)' 'chained comparisons are outside the subset'
-refused 'print("hi")'      'strings are outside the subset'
+refused 'print(["a"])'     'lists are outside the subset'
 refused 'print(3 - 9)'     'a negative result is outside the subset'
 
 printf '\nVM PASS: %d, FAIL: %d\n' "$pass" "$fail"
