@@ -44,11 +44,14 @@ jobs:
           printf 'alpha\n' > www/a.txt
           python3 -c "open('www/img.png','wb').write(bytes(range(256)))"
           printf 'b{}\n' > www/sub/b.css
+      # --root=www: the check writes its own fixtures there (a symbolic
+      # link to /etc/passwd and one to /etc, a dotfile, 1, 4 and 16 MiB
+      # files) and reads the server's VmHWM after streaming them
       - name: the checks, every mode
         run: |
           up() { for i in $(seq 1 50); do (exec 3<>/dev/tcp/127.0.0.1/$1) 2>/dev/null && return 0; sleep 0.1; done; echo "never listened on $1"; return 1; }
           C=demos/io_http_engine
-          ./httpd --root www --idle-ms 400 --log 2>log.txt & up 8080; $C/check 8080 $! --files --idle=400 --ws --log=log.txt; kill $!; wait $! || true
+          ./httpd --root www --idle-ms 400 --log 2>log.txt & up 8080; $C/check 8080 $! --files --idle=400 --ws --log=log.txt --root=www; kill $!; wait $! || true
           ./httpd --max-conns 2 & up 8080; $C/check 8080 $! --conns=2; kill $!; wait $! || true
           ./httpd --grace-ms 3000 & up 8080; $C/check 8080 $! --term
           $C/control 8081 & up 8081; $C/check 8081 $!; kill $!; wait $! || true
@@ -66,7 +69,7 @@ jobs:
           C=demos/io_http_engine
           openssl req -x509 -newkey rsa:2048 -keyout key.pem -out cert.pem -days 2 -nodes -subj "/CN=localhost"
           ./httpd --port 8443 --tls-cert cert.pem --tls-key key.pem --root www --idle-ms 600 --log 2>tlog.txt & up 8443
-          $C/check-tls 8443 $! --files --idle=600 --ws --log=tlog.txt
+          $C/check-tls 8443 $! --files --idle=600 --ws --log=tlog.txt --root=www
           kill $!; wait $! || true
           ./httpd --port 8443 --tls-cert cert.pem --tls-key key.pem --max-conns 2 & up 8443
           $C/check-tls 8443 $! --conns=2; kill $!; wait $! || true

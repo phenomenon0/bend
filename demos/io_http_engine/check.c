@@ -5,7 +5,7 @@
 // reads its CPU.
 //
 //   cc -std=c11 -O3 check.c -o check && ./check 8080 [pid] [--files] [--idle=MS]
-//   ./check 8080 [pid] [--conns=N] [--term] [--ws] [--log=FILE]
+//   ./check 8080 [pid] [--conns=N] [--term] [--ws] [--log=FILE] [--root=DIR]
 #define _GNU_SOURCE
 #include <errno.h>
 #include <netinet/in.h>
@@ -216,6 +216,102 @@ static int ws_read(int fd, char* b, int cap, int want, int* closed) {
   return n;
 }
 
+// Static files under a root the check writes itself (--root=DIR, the
+// directory the server was given): a file's bytes are a pattern of
+// their offset, so any byte out of place is seen; a stream reads
+// replies of one known length, head then body, and says whether every
+// one arrived whole and byte for byte.
+static uint8_t pat(uint32_t i) { return (uint8_t)((i * 2654435761u) >> 24); }
+
+static int put_file(const char* dir, const char* name, uint32_t n) {
+  char p[1024];
+  static uint8_t buf[65536];
+  snprintf(p, sizeof(p), "%s/%s", dir, name);
+  FILE* f = fopen(p, "wb");
+  if (f == NULL) return -1;
+  for (uint32_t i = 0; i < n;) {
+    uint32_t k = n - i < sizeof(buf) ? n - i : (uint32_t)sizeof(buf);
+    for (uint32_t j = 0; j < k; j++) buf[j] = pat(i + j);
+    if (fwrite(buf, 1, k, f) != k) { fclose(f); return -1; }
+    i += k;
+  }
+  return fclose(f);
+}
+
+// the server's peak resident set, in kB, from /proc
+static long hwm_of(long pid) {
+  char path[64], line[256];
+  long kb = -1;
+  snprintf(path, sizeof(path), "/proc/%ld/status", pid);
+  FILE* f = fopen(path, "r");
+  if (f == NULL) return -1;
+  while (fgets(line, sizeof(line), f)) if (sscanf(line, "VmHWM: %ld", &kb) == 1) break;
+  fclose(f);
+  return kb;
+}
+
+typedef struct {
+  int fd, done, bad, body, hn, replies;
+  long left, len, got;
+  uint32_t off;
+  char h[512];
+} Stream;
+
+static void stream_feed(Stream* s, const char* b, long n) {
+  for (long i = 0; i < n;) {
+    if (!s->body) {
+      if (s->hn >= 511) { s->bad = 1; return; }
+      s->h[s->hn++] = b[i++];
+      s->h[s->hn] = 0;
+      if (s->hn < 4 || memcmp(s->h + s->hn - 4, "\r\n\r\n", 4) != 0) continue;
+      char* cl = strstr(s->h, "content-length: ");
+      if (!has(s->h, s->hn, "200 OK") || cl == NULL || atol(cl + 16) != s->len) s->bad = 1;
+      s->left = s->len; s->off = 0; s->hn = 0; s->body = 1;
+    } else {
+      long k = n - i < s->left ? n - i : s->left;
+      for (long j = 0; j < k; j++) s->bad |= (uint8_t)b[i + j] != pat(s->off + (uint32_t)j);
+      s->off += (uint32_t)k; s->left -= k; s->got += k; i += k;
+    }
+    if (s->body && s->left == 0) { s->body = 0; s->replies += 1; }
+  }
+}
+
+// read every stream until its peer closes, or 30 s have passed
+static void stream_all(Stream* ss, int m) {
+  static char buf[65536];
+  time_t t0 = time(NULL);
+  int open_ = m;
+  while (open_ > 0 && time(NULL) - t0 < 30) {
+    int moved = 0;
+    for (int i = 0; i < m; i++) {
+      if (ss[i].done) continue;
+      ssize_t k = wire_read(ss[i].fd, buf, sizeof(buf), MSG_DONTWAIT);
+      if (k > 0) { stream_feed(&ss[i], buf, k); moved = 1; continue; }
+      if (k < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) continue;
+      ss[i].done = 1; open_ -= 1; wire_close(ss[i].fd);
+    }
+    if (!moved) usleep(500);
+  }
+}
+
+// m connections, each asking for the file reps times in one write
+static int stream_ask(const char* path, long len, int m, int reps) {
+  static Stream ss[64];
+  static char req[16384];
+  int n = 0, ok = 1;
+  for (int r = 0; r < reps; r++) n += snprintf(req + n, sizeof(req) - (size_t)n,
+    "GET %s HTTP/1.1\r\nHost: x\r\n%s\r\n", path, r == reps - 1 ? "connection: close\r\n" : "");
+  for (int i = 0; i < m; i++) {
+    memset(&ss[i], 0, sizeof(ss[i]));
+    ss[i].len = len;
+    ss[i].fd = wire_open();
+    if (ss[i].fd < 0 || wire_write(ss[i].fd, req, (size_t)n) != n) ss[i].bad = 1;
+  }
+  stream_all(ss, m);
+  for (int i = 0; i < m; i++) ok = ok && !ss[i].bad && ss[i].replies == reps;
+  return ok;
+}
+
 #define TEXT(s) s, (int)(sizeof(s) - 1)
 
 int main(int argc, char** argv) {
@@ -223,6 +319,8 @@ int main(int argc, char** argv) {
   static char b[262144];
   int n;
   const char* logf = NULL;
+  // --root=DIR: the server's --root, where the check writes fixtures
+  const char* root = NULL;
   // flags after the pid: --files when the server has --root on the
   // fixture directory; --idle=MS when it was started with --idle-ms MS
   // --conns=N when it was started with --max-conns N; --term to end by
@@ -237,6 +335,7 @@ int main(int argc, char** argv) {
     else if (strncmp(argv[i], "--conns=", 8) == 0) conns = atoi(argv[i] + 8);
     else if (strcmp(argv[i], "--term") == 0) term = 1;
     else if (strncmp(argv[i], "--log=", 6) == 0) logf = argv[i] + 6;
+    else if (strncmp(argv[i], "--root=", 7) == 0) root = argv[i] + 7;
   }
   // under --root, "/" is index.html rather than the banner
   const char* root_body = files ? "<h1>hi</h1>" : "bend-http";
@@ -359,6 +458,74 @@ int main(int argc, char** argv) {
 
     n = one(TEXT("GET /sub HTTP/1.1\r\nHost: x\r\n\r\n"), b, sizeof(b), 0);
     check("a directory is not a file", has(b, n, "404 Not Found"), b, n);
+  }
+
+  // Static files that must not escape the root or the memory: with
+  // --root=DIR the check writes its own fixtures there -- a symbolic
+  // link to /etc/passwd, one to /etc, a dotfile, and files whose bytes
+  // are a pattern of their offset. Given the pid, the peak resident set
+  // is read after the two cases that would once have loaded every file
+  // they asked for.
+  if (root != NULL) {
+    char p[1024];
+    const char* made[] = { "pw", "etcl", ".env", "big.bin", "mid.bin", "shrink.bin" };
+    for (int i = 0; i < 6; i++) { snprintf(p, sizeof(p), "%s/%s", root, made[i]); unlink(p); }
+    snprintf(p, sizeof(p), "%s/pw", root);
+    int fx = symlink("/etc/passwd", p);
+    snprintf(p, sizeof(p), "%s/etcl", root);
+    fx |= symlink("/etc", p);
+    fx |= put_file(root, ".env", 9) | put_file(root, "big.bin", 4194304)
+      | put_file(root, "mid.bin", 1048576) | put_file(root, "shrink.bin", 16777216);
+    check("the fixtures are written", fx == 0, "", 0);
+
+    n = one(TEXT("GET /pw HTTP/1.1\r\nHost: x\r\n\r\n"), b, sizeof(b), 0);
+    check("a symbolic link to /etc/passwd is 404", has(b, n, "404 Not Found") && !has(b, n, "root:"), b, n);
+
+    n = one(TEXT("GET /etcl/passwd HTTP/1.1\r\nHost: x\r\n\r\n"), b, sizeof(b), 0);
+    check("a symbolic link to a directory is 404", has(b, n, "404 Not Found") && !has(b, n, "root:"), b, n);
+
+    n = one(TEXT("GET /.env HTTP/1.1\r\nHost: x\r\n\r\n"), b, sizeof(b), 0);
+    check("a dotfile is 404", has(b, n, "404 Not Found"), b, n);
+
+    check("a 4 MiB file arrives whole, byte for byte, at its length",
+      stream_ask("/big.bin", 4194304, 1, 1), "", 0);
+
+    long pid = argc > 2 ? atol(argv[2]) : 0;
+    char why[96];
+    int ok = stream_ask("/big.bin", 4194304, 32, 1);
+    long kb = pid > 0 ? hwm_of(pid) : 0;
+    snprintf(why, sizeof(why), "VmHWM %ld kB", kb);
+    check("32 clients at once get the 4 MiB file, and memory stays under 20 MB",
+      ok && kb < 20480, why, (int)strlen(why));
+
+    ok = stream_ask("/mid.bin", 1048576, 1, 100);
+    kb = pid > 0 ? hwm_of(pid) : 0;
+    snprintf(why, sizeof(why), "VmHWM %ld kB", kb);
+    check("100 pipelined GETs of a 1 MiB file, and memory stays under 20 MB",
+      ok && kb < 20480, why, (int)strlen(why));
+
+    // A file that shrinks while it is written: its head promised the
+    // length, so the connection must end rather than hang or pad, and
+    // what did arrive is the file's own bytes.
+    Stream s1;
+    memset(&s1, 0, sizeof(s1));
+    s1.len = 16777216;
+    s1.fd = wire_open();
+    static const char sreq[] = "GET /shrink.bin HTTP/1.1\r\nHost: x\r\n\r\n";
+    if (wire_write(s1.fd, sreq, sizeof(sreq) - 1) != (ssize_t)(sizeof(sreq) - 1)) perror("write");
+    while (s1.got < 65536) {
+      ssize_t k = wire_read(s1.fd, b, 4096, 0);
+      if (k <= 0) break;
+      stream_feed(&s1, b, k);
+    }
+    snprintf(p, sizeof(p), "%s/shrink.bin", root);
+    if (truncate(p, 0) != 0) perror("truncate");
+    stream_all(&s1, 1);
+    snprintf(why, sizeof(why), "got %ld of 16777216", s1.got);
+    n = one(TEXT("GET /health HTTP/1.1\r\nHost: x\r\n\r\n"), b, sizeof(b), 106);
+    check("a file that shrinks mid-reply ends the connection, and the server serves on",
+      !s1.bad && s1.replies == 0 && s1.got < 16777216 && s1.done && has(b, n, "200 OK"),
+      why, (int)strlen(why));
   }
 
   // Time and size, when the idle time is known. A peer that goes quiet,
