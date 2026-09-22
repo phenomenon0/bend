@@ -770,19 +770,51 @@ def eq_is_spec(+a: Bytes(), +b: Bytes()) ->
     case SCon{Chr{x}, t} SCon{Chr{y}, u}:
       eq_is_spec.step(t, u, U32.cmp(x, y), eq_is_spec(t, u))
 
-def find_is_spec(+k: Bytes(), tbl: List<&2, Eng.Known>) ->
-  {Eng.fld.find(k, tbl) == Spec.find(k, tbl) : Eng.Fld}:
+# The lookup's walk: what it has found so far, else the reference's
+# answer for the rest of the table
+def alt(acc: Maybe<&2, Eng.Fld>, r: Eng.Fld) -> Eng.Fld:
+  match acc:
+    case None{}:
+      r
+    case Some{g}:
+      g
+
+def alt_hit(b: Bool, -f: Eng.Fld, -r: Eng.Fld) ->
+  {alt(Eng.fld.hit.at(b, f), r) == Eng.fld.pick(b, f, r) : Eng.Fld}:
+  match b:
+    case True{}:
+      {==}
+    case False{}:
+      {==}
+
+def scan_step(acc: Maybe<&2, Eng.Fld>, +k: Bytes(), +n: Bytes(), +f: Eng.Fld, +r: Eng.Fld) ->
+  {alt(Eng.fld.hit(acc, String.order(k, n), f), r) == alt(acc, Eng.fld.pick(Spec.eq(k, n), f, r)) :
+    Eng.Fld}:
+  match acc:
+    case None{}:
+      %eq_is_spec(k, n) : {alt(Eng.fld.hit.at(Eng.bytes.eq(k, n), f), r) ==
+        alt(None{}, Eng.fld.pick(_, f, r)) : Eng.Fld}
+      alt_hit(Eng.bytes.eq(k, n), f, r)
+    case Some{g}:
+      {==}
+
+def scan_is(+tbl: List<&2, Eng.Known>, +k: Bytes(), +acc: Maybe<&2, Eng.Fld>) ->
+  {Eng.fld.scan(tbl, (k, acc)) == alt(acc, Spec.find(k, tbl)) : Eng.Fld}:
   match tbl:
     case Nil{}:
-      {==}
+      match acc:
+        case None{}:
+          {==}
+        case Some{g}:
+          {==}
     case Con{h, t}:
       match h:
-        case Eng.Known{n, f}:
-          %find_is_spec(k, t) : {Eng.fld.pick(Eng.bytes.eq(k, n), f, Eng.fld.find(k, t)) ==
-            Eng.fld.pick(Spec.eq(k, n), f, _) : Eng.Fld}
-          %eq_is_spec(k, n) : {Eng.fld.pick(Eng.bytes.eq(k, n), f, Eng.fld.find(k, t)) ==
-            Eng.fld.pick(_, f, Eng.fld.find(k, t)) : Eng.Fld}
-          {==}
+        case Eng.Known{+n, +f}:
+          Equal.trans(Eng.Fld, Eng.fld.scan(t, (k, Eng.fld.hit(acc, String.order(k, n), f))),
+            alt(Eng.fld.hit(acc, String.order(k, n), f), Spec.find(k, t)),
+            alt(acc, Eng.fld.pick(Spec.eq(k, n), f, Spec.find(k, t))),
+            scan_is(t, k, Eng.fld.hit(acc, String.order(k, n), f)),
+            scan_step(acc, k, n, f, Spec.find(k, t)))
 
 def Laws.cls_is_spec():
   {==}
@@ -794,7 +826,7 @@ def Laws.lows_is_spec():
   {==}
 
 def Laws.field_by_bytes(k):
-  find_is_spec(k, Eng.fld.table())
+  scan_is(Eng.fld.table(), k, None{})
 
 def Laws.te_refused(k, pd, out, e):
   %Equal.sym(Eng.Fld, Eng.fld.of(Eng.lows(k)), Spec.field(Eng.lows(k)),

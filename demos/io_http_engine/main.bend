@@ -221,17 +221,53 @@ def fld.pick(b: Bool, f: Fld, rest: Fld) -> Fld:
     case False{}:
       rest
 
-def fld.find(+k: Bytes(), tbl: List<&2, Known>) -> Fld:
+# The lookup walks the table once with the name in hand: each entry is
+# compared with the name as two blocks, the name handed back, and the
+# first entry spelled with exactly its bytes is the field. LAWS.bend
+# proves it is the reference's lookup.
+def fld.hit.at(eq: Bool, f: Fld) -> Maybe<&2, Fld>:
+  match eq:
+    case True{}:
+      Some{f}
+    case False{}:
+      None{}
+
+def fld.hit(acc: Maybe<&2, Fld>, c: Cmp, f: Fld) -> Maybe<&2, Fld>:
+  match acc:
+    case None{}:
+      fld.hit.at(Cmp.is_eq(c), f)
+    case Some{g}:
+      Some{g}
+
+def fld.got(kc: (Bytes() & Bytes()) & Cmp, f: Fld, acc: Maybe<&2, Fld>) ->
+  Bytes() & Maybe<&2, Fld>:
+  (kn, c) = kc
+  (k, n) = kn
+  (k, fld.hit(acc, c, f))
+
+def fld.one(k: Bytes(), n: Bytes(), f: Fld, acc: Maybe<&2, Fld>) -> Bytes() & Maybe<&2, Fld>:
+  fld.got(String.cmp(k, n), f, acc)
+
+def fld.done(ka: Bytes() & Maybe<&2, Fld>) -> Fld:
+  (k, acc) = ka
+  match acc:
+    case None{}:
+      FOther{}
+    case Some{f}:
+      f
+
+def fld.scan(tbl: List<&2, Known>, ka: Bytes() & Maybe<&2, Fld>) -> Fld:
   match tbl:
     case Nil{}:
-      FOther{}
+      fld.done(ka)
     case Con{h, t}:
       match h:
         case Known{n, f}:
-          fld.pick(bytes.eq(k, n), f, fld.find(k, t))
+          (k, acc) = ka
+          fld.scan(t, fld.one(k, n, f, acc))
 
-def fld.of(+k: Bytes()) -> Fld:
-  fld.find(k, fld.table())
+def fld.of(k: Bytes()) -> Fld:
+  fld.scan(fld.table(), (k, None{}))
 
 # the method, by its bytes: GET and HEAD are served, and anything else
 # is a method this engine does not implement
