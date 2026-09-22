@@ -94,8 +94,8 @@ bytes forever runs it out and is dropped. The accept loop is the one
 The binary reads its arguments with the same shape as it reads a
 request: a state fed one argument at a time, a step that does not
 recurse, and a refusal (`IO.die`) for anything it does not know.
-`--port N`, `--root DIR`, `--idle-ms N`, `--max-conns N`, `--grace-ms
-N`, `--shared` and `--log` are the settings.
+`--port N`, `--root DIR`, `--idle-ms N`, `--head-ms N`, `--max-conns
+N`, `--grace-ms N`, `--shared` and `--log` are the settings.
 
 The route table is data: a list of `Route{path, prefix, act}` built
 once from the configuration and shared by every connection, walked
@@ -172,6 +172,34 @@ way to make the engine allocate. It is refused as `Bad{}`, a `400` and
 a close, which keeps the parser's absorbing state the one the laws
 already cover.
 
+The idle time bounds each wait; nothing in it bounded a head, which a
+peer could dribble a byte per wait for sixty-four waits, ten minutes a
+slot. So a head has budgets of its own. Its clock starts at the read
+that begins it and `--head-ms` (10 s by default) ends it: each read
+that continues it waits for the idle time or what is left of the
+head's time, whichever is less, and one out of time is dropped as a
+silent peer is. Its bytes are counted after the read it began in, and
+past 16 KiB it is a `431` and a close, so every head under 16 KiB is
+read and none past 32 KiB is. The watch rides beside the plan in the
+connection loop (`Hw`: no head, a head just begun, a head since t0
+with n bytes) and costs nothing on a read that ends at a message
+boundary. A request target past 8 KiB is a `414`. `LAWS.bend` says the
+target cap holds at its edge for any bytes, and that a head in
+progress keeps the clock it started with.
+
+Every send has a deadline too. `TCP.send_buf_poll`
+(`bend2/effs/tcp_send_buf_poll.{c,js}`, declared beside `TCP.send_buf`)
+is the send with the idle time as the longest it may go without
+progress; each write that moves bytes starts the wait over. A peer
+that asks for a file and never reads used to hold its slot, and its
+computation, for good; now it is let go after the idle time.
+
+Replies that wait in one block for the send, the fixed ones, go out
+once the block reaches 1 MiB, before the next reply is taken, in order
+and unchanged; files already go out a block at a time. `batch_under`
+in `LAWS.bend` says what stays waiting is always below the cap, so a
+pipelined read holds at most the cap and the one reply that crossed it.
+
 ## TLS
 
 `--tls-cert` and `--tls-key` make the listener a TLS listener, and
@@ -191,7 +219,14 @@ done at accept: it runs inside the first read or write, driven by the
 same park, so a slow or hostile handshake costs a parked computation
 rather than a blocked server, and the connection's idle deadline
 already covers it. A closing socket sends its `close_notify` first, so
-a peer can tell an orderly end from a cut connection.
+a peer can tell an orderly end from a cut connection; one whose session
+failed sends nothing more. Every `SSL_*` call starts from a clear error
+queue and errno, so one connection's error is never read as another's.
+Renegotiation is off, a peer's missing `close_notify` is an end rather
+than an error, idle sessions give their buffers back, and TLS 1.2 is
+held to ECDHE with AEAD ciphers. A socket whose session could not be
+made is refused rather than served in the clear, and `Listener.close`
+takes the listener's context with it.
 
 ALPN advertises `http/1.1` (h2 goes in front of it when there is an h2
 to agree to). Minimum version is TLS 1.2; here it negotiates TLS 1.3.
@@ -216,7 +251,9 @@ Upgrade` beside `Connection: close`, `Sec-WebSocket-Key` as the bytes
 it came in -- and a message that carried all three becomes a `101`
 whose accept key is `base64(sha1(key ++ GUID))`, computed by the Bend
 in `sha1.bend` and `b64.bend` once per handshake. After the `101` the
-connection reads frames instead of requests.
+connection reads frames instead of requests. A key that is not 24
+characters of base64 (22 and `==`) is a `400` before it is hashed, and
+a `Sec-WebSocket-Version` other than 13 gets the `426`, naming 13.
 
 `ws.bend` is the frame reader and writer (RFC 6455). The reader has the
 request reader's shape, one structural walk with its state in one node,
@@ -273,16 +310,29 @@ default.
 
 Stopping is `SIGTERM`. The accept loop reads through `TCP.accept_poll`
 (`TCP.accept` with a deadline, `bend2/effs/tcp_accept_poll.{c,js}`),
-so every 250 ms of no arrivals it looks up and asks
-`IO.signal_pending(15)` (`bend2/effs/signal_pending.{c,js}`: the first
-ask installs a handler that only sets a flag, with `SA_RESTART` so no
-effect in flight is failed by the signal). On a stop it closes the
+so every 250 ms of no arrivals it looks up, and after every arrival
+too, and asks `IO.signal_pending(15)` (`bend2/effs/signal_pending.{c,js}`:
+the first ask installs a handler that only sets a flag, with
+`SA_RESTART` so no effect in flight is failed by the signal). The
+first ask is made at startup: asked only when arrivals paused, a
+server under steady load never saw the signal, and one loaded from
+boot had no handler and died without draining. On a stop it closes the
 listener, so new connections are refused at once; the ones open finish
 what they are doing; and the process ends when every slot has come
 back -- the loop refills the semaphore -- or when `--grace-ms` is up,
 whichever is first. Two effects, both the size of the ones beside them,
 and both generic: any long-running Bend program that has to be stopped
 by its supervisor needs exactly these.
+
+Only a listener that is no longer one ends the loop. `accept(2)` also
+fails for one connection (reset before it was taken, a network error
+handed over with it) and for a passing shortage; those are retried.
+Out of descriptors, the connection at the head of the queue is taken
+on a spare descriptor and closed, so it leaves the backlog instead of
+waking the loop forever; out of buffers or memory, the loop steps back
+20 ms. Before, 1017 idle connections against `ulimit -n 1024` stopped
+the server for good. Accepted sockets are non-blocking and
+close-on-exec from birth (`accept4`) and have Nagle off.
 
 ## The laws
 
@@ -381,8 +431,13 @@ once and a 1 MiB one to 100 pipelined GETs with the server's `VmHWM`
 under 20 MB, and a file that shrinks mid-reply; five more for time and
 size when the server was started with `--idle-ms MS` and the check with
 `--idle=MS`; one for the limit with `--max-conns N` and `--conns=N`;
-one for the log with `--log` and `--log=FILE`; eight for WebSocket
-with `--ws`; and one, last, for stopping, with
+one for the log with `--log` and `--log=FILE`; ten for WebSocket
+with `--ws`; seven for the budgets with `--guard`, against a server
+under `ulimit -n 64` with `--idle-ms 1000 --head-ms 1500` (600
+pipelined GETs of a 100 KB file under a `VmHWM` of 40 MB, a peer that
+never reads let go, a dribbled head dropped at its time, a `431`, a
+`414`, 80 idle peers against 64 descriptors, and SIGTERM under a storm
+of arrivals, which ends the server); and one, last, for stopping, with
 `--term`, which sends the server SIGTERM and watches it refuse, finish
 and go. `load.c` drives either;
 `ramp.c` opens connections in blocks and never closes them; `sched.c`
