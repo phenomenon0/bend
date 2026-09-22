@@ -40,11 +40,21 @@ engine as first written passes every other case and fails that one.
 
 ## What it is
 
-The reader is one structural walk over whatever bytes the socket hands
-over. Its whole state rides in one `P` node, so a head split across
-three recvs parses exactly like a head that arrived whole, and a chunk
-holding three pipelined requests yields three requests in that one
-walk. It keeps no buffer of its own and never re-scans.
+The reader is one walk over whatever bytes the socket hands over. Its
+whole state rides in one `P` node, so a head split across three recvs
+parses exactly like a head that arrived whole, and a chunk holding
+three pipelined requests yields three requests in that one walk. It
+keeps no buffer of its own and never re-scans.
+
+A read is `Bytes`, one packed block (`TCP.poll_buf`), and `feed_buf`
+walks it where it lies: an uncons of a block nothing else holds
+advances it in place. Where a state reads a run of bytes without a
+transition -- a method, a target, a version, a field name, a key, a
+value it skips, a body -- the run is counted and cut from the read
+whole, so the target, the body and the key of a request that arrived in
+one read are views of it, not bytes rebuilt; every other byte is one
+step of the machine. `feed` is the same machine a byte at a time over a
+list, the reference `feed_buf` is proved equal to.
 
 That shape is not a workaround. Bend's loops cannot exit early — a
 recursive call has to shrink a matched argument — so a machine that
@@ -56,9 +66,9 @@ a pipelining parser should do anyway.
 Every byte is first classed as the RFC's grammar sees it (a space, a
 tab, a line end, a colon, a comma, a digit, a token byte, any other
 visible byte, a control), and every state has a row only for the
-classes it can carry. A field name is kept as its bytes, lowercased,
-and at the colon it is looked up in a table of the six names this
-engine acts on by comparing those bytes: it once went by a 32-bit
+classes it can carry. A field name is kept as its bytes, lowercased at
+its colon, and looked up there in a table of the names this engine
+acts on by comparing those bytes, block against block: it once went by a 32-bit
 FNV-1a hash of them, and `x-v5fged` hashed to Content-Length's value
 and was framed as one. The value scanner is chosen by the field: a
 Content-Length accumulates digits, Connection and Upgrade are read as
@@ -149,8 +159,8 @@ would have worked.
 
 ## Time and size
 
-Every read has a deadline. `TCP.poll_bytes` is `TCP.poll` carrying
-bytes (`bend2/effs/tcp_poll_bytes.{c,js}`, declared beside it): a recv
+Every read has a deadline. `TCP.poll_buf` is `TCP.poll` carrying
+a `Bytes` (`bend2/effs/tcp_poll_buf.{c,js}`, declared beside it): a recv
 is tried before any park, so a socket with data waiting costs no pass;
 one with nothing parks on the socket and on the clock, whichever fires
 first. A peer silent for `--idle-ms` (10 s by default), mid-head or
@@ -374,6 +384,17 @@ close-on-exec from birth (`accept4`) and have Nagle off.
 `feed(b, feed(a, p))`. Chunking does not change the parse, however TCP
 decides to split a message. It is also what licenses keeping no buffer.
 
+`feed_buf_is_feed` says the walk the engine runs is `feed` on the
+read's bytes, for every read and every reader state: the runs it cuts,
+the bodies it takes at their length and the values it skips land where
+stepping their bytes one at a time would have. So every law of `feed`
+is a law of the engine, and `feed_buf_split` is `feed_split` on
+blocks. Each piece of the walk was checked by breaking it -- a target
+run that swallows its space, a skipped value that runs over its CR, a
+body cut one byte short, the bytes after an upgrade dropped, a name
+entered from the wrong state, a name taken for the first field it is
+compared with -- and the checker refuses every one.
+
 `bad_absorbs` and `bad_feeds` say no byte moves the reader out of
 `Bad{}` — without them a smuggled request could follow a refused one on
 the same connection and be served.
@@ -390,7 +411,9 @@ with exactly its bytes, or none. Then, for every message state:
 has no place for there: a space before a colon, a fold, a sign in a
 length, a control in the target), `clen_disagree` (two lengths that
 differ are refused), `host_once` and `rest_feeds` (after an upgrade
-nothing is read as HTTP). Twenty-two closed laws run the real reader
+nothing is read as HTTP: the rest of the read is kept whole for the
+frame reader). `lows_is_spec` says a name is lowercased at its colon
+as the reference lowercases each of its bytes. Twenty-two closed laws run the real reader
 on the smuggling inputs; `feed_split` carries each to every chunking.
 Every one of the review's mutations of the reader -- a target refused,
 a Transfer-Encoding accepted, a body one byte short, a non-digit length
@@ -635,6 +658,18 @@ At pipeline 8 the kernel is amortised eight ways, the compute is all
 that is left, and the gap widens to the compute gap: about 6 µs of
 Bend against 1 µs of C. That is the parse, the reply and the plan, and
 it is the engine's own to answer.
+
+That answer was the reader's input. Read as `List<&2, U32>`, a cell
+per byte, and walked a cell at a time, a request cost a list built by
+the effect, a cell dropped per byte, and a walk of a static list per
+punctuation byte to class it; the profile at pipeline 8 was a third
+`term_drop` and reference-count traffic. On `Bytes` -- the read one
+block, the tokens cut from it, names compared block against block, the
+classes by ranges -- the same box (4-core VM, `--threads 1`, 32
+connections, server and client pinned to their own cores, medians of
+three) went from 53,256 to 75,149 req/s at pipeline 1 and from 92,499
+to 191,538 at pipeline 8. What is left on top of the profile is the
+walk itself: the runtime's uncons, and the drops of the views it cuts.
 
 Guessing at either is a waste. Narrowing `Pend` from eight fields to
 six -- the widening WebSocket had caused, which looked like the
