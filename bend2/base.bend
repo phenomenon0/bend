@@ -3266,6 +3266,23 @@ def Bytes.list(xs):
       Equal.cong(List<&2, U32>, List<&2, U32>, ys => h <> ys,
         Bytes.to_list(Bytes.from_list(t)), t, Bytes.list(t))
 
+# the bytes of two buffers joined are the bytes of each, joined
+law Bytes.to_list_append:
+  for +a: Bytes()
+  for +b: Bytes()
+  {Bytes.to_list(Bytes.append(a, b))
+    == List.append(&2, U32, Bytes.to_list(a), Bytes.to_list(b)) : List<&2, U32>}
+
+def Bytes.to_list_append(a, b):
+  match a:
+    case SNil{}:
+      {==}
+    case SCon{Chr{c}, t}:
+      Equal.cong(List<&2, U32>, List<&2, U32>, ys => c <> ys,
+        Bytes.to_list(Bytes.append(t, b)),
+        List.append(&2, U32, Bytes.to_list(t), Bytes.to_list(b)),
+        Bytes.to_list_append(t, b))
+
 law Bytes.len.shift:
   for +s: String
   for +m: Nat
