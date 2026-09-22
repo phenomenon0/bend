@@ -2156,11 +2156,32 @@ def noted(on: Bool, note: List<&2, U32>, a: Ans) -> Ans:
     case True{}:
       noted.on(note, a)
 
+def path.keep(acc: List<&2, U32>, c: U32, stop: Bool) -> List<&2, U32>:
+  match stop:
+    case True{}:
+      acc
+    case False{}:
+      Con{c, acc}
+
+def path.go(p: List<&2, U32>, stop: Bool, acc: List<&2, U32>) -> List<&2, U32>:
+  match p stop:
+    case Nil{} _:
+      rev(acc)
+    case Con{c, t} True{}:
+      path.go(t, True{}, acc)
+    case Con{+c, t} False{}:
+      path.go(t, U32.is_eq(c, 63), path.keep(acc, c, U32.is_eq(c, 63)))
+
+# the path a target names is its bytes before any '?': the query says
+# nothing about which resource is asked for, so /health?x=1 is /health
+def path.of(p: List<&2, U32>) -> List<&2, U32>:
+  path.go(p, False{}, Nil{})
+
 def serve.log(+srv: Srv, r: Req) -> Ans:
   match r:
     case Req{+meth, +path, body, close, ws, key}:
       noted(srv.log(srv), cat(shown(meth), cat(bytes(" "), path)),
-        serve.go(srv, path, body, meth.get(meth) || meth.head(meth),
+        serve.go(srv, path.of(path), body, meth.get(meth) || meth.head(meth),
           meth.head(meth), ws, key))
 
 def serve(+srv: Srv, r: Req) -> Ans:

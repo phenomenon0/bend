@@ -49,7 +49,7 @@ static int dial(int port) {
 
 // One message into s, returns its length. Valid most of the time, then
 // one of the mutations a reader has to get right.
-static const char* PATHS[] = { "/health", "/", "/echo", "/nope", "/health/", "/a/../health", "//" };
+static const char* PATHS[] = { "/health", "/", "/echo", "/nope", "/health/", "/a/../health", "//", "/echo?a=b" };
 static const char* METHS[] = { "GET", "HEAD", "POST", "PUT", "DELETE", "OPTIONS", "get" };
 // fields a smuggler sends; each is refused, except an agreeing repeat
 // and trailing whitespace, which are a length
@@ -64,7 +64,7 @@ static const char* CONNS[] = { "close", "keep-alive", "keep-alive, close", "Clos
 static int message(char* s, int cap) {
   int n = 0;
   const char* meth = pick(4) ? (pick(3) ? "GET" : "HEAD") : METHS[pick(7)];
-  const char* path = PATHS[pick(7)];
+  const char* path = PATHS[pick(8)];
   const char* ver  = pick(12) ? "HTTP/1.1" : (pick(2) ? "HTTP/1.0" : "HTTP/2.0");
   if (pick(16) == 0) n += snprintf(s + n, (size_t)(cap - n), "\r\n");
   n += snprintf(s + n, (size_t)(cap - n), "%s %s %s\r\n", meth, path, ver);

@@ -287,6 +287,10 @@ law refuse_after_one:
     ([Eng.Req{Eng.MGet{}, Eng.bytes("/"), Nil{}, False{}, False{}, Nil{}}], True{}) :
     List<&2, Eng.Req> & Bool}
 
+# LAW: a query is no part of the path a target routes by.
+law path_query:
+  {Eng.path.of(Eng.bytes("/health?x=/a?b")) == Eng.bytes("/health") : List<&2, U32>}
+
 # LAW: the reply that ends a connection says so, and is otherwise the
 # reply it was.
 law health_closing:

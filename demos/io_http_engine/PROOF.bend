@@ -401,6 +401,9 @@ def Laws.refuse_version():
 def Laws.refuse_after_one():
   {==}
 
+def Laws.path_query():
+  {==}
+
 def Laws.health_closing():
   {==}
 

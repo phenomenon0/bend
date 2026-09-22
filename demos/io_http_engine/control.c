@@ -83,6 +83,8 @@ static void reply(Conn* k, const char* status, const char* ctype,
 
 // the same routes as main.bend, in the same order
 static void serve(Conn* k) {
+  char* q = memchr(k->path, '?', (size_t)k->plen);   // a query is no part of the path
+  if (q != NULL) k->plen = (int)(q - k->path);
   if (k->meth == M_OTHER) {
     reply(k, "405 Method Not Allowed", "text/plain", "no method\n", 10);
   } else if (k->plen == 7 && !memcmp(k->path, "/health", 7)) {

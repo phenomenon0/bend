@@ -445,6 +445,9 @@ int main(int argc, char** argv) {
   check("a name whose hash is Content-Length's is not one",
     has(b, n, "content-length: 0") && has(b, n, "405 Method Not Allowed"), b, n);
 
+  n = one(TEXT("GET /health?x=1 HTTP/1.1\r\nHost: x\r\n\r\n"), b, sizeof(b), 106);
+  check("a query is no part of the path", has(b, n, "200 OK"), b, n);
+
   n = one(TEXT("\r\nGET /health HTTP/1.1\r\nHost: x\r\n\r\n"), b, sizeof(b), 106);
   check("an empty line before a request is skipped", has(b, n, "200 OK"), b, n);
 
