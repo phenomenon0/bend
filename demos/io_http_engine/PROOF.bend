@@ -361,8 +361,22 @@ def lem.run(+sel: Eng.Run, +s: Bytes(), +acc: Bytes(), +pd: Eng.Pend, +out: List
         lem.run(sel, t, Eng.push(acc, c), pd, out))({==})
 
 # a run cut where run.len says: the cut's two halves are what RG names
+def lem.cut.took(+sel: Eng.Run, +acc: Bytes(), +s: Bytes(), +pd: Eng.Pend,
+  +out: List<&2, Eng.Req>, j: Nat, e: {Eng.run.len(s, True{}, sel, 0n) == 1n+j : Nat}) ->
+  {Eng.feed_buf.slow(String.drop(s, 1n+j),
+    Eng.P{Eng.st.put(sel, Bytes.append(acc, String.take(s, 1n+j))), pd, out}) ==
+    Eng.feed_buf.slow(s, Eng.P{Eng.st.put(sel, acc), pd, out}) : Eng.P}:
+  %e : {Eng.feed_buf.slow(String.drop(s, _),
+    Eng.P{Eng.st.put(sel, Bytes.append(acc, String.take(s, _))), pd, out}) ==
+    Eng.feed_buf.slow(s, Eng.P{Eng.st.put(sel, acc), pd, out}) : Eng.P}
+  Equal.sym(Eng.P, Eng.feed_buf.slow(s, Eng.P{Eng.st.put(sel, acc), pd, out}),
+    Eng.feed_buf.slow(String.drop(s, Eng.run.len(s, True{}, sel, 0n)),
+      Eng.P{Eng.st.put(sel, Bytes.append(acc, String.take(s, Eng.run.len(s, True{}, sel, 0n)))),
+        pd, out}),
+    lem.run(sel, s, acc, pd, out))
+
 def lem.cut(+sel: Eng.Run, +acc: Bytes(), +s: Bytes(), +pd: Eng.Pend, +out: List<&2, Eng.Req>,
-  k: Nat) ->
+  +k: Nat) ->
   {Eng.run.len(s, True{}, sel, 0n) == k : Nat} ->
   {Eng.feed_buf.last(Eng.run.cut(sel, acc, s, pd, out, k)) ==
     Eng.feed_buf.slow(s, Eng.P{Eng.st.put(sel, acc), pd, out}) : Eng.P}:
@@ -370,20 +384,185 @@ def lem.cut(+sel: Eng.Run, +acc: Bytes(), +s: Bytes(), +pd: Eng.Pend, +out: List
     case 0n:
       e => lem.one(Eng.P{Eng.st.put(sel, acc), pd, out}, s)
     case 1n+j:
-      e =>
-        %e : {Eng.feed_buf.slow(String.drop(s, _),
-          Eng.P{Eng.st.put(sel, Bytes.append(acc, String.take(s, _))), pd, out}) ==
-          Eng.feed_buf.slow(s, Eng.P{Eng.st.put(sel, acc), pd, out}) : Eng.P}
-        Equal.sym(Eng.P, Eng.feed_buf.slow(s, Eng.P{Eng.st.put(sel, acc), pd, out}),
-          Eng.feed_buf.slow(String.drop(s, Eng.run.len(s, True{}, sel, 0n)),
-            Eng.P{Eng.st.put(sel, Bytes.append(acc, String.take(s, Eng.run.len(s, True{}, sel, 0n)))),
-              pd, out}),
-          lem.run(sel, s, acc, pd, out))
+      e => Equal.trans(Eng.P,
+        Eng.feed_buf.last(Eng.one.step(
+          Eng.P{Eng.st.put(sel, Bytes.append(acc, String.take(s, 1n+j))), pd, out},
+          String.drop(s, 1n+j))),
+        Eng.feed_buf.slow(String.drop(s, 1n+j),
+          Eng.P{Eng.st.put(sel, Bytes.append(acc, String.take(s, 1n+j))), pd, out}),
+        Eng.feed_buf.slow(s, Eng.P{Eng.st.put(sel, acc), pd, out}),
+        lem.one(Eng.P{Eng.st.put(sel, Bytes.append(acc, String.take(s, 1n+j))), pd, out},
+          String.drop(s, 1n+j)),
+        lem.cut.took(sel, acc, s, pd, out, j, e))
 
 def lem.go.run(+sel: Eng.Run, +acc: Bytes(), +s: Bytes(), +pd: Eng.Pend, +out: List<&2, Eng.Req>) ->
   {Eng.feed_buf.last(Eng.run.go(sel, acc, s, pd, out)) ==
     Eng.feed_buf.slow(s, Eng.P{Eng.st.put(sel, acc), pd, out}) : Eng.P}:
   lem.cut(sel, acc, s, pd, out, Eng.run.len(s, True{}, sel, 0n))({==})
+
+# A value skipped: what the walk is to answer, by whether the byte
+# before s was part of the value
+def skip.want(go: Bool, c: U32, s: Bytes(), pd: Eng.Pend, out: List<&2, Eng.Req>) -> Eng.P:
+  match go:
+    case True{}:
+      Eng.feed_buf.slow(s, Eng.P{Eng.InLx{}, pd, out})
+    case False{}:
+      Eng.feed_buf.slow(s, Eng.step(Eng.P{Eng.InLx{}, pd, out}, c))
+
+def lem.skip.at(+x: U32, +t: Bytes(), +pd: Eng.Pend, +out: List<&2, Eng.Req>, ok: Bool) ->
+  {Eng.run.stay(Eng.RX{}, Eng.cls(x)) == ok : Bool} ->
+  {skip.want(ok, x, t, pd, out) ==
+    Eng.feed_buf.slow(t, Eng.step(Eng.P{Eng.InLx{}, pd, out}, x)) : Eng.P}:
+  match ok:
+    case True{}:
+      e =>
+        %Equal.sym(Eng.P, Eng.step.at(Eng.InLx{}, Eng.cls(x), x, pd, out),
+          Eng.P{Eng.InLx{}, pd, out}, lem.stay(Eng.RX{}, Eng.cls(x), x, "", pd, out)(e)) :
+          {Eng.feed_buf.slow(t, Eng.P{Eng.InLx{}, pd, out}) == Eng.feed_buf.slow(t, _) : Eng.P}
+        {==}
+    case False{}:
+      e => {==}
+
+def lem.skip(+s: Bytes(), go: Bool, +c: U32, +pd: Eng.Pend, +out: List<&2, Eng.Req>) ->
+  {Eng.feed_buf.last(Eng.skip(s, go, c, pd, out)) == skip.want(go, c, s, pd, out) : Eng.P}:
+  match s go:
+    case SNil{} True{}:
+      {==}
+    case SNil{} False{}:
+      {==}
+    case SCon{Chr{x}, t} False{}:
+      {==}
+    case SCon{Chr{+x}, t} True{}:
+      Equal.trans(Eng.P, Eng.feed_buf.last(Eng.skip(t, Eng.run.stay(Eng.RX{}, Eng.cls(x)), x, pd, out)),
+        skip.want(Eng.run.stay(Eng.RX{}, Eng.cls(x)), x, t, pd, out),
+        Eng.feed_buf.slow(t, Eng.step(Eng.P{Eng.InLx{}, pd, out}, x)),
+        lem.skip(t, Eng.run.stay(Eng.RX{}, Eng.cls(x)), x, pd, out),
+        lem.skip.at(x, t, pd, out, Eng.run.stay(Eng.RX{}, Eng.cls(x)))({==}))
+
+# A method or a name, from its first byte: the state before it steps
+# each byte the run carries as the run's empty state does
+def lem.ent.step(e: Eng.Ent, k: Eng.Cls, -c: U32, -pd: Eng.Pend, -out: List<&2, Eng.Req>) ->
+  {Eng.run.stay(Eng.ent.sel(e), k) == True{} : Bool} ->
+  {Eng.step.at(Eng.ent.st(e), k, c, pd, out) ==
+    Eng.step.at(Eng.st.put(Eng.ent.sel(e), ""), k, c, pd, out) : Eng.P}:
+  match e k:
+    case Eng.EMeth{} Eng.KSp{}:
+      e => no({Eng.step.at(Eng.Pre{}, Eng.KSp{}, c, pd, out) ==
+        Eng.step.at(Eng.st.put(Eng.RM{}, ""), Eng.KSp{}, c, pd, out) : Eng.P}, e)
+    case Eng.EMeth{} Eng.KHt{}:
+      e => no({Eng.step.at(Eng.Pre{}, Eng.KHt{}, c, pd, out) ==
+        Eng.step.at(Eng.st.put(Eng.RM{}, ""), Eng.KHt{}, c, pd, out) : Eng.P}, e)
+    case Eng.EMeth{} Eng.KCr{}:
+      e => no({Eng.step.at(Eng.Pre{}, Eng.KCr{}, c, pd, out) ==
+        Eng.step.at(Eng.st.put(Eng.RM{}, ""), Eng.KCr{}, c, pd, out) : Eng.P}, e)
+    case Eng.EMeth{} Eng.KLf{}:
+      e => no({Eng.step.at(Eng.Pre{}, Eng.KLf{}, c, pd, out) ==
+        Eng.step.at(Eng.st.put(Eng.RM{}, ""), Eng.KLf{}, c, pd, out) : Eng.P}, e)
+    case Eng.EMeth{} Eng.KCo{}:
+      e => no({Eng.step.at(Eng.Pre{}, Eng.KCo{}, c, pd, out) ==
+        Eng.step.at(Eng.st.put(Eng.RM{}, ""), Eng.KCo{}, c, pd, out) : Eng.P}, e)
+    case Eng.EMeth{} Eng.KCm{}:
+      e => no({Eng.step.at(Eng.Pre{}, Eng.KCm{}, c, pd, out) ==
+        Eng.step.at(Eng.st.put(Eng.RM{}, ""), Eng.KCm{}, c, pd, out) : Eng.P}, e)
+    case Eng.EMeth{} Eng.KDg{}:
+      e => {==}
+    case Eng.EMeth{} Eng.KTk{}:
+      e => {==}
+    case Eng.EMeth{} Eng.KVc{}:
+      e => no({Eng.step.at(Eng.Pre{}, Eng.KVc{}, c, pd, out) ==
+        Eng.step.at(Eng.st.put(Eng.RM{}, ""), Eng.KVc{}, c, pd, out) : Eng.P}, e)
+    case Eng.EMeth{} Eng.KCt{}:
+      e => no({Eng.step.at(Eng.Pre{}, Eng.KCt{}, c, pd, out) ==
+        Eng.step.at(Eng.st.put(Eng.RM{}, ""), Eng.KCt{}, c, pd, out) : Eng.P}, e)
+    case Eng.EName{} Eng.KSp{}:
+      e => no({Eng.step.at(Eng.Lin{}, Eng.KSp{}, c, pd, out) ==
+        Eng.step.at(Eng.st.put(Eng.RN{}, ""), Eng.KSp{}, c, pd, out) : Eng.P}, e)
+    case Eng.EName{} Eng.KHt{}:
+      e => no({Eng.step.at(Eng.Lin{}, Eng.KHt{}, c, pd, out) ==
+        Eng.step.at(Eng.st.put(Eng.RN{}, ""), Eng.KHt{}, c, pd, out) : Eng.P}, e)
+    case Eng.EName{} Eng.KCr{}:
+      e => no({Eng.step.at(Eng.Lin{}, Eng.KCr{}, c, pd, out) ==
+        Eng.step.at(Eng.st.put(Eng.RN{}, ""), Eng.KCr{}, c, pd, out) : Eng.P}, e)
+    case Eng.EName{} Eng.KLf{}:
+      e => no({Eng.step.at(Eng.Lin{}, Eng.KLf{}, c, pd, out) ==
+        Eng.step.at(Eng.st.put(Eng.RN{}, ""), Eng.KLf{}, c, pd, out) : Eng.P}, e)
+    case Eng.EName{} Eng.KCo{}:
+      e => no({Eng.step.at(Eng.Lin{}, Eng.KCo{}, c, pd, out) ==
+        Eng.step.at(Eng.st.put(Eng.RN{}, ""), Eng.KCo{}, c, pd, out) : Eng.P}, e)
+    case Eng.EName{} Eng.KCm{}:
+      e => no({Eng.step.at(Eng.Lin{}, Eng.KCm{}, c, pd, out) ==
+        Eng.step.at(Eng.st.put(Eng.RN{}, ""), Eng.KCm{}, c, pd, out) : Eng.P}, e)
+    case Eng.EName{} Eng.KDg{}:
+      e => {==}
+    case Eng.EName{} Eng.KTk{}:
+      e => {==}
+    case Eng.EName{} Eng.KVc{}:
+      e => no({Eng.step.at(Eng.Lin{}, Eng.KVc{}, c, pd, out) ==
+        Eng.step.at(Eng.st.put(Eng.RN{}, ""), Eng.KVc{}, c, pd, out) : Eng.P}, e)
+    case Eng.EName{} Eng.KCt{}:
+      e => no({Eng.step.at(Eng.Lin{}, Eng.KCt{}, c, pd, out) ==
+        Eng.step.at(Eng.st.put(Eng.RN{}, ""), Eng.KCt{}, c, pd, out) : Eng.P}, e)
+
+# a Nat that is one more than something is not zero
+def ZN(n: Nat, g: Type) -> Type:
+  match n:
+    case 0n:
+      Unit
+    case 1n+p:
+      g
+
+def EG(-e: Eng.Ent, -s: Bytes(), -pd: Eng.Pend, -out: List<&2, Eng.Req>) -> Type:
+  {Eng.feed_buf.slow(s, Eng.P{Eng.st.put(Eng.ent.sel(e), ""), pd, out}) ==
+    Eng.feed_buf.slow(s, Eng.P{Eng.ent.st(e), pd, out}) : Eng.P}
+
+def lem.ent.at(+e: Eng.Ent, +c: U32, +t: Bytes(), +pd: Eng.Pend, +out: List<&2, Eng.Req>,
+  j: Nat, ok: Bool) ->
+  {Eng.run.stay(Eng.ent.sel(e), Eng.cls(c)) == ok : Bool} ->
+  {Eng.run.len(t, ok, Eng.ent.sel(e), Eng.run.inc(ok, 0n)) == 1n+j : Nat} ->
+  EG(e, SCon{Chr{c}, t}, pd, out):
+  match ok:
+    case True{}:
+      st => eq =>
+        %lem.ent.step(e, Eng.cls(c), c, pd, out)(st) :
+          {Eng.feed_buf.slow(t, _) ==
+            Eng.feed_buf.slow(t, Eng.step.at(Eng.ent.st(e), Eng.cls(c), c, pd, out)) : Eng.P}
+        {==}
+    case False{}:
+      st => eq =>
+        %Equal.trans(Nat, 0n, Eng.run.len(t, False{}, Eng.ent.sel(e), 0n), 1n+j,
+          Equal.sym(Nat, Eng.run.len(t, False{}, Eng.ent.sel(e), 0n), 0n,
+            lem.len0(t, Eng.ent.sel(e))), eq) :
+          ZN(_, EG(e, SCon{Chr{c}, t}, pd, out))
+        Unit{}
+
+def lem.ent.first(+e: Eng.Ent, s: Bytes(), +pd: Eng.Pend, +out: List<&2, Eng.Req>, j: Nat) ->
+  {Eng.run.len(s, True{}, Eng.ent.sel(e), 0n) == 1n+j : Nat} -> EG(e, s, pd, out):
+  match s:
+    case SNil{}:
+      eq =>
+        %eq : ZN(_, EG(e, SNil{}, pd, out))
+        Unit{}
+    case SCon{Chr{+c}, t}:
+      eq => lem.ent.at(e, c, t, pd, out, j, Eng.run.stay(Eng.ent.sel(e), Eng.cls(c)))({==}, eq)
+
+def lem.ent.cut(+e: Eng.Ent, +s: Bytes(), +pd: Eng.Pend, +out: List<&2, Eng.Req>, +k: Nat) ->
+  {Eng.run.len(s, True{}, Eng.ent.sel(e), 0n) == k : Nat} ->
+  {Eng.feed_buf.last(Eng.ent.cut(e, s, pd, out, k)) ==
+    Eng.feed_buf.slow(s, Eng.P{Eng.ent.st(e), pd, out}) : Eng.P}:
+  match k:
+    case 0n:
+      eq => lem.one(Eng.P{Eng.ent.st(e), pd, out}, s)
+    case 1n+j:
+      +eq => Equal.trans(Eng.P, Eng.feed_buf.last(Eng.run.cut(Eng.ent.sel(e), "", s, pd, out, 1n+j)),
+        Eng.feed_buf.slow(s, Eng.P{Eng.st.put(Eng.ent.sel(e), ""), pd, out}),
+        Eng.feed_buf.slow(s, Eng.P{Eng.ent.st(e), pd, out}),
+        lem.cut(Eng.ent.sel(e), "", s, pd, out, 1n+j)(eq),
+        lem.ent.first(e, s, pd, out, j)(eq))
+
+def lem.ent(+e: Eng.Ent, +s: Bytes(), +pd: Eng.Pend, +out: List<&2, Eng.Req>) ->
+  {Eng.feed_buf.last(Eng.ent.go(e, s, pd, out)) ==
+    Eng.feed_buf.slow(s, Eng.P{Eng.ent.st(e), pd, out}) : Eng.P}:
+  lem.ent.cut(e, s, pd, out, Eng.run.len(s, True{}, Eng.ent.sel(e), 0n))({==})
 
 # A body
 def lem.bod.at(+q: Nat, +b: Bytes(), +c: U32, +t: Bytes(), +pd: Eng.Pend,
@@ -483,7 +662,7 @@ def lem.adv.at(st: Eng.St, +s: Bytes(), +pd: Eng.Pend, +out: List<&2, Eng.Req>) 
     case Eng.InLk{k}:
       lem.go.run(Eng.RK{}, k, s, pd, out)
     case Eng.InLx{}:
-      lem.go.run(Eng.RX{}, "", s, pd, out)
+      lem.skip(s, True{}, 0, pd, out)
     case Eng.Bod{r, b}:
       lem.bod(s, r, b, pd, out)
     case Eng.Rest{bs}:
@@ -493,13 +672,13 @@ def lem.adv.at(st: Eng.St, +s: Bytes(), +pd: Eng.Pend, +out: List<&2, Eng.Req>) 
       Equal.sym(Eng.P, Eng.feed_buf.slow(s, Eng.P{Eng.Bad{}, pd, out}),
         Eng.P{Eng.Bad{}, pd, out}, lem.bad(s, pd, out))
     case Eng.Pre{}:
-      lem.one(Eng.P{Eng.Pre{}, pd, out}, s)
+      lem.ent(Eng.EMeth{}, s, pd, out)
     case Eng.PreLf{}:
       lem.one(Eng.P{Eng.PreLf{}, pd, out}, s)
     case Eng.CrM{}:
       lem.one(Eng.P{Eng.CrM{}, pd, out}, s)
     case Eng.Lin{}:
-      lem.one(Eng.P{Eng.Lin{}, pd, out}, s)
+      lem.ent(Eng.EName{}, s, pd, out)
     case Eng.InL0{}:
       lem.one(Eng.P{Eng.InL0{}, pd, out}, s)
     case Eng.InL{v}:

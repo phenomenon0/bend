@@ -963,10 +963,12 @@ def one.step(p: P, s: Bytes()) -> P & Bytes():
     case SCon{Chr{c}, t}:
       (step(p, c), t)
 
+# the run is cut from the read, and the byte that ended it is stepped
+# at once
 def run.took(+sel: Run, acc: Bytes(), pd: Pend, out: List<&2, Req>, ab: Bytes() & Bytes()) ->
   P & Bytes():
   (a, b) = ab
-  (P{st.put(sel, Bytes.append(acc, a)), pd, out}, b)
+  one.step(P{st.put(sel, Bytes.append(acc, a)), pd, out}, b)
 
 def run.cut(+sel: Run, acc: Bytes(), s: Bytes(), pd: Pend, out: List<&2, Req>, k: Nat) ->
   P & Bytes():
@@ -978,6 +980,50 @@ def run.cut(+sel: Run, acc: Bytes(), s: Bytes(), pd: Pend, out: List<&2, Req>, k
 
 def run.go(+sel: Run, acc: Bytes(), +s: Bytes(), pd: Pend, out: List<&2, Req>) -> P & Bytes():
   run.cut(sel, acc, s, pd, out, run.len(s, True{}, sel, 0n))
+
+# A method starts at the first byte of a request line and a name at the
+# first byte of a field line, and each is a run from that byte: the
+# state before it steps that byte exactly as the run's empty state
+# does, so the whole token is one cut and a view of the read.
+type Ent is Data:
+  EMeth{}
+  EName{}
+
+def ent.sel(e: Ent) -> Run:
+  match e:
+    case EMeth{}:
+      RM{}
+    case EName{}:
+      RN{}
+
+def ent.st(e: Ent) -> St:
+  match e:
+    case EMeth{}:
+      Pre{}
+    case EName{}:
+      Lin{}
+
+def ent.cut(+e: Ent, s: Bytes(), pd: Pend, out: List<&2, Req>, k: Nat) -> P & Bytes():
+  match k:
+    case 0n:
+      one.step(P{ent.st(e), pd, out}, s)
+    case 1n+j:
+      run.took(ent.sel(e), "", pd, out, String.cut(s, 1n+j))
+
+def ent.go(+e: Ent, +s: Bytes(), pd: Pend, out: List<&2, Req>) -> P & Bytes():
+  ent.cut(e, s, pd, out, run.len(s, True{}, ent.sel(e), 0n))
+
+# a value skipped: walked where it lies and nothing kept, and the byte
+# that ends it stepped at once. go says whether c, the byte before s,
+# was part of the value; the first call has none.
+def skip(s: Bytes(), go: Bool, c: U32, pd: Pend, out: List<&2, Req>) -> P & Bytes():
+  match s go:
+    case _ False{}:
+      (step(P{InLx{}, pd, out}, c), s)
+    case SNil{} True{}:
+      (P{InLx{}, pd, out}, SNil{})
+    case SCon{Chr{+x}, t} True{}:
+      skip(t, run.stay(RX{}, cls(x)), x, pd, out)
 
 # a body: all of the read when the body goes on past it, else the r + 1
 # bytes that end it, with the message emitted
@@ -1011,19 +1057,19 @@ def adv.at(st: St, s: Bytes(), pd: Pend, out: List<&2, Req>) -> P & Bytes():
     case InLk{k}:
       run.go(RK{}, k, s, pd, out)
     case InLx{}:
-      run.go(RX{}, "", s, pd, out)
+      skip(s, True{}, 0, pd, out)
     case Bod{r, b}:
       bod.go(r, b, s, pd, out)
     case Rest{bs}:
       (P{Rest{Bytes.append(bs, s)}, pd, out}, "")
     case Pre{}:
-      one.step(P{Pre{}, pd, out}, s)
+      ent.go(EMeth{}, s, pd, out)
     case PreLf{}:
       one.step(P{PreLf{}, pd, out}, s)
     case CrM{}:
       one.step(P{CrM{}, pd, out}, s)
     case Lin{}:
-      one.step(P{Lin{}, pd, out}, s)
+      ent.go(EName{}, s, pd, out)
     case InL0{}:
       one.step(P{InL0{}, pd, out}, s)
     case InL{v}:
