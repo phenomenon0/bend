@@ -27,6 +27,11 @@ static u32       tls_ssl_cap;
 static u8*       tls_up;
 static u32       tls_up_cap;
 
+// What tls_up says of a socket: its session is not up yet, is up, has
+// failed (so no close_notify is owed or sent), or never existed because
+// SSL_new failed (so the socket is refused, never read in the clear).
+enum { TLS_NEW = 0, TLS_UP = 1, TLS_BROKE = 2, TLS_NONE = 3 };
+
 #define TLS_SLOT(tab, cap, fd, type)                                       \
   do {                                                                     \
     if ((u32)(fd) >= (cap)) {                                              \
@@ -44,11 +49,23 @@ static SSL* tls_of(int fd) {
   return fd >= 0 && (u32)fd < tls_ssl_cap ? tls_ssl[fd] : NULL;
 }
 
+static u8 tls_state(int fd) {
+  return fd >= 0 && (u32)fd < tls_up_cap ? tls_up[fd] : TLS_NEW;
+}
+
+// Before every SSL_* call: what SSL_get_error reads is the error queue
+// and errno, so a stale entry from another socket, or a stale EAGAIN,
+// would be read as this call's answer.
+static void tls_pre(void) {
+  errno = 0;
+  ERR_clear_error();
+}
+
 // What OpenSSL is waiting for, said the way the rest of the runtime
 // says it: a short read that has to be tried again sets errno to EAGAIN
 // and dir to the direction the socket must become ready in, which for a
 // read is not always POLLIN.
-static ssize_t tls_again(SSL* ssl, int n, short* dir) {
+static ssize_t tls_again(int fd, SSL* ssl, int n, short* dir) {
   int why = SSL_get_error(ssl, n);
   if (why == SSL_ERROR_WANT_READ) {
     *dir  = POLLIN;
@@ -63,6 +80,7 @@ static ssize_t tls_again(SSL* ssl, int n, short* dir) {
   if (why == SSL_ERROR_ZERO_RETURN) {
     return 0;
   }
+  tls_up[fd] = TLS_BROKE;
   if (why == SSL_ERROR_SYSCALL) {
     if (errno == 0) {
       errno = ECONNRESET;
@@ -78,53 +96,71 @@ static ssize_t tls_again(SSL* ssl, int n, short* dir) {
 // when the session is up, 0 when it needs the socket to become ready in
 // dir, and -1 when it will never come up.
 static int tls_hand(int fd, SSL* ssl, short* dir) {
-  if ((u32)fd < tls_up_cap && tls_up[fd]) {
+  if (tls_state(fd) == TLS_UP) {
     return 1;
   }
+  if (tls_state(fd) == TLS_BROKE) {
+    errno = EPROTO;
+    return -1;
+  }
+  tls_pre();
   int n = SSL_accept(ssl);
   if (n == 1) {
-    TLS_SLOT(tls_up, tls_up_cap, fd, u8);
-    tls_up[fd] = 1;
+    tls_up[fd] = TLS_UP;
     return 1;
   }
-  return tls_again(ssl, n, dir) < 0 && errno == EAGAIN ? 0 : -1;
+  return tls_again(fd, ssl, n, dir) < 0 && errno == EAGAIN ? 0 : -1;
+}
+
+// A socket from a TLS listener that has no session is refused rather
+// than read or written in the clear.
+static bool tls_none(int fd) {
+  if (tls_state(fd) != TLS_NONE) {
+    return false;
+  }
+  errno = EPROTO;
+  return true;
 }
 
 static ssize_t tls_read(int fd, void* buf, size_t len, short* dir) {
   SSL* ssl = tls_of(fd);
   if (ssl == NULL) {
-    return recv(fd, buf, len, 0);
+    return tls_none(fd) ? -1 : recv(fd, buf, len, 0);
   }
   int up = tls_hand(fd, ssl, dir);
   if (up != 1) {
     return up == 0 ? (errno = EAGAIN, -1) : -1;
   }
+  tls_pre();
   int n = SSL_read(ssl, buf, len > INT_MAX ? INT_MAX : (int)len);
-  return n > 0 ? (ssize_t)n : tls_again(ssl, n, dir);
+  return n > 0 ? (ssize_t)n : tls_again(fd, ssl, n, dir);
 }
 
 static ssize_t tls_write(int fd, const void* buf, size_t len, short* dir) {
   SSL* ssl = tls_of(fd);
   if (ssl == NULL) {
-    return send(fd, buf, len, 0);
+    return tls_none(fd) ? -1 : send(fd, buf, len, 0);
   }
   int up = tls_hand(fd, ssl, dir);
   if (up != 1) {
     return up == 0 ? (errno = EAGAIN, -1) : -1;
   }
+  tls_pre();
   int n = SSL_write(ssl, buf, len > INT_MAX ? INT_MAX : (int)len);
-  return n > 0 ? (ssize_t)n : tls_again(ssl, n, dir);
+  return n > 0 ? (ssize_t)n : tls_again(fd, ssl, n, dir);
 }
 
 // A socket that closes without a close_notify leaves the peer unable to
 // tell an orderly end from a cut connection, which is the truncation a
 // peer is supposed to refuse to guess at. Ours goes out first, once and
 // without waiting for theirs: the connection is ending either way, and
-// a server that waited would be one a peer could hold open.
+// a server that waited would be one a peer could hold open. After a
+// fatal error there is no session to end, and none is attempted.
 static void tls_shut(int fd) {
   SSL* ssl = tls_of(fd);
   if (ssl != NULL) {
-    if ((u32)fd < tls_up_cap && tls_up[fd]) {
+    if (tls_state(fd) == TLS_UP) {
+      tls_pre();
       SSL_shutdown(ssl);
       ERR_clear_error();
     }
@@ -132,7 +168,7 @@ static void tls_shut(int fd) {
     tls_ssl[fd] = NULL;
   }
   if (fd >= 0 && (u32)fd < tls_up_cap) {
-    tls_up[fd] = 0;
+    tls_up[fd] = TLS_NEW;
   }
   if (fd >= 0 && (u32)fd < tls_ctx_cap && tls_ctx[fd] != NULL) {
     SSL_CTX_free(tls_ctx[fd]);
@@ -148,16 +184,20 @@ static void tls_join(int lfd, int fd) {
   if (ctx == NULL) {
     return;
   }
+  TLS_SLOT(tls_up, tls_up_cap, fd, u8);
+  tls_pre();
   SSL* ssl = SSL_new(ctx);
-  if (ssl == NULL) {
+  if (ssl == NULL || SSL_set_fd(ssl, fd) != 1) {
+    SSL_free(ssl);
+    ERR_clear_error();
+    shutdown(fd, SHUT_RDWR);
+    tls_up[fd] = TLS_NONE;
     return;
   }
-  SSL_set_fd(ssl, fd);
   SSL_set_accept_state(ssl);
   TLS_SLOT(tls_ssl, tls_ssl_cap, fd, SSL*);
-  TLS_SLOT(tls_up, tls_up_cap, fd, u8);
   tls_ssl[fd] = ssl;
-  tls_up[fd]  = 0;
+  tls_up[fd]  = TLS_NEW;
 }
 
 static IoWire tls_wire = { tls_read, tls_write, tls_join, tls_shut };
@@ -179,11 +219,21 @@ static SSL_CTX* tls_make(const char* cert, const char* key, uint32_t* err) {
     *err = ENOMEM;
     return NULL;
   }
+  // no renegotiation (a CPU lever for the peer); a close without a
+  // close_notify is an end rather than an error; buffers go back while
+  // a connection idles; TLS 1.2 only with ephemeral keys and AEAD (TLS
+  // 1.3's suites are all of that already)
   SSL_CTX_set_min_proto_version(ctx, TLS1_2_VERSION);
+  SSL_CTX_set_options(ctx, SSL_OP_NO_RENEGOTIATION
+#ifdef SSL_OP_IGNORE_UNEXPECTED_EOF
+    | SSL_OP_IGNORE_UNEXPECTED_EOF
+#endif
+    );
   SSL_CTX_set_mode(ctx, SSL_MODE_ENABLE_PARTIAL_WRITE
-    | SSL_MODE_ACCEPT_MOVING_WRITE_BUFFER);
+    | SSL_MODE_ACCEPT_MOVING_WRITE_BUFFER | SSL_MODE_RELEASE_BUFFERS);
   SSL_CTX_set_alpn_select_cb(ctx, tls_pick, NULL);
-  if (SSL_CTX_use_certificate_chain_file(ctx, cert) != 1
+  if (SSL_CTX_set_cipher_list(ctx, "ECDHE+AESGCM:ECDHE+CHACHA20:!aNULL") != 1
+    || SSL_CTX_use_certificate_chain_file(ctx, cert) != 1
     || SSL_CTX_use_PrivateKey_file(ctx, key, SSL_FILETYPE_PEM) != 1
     || SSL_CTX_check_private_key(ctx) != 1) {
     ERR_clear_error();
