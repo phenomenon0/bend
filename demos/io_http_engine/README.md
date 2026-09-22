@@ -291,13 +291,15 @@ for the socket, because a stream stops reading; the event count is what
 makes the loop terminate without `@unsafe`.
 
 Holding concurrent live streams, one event per second each, on the
-runtime this branch ends with:
+server as it stands (`--max-conns 20000`, since the default limit of
+1024 is what stops the eleventh hundred connection and is supposed
+to):
 
-| live streams | RSS | per stream |
-|---|---|---|
-| 1,000 | 2.8 MB | 0.24 KB |
-| 5,000 | 3.9 MB | 0.25 KB |
-| 10,000 | 5.1 MB | 0.25 KB |
+| live streams | RSS | per stream | CPU over 6 s |
+|---|---|---|---|
+| 1,000 | 3.3 MB | 0.31 KB | 0.10 s |
+| 5,000 | 4.8 MB | 0.37 KB | 0.52 s |
+| 10,000 | 6.8 MB | 0.37 KB | 0.99 s |
 
 Memory is flat per stream and about an order of magnitude under what
 the kernel spends on the socket itself. On that axis there is no
@@ -345,11 +347,11 @@ runtime:
 
 | live after | scheduler | scheduler + backlog |
 |---|---|---|
-| 500 | 2.07 ms | 49 µs |
-| 1,000 | **21 µs** | 24 µs |
-| 2,000 | 3.08 ms | 23 µs |
-| 4,000 | 3.07 ms | 28 µs |
-| 8,000 | 1.30 ms | **29 µs** |
+| 500 | 2.07 ms | 23 µs |
+| 1,000 | **21 µs** | 23 µs |
+| 2,000 | 3.08 ms | 21 µs |
+| 4,000 | 3.07 ms | 21 µs |
+| 8,000 | 1.30 ms | **28 µs** |
 
 The middle column still has whole seconds in it — block walls of
 1.03s, 3.08s, 6.13s — and whole seconds are SYN retransmit timers.
@@ -388,10 +390,16 @@ awake, which made each of them look faster than one alone.
 
 | 32 keep-alive conns, `--threads 1` | Bend | C control | C over Bend |
 |---|---|---|---|
-| pipeline 1 | 76,009 req/s | 155,162 req/s | 2.0x |
-| pipeline 8 | 148,498 req/s | 880,246 req/s | 5.9x |
+| pipeline 1 | 69,346 req/s | 155,162 req/s | 2.2x |
+| pipeline 8 | 121,986 req/s | 852,207 req/s | 7.0x |
 | per request at pipeline 1 | 6.1 µs user + 6.7 µs sys | 1.1 µs user + 5.0 µs sys | |
-| peak RSS under load | **3.6 MB** | 5.7 MB | |
+| peak RSS under load | **3.5 MB** | 5.8 MB | |
+
+The engine was at 76,009 and 148,498 before it learned WebSocket: the
+upgrade widened `Pend`, the node the parser rebuilds at every header
+that closes, from five fields to eight, and that is on every request
+whether or not it is an upgrade. Narrowing it again is the next engine
+change, and it is measured, not guessed.
 
 At pipeline 1 both servers pay the same kernel for a recv and a send,
 and the gap is the compute: 6 µs of Bend against 1 µs of C per request.
@@ -412,9 +420,9 @@ processes on.
 
 | processes | Bend, pipeline 1 | Bend, pipeline 8 | C control, pipeline 8 |
 |---|---|---|---|
-| 1 | 72,417 req/s | 119,096 req/s | 802,303 req/s |
-| 2 | 142,667 | 276,370 | 1,218,663 |
-| 3 | 129,761 (client-bound) | **409,810** | 938,430 (client-bound) |
+| 1 | 72,417 req/s | 117,386 req/s | 802,303 req/s |
+| 2 | 142,667 | 248,014 | 1,218,663 |
+| 3 | 129,761 (client-bound) | **384,762** | 938,430 (client-bound) |
 
 The engine scales linearly with processes until the client runs out:
 3.4x at three. That is the multi-core story for this server, and it
