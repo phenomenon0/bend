@@ -41,6 +41,9 @@ int main(int argc, char** argv) {
   double secs = argc > 3 ? atof(argv[3]) : 5.0;
   int pipe_ = argc > 4 ? atoi(argv[4]) : 1;
   const char* path = argc > 5 ? argv[5] : "/health";
+  // LOAD_SPIN=1: never sleep, so no reply has to wake this process; the
+  // server's send then costs what a send costs and not a wake-up too
+  int spin = getenv("LOAD_SPIN") != NULL;
 
   char one[512];
   int onen = snprintf(one, sizeof(one),
@@ -52,7 +55,7 @@ int main(int argc, char** argv) {
 
   // one round trip on its own, to learn the reply size
   int probe = dial(port);
-  if (probe < 0) { fprintf(stderr, "connect failed\n"); return 1; }
+  if (probe < 0) { perror("connect (probe)"); return 1; }
   if (write(probe, one, (size_t)onen) != onen) { fprintf(stderr, "write\n"); return 1; }
   char pb[65536];
   ssize_t pn = read(probe, pb, sizeof(pb));
@@ -64,7 +67,7 @@ int main(int argc, char** argv) {
   int* fds = calloc((size_t)conns, sizeof(int));
   for (int i = 0; i < conns; i++) {
     fds[i] = dial(port);
-    if (fds[i] < 0) { fprintf(stderr, "connect %d failed\n", i); return 1; }
+    if (fds[i] < 0) { fprintf(stderr, "connect %d: ", i); perror(""); return 1; }
     if (write(fds[i], batch, (size_t)batchn) != batchn) { fprintf(stderr, "write\n"); return 1; }
     struct epoll_event e = { .events = EPOLLIN, .data.fd = fds[i] };
     epoll_ctl(ep, EPOLL_CTL_ADD, fds[i], &e);
@@ -79,7 +82,7 @@ int main(int argc, char** argv) {
   double t0 = now(), t1 = t0 + secs;
   struct epoll_event es[256];
   while (now() < t1) {
-    int n = epoll_wait(ep, es, 256, 200);
+    int n = epoll_wait(ep, es, 256, spin ? 0 : 200);
     for (int i = 0; i < n; i++) {
       int fd = es[i].data.fd;
       ssize_t got = recv(fd, buf, sizeof(buf), 0);

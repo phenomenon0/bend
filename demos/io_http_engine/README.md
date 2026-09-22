@@ -7,6 +7,7 @@ language in the path — the socket is Bend's own effect.
     bend demos/io_http_engine/PROOF.bend        # the gate: laws hold
     bend demos/io_http_engine/main.bend -o httpd
     ./httpd --port 8080 --root www --idle-ms 10000 --max-conns 1024 --grace-ms 5000
+    ./httpd --shared & ./httpd --shared &          # one port, one copy per core
     curl -i http://127.0.0.1:8080/health
 
 The binary is the server: it links libc and libm and nothing else, and
@@ -167,6 +168,14 @@ of nine pieces cost more per request than parsing the request that
 asked for it; nobody should read the numbers, and nobody has to, since
 the checker refuses the engine the moment an edit makes one false.
 
+`sha1.bend` and `b64.bend` are SHA-1 (RFC 3174) and base64 (RFC 4648)
+in Bend, written for the reader rather than the clock (every shift is
+a single-bit shift repeated) because they run once per WebSocket
+handshake. Their test vectors are laws: the three SHA-1 vectors, the
+seven base64 vectors, and RFC 6455's own accept-key example with the
+two composed, all computed by the checker in about ten seconds; a
+digest with one byte changed is rejected with both digests printed.
+
 The route laws pin what the default table answers and what a table
 with a root answers (`/health` still, `/` and everything else to the
 files), that neither table has two entries for one path, and that an
@@ -187,7 +196,18 @@ duplicate route are all rejected, with the two terms printed.
 
 `control.c` is the same engine written the way a C server is written:
 one epoll loop, the same modes, the same byte-at-a-time transitions,
-the same routes, byte-identical replies, the same policy. `check.c`
+the same routes, byte-identical replies, the same policy. `fuzz.c`
+holds it to that: the same bytes, cut at the same random points and
+sent with a pause between the cuts, go to both, and what comes back
+has to be identical, closes included -- one to four messages a round,
+valid or mutated in the ways a reader has to survive (a truncation, a
+byte flipped, a version that is not 1.1, a Transfer-Encoding, a length
+that is not all digits or is past the cap, fields in odd case, bodies
+of arbitrary bytes). Its first run found two faults, both in the C:
+the control closed the moment it had parsed `Connection: close`,
+before the head had ended, and its 400 dropped its body when the
+broken message had been a HEAD. With those fixed it runs thousands of
+rounds without a difference. `check.c`
 runs its behavioural cases against either: fifteen for any server,
 the last of which reads the server's CPU when given its pid; nine more
 for static files when the server was started with `--root` on the
@@ -201,8 +221,9 @@ is the scheduler's two halves measured in isolation.
 
     cc -std=c11 -O3 control.c -o control && ./control 8081
     cc -std=c11 -O3 check.c -o check && ./check 8080 $(pgrep -x httpd) --files --idle=400
-    cc -std=c11 -O3 load.c -o load && ./load 8080 32 5 8 /health
+    cc -std=c11 -O3 load.c -o load && LOAD_SPIN=1 ./load 8080 32 5 8 /health
     cc -std=c11 -O2 ramp.c -o ramp && ./ramp 8080 /events
+    cc -std=c11 -O2 fuzz.c -o fuzz && ./fuzz 8080 8081 2000
 
 ## Streaming, and what it found in the runtime
 
@@ -288,22 +309,61 @@ the right column is what that one constant is worth.
 
 One 4-core Xeon at 2.8 GHz. The engine is built the way `bend -o`
 builds everything, clang 18 at `-std=c11 -O3`; the C twins with `cc`
-(gcc 13) at `-std=c11 -O3`. Medians of three five-second runs.
+(gcc 13) at `-std=c11 -O3`. Medians of three runs.
 
-| server, 32 keep-alive conns | Bend, `--threads 1` | Bend, 4 threads | C control |
+### How to measure a server on loopback
+
+A closed-loop client that sleeps between replies charges every reply
+with the cost of waking it, and charges it to the *server's* `send`:
+on loopback the wake-up runs in the sender's context. The slower the
+server, the more its client sleeps, the more each send costs it -- a
+loop that punishes exactly the server being measured. Split by
+`/proc`, one engine process under a sleeping client spent 8.8 µs of
+user time and **17.0 µs of system time** per request; the C control,
+fast enough to keep the same client awake, spent 1.0 and 4.6. With
+`LOAD_SPIN=1` the client never sleeps, a send costs a send, and the
+engine's system time falls to 6.7 µs. Every number below is measured
+that way; the numbers this README carried before were not, and
+understated the engine by half at pipeline 1. The multi-process table
+is only measurable this way at all: two engines kept a sleeping client
+awake, which made each of them look faster than one alone.
+
+### One process
+
+| 32 keep-alive conns, `--threads 1` | Bend | C control | C over Bend |
 |---|---|---|---|
-| pipeline 1 | 36,177 req/s | — | 159,960 req/s |
-| pipeline 8 | 98,302 req/s | — | 369,037 req/s |
-| C over Bend | 4.4x / 3.8x | | 1x |
-| peak RSS under load | **3.6 MB** | | 5.7 MB |
+| pipeline 1 | 76,009 req/s | 155,162 req/s | 2.0x |
+| pipeline 8 | 148,498 req/s | 880,246 req/s | 5.9x |
+| per request at pipeline 1 | 6.1 µs user + 6.7 µs sys | 1.1 µs user + 5.0 µs sys | |
+| peak RSS under load | **3.6 MB** | 5.7 MB | |
 
-Those are the server as it stands, with every read timed. The engine
-before the timed read, measured back to back on the same afternoon,
-did 40,581 and 107,169: the deadline costs about a tenth at pipeline 1,
-the recv that finds nothing plus a park that is a registration and a
-heap entry. The scheduler can give most of it back by registering a
-descriptor once and re-arming it in place, which is the next runtime
-change.
+At pipeline 1 both servers pay the same kernel for a recv and a send,
+and the gap is the compute: 6 µs of Bend against 1 µs of C per request.
+At pipeline 8 the kernel is amortised eight ways and the compute is
+all that is left, so the gap widens to the compute gap itself. That
+6 µs is the engine's real cost and the thing to attack: the parse, the
+reply, the plan.
+
+### One port, several processes
+
+`--shared` sets `SO_REUSEPORT` (`TCP.listen_shared`, beside
+`TCP.listen`, which keeps refusing a port already taken). N copies of
+the single-threaded engine on one port, the kernel dealing the
+connections out, against N copies of the control, 64 connections, the
+client never sleeping. The fourth core is the client's, so N stops at
+three; at pipeline 1 the client itself is the ceiling from two
+processes on.
+
+| processes | Bend, pipeline 1 | Bend, pipeline 8 | C control, pipeline 8 |
+|---|---|---|---|
+| 1 | 72,417 req/s | 119,096 req/s | 802,303 req/s |
+| 2 | 142,667 | 276,370 | 1,218,663 |
+| 3 | 129,761 (client-bound) | **409,810** | 938,430 (client-bound) |
+
+The engine scales linearly with processes until the client runs out:
+3.4x at three. That is the multi-core story for this server, and it
+cost one flag and one effect. Runtime threads would be the harder road
+to the same place.
 
 The runtime is not the variable here. The same engine built on
 canonical Bend 2.0.25, run back to back with this one under the same

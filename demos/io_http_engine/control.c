@@ -39,6 +39,7 @@ typedef struct {
   int fd, st, used;
   uint32_t h, n, v, g, meth, clen, bodn;
   int digit, close, te, plen;
+  int shut;                       // a served message asked to close
   char path[MAXPATH], body[MAXBODY];
   char out[CHUNK * 4];
   int outn;
@@ -81,9 +82,13 @@ static void serve(Conn* k) {
   }
 }
 
+// the same body cap as main.bend's body.cap(): refused as the head
+// completes, before a byte of the body is read
+#define BODY_CAP 1048576u
+
 static void head_done(Conn* k) {
-  if (k->te) { k->st = BAD; return; }
-  if (k->clen == 0) { k->bodn = 0; serve(k); k->st = IN_M; k->h = FNV; k->meth = 0;
+  if (k->te || k->clen > BODY_CAP) { k->st = BAD; return; }
+  if (k->clen == 0) { k->bodn = 0; serve(k); if (k->close) k->shut = 1; k->st = IN_M; k->h = FNV; k->meth = 0;
     k->plen = 0; k->clen = 0; k->close = 0; k->te = 0; }
   else { k->bodn = 0; k->st = BOD; }
 }
@@ -136,7 +141,7 @@ static void step(Conn* k, uint8_t b) {
     case BOD:
       if (k->bodn < MAXBODY) k->body[k->bodn] = (char)c;
       k->bodn += 1;
-      if (k->bodn >= k->clen) { serve(k); k->st = IN_M; k->h = FNV; k->meth = 0;
+      if (k->bodn >= k->clen) { serve(k); if (k->close) k->shut = 1; k->st = IN_M; k->h = FNV; k->meth = 0;
         k->plen = 0; k->clen = 0; k->close = 0; k->te = 0; }
       break;
     default: break;
@@ -195,6 +200,7 @@ int main(int argc, char** argv) {
       for (ssize_t j = 0; j < got; j++) step(k, (uint8_t)buf[j]);
       if (k->st == BAD) {
         k->outn = 0;
+        k->meth = 0;
         reply(k, "400 Bad Request", "text/plain", "bad request\n", 12);
       }
       for (int off = 0; off < k->outn;) {
@@ -202,7 +208,7 @@ int main(int argc, char** argv) {
         if (w <= 0) break;
         off += (int)w;
       }
-      if (k->st == BAD || k->close) {
+      if (k->st == BAD || k->shut) {
         epoll_ctl(ep, EPOLL_CTL_DEL, fd, NULL); close(fd); k->used = 0;
       }
     }
