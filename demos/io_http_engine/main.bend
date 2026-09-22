@@ -655,8 +655,16 @@ def plan.on(pb: P & Bool) -> Plan:
   plan.go(q, bad)
 
 # the plan after one chunk: parse it, then decide
+# An empty chunk is the peer's FIN: nothing more will ever arrive, so
+# the connection ends here rather than reading again. As first written
+# the engine read again, and one peer that connected and closed without
+# a byte cost most of a core in passes until the fuel ran out.
 def plan.chunk(buf: List<&2, U32>, p: P) -> Plan:
-  plan.on(p.dead(feed(buf, p)))
+  match buf:
+    case Nil{}:
+      Stop{}
+    case Con{b, bs}:
+      plan.on(p.dead(feed(Con{b, bs}, p)))
 
 def plan.read(
   s: Socket, r: Result<&1, &1, U32 & String, List<&2, U32>>, p: P

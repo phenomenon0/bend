@@ -1,0 +1,236 @@
+# io_http_engine
+
+An HTTP/1.1 engine in Bend: a streaming request parser, a router and a
+server, with the parser's laws proved by the stock checker. No host
+language in the path — the socket is Bend's own effect.
+
+    bend demos/io_http_engine/PROOF.bend        # the gate: laws hold
+    bend demos/io_http_engine/main.bend -o httpd && ./httpd
+    curl -i http://127.0.0.1:8080/health
+
+The binary is the server: it links libc and libm and nothing else, and
+needs no bend where it runs. Three runtime changes on this branch made
+it possible, each measured below: TCP that carries bytes, a scheduler
+whose pass costs what is ready rather than what is waiting, and a
+listen backlog that is not sixteen.
+
+## Bytes, not text
+
+`TCP.recv` hands back a `String`, and a `String` is built by `io_str`,
+which decodes the bytes as UTF-8. On a socket that is not a cost, it is
+a corruption: every byte that is not valid UTF-8 becomes U+FFFD, three
+bytes out for one byte in. Send eight arbitrary bytes to an engine
+built on it and eighteen come back while Content-Length still says
+eight — a reply that is longer than it announced, which on a
+keep-alive connection desynchronises the stream rather than merely
+mangling one body. `TCP.send` has the same hole outbound.
+
+So this engine does not read text. `bend2/effs/tcp_recv_bytes.{c,js}`
+and `tcp_send_bytes.{c,js}` carry `List<&2, U32>`, one cell per byte,
+which is what `File.read_bytes` and `File.write_bytes` have always done
+for files; `base.bend` declares them beside `TCP.recv` and `TCP.send`.
+Nothing there is new machinery — it is the byte pair files have and
+sockets did not.
+
+`check.c`'s byte round trip is the one case that catches this: the
+engine as first written passes every other case and fails that one.
+
+## What it is
+
+The reader is one structural walk over whatever bytes the socket hands
+over. Its whole state rides in one `P` node, so a head split across
+three recvs parses exactly like a head that arrived whole, and a chunk
+holding three pipelined requests yields three requests in that one
+walk. It keeps no buffer of its own and never re-scans.
+
+That shape is not a workaround. Bend's loops cannot exit early — a
+recursive call has to shrink a matched argument — so a machine that
+stopped at the blank line would still have to walk the rest of the
+buffer rebuilding a dead state. So the machine never stops: completing
+a message emits it and rolls straight into the next one, which is what
+a pipelining parser should do anyway.
+
+Field names are recognised by their FNV-1a hash, folded byte by byte as
+the name is read, so a name is never built, stored or compared as
+bytes. At the colon the value scanner is chosen by that hash: a
+Content-Length value accumulates a decimal, a Connection value a hash,
+and every other value takes the scanner that does no work per byte.
+
+What it accepts is deliberately small, because a framing disagreement
+is how requests get smuggled: HTTP/1.1 only, Content-Length only, that
+length all digits, and no Transfer-Encoding at all. `Bad{}` is never
+left.
+
+`conn` is bounded by fuel rather than `@unsafe`, so a peer that dribbles
+bytes forever runs it out and is dropped. The accept loop is the one
+`@unsafe` def, as in `demos/io_http_server`.
+
+## The laws
+
+`feed_split` is the one that matters: `feed(a ++ b, p)` equals
+`feed(b, feed(a, p))`. Chunking does not change the parse, however TCP
+decides to split a message. It is also what licenses keeping no buffer.
+
+`bad_absorbs` and `bad_feeds` say no byte moves the reader out of
+`Bad{}` — without them a smuggled request could follow a refused one on
+the same connection and be served.
+
+The five `*_is_built` laws each say one written-out reply is byte for
+byte what `reply()` returns for the arguments named beside it. Those
+replies are literal byte arrays, because building a 106-byte reply out
+of nine pieces cost more per request than parsing the request that
+asked for it; nobody should read the numbers, and nobody has to, since
+the checker refuses the engine the moment an edit makes one false.
+
+Each was checked by breaking it: a one-digit content-length, a linefeed
+that escapes `Bad{}`, and a `feed` that drops state at a chunk boundary
+are all rejected, with the two terms printed.
+
+## The control and the checks
+
+`control.c` is the same engine written the way a C server is written:
+one epoll loop, the same modes, the same byte-at-a-time transitions,
+the same routes, byte-identical replies, the same policy. `check.c`
+runs fourteen behavioural cases against either, the last of which
+reads the server's CPU when given its pid. `load.c` drives either;
+`ramp.c` opens connections in blocks and never closes them; `sched.c`
+is the scheduler's two halves measured in isolation.
+
+    cc -std=c11 -O3 control.c -o control && ./control 8081
+    cc -std=c11 -O3 check.c -o check && ./check 8080 $(pgrep -x httpd)
+    cc -std=c11 -O3 load.c -o load && ./load 8080 32 5 8 /health
+    cc -std=c11 -O2 ramp.c -o ramp && ./ramp 8080 /events
+
+## Streaming, and what it found in the runtime
+
+`/events` is an event stream: the head goes out once, then one event at
+a time on the engine's own clock, with nothing further read from the
+peer. It is the shape that holds a connection open — an agent session,
+a token stream, a live feed. The reader and the writer never contend
+for the socket, because a stream stops reading; the event count is what
+makes the loop terminate without `@unsafe`.
+
+Holding concurrent live streams, one event per second each, on the
+runtime this branch ends with:
+
+| live streams | RSS | per stream |
+|---|---|---|
+| 1,000 | 2.8 MB | 0.24 KB |
+| 5,000 | 3.9 MB | 0.25 KB |
+| 10,000 | 5.1 MB | 0.25 KB |
+
+Memory is flat per stream and about an order of magnitude under what
+the kernel spends on the socket itself. On that axis there is no
+headroom left for anyone, in any language.
+
+Holding them was not free until the fourteenth check existed. The
+first holding numbers on this branch showed a fixed 2.8 s of CPU per
+6 s whatever the stream count, and an idle server with no connections
+burned the same. `strace -tt` showed one descriptor in a loop of
+`recvfrom() = 0`: a peer that connected and closed without a byte (the
+readiness probe in the measurement scripts). `TCP.recv_bytes` handed
+back the empty chunk correctly; `plan.chunk` fed it to the parser,
+got the same state back, and read again, a million times, until the
+fuel ran out. An empty chunk is now `Stop{}`. Nothing in the runtime
+was at fault -- the stock poll loop spun the same way -- and the check
+that would have caught it now runs against both servers.
+
+Establishing them was the problem. Adding connections in blocks, never
+closing any, the wall time for each block against the live set it was
+added to, on the runtime as this branch found it:
+
+| live after | block wall | per connection |
+|---|---|---|
+| 500 | 1.04s | 2.1 ms |
+| 1,000 | 2.04s | 4.1 ms |
+| 2,000 | 11.27s | 11.3 ms |
+| 4,000 | 61.43s | **30.7 ms** |
+| 8,000 | not within 150s | — |
+
+`io_wait` did work proportional to every parked computation on each
+pass: it malloced a `pollfd` array sized by the live count, walked the
+park list to fill it and to find the soonest deadline, polled, then
+walked the list again to dispatch. Accepting a connection needs a
+pass, so accepting n connections cost O(n^2). Holding them needs
+almost no passes, which is why holding was free and arriving was not.
+
+`bend2/comp.ts` on this branch does what every event loop has done
+for twenty years: on Linux a descriptor waiter is registered with
+epoll once, a deadline waiter sits in a binary min-heap, and a pass
+costs what is ready. An activation can be in both at once — that is
+what `TCP.poll` is — so it carries its heap slot and whichever fires
+first takes it out of the other. Everywhere else the poll loop is
+untouched under `#else`. The same ramp against the same engine on that
+runtime:
+
+| live after | scheduler | scheduler + backlog |
+|---|---|---|
+| 500 | 2.07 ms | 49 µs |
+| 1,000 | **21 µs** | 24 µs |
+| 2,000 | 3.08 ms | 23 µs |
+| 4,000 | 3.07 ms | 28 µs |
+| 8,000 | 1.30 ms | **29 µs** |
+
+The middle column still has whole seconds in it — block walls of
+1.03s, 3.08s, 6.13s — and whole seconds are SYN retransmit timers.
+Every stream ticks once a second and they were all born in the same
+second, so thousands of timers fire in one burst; while the loop sends
+that burst the accept queue overflows, the kernel drops SYNs, and one
+`connect()` sleeps for a second. The queue overflowed because
+`bend2/effs/tcp_listen.c` said `listen(fd, 16)`. It now says
+`SOMAXCONN`, which is what `control.c` has always done in spirit, and
+the right column is what that one constant is worth.
+
+## Measured
+
+One 4-core Xeon at 2.8 GHz. The engine is built the way `bend -o`
+builds everything, clang 18 at `-std=c11 -O3`; the C twins with `cc`
+(gcc 13) at `-std=c11 -O3`. Medians of three five-second runs.
+
+| server, 32 keep-alive conns | Bend, `--threads 1` | Bend, 4 threads | C control |
+|---|---|---|---|
+| pipeline 1 | 41,439 req/s | 41,274 req/s | 159,316 req/s |
+| pipeline 8 | 103,499 req/s | 96,334 req/s | 429,691 req/s |
+| C over Bend | 3.8x / 4.2x | 3.9x / 4.5x | 1x |
+| peak RSS under load | **3.0 MB** | 3.2 MB | 5.7 MB |
+
+The runtime is not the variable here. The same engine built on
+canonical Bend 2.0.25, run back to back with this one under the same
+load at `--threads 1`, came out within noise of it at both pipeline
+depths (40,197 against 40,832 at pipeline 1, before the EOF fix
+below, on both).
+
+The engine is fastest at `--threads 1`: Bend's fork-join wins on pure
+computation, but the IO loop does not yet turn threads into throughput.
+For a server that is the process-per-core question, not a thread one.
+
+And the engine, not the runtime, is where about a tenth went recently.
+Built at the commit that brought the byte pair and again at this one,
+both with the EOF fix, on one runtime, back to back at `--threads 1`:
+47,858 → 42,935 req/s at pipeline 1 (a second run of the older engine
+gave 45,433) and 110,415 → 105,276 at pipeline 8. What `/events` added
+to the connection loop sits on every request's path; taking it off is
+the next engine change, ahead of reply construction.
+
+The gap to C is not where it looks either. Measured by substitution on
+an earlier host, recv plus a 90-byte walk plus send ran within 1.10x of
+the whole C server, so the effects themselves are nearly free; the rest
+is the parse, the reply, and now the plan.
+
+## Notes
+
+What this branch changes in the runtime, and the evidence:
+
+- `bend2/comp.ts`: `io_wait` on Linux is epoll plus a deadline heap,
+  with the poll loop kept byte for byte under `#else`. `tests/io` on
+  the stock runtime and on this one fail the identical set of files in
+  both lanes — 71 of 91 native, 85 of 109 interpreted, before and
+  after; `tcp_poll`, `udp_poll` and the channel and sleep tests
+  exercise the dual wait.
+- `bend2/effs/tcp_recv_bytes.*`, `tcp_send_bytes.*`: the byte pair,
+  declared in `base.bend` beside `TCP.recv` and `TCP.send`.
+- `bend2/effs/tcp_listen.*`: the backlog.
+
+The engine itself builds unchanged on Bend 2.0.5 and on canonical
+2.0.25 given the byte pair; the scheduler ports to 2.0.25 the same way
+and was checked there against `tests/io` with the same result.
