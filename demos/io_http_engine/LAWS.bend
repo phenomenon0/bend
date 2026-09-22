@@ -132,11 +132,9 @@ law route_empty:
   for +path: List<&2, U32>
   {Eng.route(Nil{}, path) == None{} : Maybe<&2, Eng.Act>}
 
-# LAW: a request cannot name a file outside the root. These pin the
-# normaliser on the paths that matter, including the one that climbs
-# from under a real directory; they are pins, not a proof over every
-# path -- that proof needs a lemma over classified segments and is the
-# next one to write.
+# LAW: a request cannot name a file outside the root. The four pins
+# fix the normaliser on the paths that matter, including the one that
+# climbs from under a real directory.
 law norm_climb:
   {Eng.norm(Eng.segs(Eng.bytes("/../etc/passwd"))) == None{} :
     Maybe<&2, List<&2, List<&2, U32>>>}
@@ -152,6 +150,116 @@ law norm_dots:
 law norm_flat:
   {Eng.norm(Eng.segs(Eng.bytes("/sub/../a.txt"))) ==
     Some{[Eng.bytes("a.txt")]} : Maybe<&2, List<&2, List<&2, U32>>>}
+
+# LAW: whatever follows it, a climb from the root is refused, not
+# clamped: a clamped path is a path someone will probe.
+law norm_climb_refused:
+  for +ss: List<&2, List<&2, U32>>
+  {Eng.norm(Con{[46, 46], ss}) == None{} : Maybe<&2, List<&2, List<&2, U32>>>}
+
+# LAW: a climb right after a name cancels it, whatever follows.
+law norm_climb_cancels:
+  for +s: List<&2, U32>
+  for +ss: List<&2, List<&2, U32>>
+  for e: {Eng.piece(s) == Eng.Name{} : Eng.Piece}
+  {Eng.norm(Con{s, Con{[46, 46], ss}}) == Eng.norm(ss) :
+    Maybe<&2, List<&2, List<&2, U32>>>}
+
+# What a file under the root may be named by, stated here on its own:
+# every segment has bytes, each printable ASCII (33..126, so no NUL, no
+# control byte, no space) and neither '/' nor '\'; and it is not a
+# dotfile (a first byte of '.'), or, when dotfiles are served (dot), it
+# is still neither "." nor "..".
+def seg_byte(+c: U32) -> Bool:
+  U32.is_le(33, c) && U32.is_le(c, 126) && Bool.not(U32.is_eq(c, 47))
+    && Bool.not(U32.is_eq(c, 92))
+
+def seg_bytes(bs: List<&2, U32>) -> Bool:
+  match bs:
+    case Nil{}:
+      True{}
+    case Con{+c, t}:
+      seg_byte(c) && seg_bytes(t)
+
+def seg_lead(dot: Bool, +c: U32, +s: List<&2, U32>) -> Bool:
+  match dot:
+    case True{}:
+      Bool.not(Eng.beq(s, [46], True{}) || Eng.beq(s, [46, 46], True{}))
+    case False{}:
+      Bool.not(U32.is_eq(c, 46))
+
+def seg_ok(dot: Bool, s: List<&2, U32>) -> Bool:
+  match s:
+    case Nil{}:
+      False{}
+    case Con{+c, +t}:
+      seg_lead(dot, c, Con{c, t}) && seg_bytes(Con{c, t})
+
+def segs_ok(+dot: Bool, ss: List<&2, List<&2, U32>>) -> Bool:
+  match ss:
+    case Nil{}:
+      True{}
+    case Con{s, t}:
+      seg_ok(dot, s) && segs_ok(dot, t)
+
+def safe(+dot: Bool, may: Maybe<&2, List<&2, List<&2, U32>>>) -> Bool:
+  match may:
+    case None{}:
+      True{}
+    case Some{ss}:
+      segs_ok(dot, ss)
+
+# LAW: for every request target, the path a file is opened by is
+# refused (a 404) or made only of segments the rule above allows, with
+# dotfiles served or not. No "..", ".", empty segment, separator, NUL,
+# control byte or dotfile ever reaches the file system.
+law path_safe:
+  for +dot: Bool
+  for +t: List<&2, U32>
+  {safe(dot, Eng.fnames.of(dot, t)) == True{} : Bool}
+
+# LAW: a request target holding a control byte anywhere (below 32, or
+# DEL) is never clean, so it never names a file.
+law clean_refuses_control:
+  for +a: List<&2, U32>
+  for +b: List<&2, U32>
+  for +c: U32
+  for e: {(U32.is_lt(c, 32) || U32.is_eq(c, 127)) == True{} : Bool}
+  {Eng.clean(List.append(&2, U32, a, Con{c, b})) == False{} : Bool}
+
+# LAW: and one that is not clean names nothing, whatever it normalises to.
+law unclean_names_nothing:
+  for +dot: Bool
+  for +t: List<&2, U32>
+  for e: {Eng.clean(t) == False{} : Bool}
+  {Eng.fnames.of(dot, t) == None{} : Maybe<&2, List<&2, List<&2, U32>>>}
+
+# LAW: what the guard refuses, pinned: a dotfile, one under a real
+# directory, a backslash, a NUL, and "..." (a name, so a dotfile);
+# and a plain nested file passes.
+law fnames_dotfile:
+  {Eng.fnames.of(False{}, Eng.bytes("/.env")) == None{} :
+    Maybe<&2, List<&2, List<&2, U32>>>}
+
+law fnames_dotdir:
+  {Eng.fnames.of(False{}, Eng.bytes("/a/.git/config")) == None{} :
+    Maybe<&2, List<&2, List<&2, U32>>>}
+
+law fnames_backslash:
+  {Eng.fnames.of(True{}, Eng.bytes("/a\\..\\b")) == None{} :
+    Maybe<&2, List<&2, List<&2, U32>>>}
+
+law fnames_nul:
+  {Eng.fnames.of(True{}, [47, 97, 0, 98]) == None{} :
+    Maybe<&2, List<&2, List<&2, U32>>>}
+
+law fnames_dots:
+  {Eng.fnames.of(False{}, Eng.bytes("/...")) == None{} :
+    Maybe<&2, List<&2, List<&2, U32>>>}
+
+law fnames_plain:
+  {Eng.fnames.of(False{}, Eng.bytes("/sub/b.css")) ==
+    Some{[Eng.bytes("sub"), Eng.bytes("b.css")]} : Maybe<&2, List<&2, List<&2, U32>>>}
 
 # LAW: SHA-1 is SHA-1. The three vectors of RFC 3174, computed by the
 # checker through a Bend that shifts one bit at a time.
