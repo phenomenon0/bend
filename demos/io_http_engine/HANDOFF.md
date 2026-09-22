@@ -24,12 +24,16 @@ anywhere: that is a decision waiting on the repository's owner.
 Each was run against canon's own `tests/io`, in both lanes, beside a
 run of `main` on the same box:
 
-| tree | interpreted | native | failing files |
-|---|---|---|---|
-| canon `main` | 89 / 116 | 72 / 98 | -- |
-| `fix/socket-bytes` | 90 / 117 | 73 / 99 | identical to `main` |
-| `fix/listen-backlog` | 89 / 116 | 72 / 98 | identical to `main` |
-| `fix/epoll-scheduler` | 89 / 116 | 72 / 98 | identical to `main` |
+| tree | files passing | failing files |
+|---|---|---|
+| canon `main` | 110 / 116 | -- |
+| `fix/socket-bytes` | 112 / 117 | identical to `main` |
+| `fix/listen-backlog` | 112 / 116 | identical to `main` |
+| `fix/epoll-scheduler` | 112 / 116 | identical to `main` |
+
+Judged as the gate judges. The failures are the four audio tests (no
+ALSA headers on Linux) and two sleep-ordered tests that flake under
+load; the 110/112 split between runs is those flakes.
 
 The byte branch is one higher in each lane because it brings a test
 with it. The other two change no test's outcome. The failing files are
@@ -41,7 +45,7 @@ canon already passes.
 `demos/io_http_engine` is an HTTP/1.1 server: keep-alive, pipelining,
 static files, SSE, WebSocket, TLS, an access log, a connection limit,
 timeouts, graceful shutdown, and a shared port for running one copy per
-core. 1.6 MB static binary. `demos/io_resp` is a RESP reader written to
+core. A 1.6 MB binary, linked against libc, libm, libssl and libcrypto. `demos/io_resp` is a RESP reader written to
 test whether the approach generalises (see **What is unfinished**).
 
     bend demos/io_http_engine/PROOF.bend          # 95 laws
@@ -100,12 +104,11 @@ this server by half for most of its development. `load.c` takes
 
 ## What is unfinished, and what it cost
 
-**`demos/io_resp/main.bend` does not check.** The RESP *reader* does,
-and `PROOF.bend` there passes 24 laws first try, including the nested
-arrays that HTTP never needed. The *server* on top of it hangs the
-checker. The cause looks like the fourth bug below. The reader is the
-part that was being tested and it came out well; the server is
-committed unfinished rather than deleted.
+**`demos/io_resp` works.** `PROOF.bend` there checks 23 laws, including
+the nested arrays that HTTP never needed, and CI now runs it.
+`main.bend --check-only` passes in about a second, and the built server
+answers PING, SET and GET. The earlier "hangs the checker" was `bend
+main.bend` without `--check-only`: it checks, then runs the server.
 
 **`bend-wire` is not extracted.** The evidence for it is in: the
 chunking law is provable once, polymorphically, for every step function
@@ -126,12 +129,12 @@ that found it and a branch that fixes it. In short: sockets corrupt
 every byte over 0x7F *and change the length while doing it*, which is a
 framing bug and not a missing feature; the poller's pass costs what is
 waiting, so accepting n connections costs O(n^2) and 8,000 does not
-finish in 150 seconds; and the listen backlog is 16.
+finish in 150 seconds (the HTTP ramp; a minimal server holds 8,000 in
+4.3 s and 16,000 in 31 s, quadratic all the same); and the listen
+backlog is 16.
 
-A fourth is described there but not reduced: a def namespace sharing a
-name with a live binder makes the checker run for minutes instead of
-erroring. It happened twice today and it is the one that is a checker
-bug rather than a runtime one.
+A fourth, a name collision that seemed to loop the checker, did not
+reproduce and is withdrawn in `UPSTREAM.md`.
 
 ## What I would do next, in order
 

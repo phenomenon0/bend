@@ -15,7 +15,7 @@ for it, which may itself finish.
 
 `resp.bend` reads and writes all five RESP2 types with caps on a
 bulk's length, an array's length and nesting depth, each refused at the
-byte that announces it. `PROOF.bend` checks **24 laws**, first try:
+byte that announces it. `PROOF.bend` checks **23 laws**, first try:
 
 - `feed_split` -- chunking does not change the read, the same
   four-line induction as the HTTP engine's, over a state that now
@@ -30,13 +30,14 @@ byte that announces it. `PROOF.bend` checks **24 laws**, first try:
 
     bend demos/io_resp/PROOF.bend
 
-## What does not
+## The server
 
 `main.bend` is a Redis-protocol server -- PING, ECHO, SET, GET,
-COMMAND, QUIT over the HTTP engine's connection loop -- and **it does
-not check**: the checker runs for minutes rather than reporting. The
-cause looks like the collision described below, and the file is here
-because a half-finished honest thing is worth more than a deleted one.
+COMMAND, QUIT over the HTTP engine's connection loop. It checks
+(`bend demos/io_resp/main.bend --check-only`, about a second) and the
+built server answers PING, SET and GET. An earlier note here said it
+hung the checker; that was `bend main.bend` without `--check-only`,
+which checks and then runs the server, and never returns.
 
 ## What this cost, which was the point of writing it
 
@@ -54,12 +55,8 @@ Nothing here was a RESP problem.
 - a helper must precede its caller;
 - a binder read twice needs `+`, and which ones do is found by trying.
 
-**And twice, a name collision made the checker loop instead of
-report.** A def namespace that shares a name with something in scope --
-`tls.cert` called where a binder `tls` is live, `plan.close` where a
-binder `close` is -- does not error, it runs for minutes. Every other
-collision in this work reported at once and clearly. That is the one
-thing here worth filing upstream.
+**A name collision that seemed to loop the checker did not reproduce**
+(see `UPSTREAM.md` in the HTTP engine); it is withdrawn.
 
 ## What it says about the library
 

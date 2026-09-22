@@ -11,10 +11,14 @@ each, with its own test where a test is possible:
 
 Every one was run against canon's own `tests/io` in both lanes, beside
 a run of `main` on the same box, and **each fails the identical set of
-files as `main`**: 89/116 interpreted and 72/98 native on `main`,
-90/117 and 73/99 on the byte branch because it brings a test with it,
-and 89/116 and 72/98 on the other two. None of the three regresses
-anything canon already passes.
+files as `main`** and none regresses anything canon passes. Judged as
+the gate judges (expected errors and `exit N` lines count as output),
+`main` passes 110 of 116 files; the byte branch 112 of 117 (it brings a
+test); the other two 112 of 116. What fails on Linux is the four audio
+tests (no ALSA headers) and two tests that order millisecond sleeps,
+which flake under load. An earlier count here, 89/116 and 72/98, came
+from a harness that compared stdout only and so failed every test that
+expects an error.
 
 ---
 
@@ -37,9 +41,9 @@ ill-formed byte becomes U+FFFD, three bytes out for one byte in.
 
 **Why it is worse than "binary is not supported".** The corruption
 changes the *length*. A server that reads 8 arbitrary bytes and echoes
-them back with `content-length: 8` writes 18 bytes on the wire. On a
-keep-alive connection the peer then reads the next reply's first ten
-bytes as the tail of this one, and every message after it is framed
+them back with `content-length: 8` writes 12 bytes on the wire (the two
+bytes that are not UTF-8 become three each). On a keep-alive connection
+the peer then reads the next reply's first four bytes as the tail of this one, and every message after it is framed
 against the wrong boundary. That is response splitting by accident: it
 is the bug class HTTP framing rules exist to prevent, and it is
 reachable by any peer who sends a byte over 0x7F.
@@ -50,7 +54,8 @@ reachable by any peer who sends a byte over 0x7F.
 printf 'GET /echo HTTP/1.1\r\nHost: x\r\ncontent-length: 8\r\n\r\n\x01\x80\xfe\x02\x03\x04\x05\x06' | nc 127.0.0.1 8080 | xxd
 ```
 
-The body comes back 18 bytes long under a `content-length: 8`.
+The body comes back 12 bytes long under a `content-length: 8`:
+`01 efbfbd efbfbd 02 03 04 05 06`.
 
 **Fix** the byte pair that files have already had for as long as
 `File.read_bytes` and `File.write_bytes` have existed: carry
@@ -94,6 +99,22 @@ live set they were added to.
 | 2,000 | 11.3 ms |
 | 4,000 | **30.7 ms** |
 | 8,000 | did not finish in 150 s |
+
+Those are the HTTP server's numbers, and its ramp also ran into the
+backlog of 16 below (SYN retransmits add 1 s and 3 s stalls). A minimal
+server that accepts and parks, with a client that waits for each
+accept, shows the curve alone, total time to hold n connections:
+
+| live | canon `main` | `fix/epoll-scheduler` |
+|---|---|---|
+| 1,000 | 0.15 s | 0.06 s |
+| 4,000 | 1.49 s | 0.28 s |
+| 8,000 | 4.29 s | 0.49 s |
+| 16,000 | 31.4 s | 1.78 s |
+
+Quadratic, but not "never finishes". The branch fixes the C twin on
+Linux only: macOS keeps `select`, and the JS lane's loop in `comp.ts`
+is still quadratic (51.7 s at 16,000).
 
 **Fix** the one everyone else made twenty years ago: on Linux,
 register a descriptor with epoll once and keep it registered
@@ -139,7 +160,14 @@ One constant, in both twins, on its own branch.
 
 ---
 
-## A fourth, not yet reduced: a name collision loops the checker
+## A fourth, withdrawn: a name collision that looked like a loop
+
+**Not reproduced.** A dozen reductions on this branch and on canon
+report or check in seconds, and the shipped engine already has the
+pattern (`pem.cert(pem, p)` with `pem` live) and checks in 3 s. The
+likeliest cause: `bend main.bend` without `--check-only` or `-o` checks
+the file and then *runs* the server, which never returns. What follows
+is the original note, kept for the record.
 
 Twice now, and worth saying even unreduced. When a def namespace
 shares its name with something live in scope -- defs `tls.cert` and
