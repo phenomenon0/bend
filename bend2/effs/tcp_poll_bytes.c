@@ -23,10 +23,11 @@ static Term tcp_poll_bytes_pack(Env e, IoWork* w) {
 static Term tcp_poll_bytes_more(Env e, IoWork* w);
 
 static Term tcp_poll_bytes_at(Env e, IoWork* w, u64 at) {
-  int fd  = (int)w->hand;
-  w->size = io_sys_end(w, recv(fd, w->data, (size_t)w->made, 0));
+  int   fd  = (int)w->hand;
+  short dir = POLLIN;
+  w->size = io_sys_end(w, io_wire_read(fd, w->data, (size_t)w->made, &dir));
   if (w->code == EAGAIN) {
-    return io_tick() < at ? io_wait_on(w, fd, POLLIN, at, tcp_poll_bytes_more)
+    return io_tick() < at ? io_wait_on(w, fd, dir, at, tcp_poll_bytes_more)
       : tcp_poll_bytes_end(e, w, io_done(e, term_pak(CID_NONE, 0)));
   }
   return w->code ? tcp_poll_bytes_end(e, w, io_fail(e, w->code, NULL))

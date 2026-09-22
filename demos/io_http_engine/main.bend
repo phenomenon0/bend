@@ -651,88 +651,131 @@ def sse.gap() -> U32:
 # Configuration
 # =============
 
+# The paths to a certificate and its key. They arrive one flag at a
+# time, so each half waits for the other with an empty path standing
+# for "not yet", and a pair still half empty when the arguments run out
+# is refused rather than served in the clear.
+type Pem is Data:
+  Pem{cert: List<&2, U32>, key: List<&2, U32>}
+
+def pem.cert(m: Maybe<&2, Pem>, p: List<&2, U32>) -> Maybe<&2, Pem>:
+  match m:
+    case None{}:
+      Some{Pem{p, Nil{}}}
+    case Some{pem}:
+      match pem:
+        case Pem{cert, key}:
+          Some{Pem{p, key}}
+
+def pem.key(m: Maybe<&2, Pem>, p: List<&2, U32>) -> Maybe<&2, Pem>:
+  match m:
+    case None{}:
+      Some{Pem{Nil{}, p}}
+    case Some{pem}:
+      match pem:
+        case Pem{cert, key}:
+          Some{Pem{cert, p}}
+
 # What the binary was started with: the port, the directory static
 # files come from if any, and whether to log. The route table is built
 # from it once, in main, and every connection shares that one table.
 type Cfg is Data:
-  Cfg{port: U32, root: Maybe<&2, List<&2, U32>>, log: Bool, idle: U32, conns: U32, grace: U32, shared: Bool}
+  Cfg{port: U32, root: Maybe<&2, List<&2, U32>>, log: Bool, idle: U32, conns: U32,
+    grace: U32, shared: Bool, pem: Maybe<&2, Pem>}
 
 def cfg.new() -> Cfg:
-  Cfg{8080, None{}, False{}, 10000, 1024, 5000, False{}}
+  Cfg{8080, None{}, False{}, 10000, 1024, 5000, False{}, None{}}
 
 def cfg.port(c: Cfg) -> U32:
   match c:
-    case Cfg{port, root, log, idle, conns, grace, shared}:
+    case Cfg{port, root, log, idle, conns, grace, shared, pem}:
       port
 
 # how long a connection may be silent, in ms, before it is dropped
 def cfg.idle(c: Cfg) -> U32:
   match c:
-    case Cfg{port, root, log, idle, conns, grace, shared}:
+    case Cfg{port, root, log, idle, conns, grace, shared, pem}:
       idle
 
 def cfg.root(c: Cfg) -> List<&2, U32>:
   match c:
-    case Cfg{port, root, log, idle, conns, grace, shared}:
+    case Cfg{port, root, log, idle, conns, grace, shared, pem}:
       Maybe.default(&2, List<&2, U32>, root, bytes("."))
 
 def cfg.set_port(c: Cfg, n: U32) -> Cfg:
   match c:
-    case Cfg{port, root, log, idle, conns, grace, shared}:
-      Cfg{n, root, log, idle, conns, grace, shared}
+    case Cfg{port, root, log, idle, conns, grace, shared, pem}:
+      Cfg{n, root, log, idle, conns, grace, shared, pem}
 
 # the most connections open at once; past it, accepting waits
 def cfg.conns(c: Cfg) -> U32:
   match c:
-    case Cfg{port, root, log, idle, conns, grace, shared}:
+    case Cfg{port, root, log, idle, conns, grace, shared, pem}:
       conns
 
 # how long open connections get to finish after a stop is asked, in ms
 def cfg.grace(c: Cfg) -> U32:
   match c:
-    case Cfg{port, root, log, idle, conns, grace, shared}:
+    case Cfg{port, root, log, idle, conns, grace, shared, pem}:
       grace
 
 def cfg.set_conns(c: Cfg, n: U32) -> Cfg:
   match c:
-    case Cfg{port, root, log, idle, conns, grace, shared}:
-      Cfg{port, root, log, idle, n, grace, shared}
+    case Cfg{port, root, log, idle, conns, grace, shared, pem}:
+      Cfg{port, root, log, idle, n, grace, shared, pem}
 
 def cfg.set_grace(c: Cfg, n: U32) -> Cfg:
   match c:
-    case Cfg{port, root, log, idle, conns, grace, shared}:
-      Cfg{port, root, log, idle, conns, n, shared}
+    case Cfg{port, root, log, idle, conns, grace, shared, pem}:
+      Cfg{port, root, log, idle, conns, n, shared, pem}
 
 # whether the port is shared with other copies of this server
 def cfg.log(c: Cfg) -> Bool:
   match c:
-    case Cfg{port, root, log, idle, conns, grace, shared}:
+    case Cfg{port, root, log, idle, conns, grace, shared, pem}:
       log
+
+# the certificate and key a TLS listener needs, if the server was given
+# a pair; the half-given pair is refused when the arguments are read
+def cfg.pem(c: Cfg) -> Maybe<&2, Pem>:
+  match c:
+    case Cfg{port, root, log, idle, conns, grace, shared, pem}:
+      pem
+
+def cfg.set_cert(c: Cfg, p: List<&2, U32>) -> Cfg:
+  match c:
+    case Cfg{port, root, log, idle, conns, grace, shared, pem}:
+      Cfg{port, root, log, idle, conns, grace, shared, pem.cert(pem, p)}
+
+def cfg.set_key(c: Cfg, p: List<&2, U32>) -> Cfg:
+  match c:
+    case Cfg{port, root, log, idle, conns, grace, shared, pem}:
+      Cfg{port, root, log, idle, conns, grace, shared, pem.key(pem, p)}
 
 def cfg.shared(c: Cfg) -> Bool:
   match c:
-    case Cfg{port, root, log, idle, conns, grace, shared}:
+    case Cfg{port, root, log, idle, conns, grace, shared, pem}:
       shared
 
 def cfg.set_shared(c: Cfg) -> Cfg:
   match c:
-    case Cfg{port, root, log, idle, conns, grace, shared}:
-      Cfg{port, root, log, idle, conns, grace, True{}}
+    case Cfg{port, root, log, idle, conns, grace, shared, pem}:
+      Cfg{port, root, log, idle, conns, grace, True{}, pem}
 
 def cfg.set_idle(c: Cfg, n: U32) -> Cfg:
   match c:
-    case Cfg{port, root, log, idle, conns, grace, shared}:
-      Cfg{port, root, log, n, conns, grace, shared}
+    case Cfg{port, root, log, idle, conns, grace, shared, pem}:
+      Cfg{port, root, log, n, conns, grace, shared, pem}
 
 def cfg.set_root(c: Cfg, dir: List<&2, U32>) -> Cfg:
   match c:
-    case Cfg{port, root, log, idle, conns, grace, shared}:
-      Cfg{port, Some{dir}, log, idle, conns, grace, shared}
+    case Cfg{port, root, log, idle, conns, grace, shared, pem}:
+      Cfg{port, Some{dir}, log, idle, conns, grace, shared, pem}
 
 def cfg.set_log(c: Cfg) -> Cfg:
   match c:
-    case Cfg{port, root, log, idle, conns, grace, shared}:
-      Cfg{port, root, True{}, idle, conns, grace, shared}
+    case Cfg{port, root, log, idle, conns, grace, shared, pem}:
+      Cfg{port, root, True{}, idle, conns, grace, shared, pem}
 
 # a non-empty run of decimal digits
 def digits.go(bs: List<&2, U32>, ok: Bool) -> Bool:
@@ -773,13 +816,26 @@ type Want is Data:
   IdleOf{}
   ConnsOf{}
   GraceOf{}
+  CertOf{}
+  KeyOf{}
   Wrong{why: List<&2, U32>}
 
 type Args is Data:
   Args{cfg: Cfg, want: Want}
 
+# the flags that take a path, split out so the one match below stays
+# readable rather than nine deep
+def args.pem(c: Cfg, +a: List<&2, U32>, cert: Bool, key: Bool) -> Args:
+  match cert key:
+    case True{} _:
+      Args{c, CertOf{}}
+    case False{} True{}:
+      Args{c, KeyOf{}}
+    case False{} False{}:
+      Args{c, Wrong{cat(bytes("unknown flag: "), a)}}
+
 def args.flag(
-  c: Cfg, a: List<&2, U32>, log: Bool, port: Bool, root: Bool, idle: Bool,
+  c: Cfg, +a: List<&2, U32>, log: Bool, port: Bool, root: Bool, idle: Bool,
   conns: Bool, grace: Bool, shared: Bool
 ) -> Args:
   match log port root idle conns grace shared:
@@ -798,7 +854,8 @@ def args.flag(
     case False{} False{} False{} False{} False{} False{} True{}:
       Args{cfg.set_shared(c), Flag{}}
     case False{} False{} False{} False{} False{} False{} False{}:
-      Args{c, Wrong{cat(bytes("unknown flag: "), a)}}
+      args.pem(c, a, beq(a, bytes("--tls-cert"), True{}),
+        beq(a, bytes("--tls-key"), True{}))
 
 def args.num(c: Cfg, a: List<&2, U32>, ok: Bool) -> Args:
   match ok:
@@ -848,6 +905,10 @@ def args.feed(st: Args, +a: List<&2, U32>) -> Args:
           args.conns(c, a, digits(a) && Bool.not(U32.is_zero(u32.of(a, 0))))
         case GraceOf{}:
           args.grace(c, a, digits(a))
+        case CertOf{}:
+          Args{cfg.set_cert(c, a), Flag{}}
+        case KeyOf{}:
+          Args{cfg.set_key(c, a), Flag{}}
         case Wrong{why}:
           Args{c, Wrong{why}}
 
@@ -858,13 +919,35 @@ def args.read(xs: List<String>, st: Args) -> Args:
     case Con{a, t}:
       args.read(t, args.feed(st, bytes(a)))
 
+# A certificate without its key, or a key without its certificate, is
+# refused: the one thing a server must never do with a half-given pair
+# is fall back to serving in the clear.
+def args.pair.go(c: Cfg, cert: Bool, key: Bool) -> IO(Cfg):
+  match cert key:
+    case False{} _:
+      IO.die(Cfg, 2, "--tls-cert is missing")
+    case True{} False{}:
+      IO.die(Cfg, 2, "--tls-key is missing")
+    case True{} True{}:
+      do IO<Cfg>:
+        return c
+
+def args.pair(c: Cfg, m: Maybe<&2, Pem>) -> IO(Cfg):
+  match m:
+    case None{}:
+      do IO<Cfg>:
+        return c
+    case Some{pem}:
+      match pem:
+        case Pem{+cert, +key}:
+          args.pair.go(c, has(cert), has(key))
+
 def args.done(st: Args) -> IO(Cfg):
   match st:
-    case Args{c, want}:
+    case Args{+c, want}:
       match want:
         case Flag{}:
-          do IO<Cfg>:
-            return c
+          args.pair(c, cfg.pem(c))
         case PortOf{}:
           IO.die(Cfg, 2, "--port needs a number")
         case RootOf{}:
@@ -875,6 +958,10 @@ def args.done(st: Args) -> IO(Cfg):
           IO.die(Cfg, 2, "--max-conns needs a count")
         case GraceOf{}:
           IO.die(Cfg, 2, "--grace-ms needs a number")
+        case CertOf{}:
+          IO.die(Cfg, 2, "--tls-cert needs a path")
+        case KeyOf{}:
+          IO.die(Cfg, 2, "--tls-key needs a path")
         case Wrong{why}:
           IO.die(Cfg, 2, text(why))
 
@@ -1002,7 +1089,7 @@ def routes.tail(root: Maybe<&2, List<&2, U32>>) -> List<&2, Route>:
 
 def routes(c: Cfg) -> List<&2, Route>:
   match c:
-    case Cfg{port, root, log, idle, conns, grace, shared}:
+    case Cfg{port, root, log, idle, conns, grace, shared, pem}:
       List.append(&2, Route, routes.base(), routes.tail(root))
 
 # a is a prefix of b
@@ -2039,28 +2126,49 @@ def accept(+srv: Srv, +sem: Chan(Unit), lb: Listener & Bool) -> IO(Unit):
         lb2 : Listener & Bool <- accept.one(srv, sem, l)
         accept(srv, sem, lb2)
 
+def scheme(m: Maybe<&2, Pem>) -> String:
+  match m:
+    case None{}:
+      "http"
+    case Some{pem}:
+      "https"
+
 def banner(+c: Cfg) -> String:
-  String.append("bend-http on http://127.0.0.1:", U32.show(cfg.port(c)))
+  String.append("bend-http on ", String.append(scheme(cfg.pem(c)),
+    String.append("://127.0.0.1:", U32.show(cfg.port(c)))))
 
 # a shared port: several copies of this server on one port, the kernel
 # dealing the connections out; how a single-threaded server takes more
 # than one core
-def listen(port: U32, shared: Bool) -> IO(Result<&1, &1, U32 & String, Listener>):
+def listen.plain(port: U32, shared: Bool) -> IO(Result<&1, &1, U32 & String, Listener>):
   match shared:
     case True{}:
       TCP.listen_shared(port)
     case False{}:
       TCP.listen(port)
 
+# With a certificate the listener is a TLS listener, and every socket it
+# accepts carries a session; nothing else in the server changes, because
+# the effects that carry bytes go through the same wire either way.
+def listen(port: U32, shared: Bool, m: Maybe<&2, Pem>) ->
+  IO(Result<&1, &1, U32 & String, Listener>):
+  match m:
+    case None{}:
+      listen.plain(port, shared)
+    case Some{pem}:
+      match pem:
+        case Pem{cert, key}:
+          TLS.listen(port, text(cert), text(key))
+
 def run(+c: Cfg) -> IO(Unit):
   do IO<Unit>:
-    l   : Listener <- IO.try(Listener, listen(cfg.port(c), cfg.shared(c)))
+    l   : Listener <- IO.try(Listener, listen(cfg.port(c), cfg.shared(c), cfg.pem(c)))
     sem : Chan(Unit) <- Chan.new(Unit, cfg.conns(c))
     IO.print(banner(c))
     accept(srv.new(c), sem, (l, True{}))
 
 # bend-http [--port N] [--root DIR] [--idle-ms N] [--max-conns N] [--grace-ms N]
-#           [--shared] [--log]
+#           [--shared] [--tls-cert PEM --tls-key PEM] [--log]
 def main() -> IO(Unit):
   do IO<Unit>:
     xs : List<String> <- IO.args()

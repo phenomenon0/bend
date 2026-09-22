@@ -16,11 +16,12 @@ static Term tcp_send_bytes_pack(Env e, IoWork* w) {
 // Sends what is left; a full socket (non-blocking, so EAGAIN) parks
 // the computation until the socket is writable, and resumes here.
 static Term tcp_send_bytes_more(Env e, IoWork* w) {
-  int fd = (int)w->hand;
+  int   fd  = (int)w->hand;
+  short dir = POLLOUT;
   while (w->code == 0 && (u64)w->made < w->size) {
-    ssize_t n = send(fd, w->data + w->made, w->size - (u64)w->made, 0);
+    ssize_t n = io_wire_write(fd, w->data + w->made, w->size - (u64)w->made, &dir);
     if (n < 0 && errno == EAGAIN) {
-      return io_wait_on(w, fd, POLLOUT, 0, tcp_send_bytes_more);
+      return io_wait_on(w, fd, dir, 0, tcp_send_bytes_more);
     }
     w->made += io_sys_end(w, n);
   }

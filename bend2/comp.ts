@@ -7377,6 +7377,53 @@ static void io_wait(Env e) {
 
 #endif
 
+// The wire under a socket
+// =======================
+
+// A plain socket reads and writes itself. Something that sits between
+// the socket and the bytes -- a TLS session is the only one so far --
+// installs this, and the effects that carry bytes go through it without
+// knowing what it is. NULL is the plain path, which costs one branch
+// the processor predicts.
+//
+// read and write answer as recv and send do, and set dir when they
+// could not finish: POLLIN or POLLOUT says which way the socket has to
+// become ready before trying again, since a TLS read may be waiting to
+// write and the other way about. join is told about a socket accepted
+// from a listener, and shut about one that is closing.
+typedef struct IoWire {
+  ssize_t (*read)(int fd, void* buf, size_t len, short* dir);
+  ssize_t (*write)(int fd, const void* buf, size_t len, short* dir);
+  void    (*join)(int lfd, int fd);
+  void    (*shut)(int fd);
+} IoWire;
+
+static IoWire* io_wire;
+
+static ssize_t io_wire_read(int fd, void* buf, size_t len, short* dir) {
+  *dir = POLLIN;
+  return io_wire != NULL ? io_wire->read(fd, buf, len, dir)
+    : recv(fd, buf, len, 0);
+}
+
+static ssize_t io_wire_write(int fd, const void* buf, size_t len, short* dir) {
+  *dir = POLLOUT;
+  return io_wire != NULL ? io_wire->write(fd, buf, len, dir)
+    : send(fd, buf, len, 0);
+}
+
+static void io_wire_join(int lfd, int fd) {
+  if (io_wire != NULL) {
+    io_wire->join(lfd, fd);
+  }
+}
+
+static void io_wire_shut(int fd) {
+  if (io_wire != NULL) {
+    io_wire->shut(fd);
+  }
+}
+
 ${NATIVE.IO}
 // Show
 // ====

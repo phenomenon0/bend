@@ -399,6 +399,11 @@ def TCP.listen_shared(port: U32) -> IO(Result<&1, &1, U32 & String, Listener>):
   import "./effs/tcp_listen_shared.c"
   import "./effs/tcp_listen_shared.js"
 
+def TLS.listen(port: U32, cert: String, key: String) ->
+  IO(Result<&1, &1, U32 & String, Listener>):
+  import "./effs/tls_listen.c"
+  import "./effs/tls_listen.js"
+
 def TCP.accept(listener: Listener) ->
   IO(Listener & Result<&1, &1, U32 & String, Socket>):
   import "./effs/tcp_accept.c"

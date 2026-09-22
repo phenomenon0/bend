@@ -8,6 +8,7 @@ language in the path — the socket is Bend's own effect.
     bend demos/io_http_engine/main.bend -o httpd
     ./httpd --port 8080 --root www --idle-ms 10000 --max-conns 1024 --grace-ms 5000
     ./httpd --shared & ./httpd --shared &          # one port, one copy per core
+    ./httpd --tls-cert cert.pem --tls-key key.pem  # https, ALPN, TLS 1.2+
     curl -i http://127.0.0.1:8080/health
 
 The binary is the server: it links libc and libm and nothing else, and
@@ -128,6 +129,42 @@ before a byte of the body is read, so an announced length is never a
 way to make the engine allocate. It is refused as `Bad{}`, a `400` and
 a close, which keeps the parser's absorbing state the one the laws
 already cover.
+
+## TLS
+
+`--tls-cert` and `--tls-key` make the listener a TLS listener, and
+**nothing else in the server changes**. The effects that carry bytes --
+`TCP.recv_bytes`, `TCP.send_bytes`, `TCP.poll_bytes`, `TCP.accept`,
+`Socket.close` -- go through an `IoWire` in `bend2/comp.ts`, four
+function pointers that are NULL for a plain socket and cost one branch
+the processor predicts. `bend2/effs/tls_listen.c` installs an
+implementation of it over OpenSSL and nothing above knows the
+difference: the engine's connection loop, the parser, the router and
+the WebSocket framing are the same code on both wires.
+
+A TLS read may need to write and a write may need to read, so the wire
+answers with the direction the socket has to become ready in, and the
+loop parks on that rather than on the operation. The handshake is not
+done at accept: it runs inside the first read or write, driven by the
+same park, so a slow or hostile handshake costs a parked computation
+rather than a blocked server, and the connection's idle deadline
+already covers it. A closing socket sends its `close_notify` first, so
+a peer can tell an orderly end from a cut connection.
+
+ALPN advertises `http/1.1` (h2 goes in front of it when there is an h2
+to agree to). Minimum version is TLS 1.2; here it negotiates TLS 1.3.
+
+`check.c` built with `-DCHECK_TLS` swaps its own socket calls for a
+session and runs **the same thirty-nine cases over the encrypted
+wire**: one suite, two transports. All thirty-nine pass on both, the
+256-byte binary round trip included. TLS costs about a tenth at
+pipeline 8 (77,368 against 85,853 req/s through the same client) and
+nothing measurable at pipeline 1, where the client is the ceiling.
+
+A program that never imports the effect never includes
+`<openssl/ssl.h>`, and `bend2/main.ts` links `-lssl -lcrypto` only for
+the ones that do -- the same content-driven rule it already used for
+X11 and ALSA. The plain binary still links libc and libm alone.
 
 ## WebSocket
 
@@ -277,6 +314,7 @@ is the scheduler's two halves measured in isolation.
 
     cc -std=c11 -O3 control.c -o control && ./control 8081
     cc -std=c11 -O3 check.c -o check && ./check 8080 $(pgrep -x httpd) --files --idle=400
+    cc -std=c11 -O3 -DCHECK_TLS check.c -o check-tls -lssl -lcrypto
     cc -std=c11 -O3 load.c -o load && LOAD_SPIN=1 ./load 8080 32 5 8 /health
     cc -std=c11 -O2 ramp.c -o ramp && ./ramp 8080 /events
     cc -std=c11 -O2 fuzz.c -o fuzz && ./fuzz 8080 8081 2000

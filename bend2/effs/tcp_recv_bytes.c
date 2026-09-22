@@ -25,9 +25,10 @@ static Term tcp_recv_bytes_pack(Env e, IoWork* w) {
 // The loop parked the request until the socket was readable; a recv
 // that still finds nothing (the socket is non-blocking) parks again.
 static Term tcp_recv_bytes_more(Env e, IoWork* w) {
-  int fd  = (int)w->hand;
-  w->size = io_sys_end(w, recv(fd, w->data, (size_t)w->made, 0));
-  return w->code == EAGAIN ? io_wait_on(w, fd, POLLIN, 0, tcp_recv_bytes_more)
+  int   fd  = (int)w->hand;
+  short dir = POLLIN;
+  w->size = io_sys_end(w, io_wire_read(fd, w->data, (size_t)w->made, &dir));
+  return w->code == EAGAIN ? io_wait_on(w, fd, dir, 0, tcp_recv_bytes_more)
     : tcp_recv_bytes_pack(e, w);
 }
 

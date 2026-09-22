@@ -31,24 +31,106 @@ static int dial(void) {
   return fd;
 }
 
+// The transport. Built plain, these are the socket calls themselves;
+// built with -DCHECK_TLS they are a TLS session over the same socket,
+// and every case below runs unchanged over it. One suite, two wires.
+#ifdef CHECK_TLS
+#include <openssl/ssl.h>
+static SSL_CTX* tls_ctx;
+static SSL*     tls_at[65536];
+
+// A descriptor a case failed to open is -1, and every call here has to
+// survive being handed one: plain, that is a write to -1 and an EBADF;
+// here it would be a read from outside the table.
+static SSL* tls_look(int fd) {
+  return fd >= 0 && fd < 65536 ? tls_at[fd] : NULL;
+}
+
+static int wire_open(void) {
+  if (tls_ctx == NULL) {
+    tls_ctx = SSL_CTX_new(TLS_client_method());
+    SSL_CTX_set_verify(tls_ctx, SSL_VERIFY_NONE, NULL);
+  }
+  int fd = dial();
+  if (fd < 0) {
+    return -1;
+  }
+  SSL* ssl = SSL_new(tls_ctx);
+  SSL_set_fd(ssl, fd);
+  if (SSL_connect(ssl) != 1) {
+    SSL_free(ssl);
+    close(fd);
+    return -1;
+  }
+  tls_at[fd] = ssl;
+  return fd;
+}
+
+static ssize_t wire_write(int fd, const void* b, size_t n) {
+  SSL* ssl = tls_look(fd);
+  if (ssl == NULL) {
+    return write(fd, b, n);
+  }
+  int k = SSL_write(ssl, b, (int)n);
+  return k > 0 ? (ssize_t)k : -1;
+}
+
+// A server that ends a connection sends its close_notify first, so a
+// clean end reads as zero here as it does on a plain socket; anything
+// else is the error it is.
+static ssize_t wire_read(int fd, void* b, size_t n, int flags) {
+  SSL* ssl = tls_look(fd);
+  if (ssl == NULL) {
+    return recv(fd, b, n, flags);
+  }
+  if ((flags & MSG_DONTWAIT) != 0 && SSL_pending(ssl) == 0) {
+    char peek;
+    if (recv(fd, &peek, 1, MSG_PEEK | MSG_DONTWAIT) < 0) {
+      return -1;
+    }
+  }
+  int k = SSL_read(ssl, b, (int)n);
+  if (k > 0) {
+    return k;
+  }
+  return SSL_get_error(ssl, k) == SSL_ERROR_ZERO_RETURN ? 0 : -1;
+}
+
+static void wire_close(int fd) {
+  SSL* ssl = tls_look(fd);
+  if (ssl != NULL) {
+    SSL_free(ssl);
+    tls_at[fd] = NULL;
+  }
+  if (fd >= 0) {
+    close(fd);
+  }
+}
+#else
+#define wire_open()                dial()
+#define wire_write(fd, b, n)       write((fd), (b), (n))
+#define wire_read(fd, b, n, flags) recv((fd), (b), (n), (flags))
+#define wire_close(fd)             close(fd)
+#endif
+
 // send the parts in order, then read until the peer stops or want bytes
 // have arrived; returns what came back
 static int ask(const char** parts, const int* lens, int n, char* out, int cap,
                int want) {
-  int fd = dial();
+  int fd = wire_open();
   if (fd < 0) return -1;
   for (int i = 0; i < n; i++) {
     if (i) { struct timespec t = { 0, 120000000 }; nanosleep(&t, NULL); }
-    if (write(fd, parts[i], (size_t)lens[i]) != lens[i]) { close(fd); return -1; }
+    if (wire_write(fd, parts[i], (size_t)lens[i]) != lens[i]) { wire_close(fd); return -1; }
   }
   int got = 0;
   while (got < cap) {
-    ssize_t k = recv(fd, out + got, (size_t)(cap - got), 0);
+    ssize_t k = wire_read(fd, out + got, (size_t)(cap - got), 0);
     if (k <= 0) break;
     got += (int)k;
     if (want > 0 && got >= want) break;
   }
-  close(fd);
+  wire_close(fd);
   return got;
 }
 
@@ -99,12 +181,12 @@ static int ws_open(void) {
   static const char up[] = "GET /ws HTTP/1.1\r\nHost: x\r\nUpgrade: websocket\r\n"
     "Connection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n"
     "Sec-WebSocket-Version: 13\r\n\r\n";
-  int fd = dial();
-  if (write(fd, up, sizeof(up) - 1) != (ssize_t)(sizeof(up) - 1)) perror("write");
+  int fd = wire_open();
+  if (wire_write(fd, up, sizeof(up) - 1) != (ssize_t)(sizeof(up) - 1)) perror("write");
   char b[1024];
-  int n = (int)recv(fd, b, sizeof(b), 0);
+  int n = (int)wire_read(fd, b, sizeof(b), 0);
   if (n <= 0 || !has(b, n, "101 Switching Protocols")
-      || !has(b, n, "sec-websocket-accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo=")) { close(fd); return -1; }
+      || !has(b, n, "sec-websocket-accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo=")) { wire_close(fd); return -1; }
   return fd;
 }
 
@@ -126,7 +208,7 @@ static int ws_frame(char* out, int op, const char* body, int n, int masked) {
 static int ws_read(int fd, char* b, int cap, int want, int* closed) {
   int n = 0;
   while (n < want && n < cap) {
-    int got = (int)recv(fd, b + n, (size_t)(cap - n), 0);
+    int got = (int)wire_read(fd, b + n, (size_t)(cap - n), 0);
     if (got == 0) { *closed = 1; break; }
     if (got < 0) break;
     n += got;
@@ -289,44 +371,44 @@ int main(int argc, char** argv) {
     static const char req[] = "GET /health HTTP/1.1\r\nHost: x\r\n\r\n";
     const int reqn = (int)(sizeof(req) - 1);
     // a peer that is dropped reads EOF (0); a 2 s read timeout is -1
-    int fd = dial();
-    if (write(fd, "GET /hea", 8) != 8) perror("write");
+    int fd = wire_open();
+    if (wire_write(fd, "GET /hea", 8) != 8) perror("write");
     usleep((useconds_t)(idle + 300) * 1000);
-    n = (int)recv(fd, b, sizeof(b), 0);
+    n = (int)wire_read(fd, b, sizeof(b), 0);
     check("a head that stalls is dropped after the idle time", n == 0, b, n > 0 ? n : 0);
-    close(fd);
+    wire_close(fd);
 
-    fd = dial();
-    if (write(fd, req, (size_t)reqn) != reqn) perror("write");
-    n = (int)recv(fd, b, sizeof(b), 0);
+    fd = wire_open();
+    if (wire_write(fd, req, (size_t)reqn) != reqn) perror("write");
+    n = (int)wire_read(fd, b, sizeof(b), 0);
     usleep((useconds_t)(idle + 300) * 1000);
-    n = (int)recv(fd, b, sizeof(b), 0);
+    n = (int)wire_read(fd, b, sizeof(b), 0);
     check("an idle keep-alive connection is dropped after the idle time", n == 0, b, n > 0 ? n : 0);
-    close(fd);
+    wire_close(fd);
 
-    fd = dial();
-    if (write(fd, req, (size_t)reqn) != reqn) perror("write");
-    n = (int)recv(fd, b, sizeof(b), 0);
+    fd = wire_open();
+    if (wire_write(fd, req, (size_t)reqn) != reqn) perror("write");
+    n = (int)wire_read(fd, b, sizeof(b), 0);
     usleep((useconds_t)(idle / 2) * 1000);
-    if (write(fd, req, (size_t)reqn) != reqn) perror("write");
-    n = (int)recv(fd, b, sizeof(b), 0);
+    if (wire_write(fd, req, (size_t)reqn) != reqn) perror("write");
+    n = (int)wire_read(fd, b, sizeof(b), 0);
     check("a pause shorter than the idle time keeps the connection", n > 0 && has(b, n, "200 OK"), b, n > 0 ? n : 0);
-    close(fd);
+    wire_close(fd);
 
     n = one(TEXT("GET /echo HTTP/1.1\r\nHost: x\r\ncontent-length: 2000000\r\n\r\n"), b, sizeof(b), 0);
     check("a body past the cap is refused before it is sent", has(b, n, "400 Bad Request"), b, n);
 
-    fd = dial();
+    fd = wire_open();
     const char* slow = "GET /health HTTP/1.1\r\nHost: x\r\nx-a: 0123456789012345678901234567890123456789012345678901234567890123456789\r\n\r\n";
     int dropped = 0, sl = (int)strlen(slow);
     for (int i = 0; i < sl && !dropped; i++) {
-      if (write(fd, slow + i, 1) != 1) dropped = 1;
+      if (wire_write(fd, slow + i, 1) != 1) dropped = 1;
       usleep(3000);
-      n = (int)recv(fd, b, sizeof(b), MSG_DONTWAIT);
+      n = (int)wire_read(fd, b, sizeof(b), MSG_DONTWAIT);
       if (n == 0 || (n < 0 && errno != EAGAIN && errno != EWOULDBLOCK)) dropped = 1;
     }
     check("a head dribbled a byte at a time is dropped after the wait budget", dropped, b, 0);
-    close(fd);
+    wire_close(fd);
   }
 
   // A peer that connects and closes without sending a byte. The engine
@@ -337,7 +419,7 @@ int main(int argc, char** argv) {
   if (argc > 2) {
     long   pid = atol(argv[2]);
     double c0  = cpu_of(pid);
-    for (int i = 0; i < 20; i++) { int fd = dial(); if (fd >= 0) close(fd); }
+    for (int i = 0; i < 20; i++) { int fd = wire_open(); if (fd >= 0) wire_close(fd); }
     usleep(1000000);
     double c1 = cpu_of(pid);
     n = one(TEXT("GET /health HTTP/1.1\r\nHost: x\r\n\r\n"), b, sizeof(b), 106);
@@ -357,18 +439,18 @@ int main(int argc, char** argv) {
     int fd = ws_open(), k, closed;
     check("the handshake answers RFC 6455's accept key", fd >= 0, "", 0);
 
-    k = ws_frame(f, 1, "hello", 5, 1); if (write(fd, f, (size_t)k) != k) perror("write");
+    k = ws_frame(f, 1, "hello", 5, 1); if (wire_write(fd, f, (size_t)k) != k) perror("write");
     closed = 0; n = ws_read(fd, r, sizeof(r), 7, &closed);
     check("a masked text frame comes back as text",
       n == 7 && (uint8_t)r[0] == 0x81 && r[1] == 5 && !memcmp(r + 2, "hello", 5), r, n);
 
-    k = ws_frame(f, 9, "p", 1, 1); if (write(fd, f, (size_t)k) != k) perror("write");
+    k = ws_frame(f, 9, "p", 1, 1); if (wire_write(fd, f, (size_t)k) != k) perror("write");
     n = ws_read(fd, r, sizeof(r), 3, &closed);
     check("a ping is answered with a pong", n == 3 && (uint8_t)r[0] == 0x8A && r[1] == 1 && r[2] == 'p', r, n);
 
     {
       char big[300]; for (int i = 0; i < 300; i++) big[i] = (char)(i * 7);
-      k = ws_frame(f, 2, big, 300, 1); if (write(fd, f, (size_t)k) != k) perror("write");
+      k = ws_frame(f, 2, big, 300, 1); if (wire_write(fd, f, (size_t)k) != k) perror("write");
       n = ws_read(fd, r, sizeof(r), 304, &closed);
       int ok = n == 304 && (uint8_t)r[0] == 0x82 && (uint8_t)r[1] == 126 && r[2] == 1 && (uint8_t)r[3] == 44
         && !memcmp(r + 4, big, 300);
@@ -376,27 +458,27 @@ int main(int argc, char** argv) {
     }
 
     k = ws_frame(f, 1, "split", 5, 1);
-    if (write(fd, f, 4) != 4) perror("write");
+    if (wire_write(fd, f, 4) != 4) perror("write");
     usleep(20000);
-    if (write(fd, f + 4, (size_t)(k - 4)) != k - 4) perror("write");
+    if (wire_write(fd, f + 4, (size_t)(k - 4)) != k - 4) perror("write");
     n = ws_read(fd, r, sizeof(r), 7, &closed);
     check("a frame split across two writes still parses",
       n == 7 && (uint8_t)r[0] == 0x81 && r[1] == 5 && !memcmp(r + 2, "split", 5), r, n);
 
-    k = ws_frame(f, 8, "\x03\xe8", 2, 1); if (write(fd, f, (size_t)k) != k) perror("write");
+    k = ws_frame(f, 8, "\x03\xe8", 2, 1); if (wire_write(fd, f, (size_t)k) != k) perror("write");
     n = ws_read(fd, r, sizeof(r), 4, &closed);
-    int gone = closed; if (!gone) { char x[8]; gone = recv(fd, x, sizeof(x), 0) == 0; }
+    int gone = closed; if (!gone) { char x[8]; gone = wire_read(fd, x, sizeof(x), 0) == 0; }
     check("a close is answered with a close and the connection ends",
       n == 4 && (uint8_t)r[0] == 0x88 && r[1] == 2 && r[2] == 3 && (uint8_t)r[3] == 0xe8 && gone, r, n);
-    close(fd);
+    wire_close(fd);
 
     fd = ws_open();
-    k = ws_frame(f, 1, "bare", 4, 0); if (write(fd, f, (size_t)k) != k) perror("write");
+    k = ws_frame(f, 1, "bare", 4, 0); if (wire_write(fd, f, (size_t)k) != k) perror("write");
     closed = 0; n = ws_read(fd, r, sizeof(r), 4, &closed);
-    gone = closed; if (!gone) { char x[8]; gone = recv(fd, x, sizeof(x), 0) == 0; }
+    gone = closed; if (!gone) { char x[8]; gone = wire_read(fd, x, sizeof(x), 0) == 0; }
     check("an unmasked client frame ends the connection with 1002",
       n == 4 && (uint8_t)r[0] == 0x88 && r[1] == 2 && r[2] == 3 && (uint8_t)r[3] == 0xea && gone, r, n);
-    close(fd);
+    wire_close(fd);
 
     n = one(TEXT("GET /ws HTTP/1.1\r\nHost: x\r\n\r\n"), b, sizeof(b), 0);
     check("GET /ws without an upgrade is 426", has(b, n, "426 Upgrade Required"), b, n);
@@ -432,15 +514,29 @@ int main(int argc, char** argv) {
     int m = conns < 64 ? conns : 64;
     for (int i = 0; i < m; i++) held[i] = dial();
     usleep(200000);
-    int extra = dial();
-    if (write(extra, req, (size_t)reqn) != reqn) perror("write");
-    n = (int)recv(extra, b, sizeof(b), 0);
-    int waited = n < 0;
+    // The kernel finishes the handshake of the one over the limit, so
+    // it connects; the server has not taken a slot for it, so nothing
+    // answers. Over TLS the waiting shows one step earlier, because a
+    // session cannot come up against a socket nobody is reading -- an
+    // open that does not finish is the same evidence. Either way the
+    // slot freed below is what lets it through.
+    int extra = wire_open(), waited = 0;
+    if (extra < 0) {
+      waited = 1;
+    } else {
+      if (wire_write(extra, req, (size_t)reqn) != reqn) perror("write");
+      n = (int)wire_read(extra, b, sizeof(b), 0);
+      waited = n < 0;
+    }
     close(held[0]);
-    n = (int)recv(extra, b, sizeof(b), 0);
+    if (extra < 0) {
+      extra = wire_open();
+      if (extra >= 0 && wire_write(extra, req, (size_t)reqn) != reqn) perror("write");
+    }
+    n = extra >= 0 ? (int)wire_read(extra, b, sizeof(b), 0) : -1;
     check("past the connection limit a request waits for a slot",
       waited && n > 0 && has(b, n, "200 OK"), b, n > 0 ? n : 0);
-    close(extra);
+    wire_close(extra);
     for (int i = 1; i < m; i++) close(held[i]);
   }
 
@@ -451,16 +547,16 @@ int main(int argc, char** argv) {
     static const char req[] = "GET /health HTTP/1.1\r\nHost: x\r\n\r\n";
     const int reqn = (int)(sizeof(req) - 1);
     long pid = atol(argv[2]);
-    int open_ = dial();
+    int open_ = wire_open();
     kill((pid_t)pid, SIGTERM);
     usleep(600000);
-    int fresh = dial();
+    int fresh = wire_open();
     int refused = fresh < 0;
-    if (fresh >= 0) close(fresh);
-    if (write(open_, req, (size_t)reqn) != reqn) perror("write");
-    n = (int)recv(open_, b, sizeof(b), 0);
+    if (fresh >= 0) wire_close(fresh);
+    if (wire_write(open_, req, (size_t)reqn) != reqn) perror("write");
+    n = (int)wire_read(open_, b, sizeof(b), 0);
     int served = n > 0 && has(b, n, "200 OK");
-    close(open_);
+    wire_close(open_);
     int gone = 0;
     for (int i = 0; i < 100 && !gone; i++) {
       usleep(50000);

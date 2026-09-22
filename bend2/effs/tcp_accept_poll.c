@@ -20,6 +20,9 @@ static Term tcp_accept_poll_at(Env e, IoWork* w, u64 at) {
     return io_tick() < at ? io_wait_on(w, fd, POLLIN, at, tcp_accept_poll_more)
       : io_tup(e, io_hand(fd), io_done(e, term_pak(CID_NONE, 0)));
   }
+  if (got >= 0) {
+    io_wire_join(fd, got);
+  }
   Term r = w->code != 0 ? io_fail(e, w->code, NULL)
     : io_done(e, io_box(e, CID_SOME, io_hand(got)));
   return io_tup(e, io_hand(fd), r);

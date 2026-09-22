@@ -34,6 +34,7 @@ jobs:
         run: |
           cc -std=c11 -O3 -Wall control.c -o control
           cc -std=c11 -O3 -Wall check.c -o check
+          cc -std=c11 -O3 -Wall -DCHECK_TLS check.c -o check-tls -lssl -lcrypto
           cc -std=c11 -O2 -Wall fuzz.c -o fuzz
           cc -std=c11 -O3 -Wall load.c -o load
       - name: fixtures
@@ -59,6 +60,17 @@ jobs:
           $C/control 8091 & B=$!; up 8091
           $C/fuzz 8090 8091 500 7
           kill $A $B; wait $A $B || true
+      - name: the same checks over TLS
+        run: |
+          up() { for _ in $(seq 1 60); do (exec 3<>/dev/tcp/127.0.0.1/$1) 2>/dev/null && return 0; sleep 0.1; done; return 1; }
+          C=demos/io_http_engine
+          openssl req -x509 -newkey rsa:2048 -keyout key.pem -out cert.pem -days 2 -nodes -subj "/CN=localhost"
+          ./httpd --port 8443 --tls-cert cert.pem --tls-key key.pem --root www --idle-ms 600 --log 2>tlog.txt & up 8443
+          $C/check-tls 8443 $! --files --idle=600 --ws --log=tlog.txt
+          kill $!; wait $! || true
+          ./httpd --port 8443 --tls-cert cert.pem --tls-key key.pem --max-conns 2 & up 8443
+          $C/check-tls 8443 $! --conns=2; kill $!; wait $! || true
+
       - name: a shared port takes two copies
         run: |
           up() { for i in $(seq 1 50); do (exec 3<>/dev/tcp/127.0.0.1/$1) 2>/dev/null && return 0; sleep 0.1; done; return 1; }
