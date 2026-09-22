@@ -9,6 +9,8 @@
 # does.
 import Base
 import ./main.bend as Eng
+import ./sha1.bend as Sha1
+import ./b64.bend as B64
 import ./LAWS.bend as Laws
 
 def Laws.feed_split(a, b, p):
@@ -92,4 +94,37 @@ def Laws.norm_dots():
   {==}
 
 def Laws.norm_flat():
+  {==}
+
+def Laws.sha1_empty():
+  {==}
+
+def Laws.sha1_abc():
+  {==}
+
+def Laws.sha1_two_blocks():
+  {==}
+
+def Laws.b64_empty():
+  {==}
+
+def Laws.b64_f():
+  {==}
+
+def Laws.b64_fo():
+  {==}
+
+def Laws.b64_foo():
+  {==}
+
+def Laws.b64_foob():
+  {==}
+
+def Laws.b64_fooba():
+  {==}
+
+def Laws.b64_foobar():
+  {==}
+
+def Laws.ws_accept():
   {==}

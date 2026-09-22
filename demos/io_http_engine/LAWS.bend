@@ -4,6 +4,8 @@
 # otherwise be a comment nobody checks.
 import Base
 import ./main.bend as Eng
+import ./sha1.bend as Sha1
+import ./b64.bend as B64
 
 # LAW: chunking does not change the parse. Feeding a chunk and then
 # another one lands exactly where feeding the two joined would have.
@@ -149,3 +151,45 @@ law norm_dots:
 law norm_flat:
   {Eng.norm(Eng.segs(Eng.bytes("/sub/../a.txt"))) ==
     Some{[Eng.bytes("a.txt")]} : Maybe<&2, List<&2, List<&2, U32>>>}
+
+# LAW: SHA-1 is SHA-1. The three vectors of RFC 3174, computed by the
+# checker through a Bend that shifts one bit at a time.
+law sha1_empty:
+  {Sha1.hash(Nil{}) ==
+    [218, 57, 163, 238, 94, 107, 75, 13, 50, 85, 191, 239, 149, 96, 24, 144, 175, 216, 7, 9] : List<&2, U32>}
+
+law sha1_abc:
+  {Sha1.hash(Eng.bytes("abc")) ==
+    [169, 153, 62, 54, 71, 6, 129, 106, 186, 62, 37, 113, 120, 80, 194, 108, 156, 208, 216, 157] : List<&2, U32>}
+
+law sha1_two_blocks:
+  {Sha1.hash(Eng.bytes("abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq")) ==
+    [132, 152, 62, 68, 28, 59, 210, 110, 186, 174, 74, 161, 249, 81, 41, 229, 229, 70, 112, 241] : List<&2, U32>}
+
+# LAW: base64 is base64: the seven vectors of RFC 4648.
+law b64_empty:
+  {B64.enc(Nil{}) == Nil{} : List<&2, U32>}
+
+law b64_f:
+  {B64.enc(Eng.bytes("f")) == Eng.bytes("Zg==") : List<&2, U32>}
+
+law b64_fo:
+  {B64.enc(Eng.bytes("fo")) == Eng.bytes("Zm8=") : List<&2, U32>}
+
+law b64_foo:
+  {B64.enc(Eng.bytes("foo")) == Eng.bytes("Zm9v") : List<&2, U32>}
+
+law b64_foob:
+  {B64.enc(Eng.bytes("foob")) == Eng.bytes("Zm9vYg==") : List<&2, U32>}
+
+law b64_fooba:
+  {B64.enc(Eng.bytes("fooba")) == Eng.bytes("Zm9vYmE=") : List<&2, U32>}
+
+law b64_foobar:
+  {B64.enc(Eng.bytes("foobar")) == Eng.bytes("Zm9vYmFy") : List<&2, U32>}
+
+# LAW: the WebSocket accept key of RFC 6455's own example, the two
+# composed: the client's nonce joined to the GUID, hashed, encoded.
+law ws_accept:
+  {B64.enc(Sha1.hash(Eng.bytes("dGhlIHNhbXBsZSBub25jZQ==258EAFA5-E914-47DA-95CA-C5AB0DC85B11"))) ==
+    Eng.bytes("s3pPLMBiTxaQ9kYGzzhZRbK+xOo=") : List<&2, U32>}
