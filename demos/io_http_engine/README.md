@@ -280,6 +280,7 @@ is the scheduler's two halves measured in isolation.
     cc -std=c11 -O3 load.c -o load && LOAD_SPIN=1 ./load 8080 32 5 8 /health
     cc -std=c11 -O2 ramp.c -o ramp && ./ramp 8080 /events
     cc -std=c11 -O2 fuzz.c -o fuzz && ./fuzz 8080 8081 2000
+    ./prof.sh ../../httpd 40                   # where the time goes
 
 ## Streaming, and what it found in the runtime
 
