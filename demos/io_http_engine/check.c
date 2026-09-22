@@ -4,8 +4,9 @@
 // sentence in a README. Given the server's pid, the last case also
 // reads its CPU.
 //
-//   cc -std=c11 -O3 check.c -o check && ./check 8080 [pid] [--files]
+//   cc -std=c11 -O3 check.c -o check && ./check 8080 [pid] [--files] [--idle=MS]
 #define _GNU_SOURCE
+#include <errno.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
 #include <stdio.h>
@@ -94,8 +95,14 @@ int main(int argc, char** argv) {
   if (argc > 1) PORT = atoi(argv[1]);
   static char b[262144];
   int n;
+  // flags after the pid: --files when the server has --root on the
+  // fixture directory; --idle=MS when it was started with --idle-ms MS
+  int files = 0, idle = 0;
+  for (int i = 3; i < argc; i++) {
+    if (strcmp(argv[i], "--files") == 0) files = 1;
+    else if (strncmp(argv[i], "--idle=", 7) == 0) idle = atoi(argv[i] + 7);
+  }
   // under --root, "/" is index.html rather than the banner
-  int files = argc > 3 && strcmp(argv[3], "--files") == 0;
   const char* root_body = files ? "<h1>hi</h1>" : "bend-http";
 
   n = one(TEXT("GET /health HTTP/1.1\r\nHost: x\r\n\r\n"), b, sizeof(b), 106);
@@ -216,6 +223,56 @@ int main(int argc, char** argv) {
 
     n = one(TEXT("GET /sub HTTP/1.1\r\nHost: x\r\n\r\n"), b, sizeof(b), 0);
     check("a directory is not a file", has(b, n, "404 Not Found"), b, n);
+  }
+
+  // Time and size, when the idle time is known. A peer that goes quiet,
+  // mid-head or between requests, is dropped once the idle time has
+  // passed; one that pauses for less keeps its connection; a head that
+  // announces a body past the cap is refused before a byte of it is
+  // sent; a head dribbled a byte at a time is dropped after the wait
+  // budget, well inside the idle time.
+  if (idle > 0) {
+    static const char req[] = "GET /health HTTP/1.1\r\nHost: x\r\n\r\n";
+    const int reqn = (int)(sizeof(req) - 1);
+    // a peer that is dropped reads EOF (0); a 2 s read timeout is -1
+    int fd = dial();
+    if (write(fd, "GET /hea", 8) != 8) perror("write");
+    usleep((useconds_t)(idle + 300) * 1000);
+    n = (int)recv(fd, b, sizeof(b), 0);
+    check("a head that stalls is dropped after the idle time", n == 0, b, n > 0 ? n : 0);
+    close(fd);
+
+    fd = dial();
+    if (write(fd, req, (size_t)reqn) != reqn) perror("write");
+    n = (int)recv(fd, b, sizeof(b), 0);
+    usleep((useconds_t)(idle + 300) * 1000);
+    n = (int)recv(fd, b, sizeof(b), 0);
+    check("an idle keep-alive connection is dropped after the idle time", n == 0, b, n > 0 ? n : 0);
+    close(fd);
+
+    fd = dial();
+    if (write(fd, req, (size_t)reqn) != reqn) perror("write");
+    n = (int)recv(fd, b, sizeof(b), 0);
+    usleep((useconds_t)(idle / 2) * 1000);
+    if (write(fd, req, (size_t)reqn) != reqn) perror("write");
+    n = (int)recv(fd, b, sizeof(b), 0);
+    check("a pause shorter than the idle time keeps the connection", n > 0 && has(b, n, "200 OK"), b, n > 0 ? n : 0);
+    close(fd);
+
+    n = one(TEXT("GET /echo HTTP/1.1\r\nHost: x\r\ncontent-length: 2000000\r\n\r\n"), b, sizeof(b), 0);
+    check("a body past the cap is refused before it is sent", has(b, n, "400 Bad Request"), b, n);
+
+    fd = dial();
+    const char* slow = "GET /health HTTP/1.1\r\nHost: x\r\nx-a: 0123456789012345678901234567890123456789012345678901234567890123456789\r\n\r\n";
+    int dropped = 0, sl = (int)strlen(slow);
+    for (int i = 0; i < sl && !dropped; i++) {
+      if (write(fd, slow + i, 1) != 1) dropped = 1;
+      usleep(3000);
+      n = (int)recv(fd, b, sizeof(b), MSG_DONTWAIT);
+      if (n == 0 || (n < 0 && errno != EAGAIN && errno != EWOULDBLOCK)) dropped = 1;
+    }
+    check("a head dribbled a byte at a time is dropped after the wait budget", dropped, b, 0);
+    close(fd);
   }
 
   // A peer that connects and closes without sending a byte. The engine

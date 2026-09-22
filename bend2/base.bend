@@ -279,6 +279,10 @@ def IO.now() -> IO(Nat):
   import "./effs/now.c"
   import "./effs/now.js"
 
+def IO.signal_pending(sig: U32) -> IO(Bool):
+  import "./effs/signal_pending.c"
+  import "./effs/signal_pending.js"
+
 def Chan.new(-A: Type, room: U32) -> IO(Chan(A)):
   import "./effs/chan_new.c"
   import "./effs/chan_new.js"
@@ -396,6 +400,11 @@ def TCP.accept(listener: Listener) ->
   import "./effs/tcp_accept.c"
   import "./effs/tcp_accept.js"
 
+def TCP.accept_poll(listener: Listener, ms: U32) ->
+  IO(Listener & Result<&1, &1, U32 & String, Maybe<&1, Socket>>):
+  import "./effs/tcp_accept_poll.c"
+  import "./effs/tcp_accept_poll.js"
+
 def TCP.connect(host: String, port: U32) ->
   IO(Result<&1, &1, U32 & String, Socket>):
   import "./effs/tcp_connect.c"
@@ -430,6 +439,11 @@ def TCP.poll(sock: Socket, max: U32, ms: U32) ->
   IO(Socket & Result<&1, &1, U32 & String, Maybe<&1, String>>):
   import "./effs/tcp_poll.c"
   import "./effs/tcp_poll.js"
+
+def TCP.poll_bytes(sock: Socket, max: U32, ms: U32) ->
+  IO(Socket & Result<&1, &1, U32 & String, Maybe<&1, List<&2, U32>>>):
+  import "./effs/tcp_poll_bytes.c"
+  import "./effs/tcp_poll_bytes.js"
 
 # TCP.recv through a Utf8.Dec, as File.read_text: a scalar cut by the end
 # of a recv is carried; need answers 4 when the peer has closed.

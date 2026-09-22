@@ -6,7 +6,7 @@ language in the path — the socket is Bend's own effect.
 
     bend demos/io_http_engine/PROOF.bend        # the gate: laws hold
     bend demos/io_http_engine/main.bend -o httpd
-    ./httpd --port 8080 --root www              # both optional
+    ./httpd --port 8080 --root www --idle-ms 10000 --max-conns 1024 --grace-ms 5000
     curl -i http://127.0.0.1:8080/health
 
 The binary is the server: it links libc and libm and nothing else, and
@@ -102,6 +102,54 @@ disagree about a length or a type; LAWS.bend says the scanner and the
 head builder agree on the fixed replies. A `405` names the methods that
 would have worked.
 
+## Time and size
+
+Every read has a deadline. `TCP.poll_bytes` is `TCP.poll` carrying
+bytes (`bend2/effs/tcp_poll_bytes.{c,js}`, declared beside it): a recv
+is tried before any park, so a socket with data waiting costs no pass;
+one with nothing parks on the socket and on the clock, whichever fires
+first. A peer silent for `--idle-ms` (10 s by default), mid-head or
+between requests, is dropped; one that pauses for less keeps its
+connection. `tests/io/tcp_poll_bytes.bend` and `tcp_recv_bytes.bend`
+pin the two byte effects the way `tcp_poll.bend` pins the text one.
+
+A read that finishes no message is a wait, not a write, and a
+connection gets sixty-four of them in a row: a head arrives in one or
+two chunks, and one dribbled a byte at a time inside the idle time is
+not a client. That budget is a `Nat` beside the fuel, so the loop still
+terminates by Bend's own rule. The same change stopped the engine
+sending an empty reply after every partial head, a syscall per chunk it
+never needed.
+
+A head that announces a body past 1 MiB is refused as it completes,
+before a byte of the body is read, so an announced length is never a
+way to make the engine allocate. It is refused as `Bad{}`, a `400` and
+a close, which keeps the parser's absorbing state the one the laws
+already cover.
+
+## Many, and stopping
+
+The connection limit is a channel. `Chan.new(Unit, n)` has room for n
+slots; a connection takes one (`Chan.send`) before it is served and
+gives it back (`Chan.recv`) when it ends; when every slot is taken the
+accept loop parks on the send, and the kernel's backlog holds what
+arrives meanwhile. No counter, no lock, no new effect: the semaphore
+the runtime already had, used as one. `--max-conns` sets it, 1024 by
+default.
+
+Stopping is `SIGTERM`. The accept loop reads through `TCP.accept_poll`
+(`TCP.accept` with a deadline, `bend2/effs/tcp_accept_poll.{c,js}`),
+so every 250 ms of no arrivals it looks up and asks
+`IO.signal_pending(15)` (`bend2/effs/signal_pending.{c,js}`: the first
+ask installs a handler that only sets a flag, with `SA_RESTART` so no
+effect in flight is failed by the signal). On a stop it closes the
+listener, so new connections are refused at once; the ones open finish
+what they are doing; and the process ends when every slot has come
+back -- the loop refills the semaphore -- or when `--grace-ms` is up,
+whichever is first. Two effects, both the size of the ones beside them,
+and both generic: any long-running Bend program that has to be stopped
+by its supervisor needs exactly these.
+
 ## The laws
 
 `feed_split` is the one that matters: `feed(a ++ b, p)` equals
@@ -141,14 +189,18 @@ duplicate route are all rejected, with the two terms printed.
 one epoll loop, the same modes, the same byte-at-a-time transitions,
 the same routes, byte-identical replies, the same policy. `check.c`
 runs its behavioural cases against either: fifteen for any server,
-the last of which reads the server's CPU when given its pid, and nine
-more for static files when the server was started with `--root` on the
-fixture directory and the check with `--files`. `load.c` drives either;
+the last of which reads the server's CPU when given its pid; nine more
+for static files when the server was started with `--root` on the
+fixture directory and the check with `--files`; five more for time and
+size when the server was started with `--idle-ms MS` and the check with
+`--idle=MS`; one for the limit with `--max-conns N` and `--conns=N`; and
+one, last, for stopping, with `--term`, which sends the server SIGTERM
+and watches it refuse, finish and go. `load.c` drives either;
 `ramp.c` opens connections in blocks and never closes them; `sched.c`
 is the scheduler's two halves measured in isolation.
 
     cc -std=c11 -O3 control.c -o control && ./control 8081
-    cc -std=c11 -O3 check.c -o check && ./check 8080 $(pgrep -x httpd) --files
+    cc -std=c11 -O3 check.c -o check && ./check 8080 $(pgrep -x httpd) --files --idle=400
     cc -std=c11 -O3 load.c -o load && ./load 8080 32 5 8 /health
     cc -std=c11 -O2 ramp.c -o ramp && ./ramp 8080 /events
 

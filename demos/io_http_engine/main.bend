@@ -287,16 +287,24 @@ def step.val(+n: U32, +c: U32, pd: Pend, out: List<&2, Req>) -> P:
   step.val.go(c, pd, out, U32.is_eq(n, hash.content_length()),
     U32.is_eq(n, hash.connection()))
 
-def step.head.on(pd: Pend, n: U32, out: List<&2, Req>, z: Bool) -> P:
-  match z:
-    case True{}:
+# the most body this engine will hold for one message. A head that
+# announces more is refused as it completes, before a byte of the body
+# is read, so an announced length is never a way to make it allocate.
+def body.cap() -> U32:
+  1048576
+
+def step.head.on(pd: Pend, n: U32, out: List<&2, Req>, z: Bool, big: Bool) -> P:
+  match z big:
+    case True{} _:
       emit(pd, Nil{}, out)
-    case False{}:
+    case False{} True{}:
+      P{Bad{}, pd, out}
+    case False{} False{}:
       P{Bod{n, Nil{}}, pd, out}
 
 def step.head.len(pn: Pend & U32, out: List<&2, Req>) -> P:
   (pd, +n) = pn
-  step.head.on(pd, n, out, U32.is_zero(n))
+  step.head.on(pd, n, out, U32.is_zero(n), U32.is_lt(body.cap(), n))
 
 def step.head.go(pd: Pend, te: Bool, out: List<&2, Req>) -> P:
   match te:
@@ -539,35 +547,46 @@ def sse.gap() -> U32:
 # files come from if any, and whether to log. The route table is built
 # from it once, in main, and every connection shares that one table.
 type Cfg is Data:
-  Cfg{port: U32, root: Maybe<&2, List<&2, U32>>, log: Bool}
+  Cfg{port: U32, root: Maybe<&2, List<&2, U32>>, log: Bool, idle: U32}
 
 def cfg.new() -> Cfg:
-  Cfg{8080, None{}, False{}}
+  Cfg{8080, None{}, False{}, 10000}
 
 def cfg.port(c: Cfg) -> U32:
   match c:
-    case Cfg{port, root, log}:
+    case Cfg{port, root, log, idle}:
       port
+
+# how long a connection may be silent, in ms, before it is dropped
+def cfg.idle(c: Cfg) -> U32:
+  match c:
+    case Cfg{port, root, log, idle}:
+      idle
 
 def cfg.root(c: Cfg) -> List<&2, U32>:
   match c:
-    case Cfg{port, root, log}:
+    case Cfg{port, root, log, idle}:
       Maybe.default(&2, List<&2, U32>, root, bytes("."))
 
 def cfg.set_port(c: Cfg, n: U32) -> Cfg:
   match c:
-    case Cfg{port, root, log}:
-      Cfg{n, root, log}
+    case Cfg{port, root, log, idle}:
+      Cfg{n, root, log, idle}
+
+def cfg.set_idle(c: Cfg, n: U32) -> Cfg:
+  match c:
+    case Cfg{port, root, log, idle}:
+      Cfg{port, root, log, n}
 
 def cfg.set_root(c: Cfg, dir: List<&2, U32>) -> Cfg:
   match c:
-    case Cfg{port, root, log}:
-      Cfg{port, Some{dir}, log}
+    case Cfg{port, root, log, idle}:
+      Cfg{port, Some{dir}, log, idle}
 
 def cfg.set_log(c: Cfg) -> Cfg:
   match c:
-    case Cfg{port, root, log}:
-      Cfg{port, root, True{}}
+    case Cfg{port, root, log, idle}:
+      Cfg{port, root, True{}, idle}
 
 # a non-empty run of decimal digits
 def digits.go(bs: List<&2, U32>, ok: Bool) -> Bool:
@@ -605,20 +624,23 @@ type Want is Data:
   Flag{}
   PortOf{}
   RootOf{}
+  IdleOf{}
   Wrong{why: List<&2, U32>}
 
 type Args is Data:
   Args{cfg: Cfg, want: Want}
 
-def args.flag(c: Cfg, a: List<&2, U32>, log: Bool, port: Bool, root: Bool) -> Args:
-  match log port root:
-    case True{} _ _:
+def args.flag(c: Cfg, a: List<&2, U32>, log: Bool, port: Bool, root: Bool, idle: Bool) -> Args:
+  match log port root idle:
+    case True{} _ _ _:
       Args{cfg.set_log(c), Flag{}}
-    case False{} True{} _:
+    case False{} True{} _ _:
       Args{c, PortOf{}}
-    case False{} False{} True{}:
+    case False{} False{} True{} _:
       Args{c, RootOf{}}
-    case False{} False{} False{}:
+    case False{} False{} False{} True{}:
+      Args{c, IdleOf{}}
+    case False{} False{} False{} False{}:
       Args{c, Wrong{cat(bytes("unknown flag: "), a)}}
 
 def args.num(c: Cfg, a: List<&2, U32>, ok: Bool) -> Args:
@@ -628,17 +650,26 @@ def args.num(c: Cfg, a: List<&2, U32>, ok: Bool) -> Args:
     case False{}:
       Args{c, Wrong{cat(bytes("not a port: "), a)}}
 
+def args.ms(c: Cfg, a: List<&2, U32>, ok: Bool) -> Args:
+  match ok:
+    case True{}:
+      Args{cfg.set_idle(c, u32.of(a, 0)), Flag{}}
+    case False{}:
+      Args{c, Wrong{cat(bytes("not a number of ms: "), a)}}
+
 def args.feed(st: Args, +a: List<&2, U32>) -> Args:
   match st:
     case Args{c, want}:
       match want:
         case Flag{}:
           args.flag(c, a, beq(a, bytes("--log"), True{}), beq(a, bytes("--port"), True{}),
-            beq(a, bytes("--root"), True{}))
+            beq(a, bytes("--root"), True{}), beq(a, bytes("--idle-ms"), True{}))
         case PortOf{}:
           args.num(c, a, digits(a))
         case RootOf{}:
           Args{cfg.set_root(c, a), Flag{}}
+        case IdleOf{}:
+          args.ms(c, a, digits(a))
         case Wrong{why}:
           Args{c, Wrong{why}}
 
@@ -660,6 +691,8 @@ def args.done(st: Args) -> IO(Cfg):
           IO.die(Cfg, 2, "--port needs a number")
         case RootOf{}:
           IO.die(Cfg, 2, "--root needs a directory")
+        case IdleOf{}:
+          IO.die(Cfg, 2, "--idle-ms needs a number")
         case Wrong{why}:
           IO.die(Cfg, 2, text(why))
 
@@ -785,7 +818,7 @@ def routes.tail(root: Maybe<&2, List<&2, U32>>) -> List<&2, Route>:
 
 def routes(c: Cfg) -> List<&2, Route>:
   match c:
-    case Cfg{port, root, log}:
+    case Cfg{port, root, log, idle}:
       List.append(&2, Route, routes.base(), routes.tail(root))
 
 # a is a prefix of b
@@ -872,6 +905,11 @@ def srv.root(s: Srv) -> List<&2, U32>:
   match s:
     case Srv{c, table}:
       cfg.root(c)
+
+def srv.idle(s: Srv) -> U32:
+  match s:
+    case Srv{c, table}:
+      cfg.idle(c)
 
 # Static files
 # ============
@@ -1301,6 +1339,7 @@ def answer(+srv: Srv, rs: List<&2, Req>, cl: Bool) -> Ans:
 # again, or close now. Feed is the one that holds a connection open.
 type Plan is Data:
   Go{out: List<&2, Seg>, p2: P}
+  Wait{p2: P}
   End{out: List<&2, Seg>}
   Feed{out: List<&2, Seg>, n: U32}
   Stop{}
@@ -1316,10 +1355,23 @@ def plan.pick(
     case True{} False{}:
       Go{out, p2}
 
+# nothing to write means the chunk ended mid-message: read on without
+# a write, unless the peer asked to close
+def plan.quiet(p2: P, cl: Bool) -> Plan:
+  match cl:
+    case True{}:
+      Stop{}
+    case False{}:
+      Wait{p2}
+
 def plan.ans(a: Ans, p2: P) -> Plan:
   match a:
     case Ans{out, cl, +st}:
-      plan.pick(out, p2, U32.is_zero(st), cl, st)
+      match out:
+        case Nil{}:
+          plan.quiet(p2, cl)
+        case Con{h, t}:
+          plan.pick(Con{h, t}, p2, U32.is_zero(st), cl, st)
 
 def plan.take(+srv: Srv, pr: P & List<&2, Req>) -> Plan:
   (p2, rs) = pr
@@ -1348,34 +1400,51 @@ def plan.chunk(+srv: Srv, buf: List<&2, U32>, p: P) -> Plan:
     case Con{b, bs}:
       plan.on(srv, p.dead(feed(Con{b, bs}, p)))
 
-def plan.read(
-  +srv: Srv, s: Socket, r: Result<&1, &1, U32 & String, List<&2, U32>>, p: P
+# what a timed read gave: bytes to parse, the peer's silence past the
+# idle time (the connection ends), or a failure (it ends)
+def plan.may(
+  +srv: Srv, s: Socket, may: Maybe<&1, List<&2, U32>>, p: P
+) -> Socket & Plan:
+  match may:
+    case None{}:
+      (s, Stop{})
+    case Some{buf}:
+      (s, plan.chunk(srv, buf, p))
+
+def plan.polled(
+  +srv: Srv, s: Socket, r: Result<&1, &1, U32 & String, Maybe<&1, List<&2, U32>>>,
+  p: P
 ) -> Socket & Plan:
   match r:
-    case Done{buf}:
-      (s, plan.chunk(srv, buf, p))
+    case Done{may}:
+      plan.may(srv, s, may, p)
     case Fail{e}:
       (s, Stop{})
 
-# the socket and the plan, out of one recv
-def plan.recv(
-  +srv: Srv, m: Socket & Result<&1, &1, U32 & String, List<&2, U32>>, p: P
+# the socket and the plan, out of one timed read
+def plan.poll(
+  +srv: Srv, m: Socket & Result<&1, &1, U32 & String, Maybe<&1, List<&2, U32>>>,
+  p: P
 ) -> Socket & Plan:
   (s, r) = m
-  plan.read(srv, s, r, p)
+  plan.polled(srv, s, r, p)
 
 def chunk() -> U32:
   16384
 
-# read the next chunk and plan from it. Splitting the send's socket out
-# here is what lets the connection loop below be one self-recursive def.
+# read the next chunk, within the idle time, and plan from it. Splitting
+# the send's socket out here is what lets the connection loop below be
+# one self-recursive def.
+def turn.s(+srv: Srv, s: Socket, p: P) -> IO(Socket & Plan):
+  do IO<Socket & Plan>:
+    m : Socket & Result<&1, &1, U32 & String, Maybe<&1, List<&2, U32>>> <-
+      TCP.poll_bytes(s, chunk(), srv.idle(srv))
+    return plan.poll(srv, m, p)
+
 def turn(+srv: Srv, sent: Socket & Result<&1, &1, U32 & String, Unit>, p: P) ->
   IO(Socket & Plan):
   (s, r) = sent
-  do IO<Socket & Plan>:
-    m : Socket & Result<&1, &1, U32 & String, List<&2, U32>> <-
-      TCP.recv_bytes(s, chunk())
-    return plan.recv(srv, m, p)
+  turn.s(srv, s, p)
 
 # the next event, or the end of the stream. A stream terminates because
 # the count runs out, the same way a connection does: no @unsafe, and a
@@ -1413,7 +1482,19 @@ def shut(m: Socket & Result<&1, &1, U32 & String, Unit>) -> IO(Unit):
 # One connection. fuel is the most chunks it will ever read, so the
 # loop terminates by Bend's own rule rather than by @unsafe: a peer
 # that dribbles bytes forever runs the fuel out and is dropped.
-def conn(f: Nat, +srv: Srv, sp: Socket & Plan) -> IO(Unit):
+# the most chunks one connection may ever ask for. It is a real bound,
+# not a formality: it is what stops a peer from holding a computation
+# open forever, and it is why conn needs no @unsafe.
+def conn.fuel() -> Nat:
+  U32.to_nat(1048576)
+
+# the most reads in a row that may finish no message. A head arrives
+# in one or two chunks; one dribbled a byte at a time, each inside the
+# idle time, is not a client and is dropped after this many.
+def conn.waits() -> Nat:
+  64n
+
+def conn(f: Nat, +srv: Srv, sp: Socket & Plan, w: Nat) -> IO(Unit):
   match f:
     case 0n:
       (s, pl) = sp
@@ -1429,32 +1510,34 @@ def conn(f: Nat, +srv: Srv, sp: Socket & Plan) -> IO(Unit):
             m  : Socket & Result<&1, &1, U32 & String, Unit> <-
               TCP.send_bytes(s, bs)
             shut(m)
+        case Wait{p2}:
+          match w:
+            case 0n:
+              Socket.close(s)
+            case 1n+v:
+              do IO<Unit>:
+                sp2 : Socket & Plan <- turn.s(srv, s, p2)
+                conn(g, srv, sp2, v)
         case Feed{out, n}:
           do IO<Unit>:
             bs  : List<&2, U32> <- flat(out)
             m   : Socket & Result<&1, &1, U32 & String, Unit> <-
               TCP.send_bytes(s, bs)
             sp2 : Socket & Plan <- tick(m, n)
-            conn(g, srv, sp2)
+            conn(g, srv, sp2, conn.waits())
         case Go{out, p2}:
           do IO<Unit>:
             bs  : List<&2, U32> <- flat(out)
             m   : Socket & Result<&1, &1, U32 & String, Unit> <-
               TCP.send_bytes(s, bs)
             sp2 : Socket & Plan <- turn(srv, m, p2)
-            conn(g, srv, sp2)
-
-# the most chunks one connection may ever ask for. It is a real bound,
-# not a formality: it is what stops a peer from holding a computation
-# open forever, and it is why conn needs no @unsafe.
-def conn.fuel() -> Nat:
-  U32.to_nat(1048576)
+            conn(g, srv, sp2, conn.waits())
 
 def start(+srv: Srv, s: Socket) -> IO(Unit):
   do IO<Unit>:
-    m : Socket & Result<&1, &1, U32 & String, List<&2, U32>> <-
-      TCP.recv_bytes(s, chunk())
-    conn(conn.fuel(), srv, plan.recv(srv, m, p.new()))
+    m : Socket & Result<&1, &1, U32 & String, Maybe<&1, List<&2, U32>>> <-
+      TCP.poll_bytes(s, chunk(), srv.idle(srv))
+    conn(conn.fuel(), srv, plan.poll(srv, m, p.new()), conn.waits())
 
 def accept.one(+srv: Srv, m: Listener & Result<&1, &1, U32 & String, Socket>) ->
   IO(Listener):
@@ -1482,7 +1565,7 @@ def run(+c: Cfg) -> IO(Unit):
     IO.print(banner(c))
     accept(srv.new(c), l)
 
-# bend-http [--port N] [--root DIR] [--log]
+# bend-http [--port N] [--root DIR] [--idle-ms N] [--log]
 def main() -> IO(Unit):
   do IO<Unit>:
     xs : List<String> <- IO.args()
