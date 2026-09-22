@@ -44,16 +44,17 @@ timeouts, graceful shutdown, and a shared port for running one copy per
 core. 1.6 MB static binary. `demos/io_resp` is a RESP reader written to
 test whether the approach generalises (see **What is unfinished**).
 
-    bend demos/io_http_engine/PROOF.bend          # 47 laws
+    bend demos/io_http_engine/PROOF.bend          # 58 laws
     bend demos/io_http_engine/main.bend -o httpd
     ./httpd --port 8080 --root www --tls-cert cert.pem --tls-key key.pem
 
 Four gates, and it is worth knowing what each one is for, because they
 catch different things and three of them have caught real bugs:
 
-- **`PROOF.bend`** -- 47 laws. 7 are theorems quantified over all
+- **`PROOF.bend`** -- 58 laws. 12 are theorems quantified over all
   inputs (chunking never changes a parse; a refused message is never
-  revived); 40 are closed instances -- RFC vectors, route tables,
+  revived; no request target opens a path outside the root, a dotfile
+  or a name with a control byte); 46 are closed instances -- RFC vectors, route tables,
   specific paths, literals proved equal to their builder -- which are
   test vectors the compiler recomputes and so cannot rot.
 - **`check.c`** -- 39 behavioural cases over a socket, plus 17 for the
@@ -111,9 +112,7 @@ same two hundred lines of connection-loop shape. That re-typing and
 that loop are exactly what the library should absorb.
 
 **Not done at all:** HTTP/2 (needs TLS, which now exists, then HPACK
-with round-trip laws and `h2spec` as the gate); the universal proof
-that the path normaliser cannot escape its root, as opposed to the four
-concrete pins it has; `TCP.send_vec`, which does not earn its place
+with round-trip laws and `h2spec` as the gate); `TCP.send_vec`, which does not earn its place
 until replies are flat buffers.
 
 ## The upstream bugs

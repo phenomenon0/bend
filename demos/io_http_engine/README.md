@@ -85,19 +85,40 @@ path the fixed routes leave is a file under the root, `/` itself being
 answers and that no two entries claim one path, and the checker
 refuses the build when someone adds a route that shadows another.
 
-A file's name is the request path split on `/`, normalised (`.`
-dropped, `..` climbing, a climb out of the root refused rather than
-clamped, because a clamped path is a path someone will probe), and
-gated to printable ASCII. Percent escapes are not decoded, so an
-escaped `..` names a file that does not exist rather than a climb. The
-type comes from the extension; a directory opens and then refuses to
-be read, which is a miss; a file past 4 MiB is refused rather than
-loaded, until pages are written in pieces.
+A file's name is the request path (`fnames.of`): its bytes refused if
+any is a control byte, split on `/`, normalised (`.` dropped, `..`
+climbing, a climb out of the root refused rather than clamped, because
+a clamped path is a path someone will probe), and then every segment
+checked again for what may reach the file system: some bytes, all
+printable ASCII other than `/` and `\`, and no dotfile, so `/.env` and
+`/.git/config` are a 404. Percent escapes are not decoded, so an
+escaped `..` names a file that does not exist rather than a climb.
 
-A reply is a list of segments: bytes as they are, or a page to read
+The name is opened by `File.open_under(root, path)`
+(`bend2/effs/file_open_under.{c,js}`): an `openat` per component with
+`O_NOFOLLOW`, so a symbolic link anywhere under the root, to a file or
+to a directory, is refused rather than followed out of it; the end must
+be a regular file, so a directory or a FIFO is a miss. The root itself
+is the operator's and is opened as given. The type comes from the
+extension.
+
+A reply is a list of segments: bytes as they are, or a file to write
 when the reply is written. Fixed routes stay pure and cost what they
 cost before; only a file route puts IO on the path, and only for its
 own request, so a pipelined batch mixing both still answers in order.
+`send.segs` writes them in order: fixed replies wait on one block and
+go out with whatever comes next; a file goes out as its head, sized by
+`fstat` of the descriptor it opened, then in blocks of at most 64 KiB,
+each read only after the socket took the one before. A file costs one
+block however large it is and however many of them a pipelined batch
+asks for: 32 clients fetching a 4 MiB file at once, or 100 pipelined
+GETs of a 1 MiB file, leave the server's peak resident set at 5.4 MB,
+where reading whole files first reached 200 MB and 350 MB (2.9 GB when
+a byte was a list cell); the pipelined batch also went from 335 to
+1,365 MB/s on loopback.
+The body is exactly the length its head promised: a short read is read
+on, and a file that ends early (it shrank while being written) ends the
+connection, since nothing after it could be framed.
 
 `HEAD` answers with the head of what `GET` would have sent, cut at the
 blank line by a scanner rather than rebuilt, so the two can never
@@ -212,10 +233,10 @@ is a hash by the time a reply exists, so the two this engine serves
 are named and anything else is `?`.
 
 A log line is a `Note` segment the router puts before the reply's
-segments; `flat`, which already resolves segments in IO, prints it
-against the bytes the next segment resolves to. So a pipelined batch
-logs in the order its requests arrived, a file logs the size it
-actually read, and a `HEAD` logs the head it actually sent. It is off
+segments; `send.segs`, which already resolves segments in IO, prints
+it against the bytes the next segment resolves to. So a pipelined batch
+logs in the order its requests arrived, a file logs its head and the
+length that head promised, and a `HEAD` logs the head it actually sent. It is off
 by default because a line per request is a syscall per request:
 69,819 req/s becomes 52,187 with it on.
 
@@ -272,13 +293,21 @@ with a root answers (`/health` still, `/` and everything else to the
 files), that neither table has two entries for one path, and that an
 empty table routes nothing. The two HEAD laws say the scanner that cuts
 a reply at its blank line agrees, byte for byte, with the builder that
-writes a head from a length. The four normaliser laws pin the paths
-that matter: a climb from the root, a climb from under a real
-directory, dots, and a climb that stays inside. Those four are pins,
-not a proof over every path; that proof needs a lemma over classified
-segments and is the next one to write.
+writes a head from a length. Four normaliser laws pin the paths that
+matter: a climb from the root, a climb from under a real directory,
+dots, and a climb that stays inside; two more hold for every path
+after the first segment: a climb from the root is refused whatever
+follows, and a climb right after a name cancels it. `path_safe` holds
+for every request target: what `fnames.of` hands to the file system is
+refused, or segments that keep a rule LAWS.bend states on its own (some
+bytes, printable ASCII, no `/` or `\`, no dotfile or, with dotfiles
+served, never `.` or `..`). `clean_refuses_control` says a target with
+a control byte anywhere is never clean, and `unclean_names_nothing`
+that an unclean target names no file.
 
-Each law was checked by breaking it: a one-digit content-length, a
+Each law was checked by breaking it: a clamped climb, a clean()
+that lets everything through, the segment guard removed, dotfiles
+served, DEL forgotten as a control byte, a one-digit content-length, a
 linefeed that escapes `Bad{}`, a `feed` that drops state at a chunk
 boundary, a head one byte long, a climb claimed to resolve, and a
 duplicate route are all rejected, with the two terms printed.
@@ -302,7 +331,12 @@ rounds without a difference. `check.c`
 runs its behavioural cases against either: fifteen for any server,
 the last of which reads the server's CPU when given its pid; nine more
 for static files when the server was started with `--root` on the
-fixture directory and the check with `--files`; five more for time and
+fixture directory and the check with `--files`; eight more with
+`--root=DIR`, the server's root, where the check writes its own
+fixtures: a symbolic link to `/etc/passwd` and one to `/etc`, a
+dotfile, a 4 MiB file served byte for byte, the same to 32 clients at
+once and a 1 MiB one to 100 pipelined GETs with the server's `VmHWM`
+under 20 MB, and a file that shrinks mid-reply; five more for time and
 size when the server was started with `--idle-ms MS` and the check with
 `--idle=MS`; one for the limit with `--max-conns N` and `--conns=N`;
 one for the log with `--log` and `--log=FILE`; eight for WebSocket
