@@ -262,17 +262,51 @@ reads parses where the whole would have, proved by the same induction.
 What it accepts is deliberately small: client frames are masked or the
 connection is failed with 1002, as the RFC requires; fragments and
 reserved bits are refused; a payload past 1 MiB is refused at the byte
-that announces it, before an eight-byte length could wrap. Text and
-binary come back as they came, a ping is answered with a pong, a close
-with a close and the end of the connection. The laws pin a masked text
-frame and an empty ping reading back, the three refusals, and the
-bytes the writer produces for a short frame, a two-byte length and a
-close code.
+that announces it, before an eight-byte length could wrap; a control
+frame past 125 bytes and a length in more bytes than it needed are
+refused. Text and binary come back as they came, a ping is answered
+with a pong, a close with a close and the end of the connection. A
+close code no peer may send (0-999, 1004-1006, 1015-2999, past 4999)
+is answered 1002, and text or a close reason that is not UTF-8 is
+answered 1007: the validator is a walk over the payload with the next
+continuation byte's range in its state, so an overlong form, a
+surrogate and a code point past 10FFFF are each refused at their byte.
+
+The reader has two entries over one machine: `Ws.feed` walks a list,
+and is the spec; `Ws.feed_buf` walks a `Bytes` by uncons, which moves
+an unshared buffer's view in place, and is what a connection reading
+`TCP.poll_buf` calls. `ws_feed_buf` says the two are one function of
+the bytes, for every buffer and state; `ws_feed_buf_split` follows from
+it, `ws_feed_split` and `Bytes.to_list_append`. The mask is one word
+turned a byte left per payload byte, a payload is one block (prepended
+into, reversed once), and a reply is one block: frame heads written in
+front of the payloads, a read's replies appended in place.
+
+Over 1 MB of masked 1000-byte frames the reader went from 235 ms (a
+four-cell mask list rebuilt per byte, a list per payload) to 37 ms on a
+list already built and 67 ms on `Bytes`; an uncons costs more than a
+cons cell, but a connection that reads `Bytes` would pay 82 ms to walk
+the list reader over `Bytes.to_list`, and 85 ms through `Bytes.get`
+by index. Reading and answering the same stream went from 250 ms to
+98 ms.
+
+The laws pin a masked text frame and an empty ping reading back on
+both paths, whole and cut after the mask; the refusals; the least
+length each extended form reads; the bytes the writer produces for a
+short frame, a two-byte length and a close code; the close codes at
+every edge against the rule stated on its own; the close and text
+replies; and sixteen UTF-8 vectors on which the validator and a
+decode-then-check reference in LAWS.bend both say what they are.
 
 `check.c` under `--ws` does the handshake with RFC 6455's own key and
 expects the RFC's accept value, then the echo, the pong, a 300-byte
 binary frame with its two-byte length, a frame split across two writes,
-the close, the unmasked frame, and the `426` a plain `GET /ws` earns.
+the close, the unmasked frame, and the `426` a plain `GET /ws` earns;
+then, each on its own connection, a 126-byte ping and lengths in the
+wrong form (1002), eleven reserved or out-of-range close codes (1002)
+and six valid ones (echoed), an overlong form, a surrogate and a cut
+character in text and a bad close reason (1007), and UTF-8 text in
+three and four bytes echoed.
 
 ## The log
 
@@ -431,7 +465,7 @@ once and a 1 MiB one to 100 pipelined GETs with the server's `VmHWM`
 under 20 MB, and a file that shrinks mid-reply; five more for time and
 size when the server was started with `--idle-ms MS` and the check with
 `--idle=MS`; one for the limit with `--max-conns N` and `--conns=N`;
-one for the log with `--log` and `--log=FILE`; ten for WebSocket
+one for the log with `--log` and `--log=FILE`; twenty for WebSocket
 with `--ws`; seven for the budgets with `--guard`, against a server
 under `ulimit -n 64` with `--idle-ms 1000 --head-ms 1500` (600
 pipelined GETs of a 100 KB file under a `VmHWM` of 40 MB, a peer that
