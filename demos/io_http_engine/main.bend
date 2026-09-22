@@ -2494,9 +2494,9 @@ def plan.up.rep(out: List<&2, Seg>, wr: Ws.W, r: Ws.Rep) -> Plan:
     case Ws.Rep{o, close}:
       match close:
         case True{}:
-          End{List.append(&2, Seg, out, [Raw{Bytes.from_list(o)}])}
+          End{List.append(&2, Seg, out, [Raw{o}])}
         case False{}:
-          Sock{List.append(&2, Seg, out, [Raw{Bytes.from_list(o)}]), wr}
+          Sock{List.append(&2, Seg, out, [Raw{o}]), wr}
 
 def plan.up.dead(out: List<&2, Seg>, fs: List<&2, Ws.Frm>, dd: Ws.W & Bool) -> Plan:
   (wr, bad) = dd
@@ -2725,18 +2725,18 @@ def plan.rep(s: Socket, wr: Ws.W, r: Ws.Rep) -> Socket & Plan:
   match r:
     case Ws.Rep{out, close}:
       match out:
-        case Nil{}:
+        case SNil{}:
           match close:
             case True{}:
               (s, End{Nil{}})
             case False{}:
               (s, Hold{wr})
-        case Con{h, t}:
+        case SCon{h, t}:
           match close:
             case True{}:
-              (s, End{[Raw{Bytes.from_list(Con{h, t})}]})
+              (s, End{[Raw{SCon{h, t}}]})
             case False{}:
-              (s, Sock{[Raw{Bytes.from_list(Con{h, t})}], wr})
+              (s, Sock{[Raw{SCon{h, t}}], wr})
 
 def plan.framed(s: Socket, fs: List<&2, Ws.Frm>, dd: Ws.W & Bool) -> Socket & Plan:
   (wr, bad) = dd

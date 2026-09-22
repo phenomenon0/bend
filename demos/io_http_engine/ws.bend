@@ -33,22 +33,23 @@ def accept(key: List<&2, U32>) -> List<&2, U32>:
 # Frames
 # ======
 
-# a complete frame: its opcode and its unmasked payload
+# a complete frame: its opcode and its unmasked payload, one block
 type Frm is Data:
-  Frm{op: U32, body: List<&2, U32>}
+  Frm{op: U32, body: Bytes()}
 
 # Op   the first byte: FIN, reserved bits, opcode
 # Len  the second: the mask bit and the length, or how long the length is
 # Ext  the extended length, need bytes to go, len so far
-# Msk  the mask, need bytes to go, collected (reversed)
-# Pay  the payload, rem bytes to go, the mask rotating, kept (reversed)
+# Msk  the mask, need bytes to go, the bytes so far big-endian in a word
+# Pay  the payload, rem bytes to go, the mask turned so its top byte is
+#      the next key, the bytes unmasked so far (reversed)
 # Bad  the framing broke; absorbing, and never left
 type Fs is Data:
   Op{}
   Len{op: U32}
   Ext{op: U32, need: U32, len: U32}
-  Msk{op: U32, len: U32, need: U32, m: List<&2, U32>}
-  Pay{op: U32, rem: U32, m: List<&2, U32>, acc: List<&2, U32>}
+  Msk{op: U32, len: U32, need: U32, m: U32}
+  Pay{op: U32, rem: U32, m: U32, acc: Bytes()}
   Bad{}
 
 # the whole reader: where it is, and the frames done, newest first
@@ -62,7 +63,7 @@ def new() -> W:
 def cap() -> U32:
   1048576
 
-def emit(op: U32, body: List<&2, U32>, out: List<&2, Frm>) -> W:
+def emit(op: U32, body: Bytes(), out: List<&2, Frm>) -> W:
   W{Op{}, Con{Frm{op, body}, out}}
 
 # the first byte: FIN set, no reserved bits, an opcode this reader knows
@@ -90,7 +91,7 @@ def step.len.on(op: U32, n: U32, two: Bool, eight: Bool) -> Fs:
     case False{} True{}:
       Ext{op, 8, 0}
     case False{} False{}:
-      Msk{op, n, 4, Nil{}}
+      Msk{op, n, 4, 0}
 
 def step.len.go(op: U32, +n: U32, masked: Bool) -> Fs:
   match masked:
@@ -110,7 +111,7 @@ def step.ext.go(op: U32, left: U32, len2: U32, big: Bool, done: Bool) -> Fs:
     case True{} _:
       Bad{}
     case False{} True{}:
-      Msk{op, len2, 4, Nil{}}
+      Msk{op, len2, 4, 0}
     case False{} False{}:
       Ext{op, left, len2}
 
@@ -120,57 +121,51 @@ def step.ext.on(op: U32, +left: U32, +len2: U32) -> Fs:
 def step.ext(op: U32, need: U32, len: U32, b: U32) -> Fs:
   step.ext.on(op, (need - 1 : U32), ((len * 256 : U32) + b : U32))
 
-# the four mask bytes; an empty payload is a frame the moment the mask
-# is in
+# the four mask bytes, gathered into one word; an empty payload is a
+# frame the moment the mask is in
 def step.msk.on(
-  op: U32, len: U32, left: U32, m2: List<&2, U32>, out: List<&2, Frm>,
-  last: Bool, empty: Bool
+  op: U32, len: U32, left: U32, m2: U32, out: List<&2, Frm>, last: Bool,
+  empty: Bool
 ) -> W:
   match last empty:
     case False{} _:
       W{Msk{op, len, left, m2}, out}
     case True{} True{}:
-      emit(op, Nil{}, out)
+      emit(op, SNil{}, out)
     case True{} False{}:
-      W{Pay{op, len, List.reverse(&2, U32, m2), Nil{}}, out}
+      W{Pay{op, len, m2, SNil{}}, out}
 
 def step.msk(
-  op: U32, +len: U32, +need: U32, m: List<&2, U32>, b: U32, out: List<&2, Frm>
+  op: U32, +len: U32, +need: U32, m: U32, b: U32, out: List<&2, Frm>
 ) -> W:
-  step.msk.on(op, len, (need - 1 : U32), Con{b, m}, out, U32.is_eq(need, 1),
-    U32.is_zero(len))
+  step.msk.on(op, len, (need - 1 : U32), ((m * 256 : U32) + b : U32), out,
+    U32.is_eq(need, 1), U32.is_zero(len))
 
-# the payload, unmasked byte by byte with the key rotating
-def rot(m: List<&2, U32>) -> List<&2, U32>:
-  match m:
-    case Nil{}:
-      Nil{}
-    case Con{h, t}:
-      List.append(&2, U32, t, [h])
+# the payload, unmasked byte by byte: the key is the mask's top byte,
+# and the mask turns a byte left after each
+def key.of(+m: U32) -> U32:
+  (m / 16777216 : U32)
 
-def key.of(m: List<&2, U32>) -> U32:
-  match m:
-    case Nil{}:
-      0
-    case Con{h, t}:
-      h
+def rot(+m: U32) -> U32:
+  ((m * 256 : U32) + key.of(m) : U32)
 
+# the payload is kept reversed, so each byte is a prepend, which the
+# runtime does in place into the block's front room; one reverse at the
+# end lays it out
 def step.pay.on(
-  op: U32, left: U32, m2: List<&2, U32>, acc2: List<&2, U32>, out: List<&2, Frm>,
-  last: Bool
+  op: U32, left: U32, m2: U32, acc2: Bytes(), out: List<&2, Frm>, last: Bool
 ) -> W:
   match last:
     case True{}:
-      emit(op, List.reverse(&2, U32, acc2), out)
+      emit(op, String.reverse(acc2), out)
     case False{}:
       W{Pay{op, left, m2, acc2}, out}
 
 def step.pay(
-  op: U32, +rem: U32, +m: List<&2, U32>, acc: List<&2, U32>, b: U32,
-  out: List<&2, Frm>
+  op: U32, +rem: U32, +m: U32, acc: Bytes(), b: U32, out: List<&2, Frm>
 ) -> W:
-  step.pay.on(op, (rem - 1 : U32), rot(m), Con{U32.xor(b, key.of(m)), acc}, out,
-    U32.is_eq(rem, 1))
+  step.pay.on(op, (rem - 1 : U32), rot(m), SCon{Chr{U32.xor(b, key.of(m))}, acc},
+    out, U32.is_eq(rem, 1))
 
 def step.at(st: Fs, out: List<&2, Frm>, b: U32) -> W:
   match st:
@@ -193,13 +188,24 @@ def step(w: W, b: U32) -> W:
       step.at(st, out, b)
 
 # one structural walk over a chunk; the state that comes out is the
-# state to feed the next chunk
+# state to feed the next chunk. This is the reader's spec, over a list.
 def feed(bs: List<&2, U32>, w: W) -> W:
   match bs:
     case Nil{}:
       w
     case Con{b, t}:
       feed(t, step(w, b))
+
+# the same walk over a byte buffer, the one a connection reads: it
+# steps the same machine, so it is feed of the buffer's bytes (LAWS.bend,
+# ws_feed_buf). An uncons of a buffer nothing else holds advances it in
+# place, so the walk allocates no cell per byte.
+def feed_buf(b: Bytes(), w: W) -> W:
+  match b:
+    case SNil{}:
+      w
+    case SCon{Chr{c}, t}:
+      feed_buf(t, step(w, c))
 
 # the frames completed so far, oldest first, and the reader emptied
 def take(w: W) -> W & List<&2, Frm>:
@@ -246,13 +252,16 @@ def len.go(+n: U32, small: Bool, mid: Bool) -> List<&2, U32>:
 def len.bytes(+n: U32) -> List<&2, U32>:
   len.go(n, U32.is_lt(n, 126), U32.is_lt(n, 65536))
 
-# a server frame: FIN and the opcode, the length, the payload, no mask
-def frame(op: U32, +body: List<&2, U32>) -> List<&2, U32>:
-  Con{U32.or(128, op),
-    List.append(&2, U32, len.bytes(U32.from_nat(List.length(&2, U32, body))), body)}
+# a server frame, one block: FIN and the opcode, the length, the
+# payload, no mask. The head is a few bytes; the payload is copied once,
+# behind it.
+def frame(op: U32, +body: Bytes()) -> Bytes():
+  Bytes.append(
+    Bytes.from_list(Con{U32.or(128, op), len.bytes(U32.from_nat(Bytes.len(body)))}),
+    body)
 
-def close.frame(+code: U32) -> List<&2, U32>:
-  frame(8, [Sha1.byte(Sha1.sr(8n, code)), Sha1.byte(code)])
+def close.frame(+code: U32) -> Bytes():
+  frame(8, Bytes.from_list([Sha1.byte(Sha1.sr(8n, code)), Sha1.byte(code)]))
 
 # Answering
 # =========
@@ -260,29 +269,29 @@ def close.frame(+code: U32) -> List<&2, U32>:
 # what to write back for the frames one read completed, and whether the
 # connection ends after it
 type Rep is Data:
-  Rep{out: List<&2, U32>, close: Bool}
+  Rep{out: Bytes(), close: Bool}
 
 # a close is answered with the peer's status code if it sent one; a
 # one-byte payload is not a code and gets 1002
-def close.echo(body: List<&2, U32>) -> List<&2, U32>:
+def close.echo(body: Bytes()) -> Bytes():
   match body:
-    case Nil{}:
+    case SNil{}:
       close.frame(1000)
-    case Con{a, t}:
+    case SCon{Chr{a}, t}:
       match t:
-        case Nil{}:
+        case SNil{}:
           close.frame(1002)
-        case Con{b, u}:
-          frame(8, [a, b])
+        case SCon{Chr{b}, u}:
+          frame(8, Bytes.from_list([a, b]))
 
-def rep.op(op: U32, body: List<&2, U32>, is_close: Bool, is_ping: Bool, is_pong: Bool) -> Rep:
+def rep.op(op: U32, +body: Bytes(), is_close: Bool, is_ping: Bool, is_pong: Bool) -> Rep:
   match is_close is_ping is_pong:
     case True{} _ _:
       Rep{close.echo(body), True{}}
     case False{} True{} _:
       Rep{frame(10, body), False{}}
     case False{} False{} True{}:
-      Rep{Nil{}, False{}}
+      Rep{SNil{}, False{}}
     case False{} False{} False{}:
       Rep{frame(op, body), False{}}
 
@@ -292,14 +301,14 @@ def rep.one(f: Frm) -> Rep:
       rep.op(op, body, U32.is_eq(op, 8), U32.is_eq(op, 9), U32.is_eq(op, 10))
 
 # nothing follows a close
-def rep.cat.go(o1: List<&2, U32>, c1: Bool, b: Rep) -> Rep:
+def rep.cat.go(o1: Bytes(), c1: Bool, b: Rep) -> Rep:
   match c1:
     case True{}:
       Rep{o1, True{}}
     case False{}:
       match b:
         case Rep{o2, c2}:
-          Rep{List.append(&2, U32, o1, o2), c2}
+          Rep{Bytes.append(o1, o2), c2}
 
 def rep.cat(a: Rep, b: Rep) -> Rep:
   match a:
@@ -309,7 +318,7 @@ def rep.cat(a: Rep, b: Rep) -> Rep:
 def reply.go(fs: List<&2, Frm>) -> Rep:
   match fs:
     case Nil{}:
-      Rep{Nil{}, False{}}
+      Rep{SNil{}, False{}}
     case Con{f, t}:
       rep.cat(rep.one(f), reply.go(t))
 
@@ -322,7 +331,7 @@ def reply.bad(bad: Bool, r: Rep) -> Rep:
     case True{}:
       match r:
         case Rep{o, c}:
-          Rep{List.append(&2, U32, o, close.frame(1002)), True{}}
+          Rep{Bytes.append(o, close.frame(1002)), True{}}
 
 def reply(fs: List<&2, Frm>, bad: Bool) -> Rep:
   reply.bad(bad, reply.go(fs))

@@ -580,18 +580,51 @@ law ws_bad_feeds:
   for +out: List<&2, Ws.Frm>
   {Ws.feed(s, Ws.W{Ws.Bad{}, out}) == Ws.W{Ws.Bad{}, out} : Ws.W}
 
+# LAW: the reader a connection runs walks a byte buffer, and it is the
+# list reader above on that buffer's bytes, for every buffer and state.
+law ws_feed_buf:
+  for +b: Bytes()
+  for +w: Ws.W
+  {Ws.feed_buf(b, w) == Ws.feed(Bytes.to_list(b), w) : Ws.W}
+
+# LAW: so chunking does not change the parse on buffers either.
+law ws_feed_buf_split:
+  for +a: Bytes()
+  for +b: Bytes()
+  for +w: Ws.W
+  {Ws.feed_buf(Bytes.append(a, b), w) == Ws.feed_buf(b, Ws.feed_buf(a, w)) : Ws.W}
+
+law ws_bad_feeds_buf:
+  for +s: Bytes()
+  for +out: List<&2, Ws.Frm>
+  {Ws.feed_buf(s, Ws.W{Ws.Bad{}, out}) == Ws.W{Ws.Bad{}, out} : Ws.W}
+
 # LAW: a masked client frame reads back as its opcode and its bytes:
-# "hi" as text under the mask 1 2 3 4, and an empty ping.
+# "hi" as text under the mask 1 2 3 4, and an empty ping; the same on
+# the buffer path, whole and cut after the mask.
 law ws_read_text:
   {Ws.take(Ws.feed([129, 130, 1, 2, 3, 4, 105, 107], Ws.new())) ==
-    (Ws.W{Ws.Op{}, Nil{}}, [Ws.Frm{1, Eng.bytes("hi")}]) : Ws.W & List<&2, Ws.Frm>}
+    (Ws.W{Ws.Op{}, Nil{}}, [Ws.Frm{1, "hi"}]) : Ws.W & List<&2, Ws.Frm>}
 
 law ws_read_ping:
   {Ws.take(Ws.feed([137, 128, 9, 9, 9, 9], Ws.new())) ==
-    (Ws.W{Ws.Op{}, Nil{}}, [Ws.Frm{9, Nil{}}]) : Ws.W & List<&2, Ws.Frm>}
+    (Ws.W{Ws.Op{}, Nil{}}, [Ws.Frm{9, ""}]) : Ws.W & List<&2, Ws.Frm>}
+
+law ws_read_text_buf:
+  {Ws.take(Ws.feed_buf(Bytes.from_list([129, 130, 1, 2, 3, 4, 105, 107]), Ws.new())) ==
+    (Ws.W{Ws.Op{}, Nil{}}, [Ws.Frm{1, "hi"}]) : Ws.W & List<&2, Ws.Frm>}
+
+law ws_read_text_buf_cut:
+  {Ws.take(Ws.feed_buf(Bytes.from_list([105, 107]),
+    Ws.feed_buf(Bytes.from_list([129, 130, 1, 2, 3, 4]), Ws.new()))) ==
+    (Ws.W{Ws.Op{}, Nil{}}, [Ws.Frm{1, "hi"}]) : Ws.W & List<&2, Ws.Frm>}
+
+law ws_read_ping_buf:
+  {Ws.take(Ws.feed_buf(Bytes.from_list([137, 128, 9, 9, 9, 9]), Ws.new())) ==
+    (Ws.W{Ws.Op{}, Nil{}}, [Ws.Frm{9, ""}]) : Ws.W & List<&2, Ws.Frm>}
 
 # LAW: an unmasked client frame, a fragment, and a reserved bit are each
-# refused at the byte that shows them.
+# refused at the byte that shows them, on both paths.
 law ws_unmasked_is_bad:
   {Ws.dead(Ws.feed([129, 2], Ws.new())) ==
     (Ws.W{Ws.Bad{}, Nil{}}, True{}) : Ws.W & Bool}
@@ -602,16 +635,28 @@ law ws_fragment_is_bad:
 law ws_reserved_is_bad:
   {Ws.dead(Ws.feed([193], Ws.new())) == (Ws.W{Ws.Bad{}, Nil{}}, True{}) : Ws.W & Bool}
 
-# LAW: what the server writes: a short frame, and the two-byte length
-# past 125.
+law ws_unmasked_is_bad_buf:
+  {Ws.dead(Ws.feed_buf(Bytes.from_list([129, 2]), Ws.new())) ==
+    (Ws.W{Ws.Bad{}, Nil{}}, True{}) : Ws.W & Bool}
+
+law ws_fragment_is_bad_buf:
+  {Ws.dead(Ws.feed_buf(Bytes.from_list([1]), Ws.new())) ==
+    (Ws.W{Ws.Bad{}, Nil{}}, True{}) : Ws.W & Bool}
+
+law ws_reserved_is_bad_buf:
+  {Ws.dead(Ws.feed_buf(Bytes.from_list([193]), Ws.new())) ==
+    (Ws.W{Ws.Bad{}, Nil{}}, True{}) : Ws.W & Bool}
+
+# LAW: what the server writes, one block: a short frame, the two-byte
+# length past 125, a close code.
 law ws_frame_short:
-  {Ws.frame(1, Eng.bytes("hi")) == [129, 2, 104, 105] : List<&2, U32>}
+  {Ws.frame(1, "hi") == Bytes.from_list([129, 2, 104, 105]) : Bytes()}
 
 law ws_len_two_bytes:
   {Ws.len.bytes(300) == [126, 1, 44] : List<&2, U32>}
 
 law ws_close_code:
-  {Ws.close.frame(1002) == [136, 2, 3, 234] : List<&2, U32>}
+  {Ws.close.frame(1002) == Bytes.from_list([136, 2, 3, 234]) : Bytes()}
 
 # LAW: the batch budget. After a reply of any size joins the batch of
 # pages being written, what stays waiting is below send.cap(): a batch

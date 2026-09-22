@@ -668,10 +668,67 @@ def Laws.ws_bad_feeds(s, out):
     case Con{c, t}:
       Laws.ws_bad_feeds(t, out)
 
+# ws_feed_buf: the two walks step the same machine on the same byte, so
+# the cons case is the hypothesis on the stepped state.
+def Laws.ws_feed_buf(b, w):
+  match b:
+    case SNil{}:
+      {==}
+    case SCon{Chr{c}, t}:
+      Laws.ws_feed_buf(t, Ws.step(w, c))
+
+# ws_feed_buf_split: through the lists. Each buffer walk is the list
+# walk of its bytes, the bytes of a join are the join of the bytes, and
+# the list reader splits.
+def Laws.ws_feed_buf_split(a, b, w):
+  Equal.trans(Ws.W, Ws.feed_buf(Bytes.append(a, b), w),
+    Ws.feed(Bytes.to_list(Bytes.append(a, b)), w),
+    Ws.feed_buf(b, Ws.feed_buf(a, w)),
+    Laws.ws_feed_buf(Bytes.append(a, b), w),
+    Equal.trans(Ws.W, Ws.feed(Bytes.to_list(Bytes.append(a, b)), w),
+      Ws.feed(List.append(&2, U32, Bytes.to_list(a), Bytes.to_list(b)), w),
+      Ws.feed_buf(b, Ws.feed_buf(a, w)),
+      Equal.cong(List<&2, U32>, Ws.W, xs => Ws.feed(xs, w),
+        Bytes.to_list(Bytes.append(a, b)),
+        List.append(&2, U32, Bytes.to_list(a), Bytes.to_list(b)),
+        Bytes.to_list_append(a, b)),
+      Equal.trans(Ws.W,
+        Ws.feed(List.append(&2, U32, Bytes.to_list(a), Bytes.to_list(b)), w),
+        Ws.feed(Bytes.to_list(b), Ws.feed(Bytes.to_list(a), w)),
+        Ws.feed_buf(b, Ws.feed_buf(a, w)),
+        Laws.ws_feed_split(Bytes.to_list(a), Bytes.to_list(b), w),
+        Equal.trans(Ws.W,
+          Ws.feed(Bytes.to_list(b), Ws.feed(Bytes.to_list(a), w)),
+          Ws.feed(Bytes.to_list(b), Ws.feed_buf(a, w)),
+          Ws.feed_buf(b, Ws.feed_buf(a, w)),
+          Equal.cong(Ws.W, Ws.W, v => Ws.feed(Bytes.to_list(b), v),
+            Ws.feed(Bytes.to_list(a), w), Ws.feed_buf(a, w),
+            Equal.sym(Ws.W, Ws.feed_buf(a, w), Ws.feed(Bytes.to_list(a), w),
+              Laws.ws_feed_buf(a, w))),
+          Equal.sym(Ws.W, Ws.feed_buf(b, Ws.feed_buf(a, w)),
+            Ws.feed(Bytes.to_list(b), Ws.feed_buf(a, w)),
+            Laws.ws_feed_buf(b, Ws.feed_buf(a, w)))))))
+
+def Laws.ws_bad_feeds_buf(s, out):
+  match s:
+    case SNil{}:
+      {==}
+    case SCon{Chr{c}, t}:
+      Laws.ws_bad_feeds_buf(t, out)
+
 def Laws.ws_read_text():
   {==}
 
 def Laws.ws_read_ping():
+  {==}
+
+def Laws.ws_read_text_buf():
+  {==}
+
+def Laws.ws_read_text_buf_cut():
+  {==}
+
+def Laws.ws_read_ping_buf():
   {==}
 
 def Laws.ws_unmasked_is_bad():
@@ -681,6 +738,15 @@ def Laws.ws_fragment_is_bad():
   {==}
 
 def Laws.ws_reserved_is_bad():
+  {==}
+
+def Laws.ws_unmasked_is_bad_buf():
+  {==}
+
+def Laws.ws_fragment_is_bad_buf():
+  {==}
+
+def Laws.ws_reserved_is_bad_buf():
   {==}
 
 def Laws.ws_frame_short():
