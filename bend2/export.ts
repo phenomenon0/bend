@@ -7,7 +7,7 @@
 // FORMAT (one item per line; # starts a comment line)
 //
 //   file  ::= "(bend-core 1)" item*
-//   item  ::= (adt NAME PN SIG (ctr NAME FN TYPE)*)
+//   item  ::= (adt NAME PN FLAGS SIG (ctr NAME FN TYPE)*)
 //           | (def NAME N X FLAGS TYPE BODY)
 //   FLAGS ::= (flags FLAG*)   FLAG ::= law | base | unsafe | foreign
 //   BODY  ::= none | TERM     (none: a bodiless native, foreign or law)
@@ -117,7 +117,8 @@ export function book_export(book: Bend.Book): string {
     const tld = book.tlds[k];
     if (tld.$ === "ADT") {
       const cs = tld.c.map((c) => " (ctr " + name(c.k) + " " + String(c.n) + " " + term(c.T, 0) + ")");
-      out.push("(adt " + name(k) + " " + String(tld.n) + " " + term(tld.T, 0) + cs.join("") + ")");
+      out.push("(adt " + name(k) + " " + String(tld.n) + " (flags" + (tld.b ? " base" : "") + ") "
+        + term(tld.T, 0) + cs.join("") + ")");
       return;
     }
     const fl: string[] = [];
