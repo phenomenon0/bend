@@ -8,19 +8,19 @@
 import Base
 import ./main.bend as Eng
 
-# Byte lists
-# ==========
+# Bytes
+# =====
 
-# two byte lists are equal when they are the same bytes, in order
-def eq(a: List<&2, U32>, b: List<&2, U32>) -> Bool:
+# two byte strings are equal when they are the same bytes, in order
+def eq(a: Bytes(), b: Bytes()) -> Bool:
   match a b:
-    case Nil{} Nil{}:
+    case SNil{} SNil{}:
       True{}
-    case Nil{} Con{y, u}:
+    case SNil{} SCon{Chr{y}, u}:
       False{}
-    case Con{x, t} Nil{}:
+    case SCon{Chr{x}, t} SNil{}:
       False{}
-    case Con{x, t} Con{y, u}:
+    case SCon{Chr{x}, t} SCon{Chr{y}, u}:
       U32.is_eq(x, y) && eq(t, u)
 
 def mem(+c: U32, xs: List<&2, U32>) -> Bool:
@@ -196,9 +196,17 @@ def in.value(k: Eng.Cls) -> Bool:
 # Names
 # =====
 
-# a name as the reader holds it: its bytes lowercased, read backwards
-def name(s: String) -> List<&2, U32>:
-  List.reverse(&2, U32, Eng.bytes(s))
+# a name as the reader looks it up: its bytes, lowercased
+def name(s: String) -> Bytes():
+  s
+
+# a name lowercased, byte by byte, as lower() above does it
+def lows(s: Bytes()) -> Bytes():
+  match s:
+    case SNil{}:
+      SNil{}
+    case SCon{Chr{c}, t}:
+      SCon{Chr{lower(c)}, lows(t)}
 
 def fields.rest() -> List<&2, Eng.Known>:
   [Eng.Known{name("content-length"), Eng.FCl{}},
@@ -216,7 +224,7 @@ def fields() -> List<&2, Eng.Known>:
 
 # the field a name is: the entry spelled with exactly its bytes, and
 # no field when there is none
-def find(+k: List<&2, U32>, tbl: List<&2, Eng.Known>) -> Eng.Fld:
+def find(+k: Bytes(), tbl: List<&2, Eng.Known>) -> Eng.Fld:
   match tbl:
     case Nil{}:
       Eng.FOther{}
@@ -225,7 +233,7 @@ def find(+k: List<&2, U32>, tbl: List<&2, Eng.Known>) -> Eng.Fld:
         case Eng.Known{n, f}:
           Eng.fld.pick(eq(k, n), f, find(k, t))
 
-def field(+k: List<&2, U32>) -> Eng.Fld:
+def field(+k: Bytes()) -> Eng.Fld:
   find(k, fields())
 
 # HTTP/1.1 asks for exactly one Host (RFC 9112 3.2)

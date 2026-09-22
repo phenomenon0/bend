@@ -42,6 +42,29 @@ law bad_feeds:
   {Eng.feed(s, Eng.P{Eng.Bad{}, pd, out}) ==
     Eng.P{Eng.Bad{}, pd, out} : Eng.P}
 
+# LAW: the walk a connection runs is the reader above. feed_buf takes a
+# read as one packed block and cuts whole runs out of it -- a target, a
+# body, a value it skips -- where feed steps a byte at a time; for every
+# block and every reader state the two land in the same place. So every
+# law of feed is a law of the engine.
+law feed_buf_is_feed:
+  for +b: Bytes()
+  for +p: Eng.P
+  {Eng.feed_buf(b, p) == Eng.feed(Bytes.to_list(b), p) : Eng.P}
+
+# LAW: and chunking does not change the parse on blocks either.
+law feed_buf_split:
+  for +a: Bytes()
+  for +b: Bytes()
+  for +p: Eng.P
+  {Eng.feed_buf(Bytes.append(a, b), p) == Eng.feed_buf(b, Eng.feed_buf(a, p)) : Eng.P}
+
+law bad_feeds_buf:
+  for +s: Bytes()
+  for +pd: Eng.Pend
+  for +out: List<&2, Eng.Req>
+  {Eng.feed_buf(s, Eng.P{Eng.Bad{}, pd, out}) == Eng.P{Eng.Bad{}, pd, out} : Eng.P}
+
 # Framing
 # =======
 #
@@ -59,21 +82,26 @@ law cls_is_spec:
 law lower_is_spec:
   {Spec.lower.eng(Spec.all()) == Spec.lower.ref(Spec.all()) : List<&2, U32>}
 
+# a name is lowercased whole where it closes, and that lowering is the
+# reference's on every byte too
+law lows_is_spec:
+  {Eng.lows(Bytes.from_list(Spec.all())) == Spec.lows(Bytes.from_list(Spec.all())) : Bytes()}
+
 # LAW: a field is known by its bytes. For every name the reader can
-# hold, the field it takes that name for is the reference's: the one
+# look up, the field it takes that name for is the reference's: the one
 # spelled with exactly those bytes, or none. No other name is ever a
 # Content-Length or a Transfer-Encoding, whatever it hashes to.
 law field_by_bytes:
-  for +k: List<&2, U32>
+  for +k: Bytes()
   {Eng.fld.of(k) == Spec.field(k) : Eng.Fld}
 
-# LAW: a Transfer-Encoding is refused at its colon, whatever message it
-# is in and whatever came before it.
+# LAW: a Transfer-Encoding is refused at its colon, in whatever case it
+# was written, whatever message it is in and whatever came before it.
 law te_refused:
-  for +k: List<&2, U32>
+  for +k: Bytes()
   for +pd: Eng.Pend
   for +out: List<&2, Eng.Req>
-  for e: {Spec.eq(k, Spec.name("transfer-encoding")) == True{} : Bool}
+  for e: {Spec.eq(Eng.lows(k), Spec.name("transfer-encoding")) == True{} : Bool}
   {Eng.step(Eng.P{Eng.InN{k}, pd, out}, 58) == Eng.P{Eng.Bad{}, pd, out} : Eng.P}
 
 # LAW: a name is a token and ends at its colon. Any other byte in it --
@@ -81,7 +109,7 @@ law te_refused:
 # control -- is refused, in every message.
 law name_refuses:
   for +c: U32
-  for +n: List<&2, U32>
+  for +n: Bytes()
   for +pd: Eng.Pend
   for +out: List<&2, Eng.Req>
   for e: {Spec.in.name(Eng.cls(c)) == False{} : Bool}
@@ -114,7 +142,7 @@ law clen_disagree:
   for +v: U32
   for +w: U32
   for +m: Eng.Meth
-  for +path: List<&2, U32>
+  for +path: Bytes()
   for +cl: Bool
   for +h: Eng.Hosts
   for +ws: Eng.Up
@@ -127,7 +155,7 @@ law clen_disagree:
 # in it is refused, so none reaches a route or the log.
 law target_refuses:
   for +c: U32
-  for +p: List<&2, U32>
+  for +p: Bytes()
   for +pd: Eng.Pend
   for +out: List<&2, Eng.Req>
   for e: {Spec.in.target(Eng.cls(c)) == False{} : Bool}
@@ -145,7 +173,7 @@ law value_refuses:
 
 law conn_refuses:
   for +c: U32
-  for +t: List<&2, U32>
+  for +t: Bytes()
   for +a: Bool
   for +b: Bool
   for +pd: Eng.Pend
@@ -157,7 +185,7 @@ law conn_refuses:
 # (RFC 9112 3.2), whatever else it carried.
 law host_once:
   for +m: Eng.Meth
-  for +path: List<&2, U32>
+  for +path: Bytes()
   for +l: Eng.Cl
   for +cl: Bool
   for +h: Eng.Hosts
@@ -171,125 +199,125 @@ law host_once:
 # every byte is kept, in order, for the frame reader, and no message
 # is completed.
 law rest_feeds:
-  for +s: List<&2, U32>
-  for +bs: List<&2, U32>
+  for +s: Bytes()
+  for +bs: Bytes()
   for +pd: Eng.Pend
   for +out: List<&2, Eng.Req>
-  {Eng.feed(s, Eng.P{Eng.Rest{bs}, pd, out}) ==
-    Eng.P{Eng.Rest{List.reverse.go(&2, U32, s, bs)}, pd, out} : Eng.P}
+  {Eng.feed_buf(s, Eng.P{Eng.Rest{bs}, pd, out}) ==
+    Eng.P{Eng.Rest{Bytes.append(bs, s)}, pd, out} : Eng.P}
 
 # LAW: the vectors. Each is a whole input run through the real reader
 # from a fresh state -- the messages it completed, and whether it
 # refused -- and feed_split carries each one to every way TCP could
 # have cut it. First what is served as it should be.
 law parse_get:
-  {Eng.parse(Eng.bytes("GET /health HTTP/1.1\r\nHost: x\r\n\r\n")) ==
-    ([Eng.Req{Eng.MGet{}, Eng.bytes("/health"), Nil{}, False{}, False{}, Nil{}}], False{}) :
+  {Eng.parse("GET /health HTTP/1.1\r\nHost: x\r\n\r\n") ==
+    ([Eng.Req{Eng.MGet{}, "/health", "", False{}, False{}, ""}], False{}) :
     List<&2, Eng.Req> & Bool}
 
 law parse_body:
-  {Eng.parse(Eng.bytes("GET /echo HTTP/1.1\r\nhost: x\r\nCoNtEnT-LeNgTh:\t5 \r\n\r\nhello")) ==
-    ([Eng.Req{Eng.MGet{}, Eng.bytes("/echo"), Eng.bytes("hello"), False{}, False{}, Nil{}}], False{}) :
+  {Eng.parse("GET /echo HTTP/1.1\r\nhost: x\r\nCoNtEnT-LeNgTh:\t5 \r\n\r\nhello") ==
+    ([Eng.Req{Eng.MGet{}, "/echo", "hello", False{}, False{}, ""}], False{}) :
     List<&2, Eng.Req> & Bool}
 
 # a name that hashes as Content-Length did is not one: the bytes after
 # its head are the next request, not its body
 law parse_hash_twin:
-  {Eng.parse(Eng.bytes("GET /echo HTTP/1.1\r\nHost: x\r\nx-v5fged: 5\r\n\r\nhelloGET / HTTP/1.1\r\nHost: x\r\n\r\n")) ==
-    ([Eng.Req{Eng.MGet{}, Eng.bytes("/echo"), Nil{}, False{}, False{}, Nil{}},
-      Eng.Req{Eng.MOther{}, Eng.bytes("/"), Nil{}, False{}, False{}, Nil{}}], False{}) :
+  {Eng.parse("GET /echo HTTP/1.1\r\nHost: x\r\nx-v5fged: 5\r\n\r\nhelloGET / HTTP/1.1\r\nHost: x\r\n\r\n") ==
+    ([Eng.Req{Eng.MGet{}, "/echo", "", False{}, False{}, ""},
+      Eng.Req{Eng.MOther{}, "/", "", False{}, False{}, ""}], False{}) :
     List<&2, Eng.Req> & Bool}
 
 # two lengths that agree are one length; empty lines before a request
 # line are skipped; close anywhere in a Connection list closes
 law parse_agree:
-  {Eng.parse(Eng.bytes("\r\n\r\nHEAD /echo HTTP/1.1\r\nHost: x\r\nContent-Length: 2\r\nConnection: keep-alive, CLOSE\r\ncontent-length: 2\r\n\r\nhi")) ==
-    ([Eng.Req{Eng.MHead{}, Eng.bytes("/echo"), Eng.bytes("hi"), True{}, False{}, Nil{}}], False{}) :
+  {Eng.parse("\r\n\r\nHEAD /echo HTTP/1.1\r\nHost: x\r\nContent-Length: 2\r\nConnection: keep-alive, CLOSE\r\ncontent-length: 2\r\n\r\nhi") ==
+    ([Eng.Req{Eng.MHead{}, "/echo", "hi", True{}, False{}, ""}], False{}) :
     List<&2, Eng.Req> & Bool}
 
 # the upgrade a browser asks for, Connection a list; what follows it is
 # kept for the frame reader
 law parse_upgrade:
-  {Eng.parse(Eng.bytes("GET /ws HTTP/1.1\r\nHost: x\r\nUpgrade: websocket\r\nConnection: keep-alive, Upgrade\r\nSec-WebSocket-Key: k\r\n\r\nGET / HTTP/1.1\r\n\r\n")) ==
-    ([Eng.Req{Eng.MGet{}, Eng.bytes("/ws"), Nil{}, False{}, True{}, Eng.bytes("k")}], False{}) :
+  {Eng.parse("GET /ws HTTP/1.1\r\nHost: x\r\nUpgrade: websocket\r\nConnection: keep-alive, Upgrade\r\nSec-WebSocket-Key: k\r\n\r\nGET / HTTP/1.1\r\n\r\n") ==
+    ([Eng.Req{Eng.MGet{}, "/ws", "", False{}, True{}, "k"}], False{}) :
     List<&2, Eng.Req> & Bool}
 
 law rest_upgrade:
-  {Eng.p.rest(Eng.feed(Eng.cat(Eng.bytes("GET /ws HTTP/1.1\r\nHost: x\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: k\r\n\r\n"), [129, 128]), Eng.p.new())) ==
-    [129, 128] : List<&2, U32>}
+  {Eng.p.rest(Eng.feed_buf(Bytes.append("GET /ws HTTP/1.1\r\nHost: x\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: k\r\n\r\n", Bytes.from_list([129, 128])), Eng.p.new())) ==
+    Bytes.from_list([129, 128]) : Bytes()}
 
 # LAW: and what is refused. None of these completes a message: each is
 # how a request is smuggled past a reader that frames it another way.
 law refuse_space_colon:
-  {Eng.parse(Eng.bytes("GET /echo HTTP/1.1\r\nHost: x\r\nContent-Length : 5\r\n\r\nhello")) ==
+  {Eng.parse("GET /echo HTTP/1.1\r\nHost: x\r\nContent-Length : 5\r\n\r\nhello") ==
     (Nil{}, True{}) : List<&2, Eng.Req> & Bool}
 
 law refuse_te_space_colon:
-  {Eng.parse(Eng.bytes("GET /echo HTTP/1.1\r\nHost: x\r\nTransfer-Encoding : chunked\r\nContent-Length: 5\r\n\r\nhello")) ==
+  {Eng.parse("GET /echo HTTP/1.1\r\nHost: x\r\nTransfer-Encoding : chunked\r\nContent-Length: 5\r\n\r\nhello") ==
     (Nil{}, True{}) : List<&2, Eng.Req> & Bool}
 
 law refuse_te:
-  {Eng.parse(Eng.bytes("GET /echo HTTP/1.1\r\nHost: x\r\nContent-Length: 5\r\nTRANSFER-encoding: chunked\r\n\r\n0\r\n\r\n")) ==
+  {Eng.parse("GET /echo HTTP/1.1\r\nHost: x\r\nContent-Length: 5\r\nTRANSFER-encoding: chunked\r\n\r\n0\r\n\r\n") ==
     (Nil{}, True{}) : List<&2, Eng.Req> & Bool}
 
 law refuse_two_lengths:
-  {Eng.parse(Eng.bytes("GET /echo HTTP/1.1\r\nHost: x\r\nContent-Length: 3\r\nContent-Length: 5\r\n\r\nabcde")) ==
+  {Eng.parse("GET /echo HTTP/1.1\r\nHost: x\r\nContent-Length: 3\r\nContent-Length: 5\r\n\r\nabcde") ==
     (Nil{}, True{}) : List<&2, Eng.Req> & Bool}
 
 law refuse_wrap:
-  {Eng.parse(Eng.bytes("GET /echo HTTP/1.1\r\nHost: x\r\nContent-Length: 4294967301\r\n\r\nhello")) ==
+  {Eng.parse("GET /echo HTTP/1.1\r\nHost: x\r\nContent-Length: 4294967301\r\n\r\nhello") ==
     (Nil{}, True{}) : List<&2, Eng.Req> & Bool}
 
 law refuse_past_cap:
-  {Eng.parse(Eng.bytes("GET /echo HTTP/1.1\r\nHost: x\r\nContent-Length: 1048577\r\n")) ==
+  {Eng.parse("GET /echo HTTP/1.1\r\nHost: x\r\nContent-Length: 1048577\r\n") ==
     (Nil{}, True{}) : List<&2, Eng.Req> & Bool}
 
 law refuse_not_digits:
-  {Eng.parse(Eng.bytes("GET /echo HTTP/1.1\r\nHost: x\r\nContent-Length: 5x\r\n\r\nhello")) ==
+  {Eng.parse("GET /echo HTTP/1.1\r\nHost: x\r\nContent-Length: 5x\r\n\r\nhello") ==
     (Nil{}, True{}) : List<&2, Eng.Req> & Bool}
 
 law refuse_list:
-  {Eng.parse(Eng.bytes("GET /echo HTTP/1.1\r\nHost: x\r\nContent-Length: 5, 5\r\n\r\nhello")) ==
+  {Eng.parse("GET /echo HTTP/1.1\r\nHost: x\r\nContent-Length: 5, 5\r\n\r\nhello") ==
     (Nil{}, True{}) : List<&2, Eng.Req> & Bool}
 
 law refuse_fold:
-  {Eng.parse(Eng.bytes("GET /echo HTTP/1.1\r\nHost: x\r\nX: a\r\n Content-Length: 5\r\n\r\nhello")) ==
+  {Eng.parse("GET /echo HTTP/1.1\r\nHost: x\r\nX: a\r\n Content-Length: 5\r\n\r\nhello") ==
     (Nil{}, True{}) : List<&2, Eng.Req> & Bool}
 
 law refuse_bare_lf:
-  {Eng.parse(Eng.bytes("GET /echo HTTP/1.1\r\nHost: x\r\nX: a\nContent-Length: 5\r\n\r\nhello")) ==
+  {Eng.parse("GET /echo HTTP/1.1\r\nHost: x\r\nX: a\nContent-Length: 5\r\n\r\nhello") ==
     (Nil{}, True{}) : List<&2, Eng.Req> & Bool}
 
 law refuse_no_colon:
-  {Eng.parse(Eng.bytes("GET /echo HTTP/1.1\r\nHost: x\r\nFoo\r\nContent-Length: 5\r\n\r\nhello")) ==
+  {Eng.parse("GET /echo HTTP/1.1\r\nHost: x\r\nFoo\r\nContent-Length: 5\r\n\r\nhello") ==
     (Nil{}, True{}) : List<&2, Eng.Req> & Bool}
 
 law refuse_target_cr:
-  {Eng.parse(Eng.bytes("GET /a\rb HTTP/1.1\r\nHost: x\r\n\r\n")) ==
+  {Eng.parse("GET /a\rb HTTP/1.1\r\nHost: x\r\n\r\n") ==
     (Nil{}, True{}) : List<&2, Eng.Req> & Bool}
 
 law refuse_no_host:
-  {Eng.parse(Eng.bytes("GET /health HTTP/1.1\r\n\r\n")) == (Nil{}, True{}) :
+  {Eng.parse("GET /health HTTP/1.1\r\n\r\n") == (Nil{}, True{}) :
     List<&2, Eng.Req> & Bool}
 
 law refuse_two_hosts:
-  {Eng.parse(Eng.bytes("GET /health HTTP/1.1\r\nHost: a\r\nhost: a\r\n\r\n")) ==
+  {Eng.parse("GET /health HTTP/1.1\r\nHost: a\r\nhost: a\r\n\r\n") ==
     (Nil{}, True{}) : List<&2, Eng.Req> & Bool}
 
 law refuse_version:
-  {Eng.parse(Eng.bytes("GET /health HTTP/1.0\r\nHost: x\r\n\r\n")) ==
+  {Eng.parse("GET /health HTTP/1.0\r\nHost: x\r\n\r\n") ==
     (Nil{}, True{}) : List<&2, Eng.Req> & Bool}
 
 # a refusal does not take back the message completed before it: its
 # reply is owed, and goes out before the 400
 law refuse_after_one:
-  {Eng.parse(Eng.bytes("GET / HTTP/1.1\r\nHost: x\r\n\r\nGET / HTTP/1.1\r\nHost : x\r\n\r\n")) ==
-    ([Eng.Req{Eng.MGet{}, Eng.bytes("/"), Nil{}, False{}, False{}, Nil{}}], True{}) :
+  {Eng.parse("GET / HTTP/1.1\r\nHost: x\r\n\r\nGET / HTTP/1.1\r\nHost : x\r\n\r\n") ==
+    ([Eng.Req{Eng.MGet{}, "/", "", False{}, False{}, ""}], True{}) :
     List<&2, Eng.Req> & Bool}
 
 # LAW: a query is no part of the path a target routes by.
 law path_query:
-  {Eng.path.of(Eng.bytes("/health?x=/a?b")) == Eng.bytes("/health") : List<&2, U32>}
+  {Eng.path.of("/health?x=/a?b") == "/health" : Bytes()}
 
 # LAW: the reply that ends a connection says so, and is otherwise the
 # reply it was.
@@ -345,36 +373,36 @@ law head_of_missing:
 # with a root, the fixed routes still win and everything else is a file
 # under it, "/" included.
 law route_health:
-  {Eng.route(Eng.routes(Eng.cfg.new()), Eng.bytes("/health")) ==
+  {Eng.route(Eng.routes(Eng.cfg.new()), "/health") ==
     Some{Eng.Health{}} : Maybe<&2, Eng.Act>}
 
 law route_root:
-  {Eng.route(Eng.routes(Eng.cfg.new()), Eng.bytes("/")) ==
+  {Eng.route(Eng.routes(Eng.cfg.new()), "/") ==
     Some{Eng.Root{}} : Maybe<&2, Eng.Act>}
 
 law route_echo:
-  {Eng.route(Eng.routes(Eng.cfg.new()), Eng.bytes("/echo")) ==
+  {Eng.route(Eng.routes(Eng.cfg.new()), "/echo") ==
     Some{Eng.Echo{}} : Maybe<&2, Eng.Act>}
 
 law route_events:
-  {Eng.route(Eng.routes(Eng.cfg.new()), Eng.bytes("/events")) ==
+  {Eng.route(Eng.routes(Eng.cfg.new()), "/events") ==
     Some{Eng.Events{}} : Maybe<&2, Eng.Act>}
 
 law route_missing:
-  {Eng.route(Eng.routes(Eng.cfg.new()), Eng.bytes("/nope")) ==
+  {Eng.route(Eng.routes(Eng.cfg.new()), "/nope") ==
     None{} : Maybe<&2, Eng.Act>}
 
 law route_files:
   {Eng.route(Eng.routes(Eng.cfg.set_root(Eng.cfg.new(), Eng.bytes("www"))),
-    Eng.bytes("/css/site.css")) == Some{Eng.Files{}} : Maybe<&2, Eng.Act>}
+    "/css/site.css") == Some{Eng.Files{}} : Maybe<&2, Eng.Act>}
 
 law route_files_index:
   {Eng.route(Eng.routes(Eng.cfg.set_root(Eng.cfg.new(), Eng.bytes("www"))),
-    Eng.bytes("/")) == Some{Eng.Files{}} : Maybe<&2, Eng.Act>}
+    "/") == Some{Eng.Files{}} : Maybe<&2, Eng.Act>}
 
 law route_files_fixed:
   {Eng.route(Eng.routes(Eng.cfg.set_root(Eng.cfg.new(), Eng.bytes("www"))),
-    Eng.bytes("/health")) == Some{Eng.Health{}} : Maybe<&2, Eng.Act>}
+    "/health") == Some{Eng.Health{}} : Maybe<&2, Eng.Act>}
 
 # LAW: no two entries of either table claim one path.
 law routes_distinct:
@@ -386,7 +414,7 @@ law routes_distinct_root:
 
 # LAW: an empty table routes nothing, whatever is asked.
 law route_empty:
-  for +path: List<&2, U32>
+  for +path: Bytes()
   {Eng.route(Nil{}, path) == None{} : Maybe<&2, Eng.Act>}
 
 # LAW: a request cannot name a file outside the root. The four pins
@@ -872,13 +900,13 @@ law batch_under:
 # LAW: the target cap, at its edge: a target of exactly k bytes is not
 # past k, and one byte more is, whatever the bytes are.
 law long_at:
-  for +bs: List<&2, U32>
-  {Eng.long(List.length(&2, U32, bs), bs) == False{} : Bool}
+  for +bs: Bytes()
+  {Eng.long(Bytes.len(bs), bs) == False{} : Bool}
 
 law long_past:
-  for +bs: List<&2, U32>
+  for +bs: Bytes()
   for +c: U32
-  {Eng.long(List.length(&2, U32, bs), Con{c, bs}) == True{} : Bool}
+  {Eng.long(Bytes.len(bs), SCon{Chr{c}, bs}) == True{} : Bool}
 
 # LAW: the head's clock. A read that leaves no head in progress (a body,
 # the next request, nothing) drops the watch, and one that leaves a head
@@ -911,11 +939,11 @@ law key_padding:
 # LAW: an upgrade that names version 13 asks to upgrade, and one that
 # names another does not, whatever else it carried
 law parse_version_13:
-  {Eng.parse(Eng.bytes("GET /ws HTTP/1.1\r\nHost: x\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: k\r\nSec-WebSocket-Version: 13\r\n\r\n")) ==
-    ([Eng.Req{Eng.MGet{}, Eng.bytes("/ws"), Nil{}, False{}, True{}, Eng.bytes("k")}], False{}) :
+  {Eng.parse("GET /ws HTTP/1.1\r\nHost: x\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: k\r\nSec-WebSocket-Version: 13\r\n\r\n") ==
+    ([Eng.Req{Eng.MGet{}, "/ws", "", False{}, True{}, "k"}], False{}) :
     List<&2, Eng.Req> & Bool}
 
 law parse_version_other:
-  {Eng.parse(Eng.bytes("GET /ws HTTP/1.1\r\nHost: x\r\nSec-WebSocket-Version: 8\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: k\r\n\r\n")) ==
-    ([Eng.Req{Eng.MGet{}, Eng.bytes("/ws"), Nil{}, False{}, False{}, Eng.bytes("k")}], False{}) :
+  {Eng.parse("GET /ws HTTP/1.1\r\nHost: x\r\nSec-WebSocket-Version: 8\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: k\r\n\r\n") ==
+    ([Eng.Req{Eng.MGet{}, "/ws", "", False{}, False{}, "k"}], False{}) :
     List<&2, Eng.Req> & Bool}

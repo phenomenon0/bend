@@ -1,10 +1,10 @@
 # HTTP/1.1 engine: a streaming request parser, a router and a server,
-# all in Bend. The parser is the point. It is one structural walk over
-# whatever bytes a socket hands over, with no lookahead, no buffering
-# of the head and no re-scanning: the whole reader state rides in one
-# P node, so a head split across three recvs parses exactly like a head
-# that arrives whole, and a chunk holding three pipelined requests
-# yields three requests in that one walk.
+# all in Bend. The parser is the point. It is one walk over whatever
+# bytes a socket hands over, with no lookahead, no buffering of the head
+# and no re-scanning: the whole reader state rides in one P node, so a
+# head split across three recvs parses exactly like a head that arrives
+# whole, and a chunk holding three pipelined requests yields three
+# requests in that one walk.
 #
 # Bend's loops cannot exit early: a recursive call must shrink a matched
 # argument, so a machine that stopped at the blank line would still have
@@ -26,9 +26,10 @@
 # and a String is decoded as UTF-8, so a body that is not text comes
 # back as one U+FFFD per ill-formed byte -- three bytes out for one in,
 # while Content-Length still says one. That is a framing break, not a
-# cost, so this engine reads List<&2, U32> through TCP.poll_bytes and
-# writes Bytes, one packed block, through TCP.send_buf: every reply is
-# built as Bytes and goes out as it lies in the heap.
+# cost, so this engine reads Bytes through TCP.poll_buf and writes Bytes
+# through TCP.send_buf: a read is one packed block, walked where it lies,
+# and the target, the body and the key a request carries are views of
+# it; every reply is built as Bytes and goes out as it lies in the heap.
 #
 #   bend demos/io_http_engine/main.bend -o httpd && ./httpd
 #   curl -i http://127.0.0.1:8080/health
@@ -76,16 +77,12 @@ def cls.high(del: Bool) -> Cls:
     case False{}:
       KVc{}
 
-def any(+c: U32, xs: List<&2, U32>) -> Bool:
-  match xs:
-    case Nil{}:
-      False{}
-    case Con{x, t}:
-      U32.is_eq(c, x) || any(c, t)
-
-# the token characters that are neither letters nor digits
+# the token characters that are neither letters nor digits, as the
+# ranges they fall in: ! #$%&' *+ -. ^_` | ~
 def tsym(+c: U32) -> Bool:
-  any(c, [45, 46, 95, 33, 35, 36, 37, 38, 39, 42, 43, 94, 96, 124, 126])
+  U32.is_eq(c, 33) || (U32.is_le(35, c) && U32.is_le(c, 39)) || U32.is_eq(c, 42)
+    || U32.is_eq(c, 43) || U32.is_eq(c, 45) || U32.is_eq(c, 46)
+    || (U32.is_le(94, c) && U32.is_le(c, 96)) || U32.is_eq(c, 124) || U32.is_eq(c, 126)
 
 def cls.sym(co: Bool, cm: Bool, tk: Bool) -> Cls:
   match co cm tk:
@@ -125,27 +122,24 @@ def cls.go(+c: U32, lo: Bool, hi: Bool) -> Cls:
 def cls(+c: U32) -> Cls:
   cls.go(c, U32.is_lt(c, 33), U32.is_le(127, c))
 
-# Field names are case-insensitive, so they are read lowercased.
-def lower.go(+c: U32, up: Bool) -> U32:
-  match up:
-    case True{}:
-      (c + 32 : U32)
-    case False{}:
-      c
+# Field names and list members are case-insensitive, so they are read
+# lowercased: a byte as Char.to_lower has it, which is what lows() does
+# to a whole name at once.
+def lower(c: U32) -> U32:
+  Char.to_u32(Char.to_lower(Chr{c}))
 
-def lower(+c: U32) -> U32:
-  lower.go(c, U32.is_le(65, c) && U32.is_le(c, 90))
+def lows(s: Bytes()) -> Bytes():
+  String.to_lower(s)
 
-# The reader's unit. A byte list, one cell per byte, is what the socket
-# hands over; replies go back as Bytes.
+# Byte lists are what the file names and the arguments are walked as.
 def cat(a: List<&2, U32>, b: List<&2, U32>) -> List<&2, U32>:
   List.append(&2, U32, a, b)
 
 def rev(a: List<&2, U32>) -> List<&2, U32>:
   List.reverse(&2, U32, a)
 
-# An ASCII literal as bytes. Written text stays readable in the source
-# and becomes bytes here; a code point past 255 is not a byte and
+# An ASCII literal as a byte list. Written text stays readable in the
+# source and becomes bytes here; a code point past 255 is not a byte and
 # TCP.send_buf refuses it rather than re-encoding it.
 def bytes(s: String) -> List<&2, U32>:
   match s:
@@ -167,18 +161,27 @@ def beq(a: List<&2, U32>, b: List<&2, U32>, acc: Bool) -> Bool:
     case Con{x, t} Con{y, u}:
       beq(t, u, acc && U32.is_eq(x, y))
 
-# Byte-list equality, structurally: what names, methods and the version
-# are recognised by. LAWS.bend proves it is the reference's equality.
-def bytes.eq(a: List<&2, U32>, b: List<&2, U32>) -> Bool:
-  match a b:
-    case Nil{} Nil{}:
+# The reader's unit is Bytes: a read is one packed block, and a token is
+# a run of it. one() is a single byte, push() a token grown by one; the
+# walk below takes whole runs at once, which the laws say is the same.
+def one(c: U32) -> Bytes():
+  SCon{Chr{c}, SNil{}}
+
+def push(b: Bytes(), c: U32) -> Bytes():
+  Bytes.append(b, one(c))
+
+def bnil(b: Bytes()) -> Bool:
+  match b:
+    case SNil{}:
       True{}
-    case Nil{} Con{y, u}:
+    case SCon{h, t}:
       False{}
-    case Con{x, t} Nil{}:
-      False{}
-    case Con{x, t} Con{y, u}:
-      U32.is_eq(x, y) && bytes.eq(t, u)
+
+# Byte equality, as the runtime compares two blocks: what names,
+# methods, the version and routes are recognised by. LAWS.bend proves it
+# is the reference's byte-by-byte equality.
+def bytes.eq(a: Bytes(), b: Bytes()) -> Bool:
+  String.eq(a, b)
 
 # Names
 # =====
@@ -196,22 +199,20 @@ type Fld is Data:
   FVer{}
   FOther{}
 
-# a name as the reader holds it, lowercased and backwards, and the field
-# it names
+# a name as the reader holds it, lowercased, and the field it names
 type Known is Data:
-  Known{k: List<&2, U32>, f: Fld}
+  Known{k: Bytes(), f: Fld}
 
-# transfer-encoding, content-length, connection, upgrade,
-# sec-websocket-key, host and sec-websocket-version, each backwards; LAWS.bend proves the
-# lookup through this table is the lookup through the readable one
+# LAWS.bend proves the lookup through this table is the lookup through
+# the reference's
 def fld.table() -> List<&2, Known>:
-  [Known{[103, 110, 105, 100, 111, 99, 110, 101, 45, 114, 101, 102, 115, 110, 97, 114, 116], FTe{}},
-   Known{[104, 116, 103, 110, 101, 108, 45, 116, 110, 101, 116, 110, 111, 99], FCl{}},
-   Known{[110, 111, 105, 116, 99, 101, 110, 110, 111, 99], FConn{}},
-   Known{[101, 100, 97, 114, 103, 112, 117], FUp{}},
-   Known{[121, 101, 107, 45, 116, 101, 107, 99, 111, 115, 98, 101, 119, 45, 99, 101, 115], FKey{}},
-   Known{[116, 115, 111, 104], FHost{}},
-   Known{[110, 111, 105, 115, 114, 101, 118, 45, 116, 101, 107, 99, 111, 115, 98, 101, 119, 45, 99, 101, 115], FVer{}}]
+  [Known{"transfer-encoding", FTe{}},
+   Known{"content-length", FCl{}},
+   Known{"connection", FConn{}},
+   Known{"upgrade", FUp{}},
+   Known{"sec-websocket-key", FKey{}},
+   Known{"host", FHost{}},
+   Known{"sec-websocket-version", FVer{}}]
 
 def fld.pick(b: Bool, f: Fld, rest: Fld) -> Fld:
   match b:
@@ -220,7 +221,7 @@ def fld.pick(b: Bool, f: Fld, rest: Fld) -> Fld:
     case False{}:
       rest
 
-def fld.find(+k: List<&2, U32>, tbl: List<&2, Known>) -> Fld:
+def fld.find(+k: Bytes(), tbl: List<&2, Known>) -> Fld:
   match tbl:
     case Nil{}:
       FOther{}
@@ -229,7 +230,7 @@ def fld.find(+k: List<&2, U32>, tbl: List<&2, Known>) -> Fld:
         case Known{n, f}:
           fld.pick(bytes.eq(k, n), f, fld.find(k, t))
 
-def fld.of(+k: List<&2, U32>) -> Fld:
+def fld.of(+k: Bytes()) -> Fld:
   fld.find(k, fld.table())
 
 # the method, by its bytes: GET and HEAD are served, and anything else
@@ -248,9 +249,8 @@ def meth.pick(get: Bool, head: Bool) -> Meth:
     case False{} False{}:
       MOther{}
 
-# the method as read, backwards
-def meth.of(+m: List<&2, U32>) -> Meth:
-  meth.pick(bytes.eq(m, [84, 69, 71]), bytes.eq(m, [68, 65, 69, 72]))
+def meth.of(+m: Bytes()) -> Meth:
+  meth.pick(bytes.eq(m, "GET"), bytes.eq(m, "HEAD"))
 
 def meth.get(m: Meth) -> Bool:
   match m:
@@ -270,30 +270,30 @@ def meth.head(m: Meth) -> Bool:
     case MOther{}:
       False{}
 
-# HTTP/1.1, backwards
-def ver.lit() -> List<&2, U32>:
-  [49, 46, 49, 47, 80, 84, 84, 72]
+def ver.lit() -> Bytes():
+  "HTTP/1.1"
 
-# the list members this engine acts on, backwards: close and upgrade in
-# a Connection, websocket in an Upgrade
-def tok.close() -> List<&2, U32>:
-  [101, 115, 111, 108, 99]
+# the list members this engine acts on: close and upgrade in a
+# Connection, websocket in an Upgrade
+def tok.close() -> Bytes():
+  "close"
 
-def tok.upgrade() -> List<&2, U32>:
-  [101, 100, 97, 114, 103, 112, 117]
+def tok.upgrade() -> Bytes():
+  "upgrade"
 
-def tok.websocket() -> List<&2, U32>:
-  [116, 101, 107, 99, 111, 115, 98, 101, 119]
+def tok.websocket() -> Bytes():
+  "websocket"
 
 # Requests
 # ========
 
 # A parsed message: the method, the target and body as bytes, whether
 # the peer asked to close, and whether it asked to become a WebSocket
-# and with what key.
+# and with what key. A target, a body and a key that arrived within one
+# read are views of it.
 type Req is Data:
-  Req{meth: Meth, path: List<&2, U32>, body: List<&2, U32>, close: Bool,
-    ws: Bool, key: List<&2, U32>}
+  Req{meth: Meth, path: Bytes(), body: Bytes(), close: Bool,
+    ws: Bool, key: Bytes()}
 
 def req.close(r: Req) -> Bool:
   match r:
@@ -312,9 +312,9 @@ def req.ws(r: Req) -> Bool:
 # vb says a Sec-WebSocket-Version named something other than 13.
 type Up is Data:
   Plain{}
-  Asks{key: List<&2, U32>, up: Bool, cu: Bool, vb: Bool}
+  Asks{key: Bytes(), up: Bool, cu: Bool, vb: Bool}
 
-def up.key(u: Up, k: List<&2, U32>) -> Up:
+def up.key(u: Up, k: Bytes()) -> Up:
   match u:
     case Plain{}:
       Asks{k, False{}, False{}, False{}}
@@ -327,7 +327,7 @@ def up.up(u: Up, v: Bool) -> Up:
     case Plain{} False{}:
       Plain{}
     case Plain{} True{}:
-      Asks{Nil{}, True{}, False{}, False{}}
+      Asks{"", True{}, False{}, False{}}
     case Asks{key, up, cu, vb} w:
       Asks{key, up || w, cu, vb}
 
@@ -336,7 +336,7 @@ def up.cu(u: Up, v: Bool) -> Up:
     case Plain{} False{}:
       Plain{}
     case Plain{} True{}:
-      Asks{Nil{}, False{}, True{}, False{}}
+      Asks{"", False{}, True{}, False{}}
     case Asks{key, up, cu, vb} w:
       Asks{key, up, cu || w, vb}
 
@@ -346,7 +346,7 @@ def up.ver(u: Up, v: Bool) -> Up:
     case Plain{} True{}:
       Plain{}
     case Plain{} False{}:
-      Asks{Nil{}, False{}, False{}, True{}}
+      Asks{"", False{}, False{}, True{}}
     case Asks{key, up, cu, vb} w:
       Asks{key, up, cu, vb || Bool.not(w)}
 
@@ -361,12 +361,12 @@ def has(k: List<&2, U32>) -> Bool:
 # websocket, Connection: Upgrade and a key, and named no version but
 # 13; one that named another is answered as one that did not ask, with
 # the 426 that says which version to ask for
-def up.asked(u: Up) -> Bool & List<&2, U32>:
+def up.asked(u: Up) -> Bool & Bytes():
   match u:
     case Plain{}:
-      (False{}, Nil{})
+      (False{}, "")
     case Asks{+key, up, cu, vb}:
-      (up && cu && has(key) && Bool.not(vb), key)
+      (up && cu && Bool.not(bnil(key)) && Bool.not(vb), key)
 
 # The length a message announced: none, or one value every
 # Content-Length field agreed on.
@@ -383,19 +383,19 @@ type Hosts is Data:
 # The fields of the message being read. It is rebuilt only when a token
 # closes, so an ordinary byte leaves it untouched and shares it.
 type Pend is Data:
-  Pend{meth: Meth, path: List<&2, U32>, cl: Cl, close: Bool, host: Hosts,
+  Pend{meth: Meth, path: Bytes(), cl: Cl, close: Bool, host: Hosts,
     ws: Up}
 
 def pend.new() -> Pend:
-  Pend{MOther{}, Nil{}, NoCl{}, False{}, H0{}, Plain{}}
+  Pend{MOther{}, "", NoCl{}, False{}, H0{}, Plain{}}
 
 # a new method token starts a new message, so the rest resets with it
 def pend.meth(pd: Pend, m: Meth) -> Pend:
   match pd:
     case Pend{meth, path, cl, close, host, ws}:
-      Pend{m, Nil{}, NoCl{}, False{}, H0{}, Plain{}}
+      Pend{m, "", NoCl{}, False{}, H0{}, Plain{}}
 
-def pend.path(pd: Pend, p: List<&2, U32>) -> Pend:
+def pend.path(pd: Pend, p: Bytes()) -> Pend:
   match pd:
     case Pend{meth, path, cl, close, host, ws}:
       Pend{meth, p, cl, close, host, ws}
@@ -426,7 +426,7 @@ def pend.up(pd: Pend, v: Bool) -> Pend:
     case Pend{meth, path, cl, close, host, ws}:
       Pend{meth, path, cl, close, host, up.up(ws, v)}
 
-def pend.key(pd: Pend, k: List<&2, U32>) -> Pend:
+def pend.key(pd: Pend, k: Bytes()) -> Pend:
   match pd:
     case Pend{meth, path, cl, close, host, ws}:
       Pend{meth, path, cl, close, host, up.key(ws, k)}
@@ -437,13 +437,12 @@ def pend.ver(pd: Pend, v: Bool) -> Pend:
       Pend{meth, path, cl, close, host, up.ver(ws, v)}
 
 def pend.req.go(
-  meth: Meth, path: List<&2, U32>, body: List<&2, U32>, close: Bool,
-  asked: Bool & List<&2, U32>
+  meth: Meth, path: Bytes(), body: Bytes(), close: Bool, asked: Bool & Bytes()
 ) -> Req:
   (ws, key) = asked
   Req{meth, path, body, close, ws, key}
 
-def pend.req(pd: Pend, body: List<&2, U32>) -> Req:
+def pend.req(pd: Pend, body: Bytes()) -> Req:
   match pd:
     case Pend{meth, path, cl, close, host, ws}:
       pend.req.go(meth, path, body, close, up.asked(ws))
@@ -452,38 +451,39 @@ def pend.req(pd: Pend, body: List<&2, U32>) -> Req:
 # ==========
 
 # Pre  before a request line        PreLf the LF of an empty line there
-# InM  the method, backwards         InT  the target, backwards
-# InV  the version, backwards        CrM  a CR inside the head
-# Lin  at the start of a field line  InN  a field name, lowercased, backwards
+# InM  the method                    InT  the target
+# InV  the version                   CrM  a CR inside the head
+# Lin  at the start of a field line  InN  a field name, as it came
 # InL0 a Content-Length, no digit    InL  its digits, v so far
 # InLt the whitespace after them     InLc a Connection list: the member
 #                                         being read, close and upgrade seen
 # InLu an Upgrade list, websocket    InLk0/InLk a Sec-WebSocket-Key value
-# InLx any other value, skipped      CrL  the CR of the blank line
-# Bod  the body, r bytes to go       Rest what follows a request that
-#                                         asked to upgrade, for the frame reader
+# InLv a Sec-WebSocket-Version value InLx any other value, skipped
+# CrL  the CR of the blank line      Bod  the body so far, and r more
+#                                         bytes after the next one
+# Rest what follows a request that asked to upgrade, for the frame reader
 # Bad  the grammar broke; absorbing, and never left
 type St is Data:
   Pre{}
   PreLf{}
-  InM{m: List<&2, U32>}
-  InT{p: List<&2, U32>}
-  InV{v: List<&2, U32>}
+  InM{m: Bytes()}
+  InT{p: Bytes()}
+  InV{v: Bytes()}
   CrM{}
   Lin{}
-  InN{n: List<&2, U32>}
+  InN{n: Bytes()}
   InL0{}
   InL{v: U32}
   InLt{v: U32}
-  InLc{t: List<&2, U32>, cl: Bool, up: Bool}
-  InLu{t: List<&2, U32>, ws: Bool}
+  InLc{t: Bytes(), cl: Bool, up: Bool}
+  InLu{t: Bytes(), ws: Bool}
   InLk0{}
-  InLk{k: List<&2, U32>}
-  InLv{v: List<&2, U32>}
+  InLk{k: Bytes()}
+  InLv{v: Bytes()}
   InLx{}
   CrL{}
-  Bod{r: U32, b: List<&2, U32>}
-  Rest{bs: List<&2, U32>}
+  Bod{r: Nat, b: Bytes()}
+  Rest{bs: Bytes()}
   Bad{}
 
 # The whole reader: where the machine is, the message it is filling,
@@ -499,7 +499,7 @@ def p.new() -> P:
 def emit.next(ws: Bool) -> St:
   match ws:
     case True{}:
-      Rest{Nil{}}
+      Rest{""}
     case False{}:
       Pre{}
 
@@ -509,20 +509,20 @@ def emit.go(r: Req, out: List<&2, Req>) -> P:
       P{emit.next(ws), pend.new(), Req{meth, path, body, close, ws, key} <> out}
 
 # a completed message rolls the machine straight into the next one
-def emit(pd: Pend, body: List<&2, U32>, out: List<&2, Req>) -> P:
+def emit(pd: Pend, body: Bytes(), out: List<&2, Req>) -> P:
   emit.go(pend.req(pd, body), out)
 
 # the method closes at its space, and a new message starts with it
-def step.meth(+m: List<&2, U32>, pd: Pend, out: List<&2, Req>) -> P:
-  P{InT{Nil{}}, pend.meth(pd, meth.of(m)), out}
+def step.meth(+m: Bytes(), pd: Pend, out: List<&2, Req>) -> P:
+  P{InT{""}, pend.meth(pd, meth.of(m)), out}
 
 # the target closes at its space; an empty one is no target
-def step.target(p: List<&2, U32>, pd: Pend, out: List<&2, Req>) -> P:
+def step.target(p: Bytes(), pd: Pend, out: List<&2, Req>) -> P:
   match p:
-    case Nil{}:
+    case SNil{}:
       P{Bad{}, pd, out}
-    case Con{c, t}:
-      P{InV{Nil{}}, pend.path(pd, rev(Con{c, t})), out}
+    case SCon{c, t}:
+      P{InV{""}, pend.path(pd, SCon{c, t}), out}
 
 # the version token must read exactly HTTP/1.1
 def step.ver(ok: Bool, pd: Pend, out: List<&2, Req>) -> P:
@@ -531,26 +531,6 @@ def step.ver(ok: Bool, pd: Pend, out: List<&2, Req>) -> P:
       P{CrM{}, pd, out}
     case False{}:
       P{Bad{}, pd, out}
-
-# where a value starts, by the field it belongs to
-def val.init(f: Fld) -> St:
-  match f:
-    case FTe{}:
-      Bad{}
-    case FCl{}:
-      InL0{}
-    case FConn{}:
-      InLc{Nil{}, False{}, False{}}
-    case FUp{}:
-      InLu{Nil{}, False{}}
-    case FKey{}:
-      InLk0{}
-    case FHost{}:
-      InLx{}
-    case FVer{}:
-      InLv{Nil{}}
-    case FOther{}:
-      InLx{}
 
 # a name closes at its colon. A Transfer-Encoding is refused there,
 # whatever it says: this engine frames by length only, and a message
@@ -562,15 +542,15 @@ def step.name(f: Fld, pd: Pend, out: List<&2, Req>) -> P:
     case FCl{}:
       P{InL0{}, pd, out}
     case FConn{}:
-      P{InLc{Nil{}, False{}, False{}}, pd, out}
+      P{InLc{"", False{}, False{}}, pd, out}
     case FUp{}:
-      P{InLu{Nil{}, False{}}, pd, out}
+      P{InLu{"", False{}}, pd, out}
     case FKey{}:
       P{InLk0{}, pd, out}
     case FHost{}:
       P{InLx{}, pend.host(pd), out}
     case FVer{}:
-      P{InLv{Nil{}}, pd, out}
+      P{InLv{""}, pd, out}
     case FOther{}:
       P{InLx{}, pd, out}
 
@@ -603,7 +583,7 @@ def step.clen.dup(pd: Pend, out: List<&2, Req>, agree: Bool) -> P:
       P{Bad{}, pd, out}
 
 def step.clen.go(
-  meth: Meth, path: List<&2, U32>, cl: Cl, close: Bool, host: Hosts, ws: Up,
+  meth: Meth, path: Bytes(), cl: Cl, close: Bool, host: Hosts, ws: Up,
   +v: U32, out: List<&2, Req>
 ) -> P:
   match cl:
@@ -619,37 +599,40 @@ def step.clen(+v: U32, pd: Pend, out: List<&2, Req>) -> P:
       step.clen.go(meth, path, cl, close, host, ws, v, out)
 
 # a list member closes at a comma, a space or the line's end
-def step.conn(+t: List<&2, U32>, cl: Bool, up: Bool, pd: Pend, out: List<&2, Req>) -> P:
+def step.conn(+t: Bytes(), cl: Bool, up: Bool, pd: Pend, out: List<&2, Req>) -> P:
   P{CrM{}, pend.conn(pd, cl || bytes.eq(t, tok.close()), up || bytes.eq(t, tok.upgrade())), out}
 
-def tok.conn(+t: List<&2, U32>, cl: Bool, up: Bool) -> St:
-  InLc{Nil{}, cl || bytes.eq(t, tok.close()), up || bytes.eq(t, tok.upgrade())}
+def tok.conn(+t: Bytes(), cl: Bool, up: Bool) -> St:
+  InLc{"", cl || bytes.eq(t, tok.close()), up || bytes.eq(t, tok.upgrade())}
 
-def step.upv(+t: List<&2, U32>, ws: Bool, pd: Pend, out: List<&2, Req>) -> P:
+def step.upv(+t: Bytes(), ws: Bool, pd: Pend, out: List<&2, Req>) -> P:
   P{CrM{}, pend.up(pd, ws || bytes.eq(t, tok.websocket())), out}
 
-def tok.up(+t: List<&2, U32>, ws: Bool) -> St:
-  InLu{Nil{}, ws || bytes.eq(t, tok.websocket())}
+def tok.up(+t: Bytes(), ws: Bool) -> St:
+  InLu{"", ws || bytes.eq(t, tok.websocket())}
 
 # a Sec-WebSocket-Key value closes, kept as it came
-def step.key(k: List<&2, U32>, pd: Pend, out: List<&2, Req>) -> P:
-  P{CrM{}, pend.key(pd, rev(k)), out}
+def step.key(k: Bytes(), pd: Pend, out: List<&2, Req>) -> P:
+  P{CrM{}, pend.key(pd, k), out}
 
-# a Sec-WebSocket-Version value closes: it named 13 (backwards) or not
-def step.wsv(+v: List<&2, U32>, pd: Pend, out: List<&2, Req>) -> P:
-  P{CrM{}, pend.ver(pd, bytes.eq(v, [51, 49])), out}
+# a Sec-WebSocket-Version value closes: it named 13 or not
+def step.wsv(+v: Bytes(), pd: Pend, out: List<&2, Req>) -> P:
+  P{CrM{}, pend.ver(pd, bytes.eq(v, "13")), out}
 
+# a body of v bytes: none emits the message now; otherwise the count is
+# of the bytes after the next one, so the last byte is the one it finds
+# at zero
 def step.head.len(pd: Pend, +v: U32, out: List<&2, Req>, z: Bool) -> P:
   match z:
     case True{}:
-      emit(pd, Nil{}, out)
+      emit(pd, "", out)
     case False{}:
-      P{Bod{v, Nil{}}, pd, out}
+      P{Bod{Nat.sub(U32.to_nat(v), 1n), ""}, pd, out}
 
 def step.head.at(pd: Pend, cl: Cl, host: Hosts, out: List<&2, Req>) -> P:
   match cl host:
     case NoCl{} H1{}:
-      emit(pd, Nil{}, out)
+      emit(pd, "", out)
     case Has{+v} H1{}:
       step.head.len(pd, v, out, U32.is_zero(v))
     case _ _:
@@ -663,18 +646,13 @@ def step.head(pd: Pend, out: List<&2, Req>) -> P:
     case Pend{meth, path, +cl, close, +host, ws}:
       step.head.at(Pend{meth, path, cl, close, host, ws}, cl, host, out)
 
-def step.body.go(
-  r: U32, b: List<&2, U32>, c: U32, pd: Pend, out: List<&2, Req>, last: Bool
-) -> P:
-  match last:
-    case True{}:
-      emit(pd, rev(Con{c, b}), out)
-    case False{}:
-      P{Bod{(r - 1 : U32), Con{c, b}}, pd, out}
-
 # one body byte: the last one emits the message, the rest accumulate
-def step.body(+r: U32, b: List<&2, U32>, c: U32, pd: Pend, out: List<&2, Req>) -> P:
-  step.body.go(r, b, c, pd, out, U32.is_eq(r, 1))
+def step.body(r: Nat, b: Bytes(), c: U32, pd: Pend, out: List<&2, Req>) -> P:
+  match r:
+    case 0n:
+      emit(pd, push(b, c), out)
+    case 1n+q:
+      P{Bod{q, push(b, c)}, pd, out}
 
 # The machine: one classified byte moves it once. A token state grows
 # its bytes until its delimiter arrives; the delimiter closes the token
@@ -687,9 +665,9 @@ def step.at(st: St, k: Cls, +c: U32, pd: Pend, out: List<&2, Req>) -> P:
     case Pre{} KCr{}:
       P{PreLf{}, pd, out}
     case Pre{} KTk{}:
-      P{InM{[c]}, pd, out}
+      P{InM{one(c)}, pd, out}
     case Pre{} KDg{}:
-      P{InM{[c]}, pd, out}
+      P{InM{one(c)}, pd, out}
     case Pre{} _:
       P{Bad{}, pd, out}
     case PreLf{} KLf{}:
@@ -699,9 +677,9 @@ def step.at(st: St, k: Cls, +c: U32, pd: Pend, out: List<&2, Req>) -> P:
     case InM{m} KSp{}:
       step.meth(m, pd, out)
     case InM{m} KTk{}:
-      P{InM{Con{c, m}}, pd, out}
+      P{InM{push(m, c)}, pd, out}
     case InM{m} KDg{}:
-      P{InM{Con{c, m}}, pd, out}
+      P{InM{push(m, c)}, pd, out}
     case InM{m} _:
       P{Bad{}, pd, out}
     case InT{p} KSp{}:
@@ -715,15 +693,15 @@ def step.at(st: St, k: Cls, +c: U32, pd: Pend, out: List<&2, Req>) -> P:
     case InT{p} KCt{}:
       P{Bad{}, pd, out}
     case InT{p} _:
-      P{InT{Con{c, p}}, pd, out}
+      P{InT{push(p, c)}, pd, out}
     case InV{+v} KCr{}:
       step.ver(bytes.eq(v, ver.lit()), pd, out)
     case InV{v} KTk{}:
-      P{InV{Con{c, v}}, pd, out}
+      P{InV{push(v, c)}, pd, out}
     case InV{v} KDg{}:
-      P{InV{Con{c, v}}, pd, out}
+      P{InV{push(v, c)}, pd, out}
     case InV{v} KVc{}:
-      P{InV{Con{c, v}}, pd, out}
+      P{InV{push(v, c)}, pd, out}
     case InV{v} _:
       P{Bad{}, pd, out}
     case CrM{} KLf{}:
@@ -733,17 +711,17 @@ def step.at(st: St, k: Cls, +c: U32, pd: Pend, out: List<&2, Req>) -> P:
     case Lin{} KCr{}:
       P{CrL{}, pd, out}
     case Lin{} KTk{}:
-      P{InN{[lower(c)]}, pd, out}
+      P{InN{one(c)}, pd, out}
     case Lin{} KDg{}:
-      P{InN{[c]}, pd, out}
+      P{InN{one(c)}, pd, out}
     case Lin{} _:
       P{Bad{}, pd, out}
-    case InN{+n} KCo{}:
-      step.name(fld.of(n), pd, out)
+    case InN{n} KCo{}:
+      step.name(fld.of(lows(n)), pd, out)
     case InN{n} KTk{}:
-      P{InN{Con{lower(c), n}}, pd, out}
+      P{InN{push(n, c)}, pd, out}
     case InN{n} KDg{}:
-      P{InN{Con{c, n}}, pd, out}
+      P{InN{push(n, c)}, pd, out}
     case InN{n} _:
       P{Bad{}, pd, out}
     case InL0{} KSp{}:
@@ -785,7 +763,7 @@ def step.at(st: St, k: Cls, +c: U32, pd: Pend, out: List<&2, Req>) -> P:
     case InLc{t, a, b} KCt{}:
       P{Bad{}, pd, out}
     case InLc{t, a, b} _:
-      P{InLc{Con{lower(c), t}, a, b}, pd, out}
+      P{InLc{push(t, lower(c)), a, b}, pd, out}
     case InLu{t, w} KCr{}:
       step.upv(t, w, pd, out)
     case InLu{t, w} KSp{}:
@@ -799,19 +777,19 @@ def step.at(st: St, k: Cls, +c: U32, pd: Pend, out: List<&2, Req>) -> P:
     case InLu{t, w} KCt{}:
       P{Bad{}, pd, out}
     case InLu{t, w} _:
-      P{InLu{Con{lower(c), t}, w}, pd, out}
+      P{InLu{push(t, lower(c)), w}, pd, out}
     case InLk0{} KSp{}:
       P{InLk0{}, pd, out}
     case InLk0{} KHt{}:
       P{InLk0{}, pd, out}
     case InLk0{} KCr{}:
-      step.key(Nil{}, pd, out)
+      step.key("", pd, out)
     case InLk0{} KLf{}:
       P{Bad{}, pd, out}
     case InLk0{} KCt{}:
       P{Bad{}, pd, out}
     case InLk0{} _:
-      P{InLk{[c]}, pd, out}
+      P{InLk{one(c)}, pd, out}
     case InLk{k} KCr{}:
       step.key(k, pd, out)
     case InLk{k} KLf{}:
@@ -819,7 +797,7 @@ def step.at(st: St, k: Cls, +c: U32, pd: Pend, out: List<&2, Req>) -> P:
     case InLk{k} KCt{}:
       P{Bad{}, pd, out}
     case InLk{k} _:
-      P{InLk{Con{c, k}}, pd, out}
+      P{InLk{push(k, c)}, pd, out}
     case InLv{v} KSp{}:
       P{InLv{v}, pd, out}
     case InLv{v} KHt{}:
@@ -831,7 +809,7 @@ def step.at(st: St, k: Cls, +c: U32, pd: Pend, out: List<&2, Req>) -> P:
     case InLv{v} KCt{}:
       P{Bad{}, pd, out}
     case InLv{v} _:
-      P{InLv{Con{c, v}}, pd, out}
+      P{InLv{push(v, c)}, pd, out}
     case InLx{} KCr{}:
       P{CrM{}, pd, out}
     case InLx{} KLf{}:
@@ -847,7 +825,7 @@ def step.at(st: St, k: Cls, +c: U32, pd: Pend, out: List<&2, Req>) -> P:
     case Bod{r, b} _:
       step.body(r, b, c, pd, out)
     case Rest{bs} _:
-      P{Rest{Con{c, bs}}, pd, out}
+      P{Rest{push(bs, c)}, pd, out}
     case Bad{} _:
       P{Bad{}, pd, out}
 
@@ -856,15 +834,241 @@ def step(p: P, +c: U32) -> P:
     case P{st, pd, out}:
       step.at(st, cls(c), c, pd, out)
 
-# feed: one structural walk over a chunk. The reader state that comes
-# out is the reader state to feed the next chunk, so a message split
-# anywhere parses exactly like a message that arrived whole.
+# feed: the machine over a byte list, one byte at a time. The reader
+# state that comes out is the reader state to feed the next chunk, so a
+# message split anywhere parses exactly like a message that arrived
+# whole. It is the reference the engine's own walk, feed_buf, is proved
+# equal to.
 def feed(s: List<&2, U32>, p: P) -> P:
   match s:
     case Nil{}:
       p
     case Con{c, t}:
       feed(t, step(p, c))
+
+# The same walk over Bytes, a byte at a time.
+def feed_buf.slow(s: Bytes(), p: P) -> P:
+  match s:
+    case SNil{}:
+      p
+    case SCon{Chr{c}, t}:
+      feed_buf.slow(t, step(p, c))
+
+# The walk the engine runs. Where a state reads a run of bytes without
+# a transition -- a method, a target, a version, a name, a key, a value
+# it skips, a body -- the run is found and taken whole: one cut of the
+# read, so a target or a body within one read is a view of it and not a
+# byte rebuilt. Every other byte is one step. LAWS.bend proves the walk
+# is feed, byte for byte.
+type Run is Data:
+  RM{}
+  RT{}
+  RV{}
+  RN{}
+  RK{}
+  RX{}
+
+# which classes a run carries: exactly the ones step keeps it on
+def run.stay(sel: Run, k: Cls) -> Bool:
+  match sel k:
+    case RM{} KTk{}:
+      True{}
+    case RM{} KDg{}:
+      True{}
+    case RM{} _:
+      False{}
+    case RT{} KSp{}:
+      False{}
+    case RT{} KHt{}:
+      False{}
+    case RT{} KCr{}:
+      False{}
+    case RT{} KLf{}:
+      False{}
+    case RT{} KCt{}:
+      False{}
+    case RT{} _:
+      True{}
+    case RV{} KTk{}:
+      True{}
+    case RV{} KDg{}:
+      True{}
+    case RV{} KVc{}:
+      True{}
+    case RV{} _:
+      False{}
+    case RN{} KTk{}:
+      True{}
+    case RN{} KDg{}:
+      True{}
+    case RN{} _:
+      False{}
+    case RK{} KCr{}:
+      False{}
+    case RK{} KLf{}:
+      False{}
+    case RK{} KCt{}:
+      False{}
+    case RK{} _:
+      True{}
+    case RX{} KCr{}:
+      False{}
+    case RX{} KLf{}:
+      False{}
+    case RX{} KCt{}:
+      False{}
+    case RX{} _:
+      True{}
+
+# the state a run is in, holding the bytes read so far
+def st.put(sel: Run, acc: Bytes()) -> St:
+  match sel:
+    case RM{}:
+      InM{acc}
+    case RT{}:
+      InT{acc}
+    case RV{}:
+      InV{acc}
+    case RN{}:
+      InN{acc}
+    case RK{}:
+      InLk{acc}
+    case RX{}:
+      InLx{}
+
+def run.inc(ok: Bool, k: Nat) -> Nat:
+  match ok:
+    case True{}:
+      1n+k
+    case False{}:
+      k
+
+# how many bytes of s, from its first, the run carries. It looks one
+# byte past the run and no further.
+def run.len(s: Bytes(), go: Bool, +sel: Run, k: Nat) -> Nat:
+  match s go:
+    case SNil{} _:
+      k
+    case SCon{h, t} False{}:
+      k
+    case SCon{Chr{c}, t} True{}:
+      +ok = run.stay(sel, cls(c))
+      run.len(t, ok, sel, run.inc(ok, k))
+
+# one byte, stepped
+def one.step(p: P, s: Bytes()) -> P & Bytes():
+  match s:
+    case SNil{}:
+      (p, SNil{})
+    case SCon{Chr{c}, t}:
+      (step(p, c), t)
+
+def run.took(+sel: Run, acc: Bytes(), pd: Pend, out: List<&2, Req>, ab: Bytes() & Bytes()) ->
+  P & Bytes():
+  (a, b) = ab
+  (P{st.put(sel, Bytes.append(acc, a)), pd, out}, b)
+
+def run.cut(+sel: Run, acc: Bytes(), s: Bytes(), pd: Pend, out: List<&2, Req>, k: Nat) ->
+  P & Bytes():
+  match k:
+    case 0n:
+      one.step(P{st.put(sel, acc), pd, out}, s)
+    case 1n+j:
+      run.took(sel, acc, pd, out, String.cut(s, 1n+j))
+
+def run.go(+sel: Run, acc: Bytes(), +s: Bytes(), pd: Pend, out: List<&2, Req>) -> P & Bytes():
+  run.cut(sel, acc, s, pd, out, run.len(s, True{}, sel, 0n))
+
+# a body: all of the read when the body goes on past it, else the r + 1
+# bytes that end it, with the message emitted
+def bod.took(pd: Pend, out: List<&2, Req>, b: Bytes(), xy: Bytes() & Bytes()) -> P & Bytes():
+  (x, y) = xy
+  (emit(pd, Bytes.append(b, x), out), y)
+
+def bod.at(+r: Nat, b: Bytes(), +s: Bytes(), pd: Pend, out: List<&2, Req>, done: Bool) ->
+  P & Bytes():
+  match done:
+    case False{}:
+      (P{Bod{Nat.sub(r, Bytes.len(s)), Bytes.append(b, s)}, pd, out}, "")
+    case True{}:
+      bod.took(pd, out, b, String.cut(s, 1n+r))
+
+def bod.go(+r: Nat, b: Bytes(), +s: Bytes(), pd: Pend, out: List<&2, Req>) -> P & Bytes():
+  bod.at(r, b, s, pd, out, Nat.is_lt(r, Bytes.len(s)))
+
+# one move of the walk: a run, a body, the rest after an upgrade, or
+# one byte
+def adv.at(st: St, s: Bytes(), pd: Pend, out: List<&2, Req>) -> P & Bytes():
+  match st:
+    case InM{m}:
+      run.go(RM{}, m, s, pd, out)
+    case InT{p}:
+      run.go(RT{}, p, s, pd, out)
+    case InV{v}:
+      run.go(RV{}, v, s, pd, out)
+    case InN{n}:
+      run.go(RN{}, n, s, pd, out)
+    case InLk{k}:
+      run.go(RK{}, k, s, pd, out)
+    case InLx{}:
+      run.go(RX{}, "", s, pd, out)
+    case Bod{r, b}:
+      bod.go(r, b, s, pd, out)
+    case Rest{bs}:
+      (P{Rest{Bytes.append(bs, s)}, pd, out}, "")
+    case Pre{}:
+      one.step(P{Pre{}, pd, out}, s)
+    case PreLf{}:
+      one.step(P{PreLf{}, pd, out}, s)
+    case CrM{}:
+      one.step(P{CrM{}, pd, out}, s)
+    case Lin{}:
+      one.step(P{Lin{}, pd, out}, s)
+    case InL0{}:
+      one.step(P{InL0{}, pd, out}, s)
+    case InL{v}:
+      one.step(P{InL{v}, pd, out}, s)
+    case InLt{v}:
+      one.step(P{InLt{v}, pd, out}, s)
+    case InLc{t, a, b}:
+      one.step(P{InLc{t, a, b}, pd, out}, s)
+    case InLu{t, w}:
+      one.step(P{InLu{t, w}, pd, out}, s)
+    case InLk0{}:
+      one.step(P{InLk0{}, pd, out}, s)
+    case InLv{v}:
+      one.step(P{InLv{v}, pd, out}, s)
+    case CrL{}:
+      one.step(P{CrL{}, pd, out}, s)
+    case Bad{}:
+      (P{Bad{}, pd, out}, "")
+
+def adv(s: Bytes(), p: P) -> P & Bytes():
+  match p:
+    case P{st, pd, out}:
+      adv.at(st, s, pd, out)
+
+# the rest of a walk the fuel ran out on, a byte at a time
+def feed_buf.last(q: P & Bytes()) -> P:
+  (p, s) = q
+  feed_buf.slow(s, p)
+
+# n bounds the moves; every move takes at least one byte, so a walk
+# over n bytes never runs out
+def feed_buf.go(n: Nat, q: P & Bytes()) -> P:
+  match n:
+    case 0n:
+      feed_buf.last(q)
+    case 1n+m:
+      (p, s) = q
+      match s:
+        case SNil{}:
+          p
+        case SCon{h, t}:
+          feed_buf.go(m, adv(SCon{h, t}, p))
+
+def feed_buf(+s: Bytes(), p: P) -> P:
+  feed_buf.go(Bytes.len(s), (p, s))
 
 # the finished messages, oldest first, and the reader with them cleared
 def p.take(p: P) -> P & List<&2, Req>:
@@ -928,18 +1132,18 @@ def p.dead(p: P) -> P & Bool:
       p.dead.at(st.dead(st), pd, out)
 
 # the bytes that followed a request that asked to upgrade, in order
-def p.rest(p: P) -> List<&2, U32>:
+def p.rest(p: P) -> Bytes():
   match p:
     case P{st, pd, out}:
       match st:
         case Rest{bs}:
-          rev(bs)
+          bs
         case _:
-          Nil{}
+          ""
 
-# A whole input, parsed from a fresh reader: the messages it completed,
-# oldest first, and whether the grammar broke. LAWS.bend holds the
-# reader to this on the vectors that matter.
+# A whole input, parsed from a fresh reader by the engine's own walk:
+# the messages it completed, oldest first, and whether the grammar
+# broke. LAWS.bend holds the reader to this on the vectors that matter.
 def parse.out(pr: P & List<&2, Req>, dead: Bool) -> List<&2, Req> & Bool:
   (p, rs) = pr
   (rs, dead)
@@ -948,8 +1152,8 @@ def parse.of(pb: P & Bool) -> List<&2, Req> & Bool:
   (p, dead) = pb
   parse.out(p.take(p), dead)
 
-def parse(bs: List<&2, U32>) -> List<&2, Req> & Bool:
-  parse.of(p.dead(feed(bs, p.new())))
+def parse(bs: Bytes()) -> List<&2, Req> & Bool:
+  parse.of(p.dead(feed_buf(bs, p.new())))
 
 # whether the reader is part way through a head: past the first byte of
 # a request line and short of its blank line. A body is not a head.
@@ -972,6 +1176,7 @@ def p.head(+p: P) -> Bool:
   match p:
     case P{st, pd, out}:
       st.head(st)
+
 
 # Routes
 # ======
@@ -1434,44 +1639,34 @@ type Act is Data:
 
 # an entry: an exact path, or every path under it when prefix is set
 type Route is Data:
-  Route{path: List<&2, U32>, prefix: Bool, act: Act}
+  Route{path: Bytes(), prefix: Bool, act: Act}
 
 def routes.base() -> List<&2, Route>:
-  [Route{bytes("/health"), False{}, Health{}},
-   Route{bytes("/echo"), False{}, Echo{}},
-   Route{bytes("/events"), False{}, Events{}},
-   Route{bytes("/ws"), False{}, Live{}}]
+  [Route{"/health", False{}, Health{}},
+   Route{"/echo", False{}, Echo{}},
+   Route{"/events", False{}, Events{}},
+   Route{"/ws", False{}, Live{}}]
 
 # with a root directory everything the fixed routes leave is a file
 # under it, "/" included; without one "/" is the banner
 def routes.tail(root: Maybe<&2, List<&2, U32>>) -> List<&2, Route>:
   match root:
     case None{}:
-      [Route{bytes("/"), False{}, Root{}}]
+      [Route{"/", False{}, Root{}}]
     case Some{dir}:
-      [Route{bytes("/"), True{}, Files{}}]
+      [Route{"/", True{}, Files{}}]
 
 def routes(c: Cfg) -> List<&2, Route>:
   match c:
     case Cfg{port, root, log, idle, conns, grace, shared, pem, head}:
       List.append(&2, Route, routes.base(), routes.tail(root))
 
-# a is a prefix of b
-def bpre(a: List<&2, U32>, b: List<&2, U32>, acc: Bool) -> Bool:
-  match a b:
-    case Nil{} _:
-      acc
-    case Con{x, t} Nil{}:
-      False{}
-    case Con{x, t} Con{y, u}:
-      bpre(t, u, acc && U32.is_eq(x, y))
-
-def hit(rp: List<&2, U32>, path: List<&2, U32>, prefix: Bool) -> Bool:
+def hit(rp: Bytes(), path: Bytes(), prefix: Bool) -> Bool:
   match prefix:
     case True{}:
-      bpre(rp, path, True{})
+      Bytes.starts_with(path, rp)
     case False{}:
-      beq(rp, path, True{})
+      bytes.eq(rp, path)
 
 def route.one.go(act: Act, ok: Bool) -> Maybe<&2, Act>:
   match ok:
@@ -1480,20 +1675,20 @@ def route.one.go(act: Act, ok: Bool) -> Maybe<&2, Act>:
     case False{}:
       None{}
 
-def route.one(r: Route, path: List<&2, U32>) -> Maybe<&2, Act>:
+def route.one(r: Route, path: Bytes()) -> Maybe<&2, Act>:
   match r:
     case Route{rp, prefix, act}:
       route.one.go(act, hit(rp, path, prefix))
 
 # an entry is only tested while nothing earlier has matched
-def route.keep(acc: Maybe<&2, Act>, r: Route, path: List<&2, U32>) -> Maybe<&2, Act>:
+def route.keep(acc: Maybe<&2, Act>, r: Route, path: Bytes()) -> Maybe<&2, Act>:
   match acc:
     case Some{a}:
       Some{a}
     case None{}:
       route.one(r, path)
 
-def route.go(table: List<&2, Route>, +path: List<&2, U32>, acc: Maybe<&2, Act>) -> Maybe<&2, Act>:
+def route.go(table: List<&2, Route>, +path: Bytes(), acc: Maybe<&2, Act>) -> Maybe<&2, Act>:
   match table:
     case Nil{}:
       acc
@@ -1501,14 +1696,14 @@ def route.go(table: List<&2, Route>, +path: List<&2, U32>, acc: Maybe<&2, Act>) 
       route.go(t, path, route.keep(acc, r, path))
 
 # the first entry that matches wins
-def route(table: List<&2, Route>, +path: List<&2, U32>) -> Maybe<&2, Act>:
+def route(table: List<&2, Route>, +path: Bytes()) -> Maybe<&2, Act>:
   route.go(table, path, None{})
 
 # no two entries claim one path
 def same(a: Route, b: Route) -> Bool:
   match a b:
     case Route{p, x, i} Route{q, y, j}:
-      beq(p, q, True{})
+      bytes.eq(p, q)
 
 def taken(+r: Route, rs: List<&2, Route>) -> Bool:
   match rs:
@@ -1852,7 +2047,7 @@ def ctype(e: List<&2, U32>) -> List<&2, U32>:
 type Seg is Data:
   Raw{bs: Bytes()}
   Page{root: List<&2, U32>, path: List<&2, U32>, ct: List<&2, U32>, head: Bool}
-  Note{bs: List<&2, U32>}
+  Note{bs: Bytes()}
   Shut{}
 
 def miss(head: Bool) -> Bytes():
@@ -1894,8 +2089,8 @@ def page(root: List<&2, U32>, +path: List<&2, U32>, head: Bool) -> Seg:
 # after it completes the line. --log turns it on, and it is off by
 # default because a line per request is a syscall per request. The
 # status is the three bytes after "HTTP/1.1 ", a view of the reply.
-def log.line(+note: List<&2, U32>, +out: Bytes()) -> String:
-  text(note) ++ " " ++ Bytes.slice(out, 9n, 3n) ++ " " ++ Nat.show(Bytes.len(out))
+def log.line(note: Bytes(), +out: Bytes()) -> String:
+  note ++ " " ++ Bytes.slice(out, 9n, 3n) ++ " " ++ Nat.show(Bytes.len(out))
 
 # a reply that ends its connection says so: a Shut before it marks it
 def flat.shut(sh: Bool, +bs: Bytes()) -> Bytes():
@@ -1908,7 +2103,7 @@ def flat.shut(sh: Bool, +bs: Bytes()) -> Bytes():
 # a resolved segment, logged against the note that was waiting if there
 # was one, and handed straight back: the line goes out before the
 # segments after it, so the log reads in the order the requests came
-def flat.note(may: Maybe<&2, List<&2, U32>>, +out: Bytes()) -> IO(Bytes()):
+def flat.note(may: Maybe<&2, Bytes()>, +out: Bytes()) -> IO(Bytes()):
   match may:
     case None{}:
       do IO<Bytes()>:
@@ -2040,13 +2235,13 @@ def pump(k: Nat, +ms: U32, p: Pump) -> IO(Em):
             pump(j, ms, p2)
 
 # a file's log line: its head's status, and the bytes its reply holds
-def log.sized(may: Maybe<&2, List<&2, U32>>, +hd: Bytes(), n: U32) -> IO(Unit):
+def log.sized(may: Maybe<&2, Bytes()>, +hd: Bytes(), n: U32) -> IO(Unit):
   match may:
     case None{}:
       do IO<Unit>:
         return Unit{}
     case Some{note}:
-      IO.print_err(text(note) ++ " " ++ Bytes.slice(hd, 9n, 3n) ++ " "
+      IO.print_err(note ++ " " ++ Bytes.slice(hd, 9n, 3n) ++ " "
         ++ U32.show((U32.from_nat(Bytes.len(hd)) + n : U32)))
 
 def send.flushed(m: Socket & Result<&1, &1, U32 & String, Unit>) -> IO(Em):
@@ -2078,14 +2273,14 @@ def send.hold(+ms: U32, s: Socket, +acc: Bytes()) -> IO(Em):
   send.held(ms, s, acc, U32.cmp(U32.from_nat(Bytes.len(acc)), send.cap()))
 
 def page.miss(
-  +ms: U32, head: Bool, may: Maybe<&2, List<&2, U32>>, sh: Bool, s: Socket, acc: Bytes()
+  +ms: U32, head: Bool, may: Maybe<&2, Bytes()>, sh: Bool, s: Socket, acc: Bytes()
 ) -> IO(Em):
   do IO<Em>:
     out : Bytes() <- flat.note(may, flat.shut(sh, miss(head)))
     send.hold(ms, s, Bytes.append(acc, out))
 
 def page.start(
-  +ms: U32, f: File, +n: U32, +hd: Bytes(), head: Bool, may: Maybe<&2, List<&2, U32>>,
+  +ms: U32, f: File, +n: U32, +hd: Bytes(), head: Bool, may: Maybe<&2, Bytes()>,
   s: Socket, acc: Bytes()
 ) -> IO(Em):
   match head:
@@ -2102,7 +2297,7 @@ def page.start(
 
 def page.sized(
   +ms: U32, got: File & Result<&1, &1, U32 & String, U32>, ct: List<&2, U32>, head: Bool,
-  may: Maybe<&2, List<&2, U32>>, sh: Bool, s: Socket, acc: Bytes()
+  may: Maybe<&2, Bytes()>, sh: Bool, s: Socket, acc: Bytes()
 ) -> IO(Em):
   (f, r) = got
   match r:
@@ -2115,7 +2310,7 @@ def page.sized(
 
 def page.opened(
   +ms: U32, r: Result<&1, &1, U32 & String, File>, ct: List<&2, U32>, head: Bool,
-  may: Maybe<&2, List<&2, U32>>, sh: Bool, s: Socket, acc: Bytes()
+  may: Maybe<&2, Bytes()>, sh: Bool, s: Socket, acc: Bytes()
 ) -> IO(Em):
   match r:
     case Fail{e}:
@@ -2127,7 +2322,7 @@ def page.opened(
 
 def send.page(
   +ms: U32, root: List<&2, U32>, path: List<&2, U32>, ct: List<&2, U32>, head: Bool,
-  may: Maybe<&2, List<&2, U32>>, sh: Bool, st: Em
+  may: Maybe<&2, Bytes()>, sh: Bool, st: Em
 ) -> IO(Em):
   match st:
     case Em{s, acc, ok}:
@@ -2140,7 +2335,7 @@ def send.page(
             r : Result<&1, &1, U32 & String, File> <- File.open_under(text(root), text(path))
             page.opened(ms, r, ct, head, may, sh, s, acc)
 
-def send.raw(+ms: U32, may: Maybe<&2, List<&2, U32>>, bs: Bytes(), st: Em) -> IO(Em):
+def send.raw(+ms: U32, may: Maybe<&2, Bytes()>, bs: Bytes(), st: Em) -> IO(Em):
   match st:
     case Em{s, acc, ok}:
       match ok:
@@ -2171,7 +2366,7 @@ def send.end(+ms: U32, st: Em) -> IO(Socket & Result<&1, &1, U32 & String, Unit>
         send.fin(m, ok)
 
 # a Shut before a reply marks the one that ends its connection
-def send.go(xs: List<&2, Seg>, +ms: U32, may: Maybe<&2, List<&2, U32>>, sh: Bool, st: Em) ->
+def send.go(xs: List<&2, Seg>, +ms: U32, may: Maybe<&2, Bytes()>, sh: Bool, st: Em) ->
   IO(Socket & Result<&1, &1, U32 & String, Unit>):
   match xs:
     case Nil{}:
@@ -2254,10 +2449,15 @@ def live.keyed(key: List<&2, U32>, ok: Bool) -> Ans:
     case False{}:
       Ans{[Raw{resp.bad()}], True{}, 0, False{}}
 
-def live.answer(+key: List<&2, U32>, ws: Bool, head: Bool) -> Ans:
+# the key is checked and hashed as the byte list sha1.bend reads; it is
+# at most one read of a head, and only an upgrade pays for it
+def live.list(+key: List<&2, U32>) -> Ans:
+  live.keyed(key, key.ok(key, 0, True{}))
+
+def live.answer(key: Bytes(), ws: Bool, head: Bool) -> Ans:
   match ws:
     case True{}:
-      live.keyed(key, key.ok(key, 0, True{}))
+      live.list(Bytes.to_list(key))
     case False{}:
       Ans{[Raw{fixed(reply.v13("426 Upgrade Required", "text/plain", "websocket only\n"), head)}],
         False{}, 0, False{}}
@@ -2271,9 +2471,11 @@ def events(head: Bool) -> Ans:
     case False{}:
       Ans{[Raw{sse.head()}], False{}, sse.count(), False{}}
 
+# the echo's body goes back as it arrived: within one read it is a view
+# of that read, and the reply is the only copy made of it. A file's path
+# is walked as the byte list the normaliser and its laws speak of.
 def act.run(
-  +srv: Srv, a: Act, path: List<&2, U32>, body: List<&2, U32>, head: Bool,
-  ws: Bool, key: List<&2, U32>
+  +srv: Srv, a: Act, path: Bytes(), body: Bytes(), head: Bool, ws: Bool, key: Bytes()
 ) -> Ans:
   match a:
     case Health{}:
@@ -2281,18 +2483,18 @@ def act.run(
     case Root{}:
       Ans{[Raw{fixed(resp.root(), head)}], False{}, 0, False{}}
     case Echo{}:
-      Ans{[Raw{fixed(reply("200 OK", "application/octet-stream", Bytes.from_list(body)), head)}],
+      Ans{[Raw{fixed(reply("200 OK", "application/octet-stream", body), head)}],
         False{}, 0, False{}}
     case Events{}:
       events(head)
     case Live{}:
       live.answer(key, ws, head)
     case Files{}:
-      Ans{[page(srv.root(srv), path, head)], False{}, 0, False{}}
+      Ans{[page(srv.root(srv), Bytes.to_list(path), head)], False{}, 0, False{}}
 
 def serve.act(
-  +srv: Srv, found: Maybe<&2, Act>, path: List<&2, U32>, body: List<&2, U32>,
-  head: Bool, ws: Bool, key: List<&2, U32>
+  +srv: Srv, found: Maybe<&2, Act>, path: Bytes(), body: Bytes(), head: Bool, ws: Bool,
+  key: Bytes()
 ) -> Ans:
   match found:
     case None{}:
@@ -2305,17 +2507,9 @@ def serve.act(
 def target.cap() -> Nat:
   8192n
 
-# whether bs has more than k bytes, looking at no more than k + 1
-def long(k: Nat, bs: List<&2, U32>) -> Bool:
-  match k bs:
-    case 0n Nil{}:
-      False{}
-    case 0n Con{h, t}:
-      True{}
-    case 1n+j Nil{}:
-      False{}
-    case 1n+j Con{h, t}:
-      long(j, t)
+# whether bs has more than k bytes
+def long(k: Nat, bs: Bytes()) -> Bool:
+  Nat.is_lt(k, Bytes.len(bs))
 
 def resp.long() -> Bytes():
   reply("414 URI Too Long", "text/plain", "target too long\n")
@@ -2323,8 +2517,7 @@ def resp.long() -> Bytes():
 # A method this engine does not implement is refused before routing, so
 # no route ever sees one.
 def serve.go(
-  +srv: Srv, +path: List<&2, U32>, body: List<&2, U32>, ok: Bool, head: Bool,
-  ws: Bool, key: List<&2, U32>
+  +srv: Srv, +path: Bytes(), body: Bytes(), ok: Bool, head: Bool, ws: Bool, key: Bytes()
 ) -> Ans:
   match ok:
     case True{}:
@@ -2335,51 +2528,44 @@ def serve.go(
 # what a log line says was asked: the two methods this engine serves
 # are named, and anything else is "?", so a log line never carries a
 # method's bytes
-def shown(m: Meth) -> List<&2, U32>:
+def shown(m: Meth) -> Bytes():
   match m:
     case MGet{}:
-      bytes("GET")
+      "GET"
     case MHead{}:
-      bytes("HEAD")
+      "HEAD"
     case MOther{}:
-      bytes("?")
+      "?"
 
-def noted.on(note: List<&2, U32>, a: Ans) -> Ans:
+def noted.on(note: Bytes(), a: Ans) -> Ans:
   match a:
     case Ans{out, cl, st, sk}:
       Ans{Con{Note{note}, out}, cl, st, sk}
 
-def noted(on: Bool, note: List<&2, U32>, a: Ans) -> Ans:
+# the note is only built when the log is on
+def noted(on: Bool, m: Meth, path: Bytes(), a: Ans) -> Ans:
   match on:
     case False{}:
       a
     case True{}:
-      noted.on(note, a)
+      noted.on(Bytes.concat([shown(m), " ", path]), a)
 
-def path.keep(acc: List<&2, U32>, c: U32, stop: Bool) -> List<&2, U32>:
-  match stop:
-    case True{}:
-      acc
-    case False{}:
-      Con{c, acc}
-
-def path.go(p: List<&2, U32>, stop: Bool, acc: List<&2, U32>) -> List<&2, U32>:
-  match p stop:
-    case Nil{} _:
-      rev(acc)
-    case Con{c, t} True{}:
-      path.go(t, True{}, acc)
-    case Con{+c, t} False{}:
-      path.go(t, U32.is_eq(c, 63), path.keep(acc, c, U32.is_eq(c, 63)))
+def path.cut(+p: Bytes(), q: Maybe<&2, Nat>) -> Bytes():
+  match q:
+    case None{}:
+      p
+    case Some{i}:
+      Bytes.slice(p, 0n, i)
 
 # the path a target names is its bytes before any '?': the query says
-# nothing about which resource is asked for, so /health?x=1 is /health
-def path.of(p: List<&2, U32>) -> List<&2, U32>:
-  path.go(p, False{}, Nil{})
+# nothing about which resource is asked for, so /health?x=1 is /health.
+# It is a view of the target.
+def path.of(+p: Bytes()) -> Bytes():
+  path.cut(p, Bytes.find(p, "?"))
 
 def serve.fit(
-  +srv: Srv, +path: List<&2, U32>, body: List<&2, U32>, ok: Bool, head: Bool,
-  ws: Bool, key: List<&2, U32>, far: Bool
+  +srv: Srv, +path: Bytes(), body: Bytes(), ok: Bool, head: Bool, ws: Bool, key: Bytes(),
+  far: Bool
 ) -> Ans:
   match far:
     case True{}:
@@ -2390,13 +2576,12 @@ def serve.fit(
 def serve.log(+srv: Srv, r: Req) -> Ans:
   match r:
     case Req{+meth, +path, body, close, ws, key}:
-      noted(srv.log(srv), cat(shown(meth), cat(bytes(" "), path)),
+      noted(srv.log(srv), meth, path,
         serve.fit(srv, path.of(path), body, meth.get(meth) || meth.head(meth),
           meth.head(meth), ws, key, long(target.cap(), path)))
 
 def serve(+srv: Srv, r: Req) -> Ans:
   serve.log(srv, r)
-
 
 def ans.out(a: Ans) -> List<&2, Seg>:
   match a:
@@ -2506,8 +2691,9 @@ def plan.up.take(out: List<&2, Seg>, tk: Ws.W & List<&2, Ws.Frm>) -> Plan:
   (wr, fs) = tk
   plan.up.dead(out, fs, Ws.dead(wr))
 
-def plan.up(out: List<&2, Seg>, rest: List<&2, U32>) -> Plan:
-  plan.up.take(out, Ws.take(Ws.feed(rest, Ws.new())))
+def plan.up(out: List<&2, Seg>, rest: Bytes()) -> Plan:
+  # ws: Bytes when Ws.feed_buf lands
+  plan.up.take(out, Ws.take(Ws.feed(Bytes.to_list(rest), Ws.new())))
 
 def plan.pick(
   out: List<&2, Seg>, p2: P, plain: Bool, cl: Bool, st: U32, sock: Bool
@@ -2558,17 +2744,17 @@ def plan.on(+srv: Srv, pb: P & Bool) -> Plan:
 # the connection ends here rather than reading again. As first written
 # the engine read again, and one peer that connected and closed without
 # a byte cost most of a core in passes until the fuel ran out.
-def plan.chunk(+srv: Srv, buf: List<&2, U32>, p: P) -> Plan:
+def plan.chunk(+srv: Srv, buf: Bytes(), p: P) -> Plan:
   match buf:
-    case Nil{}:
+    case SNil{}:
       Stop{}
-    case Con{b, bs}:
-      plan.on(srv, p.dead(feed(Con{b, bs}, p)))
+    case SCon{b, bs}:
+      plan.on(srv, p.dead(feed_buf(SCon{b, bs}, p)))
 
 # what a timed read gave: bytes to parse, the peer's silence past the
 # idle time (the connection ends), or a failure (it ends)
 def plan.may(
-  +srv: Srv, s: Socket, may: Maybe<&1, List<&2, U32>>, p: P
+  +srv: Srv, s: Socket, may: Maybe<&1, Bytes()>, p: P
 ) -> Socket & Plan:
   match may:
     case None{}:
@@ -2577,7 +2763,7 @@ def plan.may(
       (s, plan.chunk(srv, buf, p))
 
 def plan.polled(
-  +srv: Srv, s: Socket, r: Result<&1, &1, U32 & String, Maybe<&1, List<&2, U32>>>,
+  +srv: Srv, s: Socket, r: Result<&1, &1, U32 & String, Maybe<&1, Bytes()>>,
   p: P
 ) -> Socket & Plan:
   match r:
@@ -2588,7 +2774,7 @@ def plan.polled(
 
 # the socket and the plan, out of one timed read
 def plan.poll(
-  +srv: Srv, m: Socket & Result<&1, &1, U32 & String, Maybe<&1, List<&2, U32>>>,
+  +srv: Srv, m: Socket & Result<&1, &1, U32 & String, Maybe<&1, Bytes()>>,
   p: P
 ) -> Socket & Plan:
   (s, r) = m
@@ -2611,8 +2797,8 @@ type Hw is Data:
 # one self-recursive def.
 def turn.s(+srv: Srv, s: Socket, p: P) -> IO((Socket & Plan) & Hw):
   do IO<(Socket & Plan) & Hw>:
-    m : Socket & Result<&1, &1, U32 & String, Maybe<&1, List<&2, U32>>> <-
-      TCP.poll_bytes(s, chunk(), srv.idle(srv))
+    m : Socket & Result<&1, &1, U32 & String, Maybe<&1, Bytes()>> <-
+      TCP.poll_buf(s, chunk(), srv.idle(srv))
     return (plan.poll(srv, m, p), NoHead{})
 
 # the watch after a read that finished no message: a head still in
@@ -2640,7 +2826,7 @@ def resp.big() -> Bytes():
   reply("431 Request Header Fields Too Large", "text/plain", "head too large\n")
 
 def plan.sized(
-  +srv: Srv, s: Socket, buf: List<&2, U32>, p: P, t0: Nat, n: U32, big: Bool
+  +srv: Srv, s: Socket, buf: Bytes(), p: P, t0: Nat, n: U32, big: Bool
 ) -> (Socket & Plan) & Hw:
   match big:
     case True{}:
@@ -2649,17 +2835,17 @@ def plan.sized(
       ((s, plan.chunk(srv, buf, p)), Since{t0, n})
 
 def plan.counted(
-  +srv: Srv, s: Socket, may: Maybe<&1, List<&2, U32>>, p: P, t0: Nat, n: U32
+  +srv: Srv, s: Socket, may: Maybe<&1, Bytes()>, p: P, t0: Nat, n: U32
 ) -> (Socket & Plan) & Hw:
   match may:
     case None{}:
       ((s, Stop{}), NoHead{})
     case Some{+buf}:
-      +k = (n + U32.from_nat(List.length(&2, U32, buf)) : U32)
+      +k = (n + U32.from_nat(Bytes.len(buf)) : U32)
       plan.sized(srv, s, buf, p, t0, k, U32.is_lt(head.cap(), k))
 
 def plan.headed(
-  +srv: Srv, m: Socket & Result<&1, &1, U32 & String, Maybe<&1, List<&2, U32>>>,
+  +srv: Srv, m: Socket & Result<&1, &1, U32 & String, Maybe<&1, Bytes()>>,
   p: P, t0: Nat, n: U32
 ) -> (Socket & Plan) & Hw:
   (s, r) = m
@@ -2681,8 +2867,8 @@ def turn.left(
         return ((s, Stop{}), NoHead{})
     case True{}:
       do IO<(Socket & Plan) & Hw>:
-        m : Socket & Result<&1, &1, U32 & String, Maybe<&1, List<&2, U32>>> <-
-          TCP.poll_bytes(s, chunk(), U32.min(srv.idle(srv),
+        m : Socket & Result<&1, &1, U32 & String, Maybe<&1, Bytes()>> <-
+          TCP.poll_buf(s, chunk(), U32.min(srv.idle(srv),
             U32.from_nat(Nat.sub(U32.to_nat(srv.head(srv)), el))))
         return plan.headed(srv, m, p, t0, n)
 
@@ -2746,19 +2932,20 @@ def plan.frames(s: Socket, tk: Ws.W & List<&2, Ws.Frm>) -> Socket & Plan:
   (wr, fs) = tk
   plan.framed(s, fs, Ws.dead(wr))
 
-def plan.wsm(s: Socket, may: Maybe<&1, List<&2, U32>>, wr: Ws.W) -> Socket & Plan:
+def plan.wsm(s: Socket, may: Maybe<&1, Bytes()>, wr: Ws.W) -> Socket & Plan:
   match may:
     case None{}:
       (s, Stop{})
     case Some{bs}:
       match bs:
-        case Nil{}:
+        case SNil{}:
           (s, Stop{})
-        case Con{b, t}:
-          plan.frames(s, Ws.take(Ws.feed(Con{b, t}, wr)))
+        case SCon{b, t}:
+          # ws: Bytes when Ws.feed_buf lands
+          plan.frames(s, Ws.take(Ws.feed(Bytes.to_list(SCon{b, t}), wr)))
 
 def plan.wsr(
-  s: Socket, r: Result<&1, &1, U32 & String, Maybe<&1, List<&2, U32>>>, wr: Ws.W
+  s: Socket, r: Result<&1, &1, U32 & String, Maybe<&1, Bytes()>>, wr: Ws.W
 ) -> Socket & Plan:
   match r:
     case Done{may}:
@@ -2767,15 +2954,15 @@ def plan.wsr(
       (s, Stop{})
 
 def plan.ws(
-  m: Socket & Result<&1, &1, U32 & String, Maybe<&1, List<&2, U32>>>, wr: Ws.W
+  m: Socket & Result<&1, &1, U32 & String, Maybe<&1, Bytes()>>, wr: Ws.W
 ) -> Socket & Plan:
   (s, r) = m
   plan.wsr(s, r, wr)
 
 def turn.wr(+srv: Srv, s: Socket, wr: Ws.W) -> IO(Socket & Plan):
   do IO<Socket & Plan>:
-    m : Socket & Result<&1, &1, U32 & String, Maybe<&1, List<&2, U32>>> <-
-      TCP.poll_bytes(s, chunk(), srv.idle(srv))
+    m : Socket & Result<&1, &1, U32 & String, Maybe<&1, Bytes()>> <-
+      TCP.poll_buf(s, chunk(), srv.idle(srv))
     return plan.ws(m, wr)
 
 def turn.ws(+srv: Srv, sent: Socket & Result<&1, &1, U32 & String, Unit>, wr: Ws.W) ->
@@ -2891,8 +3078,8 @@ def conn(f: Nat, +srv: Srv, +sem: Chan(Unit), sph: (Socket & Plan) & Hw, w: Nat)
 
 def start(+srv: Srv, +sem: Chan(Unit), s: Socket) -> IO(Unit):
   do IO<Unit>:
-    m : Socket & Result<&1, &1, U32 & String, Maybe<&1, List<&2, U32>>> <-
-      TCP.poll_bytes(s, chunk(), srv.idle(srv))
+    m : Socket & Result<&1, &1, U32 & String, Maybe<&1, Bytes()>> <-
+      TCP.poll_buf(s, chunk(), srv.idle(srv))
     conn(conn.fuel(), srv, sem, (plan.poll(srv, m, p.new()), NoHead{}), conn.waits())
 
 # how often the accept loop looks up from the listener, in ms: the most
