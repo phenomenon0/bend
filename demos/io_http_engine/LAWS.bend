@@ -48,28 +48,28 @@ law bad_feeds:
 # checker refuses the engine if anyone edits one without the other.
 law health_is_built:
   {Eng.resp.health() ==
-    Eng.reply("200 OK", "application/json", Eng.bytes("{\"ok\":true}")) :
-    List<&2, U32>}
+    Eng.reply("200 OK", "application/json", "{\"ok\":true}") :
+    Bytes()}
 
 law root_is_built:
   {Eng.resp.root() ==
-    Eng.reply("200 OK", "text/plain", Eng.bytes("bend-http\n")) :
-    List<&2, U32>}
+    Eng.reply("200 OK", "text/plain", "bend-http\n") :
+    Bytes()}
 
 law missing_is_built:
   {Eng.resp.missing() ==
-    Eng.reply("404 Not Found", "text/plain", Eng.bytes("no route\n")) :
-    List<&2, U32>}
+    Eng.reply("404 Not Found", "text/plain", "no route\n") :
+    Bytes()}
 
 law method_is_built:
   {Eng.resp.method() ==
-    Eng.reply.allow("405 Method Not Allowed", "text/plain", Eng.bytes("no method\n")) :
-    List<&2, U32>}
+    Eng.reply.allow("405 Method Not Allowed", "text/plain", "no method\n") :
+    Bytes()}
 
 law bad_is_built:
   {Eng.resp.bad() ==
-    Eng.reply("400 Bad Request", "text/plain", Eng.bytes("bad request\n")) :
-    List<&2, U32>}
+    Eng.reply("400 Bad Request", "text/plain", "bad request\n") :
+    Bytes()}
 
 # LAW: HEAD is GET's head. The scanner that cuts a reply at its blank
 # line and the builder that writes a head from a length agree, byte for
@@ -77,12 +77,12 @@ law bad_is_built:
 law head_of_health:
   {Eng.head.of(Eng.resp.health()) ==
     Eng.reply.n.head("200 OK", Eng.bytes("application/json"), 11) :
-    List<&2, U32>}
+    Bytes()}
 
 law head_of_missing:
   {Eng.head.of(Eng.resp.missing()) ==
     Eng.reply.n.head("404 Not Found", Eng.bytes("text/plain"), 9) :
-    List<&2, U32>}
+    Bytes()}
 
 # LAW: the default table answers what the engine has always answered;
 # with a root, the fixed routes still win and everything else is a file

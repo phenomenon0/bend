@@ -24,9 +24,9 @@
 # and a String is decoded as UTF-8, so a body that is not text comes
 # back as one U+FFFD per ill-formed byte -- three bytes out for one in,
 # while Content-Length still says one. That is a framing break, not a
-# cost, so this engine reads and writes List<&2, U32> through
-# TCP.recv_bytes and TCP.send_bytes instead, the byte pair that files
-# have always had.
+# cost, so this engine reads List<&2, U32> through TCP.poll_bytes and
+# writes Bytes, one packed block, through TCP.send_buf: every reply is
+# built as Bytes and goes out as it lies in the heap.
 #
 #   bend demos/io_http_engine/main.bend -o httpd && ./httpd
 #   curl -i http://127.0.0.1:8080/health
@@ -75,8 +75,8 @@ def lower(+c: U32) -> U32:
 def digit(+c: U32) -> Bool:
   U32.is_le(48, c) && U32.is_le(c, 57)
 
-# The wire's unit. A byte list, one cell per byte, is what the socket
-# hands over and what it takes back.
+# The reader's unit. A byte list, one cell per byte, is what the socket
+# hands over; replies go back as Bytes.
 def cat(a: List<&2, U32>, b: List<&2, U32>) -> List<&2, U32>:
   List.append(&2, U32, a, b)
 
@@ -85,7 +85,7 @@ def rev(a: List<&2, U32>) -> List<&2, U32>:
 
 # An ASCII literal as bytes. Written text stays readable in the source
 # and becomes bytes here; a code point past 255 is not a byte and
-# TCP.send_bytes refuses it rather than re-encoding it.
+# TCP.send_buf refuses it rather than re-encoding it.
 def bytes(s: String) -> List<&2, U32>:
   match s:
     case SNil{}:
@@ -561,83 +561,43 @@ def p.dead(p: P) -> P & Bool:
 # The reply to one request: a status line, the headers this engine
 # always sends, a blank line, then the body. Content-Length is always
 # written, so every reply is framed by length and the connection stays
-# usable.
-def reply(status: String, ctype: String, +body: List<&2, U32>) -> List<&2, U32>:
-  cat(bytes("HTTP/1.1 "), cat(bytes(status),
-  cat(bytes("\r\ncontent-type: "), cat(bytes(ctype),
-  cat(bytes("\r\ncontent-length: "),
-  cat(bytes(Nat.show(List.length(&2, U32, body))),
-  cat(bytes("\r\nconnection: keep-alive\r\n\r\n"), body)))))))
+# usable. A reply is Bytes: one packed block that TCP.send_buf writes as
+# it lies, where a List<&2, U32> was a cell per byte walked into a
+# buffer on every send.
+def reply(status: Bytes(), ctype: Bytes(), +body: Bytes()) -> Bytes():
+  Bytes.concat(["HTTP/1.1 ", status, "\r\ncontent-type: ", ctype,
+    "\r\ncontent-length: ", Nat.show(Bytes.len(body)),
+    "\r\nconnection: keep-alive\r\n\r\n", body])
 
 # A reply whose body is fixed has fixed bytes, so it is written out as
-# those bytes instead of being rebuilt per request: measured here,
-# building a 106-byte reply out of nine pieces cost more than parsing
-# the request that asked for it. Nobody should read these numbers --
-# LAWS.bend says each one equals reply() called with the arguments
-# named beside it, and the checker refuses the engine if an edit ever
-# makes that false, so the readable form is the specification and this
-# is only its image.
-def resp.health() -> List<&2, U32>:
-  [
-  72, 84, 84, 80, 47, 49, 46, 49, 32, 50, 48, 48, 32, 79, 75, 13, 10, 99,
-  111, 110, 116, 101, 110, 116, 45, 116, 121, 112, 101, 58, 32, 97, 112,
-  112, 108, 105, 99, 97, 116, 105, 111, 110, 47, 106, 115, 111, 110, 13,
-  10, 99, 111, 110, 116, 101, 110, 116, 45, 108, 101, 110, 103, 116, 104,
-  58, 32, 49, 49, 13, 10, 99, 111, 110, 110, 101, 99, 116, 105, 111, 110,
-  58, 32, 107, 101, 101, 112, 45, 97, 108, 105, 118, 101, 13, 10, 13, 10,
-  123, 34, 111, 107, 34, 58, 116, 114, 117, 101, 125]
+# a literal instead of being rebuilt per request: a literal is a static
+# block, sent without a copy. LAWS.bend says each one equals reply()
+# called with the arguments named beside it, and the checker refuses
+# the engine if an edit ever makes that false.
+def resp.health() -> Bytes():
+  "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: 11\r\nconnection: keep-alive\r\n\r\n{\"ok\":true}"
 
-def resp.root() -> List<&2, U32>:
-  [
-  72, 84, 84, 80, 47, 49, 46, 49, 32, 50, 48, 48, 32, 79, 75, 13, 10, 99,
-  111, 110, 116, 101, 110, 116, 45, 116, 121, 112, 101, 58, 32, 116, 101,
-  120, 116, 47, 112, 108, 97, 105, 110, 13, 10, 99, 111, 110, 116, 101,
-  110, 116, 45, 108, 101, 110, 103, 116, 104, 58, 32, 49, 48, 13, 10, 99,
-  111, 110, 110, 101, 99, 116, 105, 111, 110, 58, 32, 107, 101, 101, 112,
-  45, 97, 108, 105, 118, 101, 13, 10, 13, 10, 98, 101, 110, 100, 45, 104,
-  116, 116, 112, 10]
+def resp.root() -> Bytes():
+  "HTTP/1.1 200 OK\r\ncontent-type: text/plain\r\ncontent-length: 10\r\nconnection: keep-alive\r\n\r\nbend-http\n"
 
-def resp.missing() -> List<&2, U32>:
-  [
-  72, 84, 84, 80, 47, 49, 46, 49, 32, 52, 48, 52, 32, 78, 111, 116, 32,
-  70, 111, 117, 110, 100, 13, 10, 99, 111, 110, 116, 101, 110, 116, 45,
-  116, 121, 112, 101, 58, 32, 116, 101, 120, 116, 47, 112, 108, 97, 105,
-  110, 13, 10, 99, 111, 110, 116, 101, 110, 116, 45, 108, 101, 110, 103,
-  116, 104, 58, 32, 57, 13, 10, 99, 111, 110, 110, 101, 99, 116, 105, 111,
-  110, 58, 32, 107, 101, 101, 112, 45, 97, 108, 105, 118, 101, 13, 10, 13,
-  10, 110, 111, 32, 114, 111, 117, 116, 101, 10]
+def resp.missing() -> Bytes():
+  "HTTP/1.1 404 Not Found\r\ncontent-type: text/plain\r\ncontent-length: 9\r\nconnection: keep-alive\r\n\r\nno route\n"
 
-def resp.method() -> List<&2, U32>:
-  [
-  72, 84, 84, 80, 47, 49, 46, 49, 32, 52, 48, 53, 32, 77, 101, 116, 104,
-  111, 100, 32, 78, 111, 116, 32, 65, 108, 108, 111, 119, 101, 100, 13, 10,
-  99, 111, 110, 116, 101, 110, 116, 45, 116, 121, 112, 101, 58, 32, 116,
-  101, 120, 116, 47, 112, 108, 97, 105, 110, 13, 10, 99, 111, 110, 116,
-  101, 110, 116, 45, 108, 101, 110, 103, 116, 104, 58, 32, 49, 48, 13, 10,
-  97, 108, 108, 111, 119, 58, 32, 71, 69, 84, 44, 32, 72, 69, 65, 68, 13,
-  10, 99, 111, 110, 110, 101, 99, 116, 105, 111, 110, 58, 32, 107, 101,
-  101, 112, 45, 97, 108, 105, 118, 101, 13, 10, 13, 10, 110, 111, 32, 109,
-  101, 116, 104, 111, 100, 10]
+def resp.method() -> Bytes():
+  "HTTP/1.1 405 Method Not Allowed\r\ncontent-type: text/plain\r\ncontent-length: 10\r\nallow: GET, HEAD\r\nconnection: keep-alive\r\n\r\nno method\n"
 
-def resp.bad() -> List<&2, U32>:
-  [
-  72, 84, 84, 80, 47, 49, 46, 49, 32, 52, 48, 48, 32, 66, 97, 100, 32, 82,
-  101, 113, 117, 101, 115, 116, 13, 10, 99, 111, 110, 116, 101, 110, 116,
-  45, 116, 121, 112, 101, 58, 32, 116, 101, 120, 116, 47, 112, 108, 97,
-  105, 110, 13, 10, 99, 111, 110, 116, 101, 110, 116, 45, 108, 101, 110,
-  103, 116, 104, 58, 32, 49, 50, 13, 10, 99, 111, 110, 110, 101, 99, 116,
-  105, 111, 110, 58, 32, 107, 101, 101, 112, 45, 97, 108, 105, 118, 101,
-  13, 10, 13, 10, 98, 97, 100, 32, 114, 101, 113, 117, 101, 115, 116, 10]
+def resp.bad() -> Bytes():
+  "HTTP/1.1 400 Bad Request\r\ncontent-type: text/plain\r\ncontent-length: 12\r\nconnection: keep-alive\r\n\r\nbad request\n"
 
 # An event stream: the head goes out once, then one event at a time on
 # the engine's own schedule, with nothing more read from the peer. This
 # is the shape that holds a connection open -- an agent session, a token
 # stream, a live feed -- and it is what this engine is actually good at.
-def sse.head() -> List<&2, U32>:
-  bytes("HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ncache-control: no-cache\r\nconnection: keep-alive\r\n\r\n")
+def sse.head() -> Bytes():
+  "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ncache-control: no-cache\r\nconnection: keep-alive\r\n\r\n"
 
-def sse.event(n: U32) -> List<&2, U32>:
-  cat(bytes("event: tick\ndata: "), cat(bytes(U32.show(n)), bytes("\n\n")))
+def sse.event(n: U32) -> Bytes():
+  Bytes.concat(["event: tick\ndata: ", U32.show(n), "\n\n"])
 
 # how many events a stream sends before it closes, and how long it
 # waits between them. Both are bounds, not settings: the count is what
@@ -970,89 +930,33 @@ def args.done(st: Args) -> IO(Cfg):
 
 # A reply head for a body of n bytes, and the reply around a body whose
 # size is already known, as a file's is. reply() measures its body;
-# these do not, so a body is never walked twice.
-def reply.n.head(status: String, ct: List<&2, U32>, n: U32) -> List<&2, U32>:
-  cat(bytes("HTTP/1.1 "), cat(bytes(status),
-  cat(bytes("\r\ncontent-type: "), cat(ct,
-  cat(bytes("\r\ncontent-length: "), cat(bytes(U32.show(n)),
-  bytes("\r\nconnection: keep-alive\r\n\r\n")))))))
+# these do not. The type is a byte list from the mime table.
+def reply.n.head(status: Bytes(), ct: List<&2, U32>, n: U32) -> Bytes():
+  Bytes.concat(["HTTP/1.1 ", status, "\r\ncontent-type: ", Bytes.from_list(ct),
+    "\r\ncontent-length: ", U32.show(n), "\r\nconnection: keep-alive\r\n\r\n"])
 
-def reply.n(status: String, ct: List<&2, U32>, n: U32, body: List<&2, U32>) -> List<&2, U32>:
-  cat(reply.n.head(status, ct, n), body)
+def reply.n(status: Bytes(), ct: List<&2, U32>, n: U32, body: Bytes()) -> Bytes():
+  Bytes.append(reply.n.head(status, ct, n), body)
 
 # the 405 names the methods that would have worked
-def reply.allow(status: String, ct: String, +body: List<&2, U32>) -> List<&2, U32>:
-  cat(bytes("HTTP/1.1 "), cat(bytes(status),
-  cat(bytes("\r\ncontent-type: "), cat(bytes(ct),
-  cat(bytes("\r\ncontent-length: "),
-  cat(bytes(Nat.show(List.length(&2, U32, body))),
-  cat(bytes("\r\nallow: GET, HEAD\r\nconnection: keep-alive\r\n\r\n"), body)))))))
+def reply.allow(status: Bytes(), ct: Bytes(), +body: Bytes()) -> Bytes():
+  Bytes.concat(["HTTP/1.1 ", status, "\r\ncontent-type: ", ct,
+    "\r\ncontent-length: ", Nat.show(Bytes.len(body)),
+    "\r\nallow: GET, HEAD\r\nconnection: keep-alive\r\n\r\n", body])
 
 # The head of a reply: its bytes through the blank line. HEAD answers
 # with the head of what GET would have sent, so the two can never
-# disagree about a length or a type. The walk goes to the end of the
-# reply, as every walk here does, and stops keeping bytes once the
-# blank line has passed.
-def head.pick(b: Bool, x: U32, y: U32) -> U32:
-  match b:
-    case True{}:
-      x
-    case False{}:
-      y
+# disagree about a length or a type. A reply with no blank line is all
+# head.
+def head.upto(+bs: Bytes(), m: Maybe<&2, Nat>) -> Bytes():
+  match m:
+    case None{}:
+      bs
+    case Some{i}:
+      Bytes.slice(bs, 0n, Nat.add(i, 4n))
 
-def head.lf(one: Bool, three: Bool) -> U32:
-  match one three:
-    case True{} _:
-      2
-    case False{} True{}:
-      4
-    case False{} False{}:
-      0
-
-# how far into "\r\n\r\n" the reply is after a byte, given it was k in
-def head.next(+k: U32, cr: Bool, lf: Bool) -> U32:
-  match cr lf:
-    case True{} _:
-      head.pick(U32.is_eq(k, 2), 3, 1)
-    case False{} True{}:
-      head.lf(U32.is_eq(k, 1), U32.is_eq(k, 3))
-    case False{} False{}:
-      0
-
-def head.keep(acc: List<&2, U32>, c: U32, done: Bool) -> List<&2, U32>:
-  match done:
-    case True{}:
-      acc
-    case False{}:
-      Con{c, acc}
-
-# the scanner's state: how far into the blank line, the bytes kept so
-# far (reversed), and whether the blank line has passed
-type Hd is Data:
-  Hd{k: U32, acc: List<&2, U32>, done: Bool}
-
-def head.step.k(+k2: U32, acc: List<&2, U32>, c: U32, +done: Bool) -> Hd:
-  Hd{k2, head.keep(acc, c, done), done || U32.is_eq(k2, 4)}
-
-def head.step(st: Hd, +c: U32) -> Hd:
-  match st:
-    case Hd{k, acc, done}:
-      head.step.k(head.next(k, U32.is_eq(c, 13), U32.is_eq(c, 10)), acc, c, done)
-
-def head.out(st: Hd) -> List<&2, U32>:
-  match st:
-    case Hd{k, acc, done}:
-      rev(acc)
-
-def head.of.go(bs: List<&2, U32>, st: Hd) -> List<&2, U32>:
-  match bs:
-    case Nil{}:
-      head.out(st)
-    case Con{c, t}:
-      head.of.go(t, head.step(st, c))
-
-def head.of(bs: List<&2, U32>) -> List<&2, U32>:
-  head.of.go(bs, Hd{0, Nil{}, False{}})
+def head.of(+bs: Bytes()) -> Bytes():
+  head.upto(bs, Bytes.find(bs, "\r\n\r\n"))
 
 # Routes
 # ======
@@ -1403,11 +1307,11 @@ def ctype(e: List<&2, U32>) -> List<&2, U32>:
 # reply is written. Fixed routes stay pure; only a file route puts IO
 # on the path, and only for its own request.
 type Seg is Data:
-  Raw{bs: List<&2, U32>}
+  Raw{bs: Bytes()}
   Page{path: List<&2, U32>, ct: List<&2, U32>, head: Bool}
   Note{bs: List<&2, U32>}
 
-def miss(head: Bool) -> List<&2, U32>:
+def miss(head: Bool) -> Bytes():
   match head:
     case True{}:
       head.of(resp.missing())
@@ -1441,13 +1345,14 @@ def page(root: List<&2, U32>, +path: List<&2, U32>, head: Bool) -> Seg:
 
 # Reading a page: open, size, read, close. A directory opens and then
 # refuses to be read, which is a miss. A file past the cap is refused
-# rather than loaded, until pages are written in pieces.
-def page.close(f: File, out: List<&2, U32>) -> IO(List<&2, U32>):
-  do IO<List<&2, U32>>:
+# rather than loaded, until pages are written in pieces. The body is
+# read as one Bytes block, never a cell per byte.
+def page.close(f: File, out: Bytes()) -> IO(Bytes()):
+  do IO<Bytes()>:
     u : Unit <- File.close(f)
     return out
 
-def page.got(got: File & Result<&1, &1, U32 & String, List<&2, U32>>, ct: List<&2, U32>, n: U32) -> IO(List<&2, U32>):
+def page.got(got: File & Result<&1, &1, U32 & String, Bytes()>, ct: List<&2, U32>, n: U32) -> IO(Bytes()):
   (f, r) = got
   match r:
     case Fail{e}:
@@ -1455,7 +1360,7 @@ def page.got(got: File & Result<&1, &1, U32 & String, List<&2, U32>>, ct: List<&
     case Done{bs}:
       page.close(f, reply.n("200 OK", ct, n, bs))
 
-def page.peek(got: File & Result<&1, &1, U32 & String, List<&2, U32>>, ct: List<&2, U32>, n: U32) -> IO(List<&2, U32>):
+def page.peek(got: File & Result<&1, &1, U32 & String, Bytes()>, ct: List<&2, U32>, n: U32) -> IO(Bytes()):
   (f, r) = got
   match r:
     case Fail{e}:
@@ -1466,20 +1371,20 @@ def page.peek(got: File & Result<&1, &1, U32 & String, List<&2, U32>>, ct: List<
 def page.cap() -> U32:
   4194304
 
-def page.body(f: File, ct: List<&2, U32>, +n: U32, head: Bool, big: Bool) -> IO(List<&2, U32>):
+def page.body(f: File, ct: List<&2, U32>, +n: U32, head: Bool, big: Bool) -> IO(Bytes()):
   match head big:
     case True{} _:
-      do IO<List<&2, U32>>:
-        got : File & Result<&1, &1, U32 & String, List<&2, U32>> <- File.read_bytes(f, 1)
+      do IO<Bytes()>:
+        got : File & Result<&1, &1, U32 & String, Bytes()> <- File.read_buf(f, 1)
         page.peek(got, ct, n)
     case False{} True{}:
-      page.close(f, reply("500 Internal Server Error", "text/plain", bytes("file too large\n")))
+      page.close(f, reply("500 Internal Server Error", "text/plain", "file too large\n"))
     case False{} False{}:
-      do IO<List<&2, U32>>:
-        got : File & Result<&1, &1, U32 & String, List<&2, U32>> <- File.read_bytes(f, n)
+      do IO<Bytes()>:
+        got : File & Result<&1, &1, U32 & String, Bytes()> <- File.read_buf(f, n)
         page.got(got, ct, n)
 
-def page.sized(got: File & Result<&1, &1, U32 & String, U32>, ct: List<&2, U32>, head: Bool) -> IO(List<&2, U32>):
+def page.sized(got: File & Result<&1, &1, U32 & String, U32>, ct: List<&2, U32>, head: Bool) -> IO(Bytes()):
   (f, r) = got
   match r:
     case Fail{e}:
@@ -1487,18 +1392,18 @@ def page.sized(got: File & Result<&1, &1, U32 & String, U32>, ct: List<&2, U32>,
     case Done{+n}:
       page.body(f, ct, n, head, U32.is_lt(page.cap(), n))
 
-def page.opened(r: Result<&1, &1, U32 & String, File>, ct: List<&2, U32>, head: Bool) -> IO(List<&2, U32>):
+def page.opened(r: Result<&1, &1, U32 & String, File>, ct: List<&2, U32>, head: Bool) -> IO(Bytes()):
   match r:
     case Fail{e}:
-      do IO<List<&2, U32>>:
+      do IO<Bytes()>:
         return miss(head)
     case Done{f}:
-      do IO<List<&2, U32>>:
+      do IO<Bytes()>:
         got : File & Result<&1, &1, U32 & String, U32> <- File.size(f)
         page.sized(got, ct, head)
 
-def page.read(path: List<&2, U32>, ct: List<&2, U32>, head: Bool) -> IO(List<&2, U32>):
-  do IO<List<&2, U32>>:
+def page.read(path: List<&2, U32>, ct: List<&2, U32>, head: Bool) -> IO(Bytes()):
+  do IO<Bytes()>:
     r : Result<&1, &1, U32 & String, File> <- File.open(text(path), "r")
     page.opened(r, ct, head)
 
@@ -1509,97 +1414,47 @@ def page.read(path: List<&2, U32>, ct: List<&2, U32>, head: Bool) -> IO(List<&2,
 # whatever supervises the process is what timestamps and collects it.
 # A Note carries what is known before the reply exists; the segment
 # after it completes the line. --log turns it on, and it is off by
-# default because a line per request is a syscall per request.
-def nth(i: Nat, xs: List<&2, U32>) -> U32:
-  match i xs:
-    case 0n Nil{}:
-      32
-    case 0n Con{h, t}:
-      h
-    case 1n+j Nil{}:
-      32
-    case 1n+j Con{h, t}:
-      nth(j, t)
-
-# "HTTP/1.1 200 OK": the status is the three bytes after the version,
-# taken in one walk so the reply is read once
-def status.take(bs: List<&2, U32>) -> List<&2, U32>:
-  match bs:
-    case Nil{}:
-      bytes("???")
-    case Con{a, t1}:
-      match t1:
-        case Nil{}:
-          bytes("???")
-        case Con{b, t2}:
-          match t2:
-            case Nil{}:
-              bytes("???")
-            case Con{c, t}:
-              [a, b, c]
-
-def status.go(k: Nat, bs: List<&2, U32>) -> List<&2, U32>:
-  match k:
-    case 0n:
-      status.take(bs)
-    case 1n+j:
-      match bs:
-        case Nil{}:
-          bytes("???")
-        case Con{h, t}:
-          status.go(j, t)
-
-def status(bs: List<&2, U32>) -> List<&2, U32>:
-  status.go(9n, bs)
-
-def log.line(+note: List<&2, U32>, +out: List<&2, U32>) -> String:
-  text(cat(note, cat(bytes(" "), cat(status(out),
-    cat(bytes(" "), bytes(Nat.show(List.length(&2, U32, out))))))))
-
-def flat.cat(a: List<&2, U32>, b: List<&2, U32>) -> List<&2, U32>:
-  match b:
-    case Nil{}:
-      a
-    case Con{h, t}:
-      cat(a, Con{h, t})
+# default because a line per request is a syscall per request. The
+# status is the three bytes after "HTTP/1.1 ", a view of the reply.
+def log.line(+note: List<&2, U32>, +out: Bytes()) -> String:
+  text(note) ++ " " ++ Bytes.slice(out, 9n, 3n) ++ " " ++ Nat.show(Bytes.len(out))
 
 # a resolved segment, logged against the note that was waiting if there
 # was one, and handed straight back: the line goes out before the
 # segments after it, so the log reads in the order the requests came
-def flat.note(may: Maybe<&2, List<&2, U32>>, +out: List<&2, U32>) ->
-  IO(List<&2, U32>):
+def flat.note(may: Maybe<&2, List<&2, U32>>, +out: Bytes()) -> IO(Bytes()):
   match may:
     case None{}:
-      do IO<List<&2, U32>>:
+      do IO<Bytes()>:
         return out
     case Some{note}:
-      do IO<List<&2, U32>>:
+      do IO<Bytes()>:
         u : Unit <- IO.print_err(log.line(note, out))
         return out
 
-def flat.go(xs: List<&2, Seg>, may: Maybe<&2, List<&2, U32>>) -> IO(List<&2, U32>):
+# the segments appended onto acc in order: the first reply's block
+# grows in place, so a pipelined batch is copied once
+def flat.go(xs: List<&2, Seg>, may: Maybe<&2, List<&2, U32>>, acc: Bytes()) -> IO(Bytes()):
   match xs:
     case Nil{}:
-      do IO<List<&2, U32>>:
-        return Nil{}
+      do IO<Bytes()>:
+        return acc
     case Con{s, t}:
       match s:
         case Note{bs}:
-          flat.go(t, Some{bs})
+          flat.go(t, Some{bs}, acc)
         case Raw{bs}:
-          do IO<List<&2, U32>>:
-            out  : List<&2, U32> <- flat.note(may, bs)
-            rest : List<&2, U32> <- flat.go(t, None{})
-            return flat.cat(out, rest)
+          do IO<Bytes()>:
+            out : Bytes() <- flat.note(may, bs)
+            flat.go(t, None{}, Bytes.append(acc, out))
         case Page{path, ct, head}:
-          do IO<List<&2, U32>>:
-            got  : List<&2, U32> <- page.read(path, ct, head)
-            out  : List<&2, U32> <- flat.note(may, got)
-            rest : List<&2, U32> <- flat.go(t, None{})
-            return flat.cat(out, rest)
+          do IO<Bytes()>:
+            got : Bytes() <- page.read(path, ct, head)
+            out : Bytes() <- flat.note(may, got)
+            flat.go(t, None{}, Bytes.append(acc, out))
 
-def flat(xs: List<&2, Seg>) -> IO(List<&2, U32>):
-  flat.go(xs, None{})
+def flat(xs: List<&2, Seg>) -> IO(Bytes()):
+  flat.go(xs, None{}, "")
 
 
 # What answering a chunk produced: the bytes to write, whether the peer
@@ -1612,7 +1467,7 @@ type Ans is Data:
 # =======
 
 # HEAD takes the head of what GET would have sent.
-def fixed(r: List<&2, U32>, head: Bool) -> List<&2, U32>:
+def fixed(+r: Bytes(), head: Bool) -> Bytes():
   match head:
     case True{}:
       head.of(r)
@@ -1621,9 +1476,9 @@ def fixed(r: List<&2, U32>, head: Bool) -> List<&2, U32>:
 
 # the reply that switches the connection to frames, with the accept key
 # the client's key earns
-def live.head(key: List<&2, U32>) -> List<&2, U32>:
-  cat(bytes("HTTP/1.1 101 Switching Protocols\r\nupgrade: websocket\r\nconnection: Upgrade\r\nsec-websocket-accept: "),
-    cat(Ws.accept(key), bytes("\r\n\r\n")))
+def live.head(key: List<&2, U32>) -> Bytes():
+  Bytes.concat(["HTTP/1.1 101 Switching Protocols\r\nupgrade: websocket\r\nconnection: Upgrade\r\nsec-websocket-accept: ",
+    Bytes.from_list(Ws.accept(key)), "\r\n\r\n"])
 
 # /ws: a WebSocket echo, or a 426 for a request that did not ask to upgrade
 def live.answer(key: List<&2, U32>, ws: Bool, head: Bool) -> Ans:
@@ -1631,7 +1486,7 @@ def live.answer(key: List<&2, U32>, ws: Bool, head: Bool) -> Ans:
     case True{}:
       Ans{[Raw{live.head(key)}], False{}, 0, True{}}
     case False{}:
-      Ans{[Raw{fixed(reply("426 Upgrade Required", "text/plain", bytes("websocket only\n")), head)}],
+      Ans{[Raw{fixed(reply("426 Upgrade Required", "text/plain", "websocket only\n"), head)}],
         False{}, 0, False{}}
 
 def act.run(
@@ -1644,7 +1499,7 @@ def act.run(
     case Root{}:
       Ans{[Raw{fixed(resp.root(), head)}], False{}, 0, False{}}
     case Echo{}:
-      Ans{[Raw{fixed(reply("200 OK", "application/octet-stream", body), head)}],
+      Ans{[Raw{fixed(reply("200 OK", "application/octet-stream", Bytes.from_list(body)), head)}],
         False{}, 0, False{}}
     case Events{}:
       Ans{[Raw{sse.head()}], False{}, sse.count(), False{}}
@@ -1880,9 +1735,9 @@ def plan.rep(s: Socket, wr: Ws.W, r: Ws.Rep) -> Socket & Plan:
         case Con{h, t}:
           match close:
             case True{}:
-              (s, End{[Raw{Con{h, t}}]})
+              (s, End{[Raw{Bytes.from_list(Con{h, t})}]})
             case False{}:
-              (s, Sock{[Raw{Con{h, t}}], wr})
+              (s, Sock{[Raw{Bytes.from_list(Con{h, t})}], wr})
 
 def plan.framed(s: Socket, fs: List<&2, Ws.Frm>, dd: Ws.W & Bool) -> Socket & Plan:
   (wr, bad) = dd
@@ -1998,9 +1853,9 @@ def conn(f: Nat, +srv: Srv, +sem: Chan(Unit), sp: Socket & Plan, w: Nat) -> IO(U
           fin(sem, s)
         case End{out}:
           do IO<Unit>:
-            bs : List<&2, U32> <- flat(out)
+            bs : Bytes() <- flat(out)
             m  : Socket & Result<&1, &1, U32 & String, Unit> <-
-              TCP.send_bytes(s, bs)
+              TCP.send_buf(s, bs)
             shut(sem, m)
         case Wait{p2}:
           match w:
@@ -2012,16 +1867,16 @@ def conn(f: Nat, +srv: Srv, +sem: Chan(Unit), sp: Socket & Plan, w: Nat) -> IO(U
                 conn(g, srv, sem, sp2, v)
         case Feed{out, n}:
           do IO<Unit>:
-            bs  : List<&2, U32> <- flat(out)
+            bs  : Bytes() <- flat(out)
             m   : Socket & Result<&1, &1, U32 & String, Unit> <-
-              TCP.send_bytes(s, bs)
+              TCP.send_buf(s, bs)
             sp2 : Socket & Plan <- tick(m, n)
             conn(g, srv, sem, sp2, conn.waits())
         case Sock{out, wr}:
           do IO<Unit>:
-            bs  : List<&2, U32> <- flat(out)
+            bs  : Bytes() <- flat(out)
             m   : Socket & Result<&1, &1, U32 & String, Unit> <-
-              TCP.send_bytes(s, bs)
+              TCP.send_buf(s, bs)
             sp2 : Socket & Plan <- turn.ws(srv, m, wr)
             conn(g, srv, sem, sp2, conn.waits())
         case Hold{wr}:
@@ -2034,9 +1889,9 @@ def conn(f: Nat, +srv: Srv, +sem: Chan(Unit), sp: Socket & Plan, w: Nat) -> IO(U
                 conn(g, srv, sem, sp2, v)
         case Go{out, p2}:
           do IO<Unit>:
-            bs  : List<&2, U32> <- flat(out)
+            bs  : Bytes() <- flat(out)
             m   : Socket & Result<&1, &1, U32 & String, Unit> <-
-              TCP.send_bytes(s, bs)
+              TCP.send_buf(s, bs)
             sp2 : Socket & Plan <- turn(srv, m, p2)
             conn(g, srv, sem, sp2, conn.waits())
 
