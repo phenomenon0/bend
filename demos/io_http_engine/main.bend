@@ -512,6 +512,31 @@ def resp.bad() -> List<&2, U32>:
   105, 111, 110, 58, 32, 107, 101, 101, 112, 45, 97, 108, 105, 118, 101,
   13, 10, 13, 10, 98, 97, 100, 32, 114, 101, 113, 117, 101, 115, 116, 10]
 
+# An event stream: the head goes out once, then one event at a time on
+# the engine's own schedule, with nothing more read from the peer. This
+# is the shape that holds a connection open -- an agent session, a token
+# stream, a live feed -- and it is what this engine is actually good at.
+def sse.head() -> List<&2, U32>:
+  bytes("HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ncache-control: no-cache\r\nconnection: keep-alive\r\n\r\n")
+
+def sse.event(n: U32) -> List<&2, U32>:
+  cat(bytes("event: tick\ndata: "), cat(bytes(U32.show(n)), bytes("\n\n")))
+
+# how many events a stream sends before it closes, and how long it
+# waits between them. Both are bounds, not settings: the count is what
+# makes the streaming loop terminate without @unsafe.
+def sse.count() -> U32:
+  1000000
+
+def sse.gap() -> U32:
+  1000
+
+# What answering a chunk produced: the bytes to write, whether the peer
+# asked to close, and how many stream events to send afterwards (0 for
+# an ordinary reply).
+type Ans is Data:
+  Ans{out: List<&2, U32>, close: Bool, stream: U32}
+
 def route.go(
   path: List<&2, U32>, body: List<&2, U32>, health: Bool, echo: Bool, root: Bool
 ) -> List<&2, U32>:
@@ -525,76 +550,98 @@ def route.go(
     case _ _ _:
       resp.missing()
 
-def route(+path: List<&2, U32>, body: List<&2, U32>) -> List<&2, U32>:
-  route.go(path, body, beq(path, bytes("/health"), True{}),
-    beq(path, bytes("/echo"), True{}), beq(path, bytes("/"), True{}))
+def route.ev(+path: List<&2, U32>, body: List<&2, U32>, ev: Bool) -> Ans:
+  match ev:
+    case True{}:
+      Ans{sse.head(), False{}, sse.count()}
+    case False{}:
+      Ans{route.go(path, body, beq(path, bytes("/health"), True{}),
+        beq(path, bytes("/echo"), True{}), beq(path, bytes("/"), True{})),
+        False{}, 0}
+
+def route(+path: List<&2, U32>, body: List<&2, U32>) -> Ans:
+  route.ev(path, body, beq(path, bytes("/events"), True{}))
 
 # A method this engine does not implement is refused before routing, so
 # no route ever sees one.
-def serve.go(path: List<&2, U32>, body: List<&2, U32>, ok: Bool) -> List<&2, U32>:
+def serve.go(path: List<&2, U32>, body: List<&2, U32>, ok: Bool) -> Ans:
   match ok:
     case True{}:
       route(path, body)
     case False{}:
-      resp.method()
+      Ans{resp.method(), False{}, 0}
 
-def serve(r: Req) -> List<&2, U32>:
+def serve(r: Req) -> Ans:
   match r:
     case Req{+meth, path, body, close}:
       serve.go(path, body,
         U32.is_eq(meth, m.get()) || U32.is_eq(meth, m.head()))
 
-def answer.cat(
-  one: List<&2, U32>, tail: List<&2, U32>, cl: Bool
-) -> List<&2, U32> & Bool:
+def answer.cat(one: List<&2, U32>, tail: List<&2, U32>, cl: Bool, st: U32) -> Ans:
   match tail:
     case Nil{}:
-      (one, cl)
+      Ans{one, cl, st}
     case Con{h, t}:
-      (cat(one, Con{h, t}), cl)
+      Ans{cat(one, Con{h, t}), cl, st}
 
-def answer.go(
-  one: List<&2, U32>, cl1: Bool, rest: List<&2, U32> & Bool
-) -> List<&2, U32> & Bool:
-  (tail, cl) = rest
-  answer.cat(one, tail, cl1 || cl)
+def answer.rest(a: List<&2, U32>, c1: Bool, s1: U32, rest: Ans) -> Ans:
+  match rest:
+    case Ans{b, c2, s2}:
+      answer.cat(a, b, c1 || c2, U32.max(s1, s2))
+
+def answer.go(one: Ans, rest: Ans) -> Ans:
+  match one:
+    case Ans{a, c1, s1}:
+      answer.rest(a, c1, s1, rest)
 
 # Every reply for one chunk's worth of messages, in arrival order, and
 # whether any of them asked to close. The replies nest to the right, so
 # each one is copied once: folding them into an accumulator instead
 # would copy the accumulator per message and go quadratic in the depth
 # of a pipelined batch.
-def answer(rs: List<&2, Req>, cl: Bool) -> List<&2, U32> & Bool:
+def answer.one(a: Ans, cl: Bool) -> Ans:
+  match a:
+    case Ans{out, c, st}:
+      Ans{out, c || cl, st}
+
+def answer(rs: List<&2, Req>, cl: Bool) -> Ans:
   match rs:
     case Nil{}:
-      (Nil{}, cl)
+      Ans{Nil{}, cl, 0}
     case Con{+r, t}:
-      answer.go(serve(r), req.close(r), answer(t, cl))
+      answer.go(answer.one(serve(r), req.close(r)), answer(t, cl))
 
 # The server
 # ==========
 
 # What the connection does next: write these bytes and read again,
-# write them and close, or close now.
+# write them and close, write them and keep streaming without reading
+# again, or close now. Feed is the one that holds a connection open.
 type Plan is Data:
   Go{out: List<&2, U32>, p2: P}
   End{out: List<&2, U32>}
+  Feed{out: List<&2, U32>, n: U32}
   Stop{}
 
-def plan.cl(out: List<&2, U32>, p2: P, cl: Bool) -> Plan:
-  match cl:
-    case True{}:
+def plan.pick(
+  out: List<&2, U32>, p2: P, plain: Bool, cl: Bool, st: U32
+) -> Plan:
+  match plain cl:
+    case False{} _:
+      Feed{out, st}
+    case True{} True{}:
       End{out}
-    case False{}:
+    case True{} False{}:
       Go{out, p2}
 
-def plan.of(bc: List<&2, U32> & Bool, p2: P) -> Plan:
-  (out, cl) = bc
-  plan.cl(out, p2, cl)
+def plan.ans(a: Ans, p2: P) -> Plan:
+  match a:
+    case Ans{out, cl, +st}:
+      plan.pick(out, p2, U32.is_zero(st), cl, st)
 
 def plan.take(pr: P & List<&2, Req>) -> Plan:
   (p2, rs) = pr
-  plan.of(answer(rs, False{}), p2)
+  plan.ans(answer(rs, False{}), p2)
 
 def plan.go(q: P, bad: Bool) -> Plan:
   match bad:
@@ -640,6 +687,35 @@ def turn(sent: Socket & Result<&1, &1, U32 & String, Unit>, p: P) ->
       TCP.recv_bytes(s, chunk())
     return plan.recv(m, p)
 
+# the next event, or the end of the stream. A stream terminates because
+# the count runs out, the same way a connection does: no @unsafe, and a
+# peer that goes quiet still cannot hold a computation open forever.
+def plan.more(s: Socket, +n: U32, done: Bool) -> Socket & Plan:
+  match done:
+    case True{}:
+      (s, Stop{})
+    case False{}:
+      (s, Feed{sse.event(n), (n - 1 : U32)})
+
+def plan.next(
+  s: Socket, r: Result<&1, &1, U32 & String, Unit>, +n: U32
+) -> Socket & Plan:
+  match r:
+    case Done{u}:
+      plan.more(s, n, U32.is_zero(n))
+    case Fail{e}:
+      (s, Stop{})
+
+# wait, then plan the next event. The engine writes on its own clock and
+# reads nothing, so the reader and the writer never contend for the one
+# socket the connection owns.
+def tick(sent: Socket & Result<&1, &1, U32 & String, Unit>, n: U32) ->
+  IO(Socket & Plan):
+  (s, r) = sent
+  do IO<Socket & Plan>:
+    IO.sleep(sse.gap())
+    return plan.next(s, r, n)
+
 def shut(m: Socket & Result<&1, &1, U32 & String, Unit>) -> IO(Unit):
   (s, r) = m
   Socket.close(s)
@@ -662,6 +738,12 @@ def conn(f: Nat, sp: Socket & Plan) -> IO(Unit):
             m : Socket & Result<&1, &1, U32 & String, Unit> <-
               TCP.send_bytes(s, out)
             shut(m)
+        case Feed{out, n}:
+          do IO<Unit>:
+            m   : Socket & Result<&1, &1, U32 & String, Unit> <-
+              TCP.send_bytes(s, out)
+            sp2 : Socket & Plan <- tick(m, n)
+            conn(g, sp2)
         case Go{out, p2}:
           do IO<Unit>:
             m   : Socket & Result<&1, &1, U32 & String, Unit> <-

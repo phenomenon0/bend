@@ -92,6 +92,39 @@ runs thirteen behavioural cases against either. `load.c` drives either.
     cc -std=c11 -O3 check.c -o check && ./check 8080 && ./check 8081
     cc -std=c11 -O3 load.c -o load && ./load 8080 32 5 8 /health
 
+## Streaming, and the ceiling it found
+
+`/events` is an event stream: the head goes out once, then one event at
+a time on the engine's own clock, with nothing further read from the
+peer. It is the shape that holds a connection open -- an agent session,
+a token stream, a live feed. The reader and the writer never contend
+for the socket, because a stream stops reading; the event count is what
+makes the loop terminate without `@unsafe`.
+
+Holding concurrent live streams, one event per second each:
+
+| live streams | RSS | per stream | CPU over 6s wall |
+|---|---|---|---|
+| 1,000 | 2.6 MB | 0.24 KB | 0.11 s |
+| 5,000 | 3.7 MB | 0.22 KB | 2.77 s |
+| 10,000 | 5.8 MB | 0.21 KB | **22.97 s** |
+
+Memory is flat per stream and about an order of magnitude under what
+the kernel spends on the socket itself (measured: 10,000 sockets cost
+34.6 MB of `TCP` and `sock_inode_cache` slab while the engine grew
+1.8 MB). On that axis there is no headroom left for anyone.
+
+CPU is the opposite, and the cause is not in this engine. `io_wait` in
+`bend2/comp.ts` rebuilds a `pollfd` array over every parked computation
+each cycle, calls `poll()` (itself linear in the kernel), then walks the
+park list again to dispatch -- O(n) per ready event, so O(n^2) per round
+over n streams. Spacing the events four times further apart cut the CPU
+only in half rather than to a quarter, which is what that shape
+predicts: the loop still iterates about once per ready timer and pays
+the full scan each time. The fix is the one everyone else made twenty
+years ago -- epoll/kqueue for readiness and a heap for the timers --
+and it is a runtime change, not an engine one.
+
 ## Measured
 
 One 5-core Xeon 8573C, clang 18, `-O3`, medians of five. Checked on
