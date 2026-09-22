@@ -1206,17 +1206,94 @@ def norm.rev(may: Maybe<&2, List<&2, List<&2, U32>>>) -> Maybe<&2, List<&2, List
 def norm(ss: List<&2, List<&2, U32>>) -> Maybe<&2, List<&2, List<&2, U32>>>:
   norm.rev(norm.go(ss, Some{Nil{}}))
 
-# every byte of a file name is printable ASCII and not a backslash
+# a control byte: below 32, or DEL
+def ctl(+c: U32) -> Bool:
+  U32.is_lt(c, 32) || U32.is_eq(c, 127)
+
+# a byte of a request target a file may be named by: printable ASCII
+# and not a backslash, so never a control byte
+def clean.pick(bad: Bool, +c: U32) -> Bool:
+  match bad:
+    case True{}:
+      False{}
+    case False{}:
+      U32.is_le(33, c) && U32.is_le(c, 126) && Bool.not(U32.is_eq(c, 92))
+
 def clean.go(bs: List<&2, U32>, ok: Bool) -> Bool:
   match bs:
     case Nil{}:
       ok
     case Con{+c, t}:
-      clean.go(t, ok && U32.is_le(33, c) && U32.is_le(c, 126)
-        && Bool.not(U32.is_eq(c, 92)))
+      clean.go(t, ok && clean.pick(ctl(c), c))
 
 def clean(bs: List<&2, U32>) -> Bool:
   clean.go(bs, True{})
+
+# What a file under the root may be named by, segment by segment: some
+# bytes, all printable ASCII other than '/' and '\', and not a dotfile
+# (a first byte of '.') unless dot says dotfiles are served, in which
+# case still never "." or "..". LAWS.bend states the same rule on its
+# own and proves every path page() opens keeps it.
+def fname.byte(+c: U32) -> Bool:
+  U32.is_le(33, c) && U32.is_le(c, 126) && Bool.not(U32.is_eq(c, 47))
+    && Bool.not(U32.is_eq(c, 92))
+
+def fname.bytes(bs: List<&2, U32>) -> Bool:
+  match bs:
+    case Nil{}:
+      True{}
+    case Con{+c, t}:
+      fname.byte(c) && fname.bytes(t)
+
+def fname.lead(dot: Bool, +c: U32, +s: List<&2, U32>) -> Bool:
+  match dot:
+    case True{}:
+      Bool.not(beq(s, [46], True{}) || beq(s, [46, 46], True{}))
+    case False{}:
+      Bool.not(U32.is_eq(c, 46))
+
+def fname.ok(dot: Bool, s: List<&2, U32>) -> Bool:
+  match s:
+    case Nil{}:
+      False{}
+    case Con{+c, +t}:
+      fname.lead(dot, c, Con{c, t}) && fname.bytes(Con{c, t})
+
+def fnames.ok(+dot: Bool, ss: List<&2, List<&2, U32>>) -> Bool:
+  match ss:
+    case Nil{}:
+      True{}
+    case Con{s, t}:
+      fname.ok(dot, s) && fnames.ok(dot, t)
+
+def fnames.keep(ss: List<&2, List<&2, U32>>, ok: Bool) -> Maybe<&2, List<&2, List<&2, U32>>>:
+  match ok:
+    case True{}:
+      Some{ss}
+    case False{}:
+      None{}
+
+def fnames.guard(+dot: Bool, may: Maybe<&2, List<&2, List<&2, U32>>>) ->
+  Maybe<&2, List<&2, List<&2, U32>>>:
+  match may:
+    case None{}:
+      None{}
+    case Some{+ss}:
+      fnames.keep(ss, fnames.ok(dot, ss))
+
+def fnames.gate(ok: Bool, may: Maybe<&2, List<&2, List<&2, U32>>>) ->
+  Maybe<&2, List<&2, List<&2, U32>>>:
+  match ok:
+    case True{}:
+      may
+    case False{}:
+      None{}
+
+# the segments a request target names under the root: its bytes clean,
+# split, normalised, and every segment a name by the rule above; None
+# is a 404
+def fnames.of(+dot: Bool, +t: List<&2, U32>) -> Maybe<&2, List<&2, List<&2, U32>>>:
+  fnames.gate(clean(t), fnames.guard(dot, norm(segs(t))))
 
 def join.rest(ss: List<&2, List<&2, U32>>) -> List<&2, U32>:
   match ss:
@@ -1303,12 +1380,13 @@ def ctype(e: List<&2, U32>) -> List<&2, U32>:
   Maybe.default(&2, List<&2, U32>, mime.go(mimes(), e, None{}),
     bytes("application/octet-stream"))
 
-# One piece of a reply: bytes as they are, or a page to read when the
-# reply is written. Fixed routes stay pure; only a file route puts IO
-# on the path, and only for its own request.
+# One piece of a reply: bytes as they are, or a file to write when the
+# reply is written: the root, the path under it, the type, and whether
+# only the head is wanted. Fixed routes stay pure; only a file route
+# puts IO on the path, and only for its own request.
 type Seg is Data:
   Raw{bs: Bytes()}
-  Page{path: List<&2, U32>, ct: List<&2, U32>, head: Bool}
+  Page{root: List<&2, U32>, path: List<&2, U32>, ct: List<&2, U32>, head: Bool}
   Note{bs: List<&2, U32>}
 
 def miss(head: Bool) -> Bytes():
@@ -1319,96 +1397,30 @@ def miss(head: Bool) -> Bytes():
       resp.missing()
 
 def page.name(root: List<&2, U32>, +ss: List<&2, List<&2, U32>>, head: Bool) -> Seg:
-  Page{cat(root, Con{47, join(ss)}), ctype(ext.go(last(ss, Nil{}), Nil{})), head}
+  Page{root, join(ss), ctype(ext.go(last(ss, Nil{}), Nil{})), head}
 
 def page.of(root: List<&2, U32>, ss: List<&2, List<&2, U32>>, head: Bool) -> Seg:
   match ss:
     case Nil{}:
-      Page{cat(root, bytes("/index.html")), bytes("text/html; charset=utf-8"), head}
+      Page{root, bytes("index.html"), bytes("text/html; charset=utf-8"), head}
     case Con{s, t}:
       page.name(root, Con{s, t}, head)
 
-def page.pick(root: List<&2, U32>, may: Maybe<&2, List<&2, List<&2, U32>>>, head: Bool, ok: Bool) -> Seg:
-  match may ok:
-    case _ False{}:
+def page.pick(root: List<&2, U32>, may: Maybe<&2, List<&2, List<&2, U32>>>, head: Bool) -> Seg:
+  match may:
+    case None{}:
       Raw{miss(head)}
-    case None{} True{}:
-      Raw{miss(head)}
-    case Some{ss} True{}:
+    case Some{ss}:
       page.of(root, ss, head)
 
-# a file under the root, named by the request path: split, normalised,
-# and gated to printable ASCII. Percent escapes are not decoded, so an
-# escaped ".." is a name no file has rather than a climb.
+# a file under the root, named by the request path (fnames.of): split,
+# normalised, gated to printable ASCII, dotfiles refused. Percent
+# escapes are not decoded, so an escaped ".." is a name no file has
+# rather than a climb. The name is opened by File.open_under, which
+# follows no symbolic link and opens nothing but a regular file.
 def page(root: List<&2, U32>, +path: List<&2, U32>, head: Bool) -> Seg:
-  page.pick(root, norm(segs(path)), head, clean(path))
+  page.pick(root, fnames.of(False{}, path), head)
 
-# Reading a page: open, size, read, close. A directory opens and then
-# refuses to be read, which is a miss. A file past the cap is refused
-# rather than loaded, until pages are written in pieces. The body is
-# read as one Bytes block, never a cell per byte.
-def page.close(f: File, out: Bytes()) -> IO(Bytes()):
-  do IO<Bytes()>:
-    u : Unit <- File.close(f)
-    return out
-
-def page.got(got: File & Result<&1, &1, U32 & String, Bytes()>, ct: List<&2, U32>, n: U32) -> IO(Bytes()):
-  (f, r) = got
-  match r:
-    case Fail{e}:
-      page.close(f, resp.missing())
-    case Done{bs}:
-      page.close(f, reply.n("200 OK", ct, n, bs))
-
-def page.peek(got: File & Result<&1, &1, U32 & String, Bytes()>, ct: List<&2, U32>, n: U32) -> IO(Bytes()):
-  (f, r) = got
-  match r:
-    case Fail{e}:
-      page.close(f, head.of(resp.missing()))
-    case Done{bs}:
-      page.close(f, reply.n.head("200 OK", ct, n))
-
-def page.cap() -> U32:
-  4194304
-
-def page.body(f: File, ct: List<&2, U32>, +n: U32, head: Bool, big: Bool) -> IO(Bytes()):
-  match head big:
-    case True{} _:
-      do IO<Bytes()>:
-        got : File & Result<&1, &1, U32 & String, Bytes()> <- File.read_buf(f, 1)
-        page.peek(got, ct, n)
-    case False{} True{}:
-      page.close(f, reply("500 Internal Server Error", "text/plain", "file too large\n"))
-    case False{} False{}:
-      do IO<Bytes()>:
-        got : File & Result<&1, &1, U32 & String, Bytes()> <- File.read_buf(f, n)
-        page.got(got, ct, n)
-
-def page.sized(got: File & Result<&1, &1, U32 & String, U32>, ct: List<&2, U32>, head: Bool) -> IO(Bytes()):
-  (f, r) = got
-  match r:
-    case Fail{e}:
-      page.close(f, miss(head))
-    case Done{+n}:
-      page.body(f, ct, n, head, U32.is_lt(page.cap(), n))
-
-def page.opened(r: Result<&1, &1, U32 & String, File>, ct: List<&2, U32>, head: Bool) -> IO(Bytes()):
-  match r:
-    case Fail{e}:
-      do IO<Bytes()>:
-        return miss(head)
-    case Done{f}:
-      do IO<Bytes()>:
-        got : File & Result<&1, &1, U32 & String, U32> <- File.size(f)
-        page.sized(got, ct, head)
-
-def page.read(path: List<&2, U32>, ct: List<&2, U32>, head: Bool) -> IO(Bytes()):
-  do IO<Bytes()>:
-    r : Result<&1, &1, U32 & String, File> <- File.open(text(path), "r")
-    page.opened(r, ct, head)
-
-# the bytes to write for one chunk's answers, in order: literal ones as
-# they are, pages read as they come up
 # The access log: one line per request, what was asked, the status it
 # got and how many bytes went back, on stderr and nowhere else, so
 # whatever supervises the process is what timestamps and collects it.
@@ -1432,29 +1444,230 @@ def flat.note(may: Maybe<&2, List<&2, U32>>, +out: Bytes()) -> IO(Bytes()):
         u : Unit <- IO.print_err(log.line(note, out))
         return out
 
-# the segments appended onto acc in order: the first reply's block
-# grows in place, so a pipelined batch is copied once
-def flat.go(xs: List<&2, Seg>, may: Maybe<&2, List<&2, U32>>, acc: Bytes()) -> IO(Bytes()):
+# Writing a reply
+# ===============
+#
+# The segments of one chunk's answers are written in order as they are
+# produced. Fixed replies wait on one block and go out in one send with
+# whatever comes next. A file goes out as its head, taken from fstat of
+# the descriptor that was opened, then as blocks of at most page.chunk()
+# bytes, each read only after the socket took the one before; so a file
+# costs one block of memory however large it is, and a pipelined batch
+# of files costs the same. The body is exactly the length its head
+# promised: a read that comes back short is read on, and one that ends
+# early (the file shrank) ends the connection, since nothing after it
+# could be framed.
+
+def page.chunk() -> U32:
+  65536
+
+# the writer: the socket, the bytes waiting, and whether everything
+# promised so far has gone out. Once it has not, nothing more is written.
+type Em is Type:
+  Em{s: Socket, acc: Bytes(), ok: Bool}
+
+# a file being written: its descriptor, the bytes still owed, the
+# socket, and what waits to go out in front of the next block
+type Pump is Type:
+  Going{f: File, left: U32, s: Socket, pre: Bytes()}
+  Over{em: Em}
+
+def pump.left(f: File, left: U32, s: Socket, pre: Bytes(), done: Bool) -> IO(Pump):
+  match done:
+    case True{}:
+      do IO<Pump>:
+        File.close(f)
+        return Over{Em{s, pre, True{}}}
+    case False{}:
+      do IO<Pump>:
+        return Going{f, left, s, pre}
+
+def pump.fail(f: File, s: Socket, pre: Bytes()) -> IO(Pump):
+  do IO<Pump>:
+    File.close(f)
+    return Over{Em{s, pre, False{}}}
+
+def pump.sent(m: Socket & Result<&1, &1, U32 & String, Unit>, f: File, +left: U32) -> IO(Pump):
+  (s, r) = m
+  match r:
+    case Fail{e}:
+      pump.fail(f, s, "")
+    case Done{u}:
+      pump.left(f, left, s, "", U32.is_zero(left))
+
+def pump.block(
+  f: File, +left: U32, s: Socket, pre: Bytes(), bs: Bytes(), +n: U32, empty: Bool
+) -> IO(Pump):
+  match empty:
+    case True{}:
+      pump.fail(f, s, pre)
+    case False{}:
+      do IO<Pump>:
+        m : Socket & Result<&1, &1, U32 & String, Unit> <-
+          TCP.send_buf(s, Bytes.append(pre, bs))
+        pump.sent(m, f, (left - n : U32))
+
+def pump.got(
+  got: File & Result<&1, &1, U32 & String, Bytes()>, left: U32, s: Socket, pre: Bytes()
+) -> IO(Pump):
+  (f, r) = got
+  match r:
+    case Fail{e}:
+      pump.fail(f, s, pre)
+    case Done{+bs}:
+      pump.block(f, left, s, pre, bs, U32.from_nat(Bytes.len(bs)), U32.is_zero(U32.from_nat(Bytes.len(bs))))
+
+def pump.out(p: Pump) -> IO(Em):
+  match p:
+    case Over{em}:
+      do IO<Em>:
+        return em
+    case Going{f, left, s, pre}:
+      do IO<Em>:
+        File.close(f)
+        return Em{s, pre, False{}}
+
+# k bounds the reads: a block's worth each, and 64 short ones besides
+def pump(k: Nat, p: Pump) -> IO(Em):
+  match k:
+    case 0n:
+      pump.out(p)
+    case 1n+j:
+      match p:
+        case Over{em}:
+          do IO<Em>:
+            return em
+        case Going{f, +left, s, pre}:
+          do IO<Em>:
+            got : File & Result<&1, &1, U32 & String, Bytes()> <-
+              File.read_buf(f, U32.min(page.chunk(), left))
+            p2 : Pump <- pump.got(got, left, s, pre)
+            pump(j, p2)
+
+# a file's log line: its head's status, and the bytes its reply holds
+def log.sized(may: Maybe<&2, List<&2, U32>>, +hd: Bytes(), n: U32) -> IO(Unit):
+  match may:
+    case None{}:
+      do IO<Unit>:
+        return Unit{}
+    case Some{note}:
+      IO.print_err(text(note) ++ " " ++ Bytes.slice(hd, 9n, 3n) ++ " "
+        ++ U32.show((U32.from_nat(Bytes.len(hd)) + n : U32)))
+
+def page.miss(head: Bool, may: Maybe<&2, List<&2, U32>>, s: Socket, acc: Bytes()) -> IO(Em):
+  do IO<Em>:
+    out : Bytes() <- flat.note(may, miss(head))
+    return Em{s, Bytes.append(acc, out), True{}}
+
+def page.start(
+  f: File, +n: U32, +hd: Bytes(), head: Bool, may: Maybe<&2, List<&2, U32>>, s: Socket,
+  acc: Bytes()
+) -> IO(Em):
+  match head:
+    case True{}:
+      do IO<Em>:
+        log.sized(may, hd, 0)
+        File.close(f)
+        return Em{s, Bytes.append(acc, hd), True{}}
+    case False{}:
+      do IO<Em>:
+        log.sized(may, hd, n)
+        p : Pump <- pump.left(f, n, s, Bytes.append(acc, hd), U32.is_zero(n))
+        pump(U32.to_nat((n / page.chunk() + 64 : U32)), p)
+
+def page.sized(
+  got: File & Result<&1, &1, U32 & String, U32>, ct: List<&2, U32>, head: Bool,
+  may: Maybe<&2, List<&2, U32>>, s: Socket, acc: Bytes()
+) -> IO(Em):
+  (f, r) = got
+  match r:
+    case Fail{e}:
+      do IO<Em>:
+        File.close(f)
+        page.miss(head, may, s, acc)
+    case Done{+n}:
+      page.start(f, n, reply.n.head("200 OK", ct, n), head, may, s, acc)
+
+def page.opened(
+  r: Result<&1, &1, U32 & String, File>, ct: List<&2, U32>, head: Bool,
+  may: Maybe<&2, List<&2, U32>>, s: Socket, acc: Bytes()
+) -> IO(Em):
+  match r:
+    case Fail{e}:
+      page.miss(head, may, s, acc)
+    case Done{f}:
+      do IO<Em>:
+        got : File & Result<&1, &1, U32 & String, U32> <- File.size(f)
+        page.sized(got, ct, head, may, s, acc)
+
+def send.page(
+  root: List<&2, U32>, path: List<&2, U32>, ct: List<&2, U32>, head: Bool,
+  may: Maybe<&2, List<&2, U32>>, st: Em
+) -> IO(Em):
+  match st:
+    case Em{s, acc, ok}:
+      match ok:
+        case False{}:
+          do IO<Em>:
+            return Em{s, acc, False{}}
+        case True{}:
+          do IO<Em>:
+            r : Result<&1, &1, U32 & String, File> <- File.open_under(text(root), text(path))
+            page.opened(r, ct, head, may, s, acc)
+
+def send.raw(may: Maybe<&2, List<&2, U32>>, bs: Bytes(), st: Em) -> IO(Em):
+  match st:
+    case Em{s, acc, ok}:
+      match ok:
+        case False{}:
+          do IO<Em>:
+            return Em{s, acc, False{}}
+        case True{}:
+          do IO<Em>:
+            out : Bytes() <- flat.note(may, bs)
+            return Em{s, Bytes.append(acc, out), True{}}
+
+def send.fin(m: Socket & Result<&1, &1, U32 & String, Unit>, ok: Bool) ->
+  IO(Socket & Result<&1, &1, U32 & String, Unit>):
+  (s, r) = m
+  match ok:
+    case True{}:
+      do IO<Socket & Result<&1, &1, U32 & String, Unit>>:
+        return (s, r)
+    case False{}:
+      do IO<Socket & Result<&1, &1, U32 & String, Unit>>:
+        return (s, Fail{(5, "a file ended before the length its head promised")})
+
+def send.end(st: Em) -> IO(Socket & Result<&1, &1, U32 & String, Unit>):
+  match st:
+    case Em{s, acc, ok}:
+      do IO<Socket & Result<&1, &1, U32 & String, Unit>>:
+        m : Socket & Result<&1, &1, U32 & String, Unit> <- TCP.send_buf(s, acc)
+        send.fin(m, ok)
+
+def send.go(xs: List<&2, Seg>, may: Maybe<&2, List<&2, U32>>, st: Em) ->
+  IO(Socket & Result<&1, &1, U32 & String, Unit>):
   match xs:
     case Nil{}:
-      do IO<Bytes()>:
-        return acc
-    case Con{s, t}:
-      match s:
+      send.end(st)
+    case Con{g, t}:
+      match g:
         case Note{bs}:
-          flat.go(t, Some{bs}, acc)
+          send.go(t, Some{bs}, st)
         case Raw{bs}:
-          do IO<Bytes()>:
-            out : Bytes() <- flat.note(may, bs)
-            flat.go(t, None{}, Bytes.append(acc, out))
-        case Page{path, ct, head}:
-          do IO<Bytes()>:
-            got : Bytes() <- page.read(path, ct, head)
-            out : Bytes() <- flat.note(may, got)
-            flat.go(t, None{}, Bytes.append(acc, out))
+          do IO<Socket & Result<&1, &1, U32 & String, Unit>>:
+            st2 : Em <- send.raw(may, bs, st)
+            send.go(t, None{}, st2)
+        case Page{root, path, ct, head}:
+          do IO<Socket & Result<&1, &1, U32 & String, Unit>>:
+            st2 : Em <- send.page(root, path, ct, head, may, st)
+            send.go(t, None{}, st2)
 
-def flat(xs: List<&2, Seg>) -> IO(Bytes()):
-  flat.go(xs, None{}, "")
+# The one hook the connection loop calls: write a plan's segments to the
+# socket, in order, streaming files; the result fails when the socket
+# failed or a file came up short, and the connection then ends.
+def send.segs(s: Socket, xs: List<&2, Seg>) -> IO(Socket & Result<&1, &1, U32 & String, Unit>):
+  send.go(xs, None{}, Em{s, "", True{}})
 
 
 # What answering a chunk produced: the bytes to write, whether the peer
@@ -1718,7 +1931,12 @@ def turn.s(+srv: Srv, s: Socket, p: P) -> IO(Socket & Plan):
 def turn(+srv: Srv, sent: Socket & Result<&1, &1, U32 & String, Unit>, p: P) ->
   IO(Socket & Plan):
   (s, r) = sent
-  turn.s(srv, s, p)
+  match r:
+    case Fail{e}:
+      do IO<Socket & Plan>:
+        return (s, Stop{})
+    case Done{u}:
+      turn.s(srv, s, p)
 
 # A WebSocket connection: what the frames one read completed earned --
 # bytes to write and read on, nothing yet (read on), or the close.
@@ -1853,9 +2071,7 @@ def conn(f: Nat, +srv: Srv, +sem: Chan(Unit), sp: Socket & Plan, w: Nat) -> IO(U
           fin(sem, s)
         case End{out}:
           do IO<Unit>:
-            bs : Bytes() <- flat(out)
-            m  : Socket & Result<&1, &1, U32 & String, Unit> <-
-              TCP.send_buf(s, bs)
+            m : Socket & Result<&1, &1, U32 & String, Unit> <- send.segs(s, out)
             shut(sem, m)
         case Wait{p2}:
           match w:
@@ -1867,16 +2083,12 @@ def conn(f: Nat, +srv: Srv, +sem: Chan(Unit), sp: Socket & Plan, w: Nat) -> IO(U
                 conn(g, srv, sem, sp2, v)
         case Feed{out, n}:
           do IO<Unit>:
-            bs  : Bytes() <- flat(out)
-            m   : Socket & Result<&1, &1, U32 & String, Unit> <-
-              TCP.send_buf(s, bs)
+            m   : Socket & Result<&1, &1, U32 & String, Unit> <- send.segs(s, out)
             sp2 : Socket & Plan <- tick(m, n)
             conn(g, srv, sem, sp2, conn.waits())
         case Sock{out, wr}:
           do IO<Unit>:
-            bs  : Bytes() <- flat(out)
-            m   : Socket & Result<&1, &1, U32 & String, Unit> <-
-              TCP.send_buf(s, bs)
+            m   : Socket & Result<&1, &1, U32 & String, Unit> <- send.segs(s, out)
             sp2 : Socket & Plan <- turn.ws(srv, m, wr)
             conn(g, srv, sem, sp2, conn.waits())
         case Hold{wr}:
@@ -1889,9 +2101,7 @@ def conn(f: Nat, +srv: Srv, +sem: Chan(Unit), sp: Socket & Plan, w: Nat) -> IO(U
                 conn(g, srv, sem, sp2, v)
         case Go{out, p2}:
           do IO<Unit>:
-            bs  : Bytes() <- flat(out)
-            m   : Socket & Result<&1, &1, U32 & String, Unit> <-
-              TCP.send_buf(s, bs)
+            m   : Socket & Result<&1, &1, U32 & String, Unit> <- send.segs(s, out)
             sp2 : Socket & Plan <- turn(srv, m, p2)
             conn(g, srv, sem, sp2, conn.waits())
 
