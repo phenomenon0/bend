@@ -940,7 +940,7 @@ def resp.method() -> Bytes():
   "HTTP/1.1 405 Method Not Allowed\r\ncontent-type: text/plain\r\ncontent-length: 10\r\nallow: GET, HEAD\r\nconnection: keep-alive\r\n\r\nno method\n"
 
 def resp.bad() -> Bytes():
-  "HTTP/1.1 400 Bad Request\r\ncontent-type: text/plain\r\ncontent-length: 12\r\nconnection: keep-alive\r\n\r\nbad request\n"
+  "HTTP/1.1 400 Bad Request\r\ncontent-type: text/plain\r\ncontent-length: 12\r\nconnection: close\r\n\r\nbad request\n"
 
 # An event stream: the head goes out once, then one event at a time on
 # the engine's own schedule, with nothing more read from the peer. This
@@ -1310,6 +1310,21 @@ def head.upto(+bs: Bytes(), m: Maybe<&2, Nat>) -> Bytes():
 
 def head.of(+bs: Bytes()) -> Bytes():
   head.upto(bs, Bytes.find(bs, "\r\n\r\n"))
+
+# The same reply, saying it is the last on its connection. Every head
+# this engine writes ends "connection: keep-alive" and a blank line;
+# those fourteen bytes become "close" and the blank line, and the body
+# follows as it was. A reply that ends its connection says so (RFC 9112
+# 9.6), and only that one reply per connection pays for the rewrite.
+def closing.at(+bs: Bytes(), m: Maybe<&2, Nat>) -> Bytes():
+  match m:
+    case None{}:
+      bs
+    case Some{+i}:
+      Bytes.concat([Bytes.slice(bs, 0n, i), "close\r\n\r\n", Bytes.drop(bs, Nat.add(i, 14n))])
+
+def closing(+bs: Bytes()) -> Bytes():
+  closing.at(bs, Bytes.find(bs, "keep-alive\r\n\r\n"))
 
 # Routes
 # ======
@@ -1741,6 +1756,7 @@ type Seg is Data:
   Raw{bs: Bytes()}
   Page{root: List<&2, U32>, path: List<&2, U32>, ct: List<&2, U32>, head: Bool}
   Note{bs: List<&2, U32>}
+  Shut{}
 
 def miss(head: Bool) -> Bytes():
   match head:
@@ -1783,6 +1799,14 @@ def page(root: List<&2, U32>, +path: List<&2, U32>, head: Bool) -> Seg:
 # status is the three bytes after "HTTP/1.1 ", a view of the reply.
 def log.line(+note: List<&2, U32>, +out: Bytes()) -> String:
   text(note) ++ " " ++ Bytes.slice(out, 9n, 3n) ++ " " ++ Nat.show(Bytes.len(out))
+
+# a reply that ends its connection says so: a Shut before it marks it
+def flat.shut(sh: Bool, +bs: Bytes()) -> Bytes():
+  match sh:
+    case True{}:
+      closing(bs)
+    case False{}:
+      bs
 
 # a resolved segment, logged against the note that was waiting if there
 # was one, and handed straight back: the line goes out before the
@@ -1907,9 +1931,9 @@ def log.sized(may: Maybe<&2, List<&2, U32>>, +hd: Bytes(), n: U32) -> IO(Unit):
       IO.print_err(text(note) ++ " " ++ Bytes.slice(hd, 9n, 3n) ++ " "
         ++ U32.show((U32.from_nat(Bytes.len(hd)) + n : U32)))
 
-def page.miss(head: Bool, may: Maybe<&2, List<&2, U32>>, s: Socket, acc: Bytes()) -> IO(Em):
+def page.miss(head: Bool, may: Maybe<&2, List<&2, U32>>, sh: Bool, s: Socket, acc: Bytes()) -> IO(Em):
   do IO<Em>:
-    out : Bytes() <- flat.note(may, miss(head))
+    out : Bytes() <- flat.note(may, flat.shut(sh, miss(head)))
     return Em{s, Bytes.append(acc, out), True{}}
 
 def page.start(
@@ -1930,32 +1954,32 @@ def page.start(
 
 def page.sized(
   got: File & Result<&1, &1, U32 & String, U32>, ct: List<&2, U32>, head: Bool,
-  may: Maybe<&2, List<&2, U32>>, s: Socket, acc: Bytes()
+  may: Maybe<&2, List<&2, U32>>, sh: Bool, s: Socket, acc: Bytes()
 ) -> IO(Em):
   (f, r) = got
   match r:
     case Fail{e}:
       do IO<Em>:
         File.close(f)
-        page.miss(head, may, s, acc)
+        page.miss(head, may, sh, s, acc)
     case Done{+n}:
-      page.start(f, n, reply.n.head("200 OK", ct, n), head, may, s, acc)
+      page.start(f, n, flat.shut(sh, reply.n.head("200 OK", ct, n)), head, may, s, acc)
 
 def page.opened(
   r: Result<&1, &1, U32 & String, File>, ct: List<&2, U32>, head: Bool,
-  may: Maybe<&2, List<&2, U32>>, s: Socket, acc: Bytes()
+  may: Maybe<&2, List<&2, U32>>, sh: Bool, s: Socket, acc: Bytes()
 ) -> IO(Em):
   match r:
     case Fail{e}:
-      page.miss(head, may, s, acc)
+      page.miss(head, may, sh, s, acc)
     case Done{f}:
       do IO<Em>:
         got : File & Result<&1, &1, U32 & String, U32> <- File.size(f)
-        page.sized(got, ct, head, may, s, acc)
+        page.sized(got, ct, head, may, sh, s, acc)
 
 def send.page(
   root: List<&2, U32>, path: List<&2, U32>, ct: List<&2, U32>, head: Bool,
-  may: Maybe<&2, List<&2, U32>>, st: Em
+  may: Maybe<&2, List<&2, U32>>, sh: Bool, st: Em
 ) -> IO(Em):
   match st:
     case Em{s, acc, ok}:
@@ -1966,7 +1990,7 @@ def send.page(
         case True{}:
           do IO<Em>:
             r : Result<&1, &1, U32 & String, File> <- File.open_under(text(root), text(path))
-            page.opened(r, ct, head, may, s, acc)
+            page.opened(r, ct, head, may, sh, s, acc)
 
 def send.raw(may: Maybe<&2, List<&2, U32>>, bs: Bytes(), st: Em) -> IO(Em):
   match st:
@@ -1998,7 +2022,8 @@ def send.end(st: Em) -> IO(Socket & Result<&1, &1, U32 & String, Unit>):
         m : Socket & Result<&1, &1, U32 & String, Unit> <- TCP.send_buf(s, acc)
         send.fin(m, ok)
 
-def send.go(xs: List<&2, Seg>, may: Maybe<&2, List<&2, U32>>, st: Em) ->
+# a Shut before a reply marks the one that ends its connection
+def send.go(xs: List<&2, Seg>, may: Maybe<&2, List<&2, U32>>, sh: Bool, st: Em) ->
   IO(Socket & Result<&1, &1, U32 & String, Unit>):
   match xs:
     case Nil{}:
@@ -2006,21 +2031,23 @@ def send.go(xs: List<&2, Seg>, may: Maybe<&2, List<&2, U32>>, st: Em) ->
     case Con{g, t}:
       match g:
         case Note{bs}:
-          send.go(t, Some{bs}, st)
+          send.go(t, Some{bs}, sh, st)
+        case Shut{}:
+          send.go(t, may, True{}, st)
         case Raw{bs}:
           do IO<Socket & Result<&1, &1, U32 & String, Unit>>:
-            st2 : Em <- send.raw(may, bs, st)
-            send.go(t, None{}, st2)
+            st2 : Em <- send.raw(may, flat.shut(sh, bs), st)
+            send.go(t, None{}, False{}, st2)
         case Page{root, path, ct, head}:
           do IO<Socket & Result<&1, &1, U32 & String, Unit>>:
-            st2 : Em <- send.page(root, path, ct, head, may, st)
-            send.go(t, None{}, st2)
+            st2 : Em <- send.page(root, path, ct, head, may, sh, st)
+            send.go(t, None{}, False{}, st2)
 
 # The one hook the connection loop calls: write a plan's segments to the
 # socket, in order, streaming files; the result fails when the socket
 # failed or a file came up short, and the connection then ends.
 def send.segs(s: Socket, xs: List<&2, Seg>) -> IO(Socket & Result<&1, &1, U32 & String, Unit>):
-  send.go(xs, None{}, Em{s, "", True{}})
+  send.go(xs, None{}, False{}, Em{s, "", True{}})
 
 
 # What answering a chunk produced: the bytes to write, whether the peer
@@ -2055,6 +2082,15 @@ def live.answer(key: List<&2, U32>, ws: Bool, head: Bool) -> Ans:
       Ans{[Raw{fixed(reply("426 Upgrade Required", "text/plain", "websocket only\n"), head)}],
         False{}, 0, False{}}
 
+# /events: the stream's head, then the events; a HEAD gets the head
+# and no stream, since a HEAD reply carries no body
+def events(head: Bool) -> Ans:
+  match head:
+    case True{}:
+      Ans{[Raw{sse.head()}], False{}, 0, False{}}
+    case False{}:
+      Ans{[Raw{sse.head()}], False{}, sse.count(), False{}}
+
 def act.run(
   +srv: Srv, a: Act, path: List<&2, U32>, body: List<&2, U32>, head: Bool,
   ws: Bool, key: List<&2, U32>
@@ -2068,7 +2104,7 @@ def act.run(
       Ans{[Raw{fixed(reply("200 OK", "application/octet-stream", Bytes.from_list(body)), head)}],
         False{}, 0, False{}}
     case Events{}:
-      Ans{[Raw{sse.head()}], False{}, sse.count(), False{}}
+      events(head)
     case Live{}:
       live.answer(key, ws, head)
     case Files{}:
@@ -2131,39 +2167,78 @@ def serve(+srv: Srv, r: Req) -> Ans:
   serve.log(srv, r)
 
 
-def answer.cat(one: List<&2, Seg>, tail: List<&2, Seg>, cl: Bool, st: U32, sk: Bool) -> Ans:
-  match tail:
-    case Nil{}:
-      Ans{one, cl, st, sk}
-    case Con{h, t}:
-      Ans{List.append(&2, Seg, one, Con{h, t}), cl, st, sk}
-
-def answer.rest(a: List<&2, Seg>, c1: Bool, s1: U32, k1: Bool, rest: Ans) -> Ans:
-  match rest:
-    case Ans{b, c2, s2, k2}:
-      answer.cat(a, b, c1 || c2, U32.max(s1, s2), k1 || k2)
-
-def answer.go(one: Ans, rest: Ans) -> Ans:
-  match one:
-    case Ans{a, c1, s1, k1}:
-      answer.rest(a, c1, s1, k1, rest)
-
-# Every reply for one chunk's worth of messages, in arrival order, and
-# whether any of them asked to close. The replies nest to the right, so
-# each one is copied once: folding them into an accumulator instead
-# would copy the accumulator per message and go quadratic in the depth
-# of a pipelined batch.
-def answer.one(a: Ans, cl: Bool) -> Ans:
+def ans.out(a: Ans) -> List<&2, Seg>:
   match a:
-    case Ans{out, c, st, sk}:
-      Ans{out, c || cl, st, sk}
+    case Ans{out, cl, st, sk}:
+      out
 
-def answer(+srv: Srv, rs: List<&2, Req>, cl: Bool) -> Ans:
-  match rs:
+def ans.close(a: Ans) -> Bool:
+  match a:
+    case Ans{out, cl, st, sk}:
+      cl
+
+def ans.stream(a: Ans) -> U32:
+  match a:
+    case Ans{out, cl, st, sk}:
+      st
+
+def ans.sock(a: Ans) -> Bool:
+  match a:
+    case Ans{out, cl, st, sk}:
+      sk
+
+# the replies so far, newest first, joined oldest first: each is
+# copied once, so a pipelined batch costs what its replies do
+def answer.flat(acc: List<&2, List<&2, Seg>>, tail: List<&2, Seg>) -> List<&2, Seg>:
+  match acc:
     case Nil{}:
-      Ans{Nil{}, cl, 0, False{}}
-    case Con{+r, t}:
-      answer.go(answer.one(serve(srv, r), req.close(r)), answer(srv, t, cl))
+      tail
+    case Con{a, t}:
+      answer.flat(t, List.append(&2, Seg, a, tail))
+
+# the reply to a request that ends the connection says so
+def answer.shut(out: List<&2, Seg>, last: Bool) -> List<&2, Seg>:
+  match last:
+    case True{}:
+      Con{Shut{}, out}
+    case False{}:
+      out
+
+# the end of a chunk's requests: a grammar that broke after them is
+# answered with a 400 after their replies, and the connection ends
+def answer.end(acc: List<&2, List<&2, Seg>>, bad: Bool) -> Ans:
+  match bad:
+    case True{}:
+      Ans{answer.flat(acc, [Raw{resp.bad()}]), True{}, 0, False{}}
+    case False{}:
+      Ans{answer.flat(acc, Nil{}), False{}, 0, False{}}
+
+# Every reply for one chunk's worth of messages, in arrival order. A
+# reply that ends what this connection reads -- one that closes, one
+# that starts a stream, one that switches to frames -- is the last: the
+# requests after it are not served, and a broken grammar after it is
+# not answered. go is whether the replies so far have ended nothing.
+# A request that asked to upgrade and was not switched ends the
+# connection, since what followed it was never read as requests.
+def answer.go(
+  +srv: Srv, rs: List<&2, Req>, bad: Bool, go: Bool, cl: Bool, st: U32, sk: Bool,
+  acc: List<&2, List<&2, Seg>>
+) -> Ans:
+  match rs go:
+    case _ False{}:
+      Ans{answer.flat(acc, Nil{}), cl, st, sk}
+    case Nil{} True{}:
+      answer.end(acc, bad)
+    case Con{+r, t} True{}:
+      +a = serve(srv, r)
+      +k = ans.sock(a)
+      +s = ans.stream(a)
+      +c = ans.close(a) || req.close(r) || (req.ws(r) && Bool.not(k))
+      answer.go(srv, t, bad, Bool.not(c || k || Bool.not(U32.is_zero(s))), c, s, k,
+        Con{answer.shut(ans.out(a), c && U32.is_zero(s) && Bool.not(k)), acc})
+
+def answer(+srv: Srv, rs: List<&2, Req>, bad: Bool) -> Ans:
+  answer.go(srv, rs, bad, True{}, False{}, 0, False{}, Nil{})
 
 # The server
 # ==========
@@ -2180,12 +2255,35 @@ type Plan is Data:
   Hold{wr: Ws.W}
   Stop{}
 
+# After a 101 the bytes that followed the upgrade in the same read are
+# frames, and go to the frame reader rather than being dropped; the
+# replies they earned go out with the 101.
+def plan.up.rep(out: List<&2, Seg>, wr: Ws.W, r: Ws.Rep) -> Plan:
+  match r:
+    case Ws.Rep{o, close}:
+      match close:
+        case True{}:
+          End{List.append(&2, Seg, out, [Raw{Bytes.from_list(o)}])}
+        case False{}:
+          Sock{List.append(&2, Seg, out, [Raw{Bytes.from_list(o)}]), wr}
+
+def plan.up.dead(out: List<&2, Seg>, fs: List<&2, Ws.Frm>, dd: Ws.W & Bool) -> Plan:
+  (wr, bad) = dd
+  plan.up.rep(out, wr, Ws.reply(fs, bad))
+
+def plan.up.take(out: List<&2, Seg>, tk: Ws.W & List<&2, Ws.Frm>) -> Plan:
+  (wr, fs) = tk
+  plan.up.dead(out, fs, Ws.dead(wr))
+
+def plan.up(out: List<&2, Seg>, rest: List<&2, U32>) -> Plan:
+  plan.up.take(out, Ws.take(Ws.feed(rest, Ws.new())))
+
 def plan.pick(
   out: List<&2, Seg>, p2: P, plain: Bool, cl: Bool, st: U32, sock: Bool
 ) -> Plan:
   match plain cl sock:
     case _ _ True{}:
-      Sock{out, Ws.new()}
+      plan.up(out, p.rest(p2))
     case False{} _ False{}:
       Feed{out, st}
     case True{} True{} False{}:
@@ -2211,16 +2309,14 @@ def plan.ans(a: Ans, p2: P) -> Plan:
         case Con{h, t}:
           plan.pick(Con{h, t}, p2, U32.is_zero(st), cl, st, sock)
 
-def plan.take(+srv: Srv, pr: P & List<&2, Req>) -> Plan:
+# a grammar that broke is answered with a 400, after the replies owed
+# to the requests the same read completed before it
+def plan.take(+srv: Srv, pr: P & List<&2, Req>, bad: Bool) -> Plan:
   (p2, rs) = pr
-  plan.ans(answer(srv, rs, False{}), p2)
+  plan.ans(answer(srv, rs, bad), p2)
 
 def plan.go(+srv: Srv, q: P, bad: Bool) -> Plan:
-  match bad:
-    case True{}:
-      End{[Raw{resp.bad()}]}
-    case False{}:
-      plan.take(srv, p.take(q))
+  plan.take(srv, p.take(q), bad)
 
 def plan.on(+srv: Srv, pb: P & Bool) -> Plan:
   (q, bad) = pb

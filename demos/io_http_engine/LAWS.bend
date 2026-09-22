@@ -68,7 +68,7 @@ law method_is_built:
 
 law bad_is_built:
   {Eng.resp.bad() ==
-    Eng.reply("400 Bad Request", "text/plain", "bad request\n") :
+    Eng.closing(Eng.reply("400 Bad Request", "text/plain", "bad request\n")) :
     Bytes()}
 
 # LAW: HEAD is GET's head. The scanner that cuts a reply at its blank
