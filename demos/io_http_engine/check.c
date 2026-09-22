@@ -5,9 +5,11 @@
 // reads its CPU.
 //
 //   cc -std=c11 -O3 check.c -o check && ./check 8080 [pid] [--files] [--idle=MS]
+//   ./check 8080 [pid] [--conns=N] [--term]
 #define _GNU_SOURCE
 #include <errno.h>
 #include <netinet/in.h>
+#include <signal.h>
 #include <netinet/tcp.h>
 #include <stdio.h>
 #include <stdint.h>
@@ -97,10 +99,14 @@ int main(int argc, char** argv) {
   int n;
   // flags after the pid: --files when the server has --root on the
   // fixture directory; --idle=MS when it was started with --idle-ms MS
-  int files = 0, idle = 0;
+  // --conns=N when it was started with --max-conns N; --term to end by
+  // sending it SIGTERM (last, since the server is gone afterwards)
+  int files = 0, idle = 0, conns = 0, term = 0;
   for (int i = 3; i < argc; i++) {
     if (strcmp(argv[i], "--files") == 0) files = 1;
     else if (strncmp(argv[i], "--idle=", 7) == 0) idle = atoi(argv[i] + 7);
+    else if (strncmp(argv[i], "--conns=", 8) == 0) conns = atoi(argv[i] + 8);
+    else if (strcmp(argv[i], "--term") == 0) term = 1;
   }
   // under --root, "/" is index.html rather than the banner
   const char* root_body = files ? "<h1>hi</h1>" : "bend-http";
@@ -291,6 +297,54 @@ int main(int argc, char** argv) {
     snprintf(why, sizeof(why), "cpu moved %.3fs", c1 - c0);
     check("twenty silent closes cost no CPU",
       c0 >= 0 && c1 - c0 < 0.05 && has(b, n, "200 OK"), why, (int)strlen(why));
+  }
+
+  // The connection limit. With N connections held open and idle, one
+  // more is accepted by the kernel but not served until a slot frees;
+  // closing one of the N is what frees it.
+  if (conns > 0) {
+    static const char req[] = "GET /health HTTP/1.1\r\nHost: x\r\n\r\n";
+    const int reqn = (int)(sizeof(req) - 1);
+    int held[64];
+    int m = conns < 64 ? conns : 64;
+    for (int i = 0; i < m; i++) held[i] = dial();
+    usleep(200000);
+    int extra = dial();
+    if (write(extra, req, (size_t)reqn) != reqn) perror("write");
+    n = (int)recv(extra, b, sizeof(b), 0);
+    int waited = n < 0;
+    close(held[0]);
+    n = (int)recv(extra, b, sizeof(b), 0);
+    check("past the connection limit a request waits for a slot",
+      waited && n > 0 && has(b, n, "200 OK"), b, n > 0 ? n : 0);
+    close(extra);
+    for (int i = 1; i < m; i++) close(held[i]);
+  }
+
+  // Stopping. After SIGTERM the port refuses new connections within a
+  // tick, a connection already open still gets its request answered,
+  // and the process is gone once the open ones have ended.
+  if (term && argc > 2) {
+    static const char req[] = "GET /health HTTP/1.1\r\nHost: x\r\n\r\n";
+    const int reqn = (int)(sizeof(req) - 1);
+    long pid = atol(argv[2]);
+    int open_ = dial();
+    kill((pid_t)pid, SIGTERM);
+    usleep(600000);
+    int fresh = dial();
+    int refused = fresh < 0;
+    if (fresh >= 0) close(fresh);
+    if (write(open_, req, (size_t)reqn) != reqn) perror("write");
+    n = (int)recv(open_, b, sizeof(b), 0);
+    int served = n > 0 && has(b, n, "200 OK");
+    close(open_);
+    int gone = 0;
+    for (int i = 0; i < 100 && !gone; i++) {
+      usleep(50000);
+      gone = kill((pid_t)pid, 0) != 0;
+    }
+    check("SIGTERM: new connections refused, open ones served, then gone",
+      refused && served && gone, b, n > 0 ? n : 0);
   }
 
   printf("\n%d/%d pass\n", pass, pass + fail);

@@ -292,10 +292,18 @@ builds everything, clang 18 at `-std=c11 -O3`; the C twins with `cc`
 
 | server, 32 keep-alive conns | Bend, `--threads 1` | Bend, 4 threads | C control |
 |---|---|---|---|
-| pipeline 1 | 41,439 req/s | 41,274 req/s | 159,316 req/s |
-| pipeline 8 | 103,499 req/s | 96,334 req/s | 429,691 req/s |
-| C over Bend | 3.8x / 4.2x | 3.9x / 4.5x | 1x |
-| peak RSS under load | **3.0 MB** | 3.2 MB | 5.7 MB |
+| pipeline 1 | 36,177 req/s | — | 159,960 req/s |
+| pipeline 8 | 98,302 req/s | — | 369,037 req/s |
+| C over Bend | 4.4x / 3.8x | | 1x |
+| peak RSS under load | **3.6 MB** | | 5.7 MB |
+
+Those are the server as it stands, with every read timed. The engine
+before the timed read, measured back to back on the same afternoon,
+did 40,581 and 107,169: the deadline costs about a tenth at pipeline 1,
+the recv that finds nothing plus a park that is a registration and a
+heap entry. The scheduler can give most of it back by registering a
+descriptor once and re-arming it in place, which is the next runtime
+change.
 
 The runtime is not the variable here. The same engine built on
 canonical Bend 2.0.25, run back to back with this one under the same

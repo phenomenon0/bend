@@ -150,9 +150,12 @@ static void reset(Conn* k, int fd) {
 
 int main(int argc, char** argv) {
   int port = argc > 1 ? atoi(argv[1]) : 8081;
+  // "shared": SO_REUSEPORT, so N copies split one port between them
+  int shared = argc > 2 && strcmp(argv[2], "shared") == 0;
   int ln = socket(AF_INET, SOCK_STREAM | SOCK_NONBLOCK, 0);
   int on = 1;
   setsockopt(ln, SOL_SOCKET, SO_REUSEADDR, &on, sizeof(on));
+  if (shared) setsockopt(ln, SOL_SOCKET, SO_REUSEPORT, &on, sizeof(on));
   struct sockaddr_in a = { .sin_family = AF_INET, .sin_port = htons(port),
     .sin_addr.s_addr = htonl(INADDR_LOOPBACK) };
   if (bind(ln, (struct sockaddr*)&a, sizeof(a)) || listen(ln, 1024)) {

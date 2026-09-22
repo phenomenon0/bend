@@ -547,46 +547,68 @@ def sse.gap() -> U32:
 # files come from if any, and whether to log. The route table is built
 # from it once, in main, and every connection shares that one table.
 type Cfg is Data:
-  Cfg{port: U32, root: Maybe<&2, List<&2, U32>>, log: Bool, idle: U32}
+  Cfg{port: U32, root: Maybe<&2, List<&2, U32>>, log: Bool, idle: U32, conns: U32, grace: U32}
 
 def cfg.new() -> Cfg:
-  Cfg{8080, None{}, False{}, 10000}
+  Cfg{8080, None{}, False{}, 10000, 1024, 5000}
 
 def cfg.port(c: Cfg) -> U32:
   match c:
-    case Cfg{port, root, log, idle}:
+    case Cfg{port, root, log, idle, conns, grace}:
       port
 
 # how long a connection may be silent, in ms, before it is dropped
 def cfg.idle(c: Cfg) -> U32:
   match c:
-    case Cfg{port, root, log, idle}:
+    case Cfg{port, root, log, idle, conns, grace}:
       idle
 
 def cfg.root(c: Cfg) -> List<&2, U32>:
   match c:
-    case Cfg{port, root, log, idle}:
+    case Cfg{port, root, log, idle, conns, grace}:
       Maybe.default(&2, List<&2, U32>, root, bytes("."))
 
 def cfg.set_port(c: Cfg, n: U32) -> Cfg:
   match c:
-    case Cfg{port, root, log, idle}:
-      Cfg{n, root, log, idle}
+    case Cfg{port, root, log, idle, conns, grace}:
+      Cfg{n, root, log, idle, conns, grace}
+
+# the most connections open at once; past it, accepting waits
+def cfg.conns(c: Cfg) -> U32:
+  match c:
+    case Cfg{port, root, log, idle, conns, grace}:
+      conns
+
+# how long open connections get to finish after a stop is asked, in ms
+def cfg.grace(c: Cfg) -> U32:
+  match c:
+    case Cfg{port, root, log, idle, conns, grace}:
+      grace
+
+def cfg.set_conns(c: Cfg, n: U32) -> Cfg:
+  match c:
+    case Cfg{port, root, log, idle, conns, grace}:
+      Cfg{port, root, log, idle, n, grace}
+
+def cfg.set_grace(c: Cfg, n: U32) -> Cfg:
+  match c:
+    case Cfg{port, root, log, idle, conns, grace}:
+      Cfg{port, root, log, idle, conns, n}
 
 def cfg.set_idle(c: Cfg, n: U32) -> Cfg:
   match c:
-    case Cfg{port, root, log, idle}:
-      Cfg{port, root, log, n}
+    case Cfg{port, root, log, idle, conns, grace}:
+      Cfg{port, root, log, n, conns, grace}
 
 def cfg.set_root(c: Cfg, dir: List<&2, U32>) -> Cfg:
   match c:
-    case Cfg{port, root, log, idle}:
-      Cfg{port, Some{dir}, log, idle}
+    case Cfg{port, root, log, idle, conns, grace}:
+      Cfg{port, Some{dir}, log, idle, conns, grace}
 
 def cfg.set_log(c: Cfg) -> Cfg:
   match c:
-    case Cfg{port, root, log, idle}:
-      Cfg{port, root, True{}, idle}
+    case Cfg{port, root, log, idle, conns, grace}:
+      Cfg{port, root, True{}, idle, conns, grace}
 
 # a non-empty run of decimal digits
 def digits.go(bs: List<&2, U32>, ok: Bool) -> Bool:
@@ -625,22 +647,31 @@ type Want is Data:
   PortOf{}
   RootOf{}
   IdleOf{}
+  ConnsOf{}
+  GraceOf{}
   Wrong{why: List<&2, U32>}
 
 type Args is Data:
   Args{cfg: Cfg, want: Want}
 
-def args.flag(c: Cfg, a: List<&2, U32>, log: Bool, port: Bool, root: Bool, idle: Bool) -> Args:
-  match log port root idle:
-    case True{} _ _ _:
+def args.flag(
+  c: Cfg, a: List<&2, U32>, log: Bool, port: Bool, root: Bool, idle: Bool,
+  conns: Bool, grace: Bool
+) -> Args:
+  match log port root idle conns grace:
+    case True{} _ _ _ _ _:
       Args{cfg.set_log(c), Flag{}}
-    case False{} True{} _ _:
+    case False{} True{} _ _ _ _:
       Args{c, PortOf{}}
-    case False{} False{} True{} _:
+    case False{} False{} True{} _ _ _:
       Args{c, RootOf{}}
-    case False{} False{} False{} True{}:
+    case False{} False{} False{} True{} _ _:
       Args{c, IdleOf{}}
-    case False{} False{} False{} False{}:
+    case False{} False{} False{} False{} True{} _:
+      Args{c, ConnsOf{}}
+    case False{} False{} False{} False{} False{} True{}:
+      Args{c, GraceOf{}}
+    case False{} False{} False{} False{} False{} False{}:
       Args{c, Wrong{cat(bytes("unknown flag: "), a)}}
 
 def args.num(c: Cfg, a: List<&2, U32>, ok: Bool) -> Args:
@@ -657,19 +688,39 @@ def args.ms(c: Cfg, a: List<&2, U32>, ok: Bool) -> Args:
     case False{}:
       Args{c, Wrong{cat(bytes("not a number of ms: "), a)}}
 
+def args.grace(c: Cfg, a: List<&2, U32>, ok: Bool) -> Args:
+  match ok:
+    case True{}:
+      Args{cfg.set_grace(c, u32.of(a, 0)), Flag{}}
+    case False{}:
+      Args{c, Wrong{cat(bytes("not a number of ms: "), a)}}
+
+# a connection limit of zero would let nothing in, so it is refused
+def args.conns(c: Cfg, a: List<&2, U32>, ok: Bool) -> Args:
+  match ok:
+    case True{}:
+      Args{cfg.set_conns(c, u32.of(a, 0)), Flag{}}
+    case False{}:
+      Args{c, Wrong{cat(bytes("not a count of connections: "), a)}}
+
 def args.feed(st: Args, +a: List<&2, U32>) -> Args:
   match st:
     case Args{c, want}:
       match want:
         case Flag{}:
           args.flag(c, a, beq(a, bytes("--log"), True{}), beq(a, bytes("--port"), True{}),
-            beq(a, bytes("--root"), True{}), beq(a, bytes("--idle-ms"), True{}))
+            beq(a, bytes("--root"), True{}), beq(a, bytes("--idle-ms"), True{}),
+            beq(a, bytes("--max-conns"), True{}), beq(a, bytes("--grace-ms"), True{}))
         case PortOf{}:
           args.num(c, a, digits(a))
         case RootOf{}:
           Args{cfg.set_root(c, a), Flag{}}
         case IdleOf{}:
           args.ms(c, a, digits(a))
+        case ConnsOf{}:
+          args.conns(c, a, digits(a) && Bool.not(U32.is_zero(u32.of(a, 0))))
+        case GraceOf{}:
+          args.grace(c, a, digits(a))
         case Wrong{why}:
           Args{c, Wrong{why}}
 
@@ -693,6 +744,10 @@ def args.done(st: Args) -> IO(Cfg):
           IO.die(Cfg, 2, "--root needs a directory")
         case IdleOf{}:
           IO.die(Cfg, 2, "--idle-ms needs a number")
+        case ConnsOf{}:
+          IO.die(Cfg, 2, "--max-conns needs a count")
+        case GraceOf{}:
+          IO.die(Cfg, 2, "--grace-ms needs a number")
         case Wrong{why}:
           IO.die(Cfg, 2, text(why))
 
@@ -818,7 +873,7 @@ def routes.tail(root: Maybe<&2, List<&2, U32>>) -> List<&2, Route>:
 
 def routes(c: Cfg) -> List<&2, Route>:
   match c:
-    case Cfg{port, root, log, idle}:
+    case Cfg{port, root, log, idle, conns, grace}:
       List.append(&2, Route, routes.base(), routes.tail(root))
 
 # a is a prefix of b
@@ -910,6 +965,16 @@ def srv.idle(s: Srv) -> U32:
   match s:
     case Srv{c, table}:
       cfg.idle(c)
+
+def srv.conns(s: Srv) -> U32:
+  match s:
+    case Srv{c, table}:
+      cfg.conns(c)
+
+def srv.grace(s: Srv) -> U32:
+  match s:
+    case Srv{c, table}:
+      cfg.grace(c)
 
 # Static files
 # ============
@@ -1475,9 +1540,18 @@ def tick(sent: Socket & Result<&1, &1, U32 & String, Unit>, n: U32) ->
     IO.sleep(sse.gap())
     return plan.next(s, r, n)
 
-def shut(m: Socket & Result<&1, &1, U32 & String, Unit>) -> IO(Unit):
+# A connection ends by closing its socket and giving its slot back: the
+# semaphore is a channel with as much room as connections allowed, a
+# slot is a Unit sent into it, and accepting parks on a full one.
+def fin(+sem: Chan(Unit), s: Socket) -> IO(Unit):
+  do IO<Unit>:
+    Socket.close(s)
+    got : Maybe<&1, Unit> <- Chan.recv(Unit, sem)
+    return Unit{}
+
+def shut(+sem: Chan(Unit), m: Socket & Result<&1, &1, U32 & String, Unit>) -> IO(Unit):
   (s, r) = m
-  Socket.close(s)
+  fin(sem, s)
 
 # One connection. fuel is the most chunks it will ever read, so the
 # loop terminates by Bend's own rule rather than by @unsafe: a peer
@@ -1494,78 +1568,142 @@ def conn.fuel() -> Nat:
 def conn.waits() -> Nat:
   64n
 
-def conn(f: Nat, +srv: Srv, sp: Socket & Plan, w: Nat) -> IO(Unit):
+def conn(f: Nat, +srv: Srv, +sem: Chan(Unit), sp: Socket & Plan, w: Nat) -> IO(Unit):
   match f:
     case 0n:
       (s, pl) = sp
-      Socket.close(s)
+      fin(sem, s)
     case 1n+g:
       (s, pl) = sp
       match pl:
         case Stop{}:
-          Socket.close(s)
+          fin(sem, s)
         case End{out}:
           do IO<Unit>:
             bs : List<&2, U32> <- flat(out)
             m  : Socket & Result<&1, &1, U32 & String, Unit> <-
               TCP.send_bytes(s, bs)
-            shut(m)
+            shut(sem, m)
         case Wait{p2}:
           match w:
             case 0n:
-              Socket.close(s)
+              fin(sem, s)
             case 1n+v:
               do IO<Unit>:
                 sp2 : Socket & Plan <- turn.s(srv, s, p2)
-                conn(g, srv, sp2, v)
+                conn(g, srv, sem, sp2, v)
         case Feed{out, n}:
           do IO<Unit>:
             bs  : List<&2, U32> <- flat(out)
             m   : Socket & Result<&1, &1, U32 & String, Unit> <-
               TCP.send_bytes(s, bs)
             sp2 : Socket & Plan <- tick(m, n)
-            conn(g, srv, sp2, conn.waits())
+            conn(g, srv, sem, sp2, conn.waits())
         case Go{out, p2}:
           do IO<Unit>:
             bs  : List<&2, U32> <- flat(out)
             m   : Socket & Result<&1, &1, U32 & String, Unit> <-
               TCP.send_bytes(s, bs)
             sp2 : Socket & Plan <- turn(srv, m, p2)
-            conn(g, srv, sp2, conn.waits())
+            conn(g, srv, sem, sp2, conn.waits())
 
-def start(+srv: Srv, s: Socket) -> IO(Unit):
+def start(+srv: Srv, +sem: Chan(Unit), s: Socket) -> IO(Unit):
   do IO<Unit>:
     m : Socket & Result<&1, &1, U32 & String, Maybe<&1, List<&2, U32>>> <-
       TCP.poll_bytes(s, chunk(), srv.idle(srv))
-    conn(conn.fuel(), srv, plan.poll(srv, m, p.new()), conn.waits())
+    conn(conn.fuel(), srv, sem, plan.poll(srv, m, p.new()), conn.waits())
 
-def accept.one(+srv: Srv, m: Listener & Result<&1, &1, U32 & String, Socket>) ->
-  IO(Listener):
+# how often the accept loop looks up from the listener, in ms: the most
+# a stop request waits before it is seen
+def accept.tick() -> U32:
+  250
+
+# A connection to serve takes a slot first, so accepting parks while the
+# limit is reached and the backlog holds what arrives meanwhile. Nothing
+# within the tick is the moment to look for a stop request.
+def accept.on(
+  +srv: Srv, +sem: Chan(Unit), l: Listener, may: Maybe<&1, Socket>
+) -> IO(Listener & Bool):
+  match may:
+    case None{}:
+      do IO<Listener & Bool>:
+        stop : Bool <- IO.signal_pending(15)
+        return (l, Bool.not(stop))
+    case Some{s}:
+      do IO<Listener & Bool>:
+        ok : Bool <- Chan.send(Unit, sem, Unit{})
+        IO.spawn(Unit, start(srv, sem, s))
+        return (l, True{})
+
+def accept.got(
+  +srv: Srv, +sem: Chan(Unit),
+  m: Listener & Result<&1, &1, U32 & String, Maybe<&1, Socket>>
+) -> IO(Listener & Bool):
   (l, r) = m
-  do IO<Listener>:
-    s : Socket <- IO.pass(Socket, r)
-    IO.spawn(Unit, start(srv, s))
-    return l
+  match r:
+    case Done{may}:
+      accept.on(srv, sem, l, may)
+    case Fail{e}:
+      do IO<Listener & Bool>:
+        return (l, False{})
 
-# The accept loop is the one place that runs until the process is
-# killed, so it is the one @unsafe def in the engine.
-@unsafe
-def accept(+srv: Srv, l: Listener) -> IO(Unit):
+def accept.one(+srv: Srv, +sem: Chan(Unit), l: Listener) -> IO(Listener & Bool):
+  do IO<Listener & Bool>:
+    m : Listener & Result<&1, &1, U32 & String, Maybe<&1, Socket>> <-
+      TCP.accept_poll(l, accept.tick())
+    accept.got(srv, sem, m)
+
+# every slot taken back means every connection has ended
+def drain(k: Nat, +sem: Chan(Unit)) -> IO(Unit):
+  match k:
+    case 0n:
+      do IO<Unit>:
+        return Unit{}
+    case 1n+j:
+      do IO<Unit>:
+        ok : Bool <- Chan.send(Unit, sem, Unit{})
+        drain(j, sem)
+
+def grace(ms: U32) -> IO(Unit):
   do IO<Unit>:
-    m  : Listener & Result<&1, &1, U32 & String, Socket> <- TCP.accept(l)
-    l2 : Listener <- accept.one(srv, m)
-    accept(srv, l2)
+    IO.sleep(ms)
+    IO.die(Unit, 0, "bend-http: stopped with connections still open")
+
+# Stopping, on SIGTERM: the listener closes so nothing more arrives, the
+# connections open finish what they are doing, and the process ends when
+# they have all ended or when the grace time is up, whichever is first.
+def stopping(+srv: Srv, +sem: Chan(Unit), l: Listener) -> IO(Unit):
+  do IO<Unit>:
+    IO.print_err("bend-http: stopping")
+    Listener.close(l)
+    IO.spawn(Unit, grace(srv.grace(srv)))
+    drain(U32.to_nat(srv.conns(srv)), sem)
+    IO.die(Unit, 0, "bend-http: stopped")
+
+# The accept loop is the one place that runs until it is told to stop,
+# so it is the one @unsafe def in the engine.
+@unsafe
+def accept(+srv: Srv, +sem: Chan(Unit), lb: Listener & Bool) -> IO(Unit):
+  (l, go) = lb
+  match go:
+    case False{}:
+      stopping(srv, sem, l)
+    case True{}:
+      do IO<Unit>:
+        lb2 : Listener & Bool <- accept.one(srv, sem, l)
+        accept(srv, sem, lb2)
 
 def banner(+c: Cfg) -> String:
   String.append("bend-http on http://127.0.0.1:", U32.show(cfg.port(c)))
 
 def run(+c: Cfg) -> IO(Unit):
   do IO<Unit>:
-    l : Listener <- IO.try(Listener, TCP.listen(cfg.port(c)))
+    l   : Listener <- IO.try(Listener, TCP.listen(cfg.port(c)))
+    sem : Chan(Unit) <- Chan.new(Unit, cfg.conns(c))
     IO.print(banner(c))
-    accept(srv.new(c), l)
+    accept(srv.new(c), sem, (l, True{}))
 
-# bend-http [--port N] [--root DIR] [--idle-ms N] [--log]
+# bend-http [--port N] [--root DIR] [--idle-ms N] [--max-conns N] [--grace-ms N] [--log]
 def main() -> IO(Unit):
   do IO<Unit>:
     xs : List<String> <- IO.args()
