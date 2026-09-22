@@ -1,8 +1,9 @@
 // C control for main.bend: the same engine, written the way a C server
 // is written. One epoll loop, one parser state per connection, the same
-// ten modes and the same byte-at-a-time transitions, the same routes
-// and byte-identical replies, the same policy (HTTP/1.1 only,
-// Content-Length only, that length all digits, no Transfer-Encoding).
+// states and the same byte-at-a-time transitions, the same routes and
+// byte-identical replies, the same policy (HTTP/1.1 only, one Host,
+// Content-Length only, all digits, agreeing when repeated, no
+// Transfer-Encoding, names compared as bytes).
 // It is the control for demos/io_http_engine: whatever it measures is
 // what the Bend engine is measured against.
 //
@@ -19,57 +20,70 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
-enum { K_SP, K_CR, K_LF, K_CO, K_CH };
-enum { IN_M, IN_T, IN_V, CR_M, LIN, IN_N, OWS, IN_L, CR_L, BOD, BAD };
-
-#define FNV 2166136261u
-#define H_VERSION 4120326248u
-#define H_CLEN 1308181789u
-#define H_TE 3719590988u
-#define H_CONN 951688921u
-#define H_CLOSE 667630371u
-#define M_GET 2531704439u
-#define M_HEAD 811237315u
+// the byte classes and states of main.bend's step.at, one for one
+enum { K_SP, K_HT, K_CR, K_LF, K_CO, K_CM, K_DG, K_TK, K_VC, K_CT };
+enum { PRE, PRE_LF, IN_M, IN_T, IN_V, CR_M, LIN, IN_N, IN_L0, IN_L, IN_LT,
+  IN_LC, IN_LX, CR_L, BOD, BAD };
+enum { M_OTHER, M_GET, M_HEAD };
+enum { F_OTHER, F_TE, F_CL, F_CONN };
 
 #define CHUNK 16384
 #define MAXPATH 512
 #define MAXBODY 65536
+#define MAXTOK 32
 
 typedef struct {
   int fd, st, used;
-  uint32_t h, n, v, g, meth, clen, bodn;
-  int digit, close, te, plen;
+  uint32_t v, clen, bodn;
+  int meth, hascl, close, hosts, plen, tn;
   int shut;                       // a served message asked to close
+  char tok[MAXTOK + 1];           // the method, version, name or list member
   char path[MAXPATH], body[MAXBODY];
   char out[CHUNK * 4];
   int outn;
 } Conn;
 
-static uint32_t fnv1(uint32_t h, uint32_t c) { return (h ^ c) * 16777619u; }
 static int cls(uint8_t c) {
-  return c == 32 ? K_SP : c == 13 ? K_CR : c == 10 ? K_LF
-    : c == 58 ? K_CO : K_CH;
+  if (c == 32) return K_SP;
+  if (c == 9) return K_HT;
+  if (c == 13) return K_CR;
+  if (c == 10) return K_LF;
+  if (c < 32 || c == 127) return K_CT;
+  if (c > 127) return K_VC;
+  if (c == 58) return K_CO;
+  if (c == 44) return K_CM;
+  if (c >= 48 && c <= 57) return K_DG;
+  if ((c | 32) >= 97 && (c | 32) <= 122) return K_TK;
+  return strchr("-._!#$%&'*+^`|~", c) ? K_TK : K_VC;
 }
+static int token(int t) { return t == K_TK || t == K_DG; }
 static uint32_t lower(uint32_t c) { return c >= 65 && c <= 90 ? c + 32 : c; }
+// a token is kept up to MAXTOK bytes; a longer one names nothing known
+static void keep(Conn* k, uint8_t c) { if (k->tn <= MAXTOK) k->tok[k->tn++] = (char)c; }
+static int is(Conn* k, const char* s) {
+  return k->tn == (int)strlen(s) && !memcmp(k->tok, s, (size_t)k->tn);
+}
 
 static void put(Conn* k, const char* s, int n) {
   if (k->outn + n <= (int)sizeof(k->out)) { memcpy(k->out + k->outn, s, n); k->outn += n; }
 }
-// HEAD gets GET's head and no body; the 405 names the methods that work
+// HEAD gets GET's head and no body; the 405 names the methods that
+// work; the reply that ends its connection says so
 static void reply(Conn* k, const char* status, const char* ctype,
                   const char* body, int bn) {
   char h[256];
   int n = snprintf(h, sizeof(h),
     "HTTP/1.1 %s\r\ncontent-type: %s\r\ncontent-length: %d%s"
-    "\r\nconnection: keep-alive\r\n\r\n", status, ctype, bn,
-    status[0] == '4' && status[1] == '0' && status[2] == '5' ? "\r\nallow: GET, HEAD" : "");
+    "\r\nconnection: %s\r\n\r\n", status, ctype, bn,
+    !strncmp(status, "405", 3) ? "\r\nallow: GET, HEAD" : "",
+    k->close || !strncmp(status, "400", 3) ? "close" : "keep-alive");
   put(k, h, n);
   if (k->meth != M_HEAD) put(k, body, bn);
 }
 
 // the same routes as main.bend, in the same order
 static void serve(Conn* k) {
-  if (k->meth != M_GET && k->meth != M_HEAD) {
+  if (k->meth == M_OTHER) {
     reply(k, "405 Method Not Allowed", "text/plain", "no method\n", 10);
   } else if (k->plen == 7 && !memcmp(k->path, "/health", 7)) {
     reply(k, "200 OK", "application/json", "{\"ok\":true}", 11);
@@ -80,69 +94,107 @@ static void serve(Conn* k) {
   } else {
     reply(k, "404 Not Found", "text/plain", "no route\n", 9);
   }
+  if (k->close) k->shut = 1;
+  k->st = PRE;
 }
 
-// the same body cap as main.bend's body.cap(): refused as the head
-// completes, before a byte of the body is read
+// the same body cap as main.bend's body.cap(): a length past it is
+// refused at the digit that crosses it
 #define BODY_CAP 1048576u
 
 static void head_done(Conn* k) {
-  if (k->te || k->clen > BODY_CAP) { k->st = BAD; return; }
-  if (k->clen == 0) { k->bodn = 0; serve(k); if (k->close) k->shut = 1; k->st = IN_M; k->h = FNV; k->meth = 0;
-    k->plen = 0; k->clen = 0; k->close = 0; k->te = 0; }
-  else { k->bodn = 0; k->st = BOD; }
+  if (k->hosts != 1) { k->st = BAD; return; }
+  k->bodn = 0;
+  if (k->clen == 0) serve(k); else k->st = BOD;
 }
 
-static void field(Conn* k) {
-  if (k->n == H_CLEN && k->digit) k->clen = k->v;
-  else if (k->n == H_TE) k->te = 1;
-  else if (k->n == H_CONN) k->close = (k->g == H_CLOSE);
+// a name closes at its colon, compared by its bytes; a
+// Transfer-Encoding is refused there
+static void name_done(Conn* k) {
+  int f = is(k, "transfer-encoding") ? F_TE : is(k, "content-length") ? F_CL
+    : is(k, "connection") ? F_CONN : F_OTHER;
+  if (is(k, "host")) k->hosts++;
+  k->st = f == F_TE ? BAD : f == F_CL ? IN_L0 : f == F_CONN ? IN_LC : IN_LX;
+  k->tn = 0;
 }
+
+// a Content-Length value closes: a second one must agree with the first
+static void clen_done(Conn* k) {
+  if (k->hascl && k->clen != k->v) { k->st = BAD; return; }
+  k->hascl = 1; k->clen = k->v; k->st = CR_M;
+}
+
+// a member of a Connection list closes
+static void member(Conn* k) { if (is(k, "close")) k->close = 1; k->tn = 0; }
 
 // one byte, the same transition table as main.bend's step.at
-static void step(Conn* k, uint8_t b) {
-  uint32_t c = b;
-  int t = cls(b);
+static void step(Conn* k, uint8_t c) {
+  int t = cls(c);
   switch (k->st) {
+    case PRE:
+      if (t == K_CR) k->st = PRE_LF;
+      else if (token(t)) { k->tn = 0; keep(k, c); k->st = IN_M; }
+      else k->st = BAD;
+      break;
+    case PRE_LF: k->st = t == K_LF ? PRE : BAD; break;
     case IN_M:
-      if (t == K_SP) { k->meth = k->h; k->plen = 0; k->clen = 0; k->close = 0;
-        k->te = 0; k->st = IN_T; }
-      else k->h = fnv1(k->h, c);
+      if (t == K_SP) {
+        k->meth = is(k, "GET") ? M_GET : is(k, "HEAD") ? M_HEAD : M_OTHER;
+        k->plen = 0; k->clen = 0; k->hascl = 0; k->close = 0; k->hosts = 0;
+        k->st = IN_T;
+      } else if (token(t)) keep(k, c);
+      else k->st = BAD;
       break;
     case IN_T:
-      if (t == K_SP) { k->h = FNV; k->st = IN_V; }
+      if (t == K_SP) { k->tn = 0; k->st = k->plen ? IN_V : BAD; }
+      else if (t == K_HT || t == K_CR || t == K_LF || t == K_CT) k->st = BAD;
       else if (k->plen < MAXPATH) k->path[k->plen++] = (char)c;
       break;
     case IN_V:
-      if (t == K_CR) k->st = (k->h == H_VERSION) ? CR_M : BAD;
-      else k->h = fnv1(k->h, c);
+      if (t == K_CR) k->st = is(k, "HTTP/1.1") ? CR_M : BAD;
+      else if (token(t) || t == K_VC) keep(k, c);
+      else k->st = BAD;
       break;
     case CR_M: k->st = (t == K_LF) ? LIN : BAD; break;
     case LIN:
       if (t == K_CR) k->st = CR_L;
-      else { k->h = fnv1(FNV, lower(c)); k->st = IN_N; }
+      else if (token(t)) { k->tn = 0; keep(k, (uint8_t)lower(c)); k->st = IN_N; }
+      else k->st = BAD;
       break;
     case IN_N:
-      if (t == K_CO) { k->n = k->h; k->st = OWS; }
-      else k->h = fnv1(k->h, lower(c));
+      if (t == K_CO) name_done(k);
+      else if (token(t)) keep(k, (uint8_t)lower(c));
+      else k->st = BAD;
       break;
-    case OWS:
-      if (t == K_SP) break;
-      if (t == K_CR) { k->v = 0; k->g = FNV; k->digit = 0; field(k); k->st = CR_M; break; }
-      k->v = c - 48; k->g = fnv1(FNV, lower(c)); k->digit = (c >= 48 && c <= 57);
-      k->st = IN_L;
+    case IN_L0:
+      if (t == K_DG) { k->v = c - 48; k->st = IN_L; }
+      else if (t != K_SP && t != K_HT) k->st = BAD;
       break;
     case IN_L:
-      if (t == K_CR) { field(k); k->st = CR_M; }
-      else { k->v = k->v * 10 + (c - 48); k->g = fnv1(k->g, lower(c));
-        k->digit = k->digit && (c >= 48 && c <= 57); }
+      if (t == K_DG) { k->v = k->v * 10 + (c - 48); if (k->v > BODY_CAP) k->st = BAD; }
+      else if (t == K_SP || t == K_HT) k->st = IN_LT;
+      else if (t == K_CR) clen_done(k);
+      else k->st = BAD;
+      break;
+    case IN_LT:
+      if (t == K_CR) clen_done(k);
+      else if (t != K_SP && t != K_HT) k->st = BAD;
+      break;
+    case IN_LC:
+      if (t == K_CR) { member(k); k->st = CR_M; }
+      else if (t == K_SP || t == K_HT || t == K_CM) member(k);
+      else if (t == K_LF || t == K_CT) k->st = BAD;
+      else keep(k, (uint8_t)lower(c));
+      break;
+    case IN_LX:
+      if (t == K_CR) k->st = CR_M;
+      else if (t == K_LF || t == K_CT) k->st = BAD;
       break;
     case CR_L: if (t == K_LF) head_done(k); else k->st = BAD; break;
     case BOD:
       if (k->bodn < MAXBODY) k->body[k->bodn] = (char)c;
       k->bodn += 1;
-      if (k->bodn >= k->clen) { serve(k); if (k->close) k->shut = 1; k->st = IN_M; k->h = FNV; k->meth = 0;
-        k->plen = 0; k->clen = 0; k->close = 0; k->te = 0; }
+      if (k->bodn >= k->clen) serve(k);
       break;
     default: break;
   }
@@ -150,7 +202,7 @@ static void step(Conn* k, uint8_t b) {
 
 static void reset(Conn* k, int fd) {
   memset(k, 0, sizeof(*k));
-  k->fd = fd; k->used = 1; k->st = IN_M; k->h = FNV;
+  k->fd = fd; k->used = 1; k->st = PRE;
 }
 
 int main(int argc, char** argv) {
@@ -197,10 +249,11 @@ int main(int argc, char** argv) {
         epoll_ctl(ep, EPOLL_CTL_DEL, fd, NULL); close(fd); k->used = 0; continue;
       }
       k->outn = 0;
-      for (ssize_t j = 0; j < got; j++) step(k, (uint8_t)buf[j]);
+      // nothing after a message that asked to close is served; a broken
+      // grammar is answered with a 400 after the replies owed before it
+      for (ssize_t j = 0; j < got && !k->shut && k->st != BAD; j++) step(k, (uint8_t)buf[j]);
       if (k->st == BAD) {
-        k->outn = 0;
-        k->meth = 0;
+        k->meth = M_GET;
         reply(k, "400 Bad Request", "text/plain", "bad request\n", 12);
       }
       for (int off = 0; off < k->outn;) {

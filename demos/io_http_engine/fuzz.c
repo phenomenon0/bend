@@ -5,7 +5,9 @@
 // protocol reader has to survive: a truncation, a byte flipped, a
 // version that is not 1.1, a Transfer-Encoding, a length that is not
 // all digits, a length past the cap, fields in odd case, bodies of
-// arbitrary bytes -- then cuts the stream at random points and sends
+// arbitrary bytes, and the framing ambiguities requests are smuggled
+// through (a space before a colon, a folded line, a bare LF, two
+// lengths, a length list, a missing or repeated Host) -- then cuts the stream at random points and sends
 // each cut to both servers with a pause between, so the splits are
 // real recvs on the other side. A mismatch prints the round's seed,
 // the stream, the cuts and both answers. Neither server serves
@@ -49,16 +51,27 @@ static int dial(int port) {
 // one of the mutations a reader has to get right.
 static const char* PATHS[] = { "/health", "/", "/echo", "/nope", "/health/", "/a/../health", "//" };
 static const char* METHS[] = { "GET", "HEAD", "POST", "PUT", "DELETE", "OPTIONS", "get" };
+// fields a smuggler sends; each is refused, except an agreeing repeat
+// and trailing whitespace, which are a length
+static const char* SMUGGLE[] = {
+  "Content-Length : 5\r\n", "Transfer-Encoding : chunked\r\n", "content-length: 5, 5\r\n",
+  "Content-Length: 3\r\nContent-Length: 5\r\n", "Content-Length: 3\r\ncontent-length: 3\r\n",
+  "X-A: a\r\n b\r\n", "X-A: a\nContent-Length: 3\r\n", "content-length: +3\r\n",
+  "Content-Length: 4294967299\r\n", "Content-Length: 3 \r\n", "TRANSFER-encoding: chunked\r\n",
+  "X-A\r\n", "content-length:\t3\r\n", "X-\x01: y\r\n" };
+static const char* CONNS[] = { "close", "keep-alive", "keep-alive, close", "Close", "x,close ,y" };
 
 static int message(char* s, int cap) {
   int n = 0;
   const char* meth = pick(4) ? (pick(3) ? "GET" : "HEAD") : METHS[pick(7)];
   const char* path = PATHS[pick(7)];
   const char* ver  = pick(12) ? "HTTP/1.1" : (pick(2) ? "HTTP/1.0" : "HTTP/2.0");
+  if (pick(16) == 0) n += snprintf(s + n, (size_t)(cap - n), "\r\n");
   n += snprintf(s + n, (size_t)(cap - n), "%s %s %s\r\n", meth, path, ver);
-  if (pick(4)) n += snprintf(s + n, (size_t)(cap - n), "%s: x\r\n", pick(2) ? "Host" : "host");
+  int hosts = pick(16) ? 1 : pick(2) * 2;               // mostly one, sometimes none or two
+  for (int i = 0; i < hosts; i++) n += snprintf(s + n, (size_t)(cap - n), "%s: x\r\n", pick(2) ? "Host" : "host");
   int body = 0, announce = -1;
-  int kind = pick(10);
+  int kind = pick(11);
   if (kind < 5) {                                       // a body, announced right
     body = pick(40);
     announce = body;
@@ -71,12 +84,15 @@ static int message(char* s, int cap) {
   } else if (kind == 8) {                               // announced more than sent (later bytes are body)
     body = pick(10);
     announce = body + 1 + pick(5);
+  } else if (kind == 9) {                               // a smuggling vector
+    n += snprintf(s + n, (size_t)(cap - n), "%s", SMUGGLE[pick(14)]);
+    body = 3;
   }
   if (announce >= 0) {
     static const char* NAMES[] = { "content-length", "Content-Length", "CONTENT-LENGTH", "cOnTeNt-LeNgTh" };
     n += snprintf(s + n, (size_t)(cap - n), "%s:%s%d\r\n", NAMES[pick(4)], pick(2) ? " " : "", announce);
   }
-  if (pick(5) == 0) n += snprintf(s + n, (size_t)(cap - n), "Connection: %s\r\n", pick(2) ? "close" : "keep-alive");
+  if (pick(5) == 0) n += snprintf(s + n, (size_t)(cap - n), "Connection: %s\r\n", CONNS[pick(5)]);
   if (pick(6) == 0) n += snprintf(s + n, (size_t)(cap - n), "X-Junk: %d\r\n", pick(100000));
   n += snprintf(s + n, (size_t)(cap - n), "\r\n");
   for (int i = 0; i < body && n < cap; i++) s[n++] = (char)pick(256);

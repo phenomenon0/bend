@@ -416,6 +416,49 @@ int main(int argc, char** argv) {
   n = one(TEXT("POST /health HTTP/1.1\r\nHost: x\r\n\r\n"), b, sizeof(b), 0);
   check("405 names the methods that work", has(b, n, "allow: GET, HEAD"), b, n);
 
+  // Framing. Each of these is how a request gets smuggled past a proxy
+  // that reads it another way; each is a 400 that says it closes.
+  static const char* smuggled[][2] = {
+    { "a space before a colon", "GET /echo HTTP/1.1\r\nHost: x\r\nContent-Length : 5\r\n\r\nhello" },
+    { "a Transfer-Encoding with a space before its colon",
+      "GET /echo HTTP/1.1\r\nHost: x\r\nTransfer-Encoding : chunked\r\nContent-Length: 5\r\n\r\nhello" },
+    { "two Content-Lengths that disagree",
+      "GET /echo HTTP/1.1\r\nHost: x\r\nContent-Length: 3\r\nContent-Length: 5\r\n\r\nabcde" },
+    { "a Content-Length past 2^32", "GET /echo HTTP/1.1\r\nHost: x\r\nContent-Length: 4294967301\r\n\r\nhello" },
+    { "a Content-Length list", "GET /echo HTTP/1.1\r\nHost: x\r\nContent-Length: 5, 5\r\n\r\nhello" },
+    { "a folded line", "GET /echo HTTP/1.1\r\nHost: x\r\nX: a\r\n Content-Length: 5\r\n\r\nhello" },
+    { "a bare LF", "GET /echo HTTP/1.1\r\nHost: x\r\nX: a\nContent-Length: 5\r\n\r\nhello" },
+    { "a line without a colon", "GET /echo HTTP/1.1\r\nHost: x\r\nFoo\r\nContent-Length: 5\r\n\r\nhello" },
+    { "a CR in the target", "GET /a\rb HTTP/1.1\r\nHost: x\r\n\r\n" },
+    { "no Host", "GET /health HTTP/1.1\r\n\r\n" },
+    { "two Hosts", "GET /health HTTP/1.1\r\nHost: a\r\nHost: b\r\n\r\n" } };
+  for (int i = 0; i < (int)(sizeof(smuggled) / sizeof(smuggled[0])); i++) {
+    char what[96];
+    snprintf(what, sizeof(what), "%s is refused", smuggled[i][0]);
+    n = one(smuggled[i][1], (int)strlen(smuggled[i][1]), b, sizeof(b), 0);
+    check(what, has(b, n, "400 Bad Request") && has(b, n, "connection: close")
+      && !has(b, n, "200 OK"), b, n);
+  }
+
+  n = one(TEXT("GET /echo HTTP/1.1\r\nHost: x\r\nx-v5fged: 5\r\n\r\nhelloGET /health HTTP/1.1\r\nHost: x\r\n\r\n"),
+    b, sizeof(b), 0);
+  check("a name whose hash is Content-Length's is not one",
+    has(b, n, "content-length: 0") && has(b, n, "405 Method Not Allowed"), b, n);
+
+  n = one(TEXT("\r\nGET /health HTTP/1.1\r\nHost: x\r\n\r\n"), b, sizeof(b), 106);
+  check("an empty line before a request is skipped", has(b, n, "200 OK"), b, n);
+
+  n = one(TEXT("GET /health HTTP/1.1\r\nHost: x\r\nConnection: keep-alive, close\r\n\r\n"
+    "GET /nope HTTP/1.1\r\nHost: x\r\n\r\n"), b, sizeof(b), 0);
+  check("close anywhere in Connection closes, and nothing after it is served",
+    has(b, n, "200 OK") && has(b, n, "connection: close") && !has(b, n, "404"), b, n);
+
+  n = one(TEXT("GET /health HTTP/1.1\r\nHost: x\r\n\r\nGET /health HTTP/1.1\r\nHost: x\r\nX : y\r\n\r\n"),
+    b, sizeof(b), 0);
+  check("a bad request after a good one: the good one's reply, then the 400",
+    has(b, n, "200 OK") && has(b, n, "400 Bad Request")
+    && (char*)memmem(b, (size_t)n, "200 OK", 6) < (char*)memmem(b, (size_t)n, "400 Bad", 7), b, n);
+
   // Static files, when the server was started with --root on the
   // fixture directory the harness writes: index.html "<h1>hi</h1>\n",
   // a.txt "alpha\n", img.png the 256 byte values, sub/b.css "b{}\n".
@@ -648,6 +691,27 @@ int main(int argc, char** argv) {
 
     n = one(TEXT("GET /ws HTTP/1.1\r\nHost: x\r\n\r\n"), b, sizeof(b), 0);
     check("GET /ws without an upgrade is 426", has(b, n, "426 Upgrade Required"), b, n);
+
+    // what follows an upgrade in the same write is frames, not requests;
+    // Connection is a list, as a browser sends it
+    static const char up2[] = "GET /ws HTTP/1.1\r\nHost: x\r\nUpgrade: websocket\r\n"
+      "Connection: keep-alive, Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n";
+    memcpy(r, up2, sizeof(up2) - 1);
+    k = (int)sizeof(up2) - 1 + ws_frame(r + sizeof(up2) - 1, 1, "abc", 3, 1);
+    fd = wire_open();
+    if (wire_write(fd, r, (size_t)k) != k) perror("write");
+    closed = 0; n = ws_read(fd, b, sizeof(b), 134, &closed);
+    check("a frame sent with the upgrade is answered after the 101",
+      has(b, n, "101 Switching") && n >= 5 && !memcmp(b + n - 5, "\x81\x03" "abc", 5), b, n);
+    wire_close(fd);
+
+    n = one(TEXT("GET /ws HTTP/1.1\r\nHost: x\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
+      "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\nGET /health HTTP/1.1\r\nHost: x\r\n\r\n"), b, sizeof(b), 0);
+    check("nothing after a 101 is answered as HTTP", has(b, n, "101") && !has(b, n, "200 OK"), b, n);
+
+    n = one(TEXT("HEAD /events HTTP/1.1\r\nHost: x\r\n\r\n"), b, sizeof(b), 0);
+    check("HEAD /events is the head and no stream",
+      has(b, n, "text/event-stream") && !has(b, n, "event: tick"), b, n);
   }
 
   // The access log: one line per request, what was asked, the status
