@@ -2318,6 +2318,10 @@ def send.hold(
   send.held(~M, ~pure, ~bind, ~S, ~tx, ms, s, acc, U32.cmp(U32.from_nat(Bytes.len(acc)),
       send.cap()))
 
+# a file whose bytes are all out leaves what waits in front of the next
+# block (its head, when it was empty) to the batch, under the batch's
+# cap. As first written it was left waiting without the cap's test, so
+# a pipelined read of empty files grew the batch by a head each.
 def pump.left(
   ~M: Type -> Type, ~pure: @-A: Type -> A -> M(A),
   ~bind: @-A: Type -> @-B: Type -> M(A) -> (A -> M(B)) -> M(B), ~S: Type, ~F: Type,
@@ -2326,7 +2330,9 @@ def pump.left(
 ) -> M(Pump<S, F>):
   match done:
     case True{}:
-      bind(Unit, Pump<S, F>, fclose(f), u => pure(Pump<S, F>, Over{Em{s, pre, True{}}}))
+      bind(Unit, Pump<S, F>, fclose(f), u =>
+        bind(Em<S>, Pump<S, F>, send.hold(~M, ~pure, ~bind, ~S, ~tx, ms, s, pre), em =>
+          pure(Pump<S, F>, Over{em})))
     case False{}:
       pure(Pump<S, F>, Going{f, left, s, pre})
 
