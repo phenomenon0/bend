@@ -14,7 +14,7 @@ uint32_t tcp_listen(uint32_t port, int* out) {
     return EINVAL;
   }
   int bound = bind(fd, (struct sockaddr*)&at, sizeof(at));
-  if (bound < 0 || listen(fd, 16) < 0
+  if (bound < 0 || listen(fd, SOMAXCONN) < 0
     || fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) | O_NONBLOCK) < 0) {
     uint32_t code = (uint32_t)errno;
     close(fd);
