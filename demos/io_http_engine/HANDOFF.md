@@ -1,0 +1,141 @@
+# Where this stands
+
+Written at the end of the session that built it, so that whoever picks
+it up next -- a person, or me with no memory of today -- can see the
+state without reading the history.
+
+## The repositories, and what is where
+
+Everything lives in `phenomenon0/bend`. Nothing is on `bendlang/bend`.
+
+| branch | base | what it is |
+|---|---|---|
+| `omen-http` | the `omen` fork line (2.0.21) | **the live line.** The server, the runtime it needs, the tests, the tools, this note |
+| `claude/bend-http-experimental-2hue8o` | `main` (2.0.5) | the early engine, kept as a record. Stale: the later work needs effects 2.0.5 does not have |
+| `fix/socket-bytes` | canon `main` (`db06f02f`) | upstream fix 1 |
+| `fix/listen-backlog` | canon `main` | upstream fix 2 |
+| `fix/epoll-scheduler` | canon `main` | upstream fix 3 |
+
+The three `fix/*` branches are **for `bendlang/bend`, not for this
+fork**. They are cut from canon's current `main`, one bug each, and
+pushed here only so they survive. No pull request has been opened
+anywhere: that is a decision waiting on the repository's owner.
+
+## What works, and how it is checked
+
+`demos/io_http_engine` is an HTTP/1.1 server: keep-alive, pipelining,
+static files, SSE, WebSocket, TLS, an access log, a connection limit,
+timeouts, graceful shutdown, and a shared port for running one copy per
+core. 1.6 MB static binary. `demos/io_resp` is a RESP reader written to
+test whether the approach generalises (see **What is unfinished**).
+
+    bend demos/io_http_engine/PROOF.bend          # 47 laws
+    bend demos/io_http_engine/main.bend -o httpd
+    ./httpd --port 8080 --root www --tls-cert cert.pem --tls-key key.pem
+
+Four gates, and it is worth knowing what each one is for, because they
+catch different things and three of them have caught real bugs:
+
+- **`PROOF.bend`** -- 47 laws. 7 are theorems quantified over all
+  inputs (chunking never changes a parse; a refused message is never
+  revived); 40 are closed instances -- RFC vectors, route tables,
+  specific paths, literals proved equal to their builder -- which are
+  test vectors the compiler recomputes and so cannot rot.
+- **`check.c`** -- 39 behavioural cases over a socket, plus 17 for the
+  connection limit and 17 for stopping. Built with `-DCHECK_TLS` it
+  swaps its own socket calls for a TLS session and **runs the same 39
+  cases over the encrypted wire**. All pass on both.
+- **`fuzz.c`** -- the same random bytes, cut at the same random points,
+  into the engine and into `control.c`, demanding byte-identical
+  answers including closes. Thousands of rounds clean. It found two
+  real faults on its first run, both in the C twin.
+- **`prof.sh`** -- gdb stack sampling under load. It is a gate in the
+  sense that it settles arguments: it is the only reason the right
+  thing got optimised.
+
+`.github/workflows/http.yml` runs the laws, the build, every check mode
+plain and over TLS, 500 fuzz rounds and a shared-port smoke, and keeps
+the binary.
+
+## The numbers, and how to reproduce them
+
+One 4-core Xeon at 2.8 GHz, `--threads 1`, 32 keep-alive connections,
+medians of three.
+
+| | Bend | C control |
+|---|---|---|
+| pipeline 1 | 80,052 req/s | 155,162 |
+| pipeline 8 | 128,028 req/s | 852,207 |
+| peak RSS under load | 3.5 MB | 5.8 MB |
+| 10,000 live SSE streams | 6.8 MB, 0.37 KB each, 1.07 s CPU per 6 s | |
+| arriving, to 8,000 held | 23-25 us per connection, flat | |
+| three processes, `--shared`, pipeline 8 | 385k req/s | |
+
+**Measure with `LOAD_SPIN=1` or the numbers are wrong.** A client that
+sleeps between replies charges the wake-up to the *server's* `send` on
+loopback, and the slower the server the more its client sleeps -- a
+loop that punishes exactly what it measures. That artefact understated
+this server by half for most of its development. `load.c` takes
+`LOAD_SPIN=1` to never sleep.
+
+## What is unfinished, and what it cost
+
+**`demos/io_resp/main.bend` does not check.** The RESP *reader* does,
+and `PROOF.bend` there passes 24 laws first try, including the nested
+arrays that HTTP never needed. The *server* on top of it hangs the
+checker. The cause looks like the fourth bug below. The reader is the
+part that was being tested and it came out well; the server is
+committed unfinished rather than deleted.
+
+**`bend-wire` is not extracted.** The evidence for it is in: the
+chunking law is provable once, polymorphically, for every step function
+and every state type (`~A: Data, ~B: Data, ~f` erased, six lines of
+induction, verified non-vacuous by breaking it). RESP then reused the
+*idea* with no change but re-typed every byte helper and fought the
+same two hundred lines of connection-loop shape. That re-typing and
+that loop are exactly what the library should absorb.
+
+**Not done at all:** HTTP/2 (needs TLS, which now exists, then HPACK
+with round-trip laws and `h2spec` as the gate); the universal proof
+that the path normaliser cannot escape its root, as opposed to the four
+concrete pins it has; `TCP.send_vec`, which does not earn its place
+until replies are flat buffers.
+
+## The upstream bugs
+
+`UPSTREAM.md` beside this file states three, each with the measurement
+that found it and a branch that fixes it. In short: sockets corrupt
+every byte over 0x7F *and change the length while doing it*, which is a
+framing bug and not a missing feature; the poller's pass costs what is
+waiting, so accepting n connections costs O(n^2) and 8,000 does not
+finish in 150 seconds; and the listen backlog is 16.
+
+A fourth is described there but not reduced: a def namespace sharing a
+name with a live binder makes the checker run for minutes instead of
+erroring. It happened twice today and it is the one that is a checker
+bug rather than a runtime one.
+
+## What I would do next, in order
+
+1. **Open the three upstream pull requests**, byte pair first and
+   alone -- it is a correctness bug, it is small, it has a test, and it
+   unblocks every non-text protocol.
+2. **Reduce the checker hang** to a minimal file and file it.
+3. **Extract `bend-wire`** and re-derive HTTP and RESP on it. The
+   measure of success is that RESP's server takes an hour rather than
+   an afternoon, and that `foldl_split` is proposed to canon's
+   `base.bend`, where a theorem about `List.foldl` belongs.
+4. Then HTTP/2, on top of the TLS that now exists.
+
+## Three things that are easy to get wrong here
+
+- **A stale process ruins a measurement.** Twice, numbers were taken
+  against a server that was still running from a previous test, and
+  once a runaway `bun` from the checker hang skewed everything for an
+  hour. Check with `pgrep` before trusting a number.
+- **`pkill -f <pattern>` matches its own shell** and kills the script
+  running it. Use `pkill -x <exact-name>`.
+- **The connection limit is 1024 by default**, so a ramp or a
+  stream-holding test past that needs `--max-conns 20000`. Two
+  measurements in this work "failed" until that was noticed; the
+  feature was working.
