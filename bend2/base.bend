@@ -3241,6 +3241,117 @@ def Bytes.to_list(b: Bytes()) -> List<&2, U32>:
     case SCon{Chr{c}, t}:
       c <> Bytes.to_list(t)
 
+law Bytes.list:
+  for xs: List<&2, U32>
+  {Bytes.to_list(Bytes.from_list(xs)) == xs : List<&2, U32>}
+
+def Bytes.list(xs):
+  match xs:
+    case Nil{}:
+      {==}
+    case h <> t:
+      Equal.cong(List<&2, U32>, List<&2, U32>, ys => h <> ys,
+        Bytes.to_list(Bytes.from_list(t)), t, Bytes.list(t))
+
+law Bytes.len.shift:
+  for +s: String
+  for +m: Nat
+  {String.length.go(s, 1n+m) == 1n+String.length.go(s, m) : Nat}
+
+def Bytes.len.shift(s, m):
+  match s:
+    case SNil{}:
+      {==}
+    case SCon{h, t}:
+      Bytes.len.shift(t, 1n+m)
+
+law Bytes.len.from:
+  for +s: String
+  for +m: Nat
+  {String.length.go(s, m) == Nat.add(m, String.length.go(s, 0n)) : Nat}
+
+def Bytes.len.from(s, m):
+  match m:
+    case 0n:
+      {==}
+    case 1n+p:
+      Equal.trans(Nat, String.length.go(s, 1n+p), 1n+String.length.go(s, p),
+        1n+Nat.add(p, String.length.go(s, 0n)), Bytes.len.shift(s, p),
+        Equal.cong(Nat, Nat, y => 1n+y, String.length.go(s, p),
+          Nat.add(p, String.length.go(s, 0n)), Bytes.len.from(s, p)))
+
+law Bytes.len.go:
+  for +a: String
+  for +b: String
+  for +m: Nat
+  {String.length.go(String.append(a, b), m)
+    == Nat.add(String.length.go(a, m), String.length.go(b, 0n)) : Nat}
+
+def Bytes.len.go(a, b, m):
+  match a:
+    case SNil{}:
+      Bytes.len.from(b, m)
+    case SCon{h, t}:
+      Bytes.len.go(t, b, 1n+m)
+
+law Bytes.len_append:
+  for +a: Bytes()
+  for +b: Bytes()
+  {Bytes.len(Bytes.append(a, b)) == Nat.add(Bytes.len(a), Bytes.len(b)) : Nat}
+
+def Bytes.len_append(a, b):
+  Bytes.len.go(a, b, 0n)
+
+law Bytes.get.take:
+  for +s: String
+  for +k: Nat
+  for +m: Nat
+  {String.get(String.take(s, 1n+Nat.add(k, m)), k) == String.get(s, k)
+    : Maybe<&2, Char>}
+
+def Bytes.get.take(s, k, m):
+  match s k:
+    case SNil{} _:
+      {==}
+    case SCon{h, t} 0n:
+      {==}
+    case SCon{h, t} 1n+q:
+      Bytes.get.take(t, q, m)
+
+law Bytes.get.drop:
+  for +s: String
+  for +i: Nat
+  for +k: Nat
+  {String.get(String.drop(s, i), k) == String.get(s, Nat.add(i, k))
+    : Maybe<&2, Char>}
+
+def Bytes.get.drop(s, i, k):
+  match s i:
+    case SNil{} _:
+      {==}
+    case SCon{h, t} 0n:
+      {==}
+    case SCon{h, t} 1n+p:
+      Bytes.get.drop(t, p, k)
+
+# a byte of a slice is the byte at its offset, for every k it holds
+law Bytes.get_slice:
+  for +b: Bytes()
+  for +i: Nat
+  for +k: Nat
+  for +m: Nat
+  {Bytes.get(Bytes.slice(b, i, 1n+Nat.add(k, m)), k)
+    == Bytes.get(b, Nat.add(i, k)) : U32}
+
+def Bytes.get_slice(b, i, k, m):
+  Equal.cong(Maybe<&2, Char>, U32, Bytes.byte,
+    String.get(Bytes.slice(b, i, 1n+Nat.add(k, m)), k),
+    String.get(b, Nat.add(i, k)),
+    Equal.trans(Maybe<&2, Char>,
+      String.get(String.take(String.drop(b, i), 1n+Nat.add(k, m)), k),
+      String.get(String.drop(b, i), k), String.get(b, Nat.add(i, k)),
+      Bytes.get.take(String.drop(b, i), k, m), Bytes.get.drop(b, i, k)))
+
 # Regex
 # -----
 
