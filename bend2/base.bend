@@ -86,6 +86,10 @@ type Map<a, -V: Kind(a)> is Kind(a):
   MLeaf{key: String, val: V}
   MNode{pos: Nat, lo: Map<a, V>, hi: Map<a, V>}
 
+# A String below 256 in every Char: see Bytes under String
+def Bytes() -> Data:
+  String
+
 # The shapes the Regex types share: a code point range, a class, a span
 def Regex.Range() -> Data:
   Sigma<&2, &2, U32, _ => U32>
@@ -453,6 +457,28 @@ def TCP.poll_bytes(sock: Socket, max: U32, ms: U32) ->
   IO(Socket & Result<&1, &1, U32 & String, Maybe<&1, List<&2, U32>>>):
   import "./effs/tcp_poll_bytes.c"
   import "./effs/tcp_poll_bytes.js"
+
+# The buffer quartet: the byte pair and File.read_bytes with a Bytes in
+# place of the list, so no byte is ever a cell (see Bytes below).
+def TCP.recv_buf(sock: Socket, max: U32) ->
+  IO(Socket & Result<&1, &1, U32 & String, Bytes()>):
+  import "./effs/tcp_recv_buf.c"
+  import "./effs/tcp_recv_buf.js"
+
+def TCP.send_buf(sock: Socket, data: Bytes()) ->
+  IO(Socket & Result<&1, &1, U32 & String, Unit>):
+  import "./effs/tcp_send_buf.c"
+  import "./effs/tcp_send_buf.js"
+
+def TCP.poll_buf(sock: Socket, max: U32, ms: U32) ->
+  IO(Socket & Result<&1, &1, U32 & String, Maybe<&1, Bytes()>>):
+  import "./effs/tcp_poll_buf.c"
+  import "./effs/tcp_poll_buf.js"
+
+def File.read_buf(file: File, max: U32) ->
+  IO(File & Result<&1, &1, U32 & String, Bytes()>):
+  import "./effs/file_read_buf.c"
+  import "./effs/file_read_buf.js"
 
 # TCP.recv through a Utf8.Dec, as File.read_text: a scalar cut by the end
 # of a recv is carried; need answers 4 when the peer has closed.
@@ -3157,6 +3183,63 @@ def String.hash.go(s: String, h: U32) -> U32:
 # Bend spec, not Python's hash
 def String.hash(s: String) -> U32:
   String.hash.go(s, 2166136261)
+
+# Bytes
+# -----
+
+# A byte buffer is a String whose every Char is below 256. The runtime
+# packs such a String a byte a cell in one block, cuts it by view and
+# appends to it in place, so it is what List<&2, U32> is on the wire at a
+# byte a byte instead of a cell a byte. An ASCII literal is its own bytes;
+# TCP.send_buf refuses a Char past 255 (EINVAL) rather than encode it.
+def Bytes.len(b: Bytes()) -> Nat:
+  String.length(b)
+
+def Bytes.byte(m: Maybe<&2, Char>) -> U32:
+  match m:
+    case None{}:
+      256
+    case Some{Chr{c}}:
+      c
+
+# the byte at i; past the end, 256, which no byte is
+def Bytes.get(b: Bytes(), i: Nat) -> U32:
+  Bytes.byte(String.get(b, i))
+
+# n bytes from at, a view: nothing is copied
+def Bytes.slice(b: Bytes(), at: Nat, n: Nat) -> Bytes():
+  String.take(String.drop(b, at), n)
+
+def Bytes.drop(b: Bytes(), n: Nat) -> Bytes():
+  String.drop(b, n)
+
+# in place when a is the buffer's one owner and has room
+def Bytes.append(a: Bytes(), b: Bytes()) -> Bytes():
+  String.append(a, b)
+
+def Bytes.concat(xs: List<&2, Bytes()>) -> Bytes():
+  String.concat(xs)
+
+def Bytes.starts_with(b: Bytes(), p: Bytes()) -> Bool:
+  String.starts_with(b, p)
+
+# the first offset of p in b, as "\r\n\r\n" ends a head
+def Bytes.find(b: Bytes(), p: Bytes()) -> Maybe<&2, Nat>:
+  String.find(b, p)
+
+def Bytes.from_list(xs: List<&2, U32>) -> Bytes():
+  match xs:
+    case Nil{}:
+      SNil{}
+    case h <> t:
+      SCon{Chr{h}, Bytes.from_list(t)}
+
+def Bytes.to_list(b: Bytes()) -> List<&2, U32>:
+  match b:
+    case SNil{}:
+      Nil{}
+    case SCon{Chr{c}, t}:
+      c <> Bytes.to_list(t)
 
 # Regex
 # -----

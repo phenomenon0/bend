@@ -7169,6 +7169,33 @@ static Term io_str(Env e, const char* p, u64 n) {
   return str_view_owned(e, out);
 }
 
+// Bytes as they are: a byte a 1-byte cell, one copy, no decoder.
+static inline Term io_buf(Env e, const char* p, u64 n) {
+  StrParts out = str_alloc(e, n, 2);
+  if (out.data && !err_seen(e.mem)) {
+    memcpy((u8*)(e.mem + term_peek(e, out.data)), p, n);
+  }
+  return str_view_owned(e, out);
+}
+
+// A Bytes' cells as a byte run: the block itself when its cells are one
+// byte (*own = NULL), else a copy (*own to free); a cell past 255 is NULL.
+static inline const char* io_buf_ptr(Env e, Term s, u32* n, char** own) {
+  StrParts p = str_peek(e, s);
+  *n = p.len;
+  *own = NULL;
+  if (!p.len || str_nar(p) == 2) {
+    return p.len ? (const char*)(e.mem + term_peek(e, p.data)) + p.off : "";
+  }
+  *own = io_mem(malloc(p.len));
+  for (u32 i = 0; i < p.len; i++) {
+    u32 c = str_at_peek(e, p, i);
+    if (c > 255) { free(*own); *own = NULL; return NULL; }
+    (*own)[i] = (char)c;
+  }
+  return *own;
+}
+
 #define io_tup(e, a, b) io_node(e, CID_TUPLE, a, b)
 #define io_done(e, v)   io_box(e, CID_DONE, v)
 
