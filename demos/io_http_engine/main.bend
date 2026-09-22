@@ -3195,13 +3195,22 @@ def turn.wr(
 ) -> M(S & Plan):
   bind(Got(S), S & Plan, rx(s, chunk(), srv.idle(srv)), m => pure(S & Plan, plan.ws(S, m, wr)))
 
+# after the frames' replies: a send that failed or stalled ends the
+# connection, as it does for requests. As first written this read on
+# whatever the send said, so a peer that sent pings and never read
+# held its connection for as many sends as the fuel allowed, each one
+# waiting out the idle time.
 def turn.ws(
   ~M: Type -> Type, ~pure: @-A: Type -> A -> M(A),
   ~bind: @-A: Type -> @-B: Type -> M(A) -> (A -> M(B)) -> M(B), ~S: Type,
   ~rx: S -> U32 -> U32 -> M(Got(S)), +srv: Srv, sent: Put(S), wr: Ws.W
 ) -> M(S & Plan):
   (s, r) = sent
-  turn.wr(~M, ~pure, ~bind, ~S, ~rx, srv, s, wr)
+  match r:
+    case Fail{e}:
+      pure(S & Plan, (s, Stop{}))
+    case Done{u}:
+      turn.wr(~M, ~pure, ~bind, ~S, ~rx, srv, s, wr)
 
 # the next event, or the end of the stream. A stream terminates because
 # the count runs out, the same way a connection does: no @unsafe, and a
