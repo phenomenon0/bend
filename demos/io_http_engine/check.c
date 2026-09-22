@@ -220,6 +220,36 @@ static int ws_read(int fd, char* b, int cap, int want, int* closed) {
   return n;
 }
 
+// a masked client frame with its length in the form asked for: 0 the
+// least one, 2 the two-byte form, 8 the eight-byte form, whatever n is
+static int ws_frame_as(char* out, int op, const char* body, int n, int form) {
+  int k = 0;
+  out[k++] = (char)(0x80 | op);
+  if (form == 0 && n < 126) out[k++] = (char)(0x80 | n);
+  else if (form == 8) {
+    out[k++] = (char)(0x80 | 127);
+    for (int i = 7; i >= 0; i--) out[k++] = (char)(i < 4 ? ((unsigned)n >> (8 * i)) & 255 : 0);
+  } else { out[k++] = (char)(0x80 | 126); out[k++] = (char)(n >> 8); out[k++] = (char)(n & 255); }
+  const char m[4] = { 0x11, 0x22, 0x33, 0x44 };
+  memcpy(out + k, m, 4); k += 4;
+  for (int i = 0; i < n; i++) out[k++] = (char)(body[i] ^ m[i % 4]);
+  return k;
+}
+
+// on a fresh connection, send these bytes; the answer is a close with
+// this code and the end of the connection. Returns whether it was.
+static int ws_refused(const char* f, int k, int code, char* r, int* rn) {
+  int fd = ws_open(), closed = 0;
+  if (fd < 0) { *rn = 0; return 0; }
+  if (wire_write(fd, f, (size_t)k) != k) perror("write");
+  int n = ws_read(fd, r, 64, 4, &closed);
+  int gone = closed; if (!gone) { char x[8]; gone = wire_read(fd, x, sizeof(x), 0) == 0; }
+  wire_close(fd);
+  *rn = n;
+  return n == 4 && (uint8_t)r[0] == 0x88 && r[1] == 2 && (uint8_t)r[2] == (code >> 8)
+    && (uint8_t)r[3] == (code & 255) && gone;
+}
+
 // Static files under a root the check writes itself (--root=DIR, the
 // directory the server was given): a file's bytes are a pattern of
 // their offset, so any byte out of place is seen; a stream reads
@@ -696,6 +726,64 @@ int main(int argc, char** argv) {
     check("an unmasked client frame ends the connection with 1002",
       n == 4 && (uint8_t)r[0] == 0x88 && r[1] == 2 && r[2] == 3 && (uint8_t)r[3] == 0xea && gone, r, n);
     wire_close(fd);
+
+    // what RFC 6455 says a peer may not send, each on its own connection:
+    // a control frame past 125 bytes, a length in more bytes than it
+    // needed, a close code that is reserved or no code at all, and text
+    // or a close reason that is not UTF-8
+    {
+      char body[200]; memset(body, 'p', sizeof(body));
+      int rn;
+      k = ws_frame_as(f, 9, body, 126, 0);
+      check("a ping of 126 bytes ends the connection with 1002", ws_refused(f, k, 1002, r, &rn), r, rn);
+      k = ws_frame_as(f, 2, "short", 5, 2);
+      check("a length of 5 in the two-byte form ends the connection with 1002",
+        ws_refused(f, k, 1002, r, &rn), r, rn);
+      k = ws_frame_as(f, 2, body, 200, 8);
+      check("a length of 200 in the eight-byte form ends the connection with 1002",
+        ws_refused(f, k, 1002, r, &rn), r, rn);
+
+      static const int bad[] = { 0, 999, 1004, 1005, 1006, 1015, 1016, 2000, 2999, 5000, 65535 };
+      int all = 1, at = -1;
+      for (int i = 0; i < (int)(sizeof(bad) / sizeof(bad[0])); i++) {
+        char c[2] = { (char)(bad[i] >> 8), (char)(bad[i] & 255) };
+        k = ws_frame_as(f, 8, c, 2, 0);
+        if (!ws_refused(f, k, 1002, r, &rn)) { all = 0; at = bad[i]; break; }
+      }
+      char why[64]; snprintf(why, sizeof(why), "code %d", at);
+      check("a close with a reserved or out-of-range code is answered 1002", all, why, (int)strlen(why));
+
+      static const int good[] = { 1000, 1003, 1007, 1014, 3000, 4999 };
+      all = 1; at = -1;
+      for (int i = 0; i < (int)(sizeof(good) / sizeof(good[0])); i++) {
+        char c[2] = { (char)(good[i] >> 8), (char)(good[i] & 255) };
+        k = ws_frame_as(f, 8, c, 2, 0);
+        if (!ws_refused(f, k, good[i], r, &rn)) { all = 0; at = good[i]; break; }
+      }
+      snprintf(why, sizeof(why), "code %d", at);
+      check("a close with a code a peer may send is answered with it", all, why, (int)strlen(why));
+
+      k = ws_frame_as(f, 1, "\xc0\xaf", 2, 0);
+      check("an overlong form in a text frame ends the connection with 1007",
+        ws_refused(f, k, 1007, r, &rn), r, rn);
+      k = ws_frame_as(f, 1, "\xed\xa0\x80", 3, 0);
+      check("a surrogate in a text frame ends the connection with 1007",
+        ws_refused(f, k, 1007, r, &rn), r, rn);
+      k = ws_frame_as(f, 1, "ab\xe2\x82", 4, 0);
+      check("a text frame cut inside a character ends the connection with 1007",
+        ws_refused(f, k, 1007, r, &rn), r, rn);
+      k = ws_frame_as(f, 8, "\x03\xe8\xff", 3, 0);
+      check("a close whose reason is not UTF-8 is answered 1007",
+        ws_refused(f, k, 1007, r, &rn), r, rn);
+
+      fd = ws_open();
+      k = ws_frame_as(f, 1, "h\xe2\x82\xaci \xf0\x9f\x98\x80", 10, 0);
+      if (wire_write(fd, f, (size_t)k) != k) perror("write");
+      closed = 0; n = ws_read(fd, r, sizeof(r), 12, &closed);
+      check("UTF-8 text in three and four bytes comes back as it came",
+        n == 12 && (uint8_t)r[0] == 0x81 && r[1] == 10 && !memcmp(r + 2, "h\xe2\x82\xaci \xf0\x9f\x98\x80", 10), r, n);
+      wire_close(fd);
+    }
 
     n = one(TEXT("GET /ws HTTP/1.1\r\nHost: x\r\n\r\n"), b, sizeof(b), 0);
     check("GET /ws without an upgrade is 426", has(b, n, "426 Upgrade Required"), b, n);
