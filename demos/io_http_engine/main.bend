@@ -908,6 +908,28 @@ def parse.of(pb: P & Bool) -> List<&2, Req> & Bool:
 def parse(bs: List<&2, U32>) -> List<&2, Req> & Bool:
   parse.of(p.dead(feed(bs, p.new())))
 
+# whether the reader is part way through a head: past the first byte of
+# a request line and short of its blank line. A body is not a head.
+def st.head(st: St) -> Bool:
+  match st:
+    case Pre{}:
+      False{}
+    case PreLf{}:
+      False{}
+    case Bod{r, b}:
+      False{}
+    case Rest{bs}:
+      False{}
+    case Bad{}:
+      False{}
+    case _:
+      True{}
+
+def p.head(+p: P) -> Bool:
+  match p:
+    case P{st, pd, out}:
+      st.head(st)
+
 # Routes
 # ======
 
@@ -994,101 +1016,113 @@ def pem.key(m: Maybe<&2, Pem>, p: List<&2, U32>) -> Maybe<&2, Pem>:
 # from it once, in main, and every connection shares that one table.
 type Cfg is Data:
   Cfg{port: U32, root: Maybe<&2, List<&2, U32>>, log: Bool, idle: U32, conns: U32,
-    grace: U32, shared: Bool, pem: Maybe<&2, Pem>}
+    grace: U32, shared: Bool, pem: Maybe<&2, Pem>, head: U32}
 
 def cfg.new() -> Cfg:
-  Cfg{8080, None{}, False{}, 10000, 1024, 5000, False{}, None{}}
+  Cfg{8080, None{}, False{}, 10000, 1024, 5000, False{}, None{}, 10000}
 
 def cfg.port(c: Cfg) -> U32:
   match c:
-    case Cfg{port, root, log, idle, conns, grace, shared, pem}:
+    case Cfg{port, root, log, idle, conns, grace, shared, pem, head}:
       port
 
 # how long a connection may be silent, in ms, before it is dropped
 def cfg.idle(c: Cfg) -> U32:
   match c:
-    case Cfg{port, root, log, idle, conns, grace, shared, pem}:
+    case Cfg{port, root, log, idle, conns, grace, shared, pem, head}:
       idle
 
 def cfg.root(c: Cfg) -> List<&2, U32>:
   match c:
-    case Cfg{port, root, log, idle, conns, grace, shared, pem}:
+    case Cfg{port, root, log, idle, conns, grace, shared, pem, head}:
       Maybe.default(&2, List<&2, U32>, root, bytes("."))
 
 def cfg.set_port(c: Cfg, n: U32) -> Cfg:
   match c:
-    case Cfg{port, root, log, idle, conns, grace, shared, pem}:
-      Cfg{n, root, log, idle, conns, grace, shared, pem}
+    case Cfg{port, root, log, idle, conns, grace, shared, pem, head}:
+      Cfg{n, root, log, idle, conns, grace, shared, pem, head}
 
 # the most connections open at once; past it, accepting waits
 def cfg.conns(c: Cfg) -> U32:
   match c:
-    case Cfg{port, root, log, idle, conns, grace, shared, pem}:
+    case Cfg{port, root, log, idle, conns, grace, shared, pem, head}:
       conns
 
 # how long open connections get to finish after a stop is asked, in ms
 def cfg.grace(c: Cfg) -> U32:
   match c:
-    case Cfg{port, root, log, idle, conns, grace, shared, pem}:
+    case Cfg{port, root, log, idle, conns, grace, shared, pem, head}:
       grace
 
 def cfg.set_conns(c: Cfg, n: U32) -> Cfg:
   match c:
-    case Cfg{port, root, log, idle, conns, grace, shared, pem}:
-      Cfg{port, root, log, idle, n, grace, shared, pem}
+    case Cfg{port, root, log, idle, conns, grace, shared, pem, head}:
+      Cfg{port, root, log, idle, n, grace, shared, pem, head}
 
 def cfg.set_grace(c: Cfg, n: U32) -> Cfg:
   match c:
-    case Cfg{port, root, log, idle, conns, grace, shared, pem}:
-      Cfg{port, root, log, idle, conns, n, shared, pem}
+    case Cfg{port, root, log, idle, conns, grace, shared, pem, head}:
+      Cfg{port, root, log, idle, conns, n, shared, pem, head}
 
 # whether the port is shared with other copies of this server
 def cfg.log(c: Cfg) -> Bool:
   match c:
-    case Cfg{port, root, log, idle, conns, grace, shared, pem}:
+    case Cfg{port, root, log, idle, conns, grace, shared, pem, head}:
       log
 
 # the certificate and key a TLS listener needs, if the server was given
 # a pair; the half-given pair is refused when the arguments are read
 def cfg.pem(c: Cfg) -> Maybe<&2, Pem>:
   match c:
-    case Cfg{port, root, log, idle, conns, grace, shared, pem}:
+    case Cfg{port, root, log, idle, conns, grace, shared, pem, head}:
       pem
 
 def cfg.set_cert(c: Cfg, p: List<&2, U32>) -> Cfg:
   match c:
-    case Cfg{port, root, log, idle, conns, grace, shared, pem}:
-      Cfg{port, root, log, idle, conns, grace, shared, pem.cert(pem, p)}
+    case Cfg{port, root, log, idle, conns, grace, shared, pem, head}:
+      Cfg{port, root, log, idle, conns, grace, shared, pem.cert(pem, p), head}
 
 def cfg.set_key(c: Cfg, p: List<&2, U32>) -> Cfg:
   match c:
-    case Cfg{port, root, log, idle, conns, grace, shared, pem}:
-      Cfg{port, root, log, idle, conns, grace, shared, pem.key(pem, p)}
+    case Cfg{port, root, log, idle, conns, grace, shared, pem, head}:
+      Cfg{port, root, log, idle, conns, grace, shared, pem.key(pem, p), head}
 
 def cfg.shared(c: Cfg) -> Bool:
   match c:
-    case Cfg{port, root, log, idle, conns, grace, shared, pem}:
+    case Cfg{port, root, log, idle, conns, grace, shared, pem, head}:
       shared
 
 def cfg.set_shared(c: Cfg) -> Cfg:
   match c:
-    case Cfg{port, root, log, idle, conns, grace, shared, pem}:
-      Cfg{port, root, log, idle, conns, grace, True{}, pem}
+    case Cfg{port, root, log, idle, conns, grace, shared, pem, head}:
+      Cfg{port, root, log, idle, conns, grace, True{}, pem, head}
 
 def cfg.set_idle(c: Cfg, n: U32) -> Cfg:
   match c:
-    case Cfg{port, root, log, idle, conns, grace, shared, pem}:
-      Cfg{port, root, log, n, conns, grace, shared, pem}
+    case Cfg{port, root, log, idle, conns, grace, shared, pem, head}:
+      Cfg{port, root, log, n, conns, grace, shared, pem, head}
 
 def cfg.set_root(c: Cfg, dir: List<&2, U32>) -> Cfg:
   match c:
-    case Cfg{port, root, log, idle, conns, grace, shared, pem}:
-      Cfg{port, Some{dir}, log, idle, conns, grace, shared, pem}
+    case Cfg{port, root, log, idle, conns, grace, shared, pem, head}:
+      Cfg{port, Some{dir}, log, idle, conns, grace, shared, pem, head}
+
+# how long a request head may take to arrive, in ms, however it is
+# spread over reads: the idle time bounds each wait, this bounds them all
+def cfg.head(c: Cfg) -> U32:
+  match c:
+    case Cfg{port, root, log, idle, conns, grace, shared, pem, head}:
+      head
+
+def cfg.set_head(c: Cfg, n: U32) -> Cfg:
+  match c:
+    case Cfg{port, root, log, idle, conns, grace, shared, pem, head}:
+      Cfg{port, root, log, idle, conns, grace, shared, pem, n}
 
 def cfg.set_log(c: Cfg) -> Cfg:
   match c:
-    case Cfg{port, root, log, idle, conns, grace, shared, pem}:
-      Cfg{port, root, True{}, idle, conns, grace, shared, pem}
+    case Cfg{port, root, log, idle, conns, grace, shared, pem, head}:
+      Cfg{port, root, True{}, idle, conns, grace, shared, pem, head}
 
 # a non-empty run of decimal digits
 def digits.go(bs: List<&2, U32>, ok: Bool) -> Bool:
@@ -1131,20 +1165,23 @@ type Want is Data:
   GraceOf{}
   CertOf{}
   KeyOf{}
+  HeadOf{}
   Wrong{why: List<&2, U32>}
 
 type Args is Data:
   Args{cfg: Cfg, want: Want}
 
-# the flags that take a path, split out so the one match below stays
-# readable rather than nine deep
-def args.pem(c: Cfg, +a: List<&2, U32>, cert: Bool, key: Bool) -> Args:
-  match cert key:
-    case True{} _:
+# the flags that take a path, and the head budget, split out so the one
+# match below stays readable rather than nine deep
+def args.pem(c: Cfg, +a: List<&2, U32>, cert: Bool, key: Bool, head: Bool) -> Args:
+  match cert key head:
+    case True{} _ _:
       Args{c, CertOf{}}
-    case False{} True{}:
+    case False{} True{} _:
       Args{c, KeyOf{}}
-    case False{} False{}:
+    case False{} False{} True{}:
+      Args{c, HeadOf{}}
+    case False{} False{} False{}:
       Args{c, Wrong{cat(bytes("unknown flag: "), a)}}
 
 def args.flag(
@@ -1168,7 +1205,7 @@ def args.flag(
       Args{cfg.set_shared(c), Flag{}}
     case False{} False{} False{} False{} False{} False{} False{}:
       args.pem(c, a, beq(a, bytes("--tls-cert"), True{}),
-        beq(a, bytes("--tls-key"), True{}))
+        beq(a, bytes("--tls-key"), True{}), beq(a, bytes("--head-ms"), True{}))
 
 def args.num(c: Cfg, a: List<&2, U32>, ok: Bool) -> Args:
   match ok:
@@ -1181,6 +1218,14 @@ def args.ms(c: Cfg, a: List<&2, U32>, ok: Bool) -> Args:
   match ok:
     case True{}:
       Args{cfg.set_idle(c, u32.of(a, 0)), Flag{}}
+    case False{}:
+      Args{c, Wrong{cat(bytes("not a number of ms: "), a)}}
+
+# a head budget of zero would refuse every head that takes two reads
+def args.head(c: Cfg, a: List<&2, U32>, ok: Bool) -> Args:
+  match ok:
+    case True{}:
+      Args{cfg.set_head(c, u32.of(a, 0)), Flag{}}
     case False{}:
       Args{c, Wrong{cat(bytes("not a number of ms: "), a)}}
 
@@ -1222,6 +1267,8 @@ def args.feed(st: Args, +a: List<&2, U32>) -> Args:
           Args{cfg.set_cert(c, a), Flag{}}
         case KeyOf{}:
           Args{cfg.set_key(c, a), Flag{}}
+        case HeadOf{}:
+          args.head(c, a, digits(a) && Bool.not(U32.is_zero(u32.of(a, 0))))
         case Wrong{why}:
           Args{c, Wrong{why}}
 
@@ -1275,6 +1322,8 @@ def args.done(st: Args) -> IO(Cfg):
           IO.die(Cfg, 2, "--tls-cert needs a path")
         case KeyOf{}:
           IO.die(Cfg, 2, "--tls-key needs a path")
+        case HeadOf{}:
+          IO.die(Cfg, 2, "--head-ms needs a number")
         case Wrong{why}:
           IO.die(Cfg, 2, text(why))
 
@@ -1361,7 +1410,7 @@ def routes.tail(root: Maybe<&2, List<&2, U32>>) -> List<&2, Route>:
 
 def routes(c: Cfg) -> List<&2, Route>:
   match c:
-    case Cfg{port, root, log, idle, conns, grace, shared, pem}:
+    case Cfg{port, root, log, idle, conns, grace, shared, pem, head}:
       List.append(&2, Route, routes.base(), routes.tail(root))
 
 # a is a prefix of b
@@ -1468,6 +1517,11 @@ def srv.grace(s: Srv) -> U32:
   match s:
     case Srv{c, table}:
       cfg.grace(c)
+
+def srv.head(s: Srv) -> U32:
+  match s:
+    case Srv{c, table}:
+      cfg.head(c)
 
 # Static files
 # ============
@@ -1838,6 +1892,26 @@ def flat.note(may: Maybe<&2, List<&2, U32>>, +out: Bytes()) -> IO(Bytes()):
 def page.chunk() -> U32:
   65536
 
+# The batch budget. Fixed replies wait in one block, and once the block
+# reaches send.cap() bytes it goes out before the next reply is taken:
+# a pipelined read's replies come to what the peer sent and a head per
+# request, and this bounds even that. Every send has the idle time as
+# its deadline, so a peer that stops reading is let go rather than
+# holding its slot.
+def send.cap() -> U32:
+  1048576
+
+# what stays waiting after a reply brings the block to k bytes: all of
+# it below the cap, none of it (it has gone out) at or past it
+def batch.keep(c: Cmp, k: U32) -> U32:
+  match c:
+    case LT{}:
+      k
+    case EQ{}:
+      0
+    case GT{}:
+      0
+
 # the writer: the socket, the bytes waiting, and whether everything
 # promised so far has gone out. Once it has not, nothing more is written.
 type Em is Type:
@@ -1873,7 +1947,7 @@ def pump.sent(m: Socket & Result<&1, &1, U32 & String, Unit>, f: File, +left: U3
       pump.left(f, left, s, "", U32.is_zero(left))
 
 def pump.block(
-  f: File, +left: U32, s: Socket, pre: Bytes(), bs: Bytes(), +n: U32, empty: Bool
+  +ms: U32, f: File, +left: U32, s: Socket, pre: Bytes(), bs: Bytes(), +n: U32, empty: Bool
 ) -> IO(Pump):
   match empty:
     case True{}:
@@ -1881,18 +1955,19 @@ def pump.block(
     case False{}:
       do IO<Pump>:
         m : Socket & Result<&1, &1, U32 & String, Unit> <-
-          TCP.send_buf(s, Bytes.append(pre, bs))
+          TCP.send_buf_poll(s, Bytes.append(pre, bs), ms)
         pump.sent(m, f, (left - n : U32))
 
 def pump.got(
-  got: File & Result<&1, &1, U32 & String, Bytes()>, left: U32, s: Socket, pre: Bytes()
+  +ms: U32, got: File & Result<&1, &1, U32 & String, Bytes()>, left: U32, s: Socket,
+  pre: Bytes()
 ) -> IO(Pump):
   (f, r) = got
   match r:
     case Fail{e}:
       pump.fail(f, s, pre)
     case Done{+bs}:
-      pump.block(f, left, s, pre, bs, U32.from_nat(Bytes.len(bs)), U32.is_zero(U32.from_nat(Bytes.len(bs))))
+      pump.block(ms, f, left, s, pre, bs, U32.from_nat(Bytes.len(bs)), U32.is_zero(U32.from_nat(Bytes.len(bs))))
 
 def pump.out(p: Pump) -> IO(Em):
   match p:
@@ -1905,7 +1980,7 @@ def pump.out(p: Pump) -> IO(Em):
         return Em{s, pre, False{}}
 
 # k bounds the reads: a block's worth each, and 64 short ones besides
-def pump(k: Nat, p: Pump) -> IO(Em):
+def pump(k: Nat, +ms: U32, p: Pump) -> IO(Em):
   match k:
     case 0n:
       pump.out(p)
@@ -1918,8 +1993,8 @@ def pump(k: Nat, p: Pump) -> IO(Em):
           do IO<Em>:
             got : File & Result<&1, &1, U32 & String, Bytes()> <-
               File.read_buf(f, U32.min(page.chunk(), left))
-            p2 : Pump <- pump.got(got, left, s, pre)
-            pump(j, p2)
+            p2 : Pump <- pump.got(ms, got, left, s, pre)
+            pump(j, ms, p2)
 
 # a file's log line: its head's status, and the bytes its reply holds
 def log.sized(may: Maybe<&2, List<&2, U32>>, +hd: Bytes(), n: U32) -> IO(Unit):
@@ -1931,29 +2006,59 @@ def log.sized(may: Maybe<&2, List<&2, U32>>, +hd: Bytes(), n: U32) -> IO(Unit):
       IO.print_err(text(note) ++ " " ++ Bytes.slice(hd, 9n, 3n) ++ " "
         ++ U32.show((U32.from_nat(Bytes.len(hd)) + n : U32)))
 
-def page.miss(head: Bool, may: Maybe<&2, List<&2, U32>>, sh: Bool, s: Socket, acc: Bytes()) -> IO(Em):
+def send.flushed(m: Socket & Result<&1, &1, U32 & String, Unit>) -> IO(Em):
+  (s, r) = m
+  match r:
+    case Done{u}:
+      do IO<Em>:
+        return Em{s, "", True{}}
+    case Fail{e}:
+      do IO<Em>:
+        return Em{s, "", False{}}
+
+def send.held(+ms: U32, s: Socket, acc: Bytes(), c: Cmp) -> IO(Em):
+  match c:
+    case LT{}:
+      do IO<Em>:
+        return Em{s, acc, True{}}
+    case EQ{}:
+      do IO<Em>:
+        m : Socket & Result<&1, &1, U32 & String, Unit> <- TCP.send_buf_poll(s, acc, ms)
+        send.flushed(m)
+    case GT{}:
+      do IO<Em>:
+        m : Socket & Result<&1, &1, U32 & String, Unit> <- TCP.send_buf_poll(s, acc, ms)
+        send.flushed(m)
+
+# a reply joins the waiting block, and a block at the cap goes out
+def send.hold(+ms: U32, s: Socket, +acc: Bytes()) -> IO(Em):
+  send.held(ms, s, acc, U32.cmp(U32.from_nat(Bytes.len(acc)), send.cap()))
+
+def page.miss(
+  +ms: U32, head: Bool, may: Maybe<&2, List<&2, U32>>, sh: Bool, s: Socket, acc: Bytes()
+) -> IO(Em):
   do IO<Em>:
     out : Bytes() <- flat.note(may, flat.shut(sh, miss(head)))
-    return Em{s, Bytes.append(acc, out), True{}}
+    send.hold(ms, s, Bytes.append(acc, out))
 
 def page.start(
-  f: File, +n: U32, +hd: Bytes(), head: Bool, may: Maybe<&2, List<&2, U32>>, s: Socket,
-  acc: Bytes()
+  +ms: U32, f: File, +n: U32, +hd: Bytes(), head: Bool, may: Maybe<&2, List<&2, U32>>,
+  s: Socket, acc: Bytes()
 ) -> IO(Em):
   match head:
     case True{}:
       do IO<Em>:
         log.sized(may, hd, 0)
         File.close(f)
-        return Em{s, Bytes.append(acc, hd), True{}}
+        send.hold(ms, s, Bytes.append(acc, hd))
     case False{}:
       do IO<Em>:
         log.sized(may, hd, n)
         p : Pump <- pump.left(f, n, s, Bytes.append(acc, hd), U32.is_zero(n))
-        pump(U32.to_nat((n / page.chunk() + 64 : U32)), p)
+        pump(U32.to_nat((n / page.chunk() + 64 : U32)), ms, p)
 
 def page.sized(
-  got: File & Result<&1, &1, U32 & String, U32>, ct: List<&2, U32>, head: Bool,
+  +ms: U32, got: File & Result<&1, &1, U32 & String, U32>, ct: List<&2, U32>, head: Bool,
   may: Maybe<&2, List<&2, U32>>, sh: Bool, s: Socket, acc: Bytes()
 ) -> IO(Em):
   (f, r) = got
@@ -1961,24 +2066,24 @@ def page.sized(
     case Fail{e}:
       do IO<Em>:
         File.close(f)
-        page.miss(head, may, sh, s, acc)
+        page.miss(ms, head, may, sh, s, acc)
     case Done{+n}:
-      page.start(f, n, flat.shut(sh, reply.n.head("200 OK", ct, n)), head, may, s, acc)
+      page.start(ms, f, n, flat.shut(sh, reply.n.head("200 OK", ct, n)), head, may, s, acc)
 
 def page.opened(
-  r: Result<&1, &1, U32 & String, File>, ct: List<&2, U32>, head: Bool,
+  +ms: U32, r: Result<&1, &1, U32 & String, File>, ct: List<&2, U32>, head: Bool,
   may: Maybe<&2, List<&2, U32>>, sh: Bool, s: Socket, acc: Bytes()
 ) -> IO(Em):
   match r:
     case Fail{e}:
-      page.miss(head, may, sh, s, acc)
+      page.miss(ms, head, may, sh, s, acc)
     case Done{f}:
       do IO<Em>:
         got : File & Result<&1, &1, U32 & String, U32> <- File.size(f)
-        page.sized(got, ct, head, may, sh, s, acc)
+        page.sized(ms, got, ct, head, may, sh, s, acc)
 
 def send.page(
-  root: List<&2, U32>, path: List<&2, U32>, ct: List<&2, U32>, head: Bool,
+  +ms: U32, root: List<&2, U32>, path: List<&2, U32>, ct: List<&2, U32>, head: Bool,
   may: Maybe<&2, List<&2, U32>>, sh: Bool, st: Em
 ) -> IO(Em):
   match st:
@@ -1990,9 +2095,9 @@ def send.page(
         case True{}:
           do IO<Em>:
             r : Result<&1, &1, U32 & String, File> <- File.open_under(text(root), text(path))
-            page.opened(r, ct, head, may, sh, s, acc)
+            page.opened(ms, r, ct, head, may, sh, s, acc)
 
-def send.raw(may: Maybe<&2, List<&2, U32>>, bs: Bytes(), st: Em) -> IO(Em):
+def send.raw(+ms: U32, may: Maybe<&2, List<&2, U32>>, bs: Bytes(), st: Em) -> IO(Em):
   match st:
     case Em{s, acc, ok}:
       match ok:
@@ -2002,7 +2107,7 @@ def send.raw(may: Maybe<&2, List<&2, U32>>, bs: Bytes(), st: Em) -> IO(Em):
         case True{}:
           do IO<Em>:
             out : Bytes() <- flat.note(may, bs)
-            return Em{s, Bytes.append(acc, out), True{}}
+            send.hold(ms, s, Bytes.append(acc, out))
 
 def send.fin(m: Socket & Result<&1, &1, U32 & String, Unit>, ok: Bool) ->
   IO(Socket & Result<&1, &1, U32 & String, Unit>):
@@ -2015,39 +2120,41 @@ def send.fin(m: Socket & Result<&1, &1, U32 & String, Unit>, ok: Bool) ->
       do IO<Socket & Result<&1, &1, U32 & String, Unit>>:
         return (s, Fail{(5, "a file ended before the length its head promised")})
 
-def send.end(st: Em) -> IO(Socket & Result<&1, &1, U32 & String, Unit>):
+def send.end(+ms: U32, st: Em) -> IO(Socket & Result<&1, &1, U32 & String, Unit>):
   match st:
     case Em{s, acc, ok}:
       do IO<Socket & Result<&1, &1, U32 & String, Unit>>:
-        m : Socket & Result<&1, &1, U32 & String, Unit> <- TCP.send_buf(s, acc)
+        m : Socket & Result<&1, &1, U32 & String, Unit> <- TCP.send_buf_poll(s, acc, ms)
         send.fin(m, ok)
 
 # a Shut before a reply marks the one that ends its connection
-def send.go(xs: List<&2, Seg>, may: Maybe<&2, List<&2, U32>>, sh: Bool, st: Em) ->
+def send.go(xs: List<&2, Seg>, +ms: U32, may: Maybe<&2, List<&2, U32>>, sh: Bool, st: Em) ->
   IO(Socket & Result<&1, &1, U32 & String, Unit>):
   match xs:
     case Nil{}:
-      send.end(st)
+      send.end(ms, st)
     case Con{g, t}:
       match g:
         case Note{bs}:
-          send.go(t, Some{bs}, sh, st)
+          send.go(t, ms, Some{bs}, sh, st)
         case Shut{}:
-          send.go(t, may, True{}, st)
+          send.go(t, ms, may, True{}, st)
         case Raw{bs}:
           do IO<Socket & Result<&1, &1, U32 & String, Unit>>:
-            st2 : Em <- send.raw(may, flat.shut(sh, bs), st)
-            send.go(t, None{}, False{}, st2)
+            st2 : Em <- send.raw(ms, may, flat.shut(sh, bs), st)
+            send.go(t, ms, None{}, False{}, st2)
         case Page{root, path, ct, head}:
           do IO<Socket & Result<&1, &1, U32 & String, Unit>>:
-            st2 : Em <- send.page(root, path, ct, head, may, sh, st)
-            send.go(t, None{}, False{}, st2)
+            st2 : Em <- send.page(ms, root, path, ct, head, may, sh, st)
+            send.go(t, ms, None{}, False{}, st2)
 
 # The one hook the connection loop calls: write a plan's segments to the
-# socket, in order, streaming files; the result fails when the socket
-# failed or a file came up short, and the connection then ends.
-def send.segs(s: Socket, xs: List<&2, Seg>) -> IO(Socket & Result<&1, &1, U32 & String, Unit>):
-  send.go(xs, None{}, False{}, Em{s, "", True{}})
+# socket, in order, streaming files, each send within ms of progress;
+# the result fails when the socket failed, stalled, or a file came up
+# short, and the connection then ends.
+def send.segs(s: Socket, xs: List<&2, Seg>, +ms: U32) ->
+  IO(Socket & Result<&1, &1, U32 & String, Unit>):
+  send.go(xs, ms, None{}, False{}, Em{s, "", True{}})
 
 
 # What answering a chunk produced: the bytes to write, whether the peer
@@ -2387,24 +2494,127 @@ def plan.poll(
 def chunk() -> U32:
   16384
 
+# The head being read, for its budget. NoHead{} is no head in progress
+# (or a body, which the idle time alone bounds); Begun{} is a head the
+# last read began, whose clock starts now; Since{t0, n} is one that began
+# at t0 (IO.now, ms) and has had n bytes since the read it began in.
+type Hw is Data:
+  NoHead{}
+  Begun{}
+  Since{t0: Nat, n: U32}
+
 # read the next chunk, within the idle time, and plan from it. Splitting
 # the send's socket out here is what lets the connection loop below be
 # one self-recursive def.
-def turn.s(+srv: Srv, s: Socket, p: P) -> IO(Socket & Plan):
-  do IO<Socket & Plan>:
+def turn.s(+srv: Srv, s: Socket, p: P) -> IO((Socket & Plan) & Hw):
+  do IO<(Socket & Plan) & Hw>:
     m : Socket & Result<&1, &1, U32 & String, Maybe<&1, List<&2, U32>>> <-
       TCP.poll_bytes(s, chunk(), srv.idle(srv))
-    return plan.poll(srv, m, p)
+    return (plan.poll(srv, m, p), NoHead{})
 
-def turn(+srv: Srv, sent: Socket & Result<&1, &1, U32 & String, Unit>, p: P) ->
-  IO(Socket & Plan):
+# the watch after a read that finished no message: a head still in
+# progress keeps its clock, one just begun gets one
+def hw.next(mid: Bool, hw: Hw) -> Hw:
+  match mid:
+    case False{}:
+      NoHead{}
+    case True{}:
+      match hw:
+        case NoHead{}:
+          Begun{}
+        case Begun{}:
+          Begun{}
+        case Since{t0, n}:
+          Since{t0, n}
+
+# the most bytes a head may take after the read it began in. A read is
+# at most chunk() bytes, so every head under 16 KiB is read whole and
+# none past 32 KiB ever is; past it, the answer is a 431 and a close.
+def head.cap() -> U32:
+  16384
+
+def resp.big() -> Bytes():
+  reply("431 Request Header Fields Too Large", "text/plain", "head too large\n")
+
+def plan.sized(
+  +srv: Srv, s: Socket, buf: List<&2, U32>, p: P, t0: Nat, n: U32, big: Bool
+) -> (Socket & Plan) & Hw:
+  match big:
+    case True{}:
+      ((s, End{[Shut{}, Raw{resp.big()}]}), NoHead{})
+    case False{}:
+      ((s, plan.chunk(srv, buf, p)), Since{t0, n})
+
+def plan.counted(
+  +srv: Srv, s: Socket, may: Maybe<&1, List<&2, U32>>, p: P, t0: Nat, n: U32
+) -> (Socket & Plan) & Hw:
+  match may:
+    case None{}:
+      ((s, Stop{}), NoHead{})
+    case Some{+buf}:
+      +k = (n + U32.from_nat(List.length(&2, U32, buf)) : U32)
+      plan.sized(srv, s, buf, p, t0, k, U32.is_lt(head.cap(), k))
+
+def plan.headed(
+  +srv: Srv, m: Socket & Result<&1, &1, U32 & String, Maybe<&1, List<&2, U32>>>,
+  p: P, t0: Nat, n: U32
+) -> (Socket & Plan) & Hw:
+  (s, r) = m
+  match r:
+    case Done{may}:
+      plan.counted(srv, s, may, p, t0, n)
+    case Fail{e}:
+      ((s, Stop{}), NoHead{})
+
+# a read that continues a head waits for the idle time or for what is
+# left of the head's time, whichever is less; a head out of time is
+# dropped, as a silent peer is
+def turn.left(
+  +srv: Srv, s: Socket, p: P, t0: Nat, n: U32, +el: Nat, ok: Bool
+) -> IO((Socket & Plan) & Hw):
+  match ok:
+    case False{}:
+      do IO<(Socket & Plan) & Hw>:
+        return ((s, Stop{}), NoHead{})
+    case True{}:
+      do IO<(Socket & Plan) & Hw>:
+        m : Socket & Result<&1, &1, U32 & String, Maybe<&1, List<&2, U32>>> <-
+          TCP.poll_bytes(s, chunk(), U32.min(srv.idle(srv),
+            U32.from_nat(Nat.sub(U32.to_nat(srv.head(srv)), el))))
+        return plan.headed(srv, m, p, t0, n)
+
+def turn.at(+srv: Srv, s: Socket, p: P, +t0: Nat, n: U32, now: Nat) ->
+  IO((Socket & Plan) & Hw):
+  +el = Nat.sub(now, t0)
+  turn.left(srv, s, p, t0, n, el, Nat.is_lt(el, U32.to_nat(srv.head(srv))))
+
+def turn.fresh(+srv: Srv, s: Socket, p: P, +now: Nat) -> IO((Socket & Plan) & Hw):
+  turn.at(srv, s, p, now, 0, now)
+
+# read the next chunk for the request reader, under the head's budget
+# when a head is in progress
+def turn.h(+srv: Srv, s: Socket, p: P, hw: Hw) -> IO((Socket & Plan) & Hw):
+  match hw:
+    case NoHead{}:
+      turn.s(srv, s, p)
+    case Begun{}:
+      do IO<(Socket & Plan) & Hw>:
+        now : Nat <- IO.now()
+        turn.fresh(srv, s, p, now)
+    case Since{t0, n}:
+      do IO<(Socket & Plan) & Hw>:
+        now : Nat <- IO.now()
+        turn.at(srv, s, p, t0, n, now)
+
+def turn(+srv: Srv, sent: Socket & Result<&1, &1, U32 & String, Unit>, p: P, hw: Hw) ->
+  IO((Socket & Plan) & Hw):
   (s, r) = sent
   match r:
     case Fail{e}:
-      do IO<Socket & Plan>:
-        return (s, Stop{})
+      do IO<(Socket & Plan) & Hw>:
+        return ((s, Stop{}), NoHead{})
     case Done{u}:
-      turn.s(srv, s, p)
+      turn.h(srv, s, p, hw)
 
 # A WebSocket connection: what the frames one read completed earned --
 # bytes to write and read on, nothing yet (read on), or the close.
@@ -2527,38 +2737,41 @@ def conn.fuel() -> Nat:
 def conn.waits() -> Nat:
   64n
 
-def conn(f: Nat, +srv: Srv, +sem: Chan(Unit), sp: Socket & Plan, w: Nat) -> IO(Unit):
+# The watch rides beside the plan: a read that finishes no message
+# keeps the head's clock and count, and one that finishes one starts
+# them over for whatever head it left begun.
+def conn(f: Nat, +srv: Srv, +sem: Chan(Unit), sph: (Socket & Plan) & Hw, w: Nat) -> IO(Unit):
   match f:
     case 0n:
-      (s, pl) = sp
+      ((s, pl), hw) = sph
       fin(sem, s)
     case 1n+g:
-      (s, pl) = sp
+      ((s, pl), hw) = sph
       match pl:
         case Stop{}:
           fin(sem, s)
         case End{out}:
           do IO<Unit>:
-            m : Socket & Result<&1, &1, U32 & String, Unit> <- send.segs(s, out)
+            m : Socket & Result<&1, &1, U32 & String, Unit> <- send.segs(s, out, srv.idle(srv))
             shut(sem, m)
-        case Wait{p2}:
+        case Wait{+p2}:
           match w:
             case 0n:
               fin(sem, s)
             case 1n+v:
               do IO<Unit>:
-                sp2 : Socket & Plan <- turn.s(srv, s, p2)
+                sp2 : (Socket & Plan) & Hw <- turn.h(srv, s, p2, hw.next(p.head(p2), hw))
                 conn(g, srv, sem, sp2, v)
         case Feed{out, n}:
           do IO<Unit>:
-            m   : Socket & Result<&1, &1, U32 & String, Unit> <- send.segs(s, out)
+            m   : Socket & Result<&1, &1, U32 & String, Unit> <- send.segs(s, out, srv.idle(srv))
             sp2 : Socket & Plan <- tick(m, n)
-            conn(g, srv, sem, sp2, conn.waits())
+            conn(g, srv, sem, (sp2, NoHead{}), conn.waits())
         case Sock{out, wr}:
           do IO<Unit>:
-            m   : Socket & Result<&1, &1, U32 & String, Unit> <- send.segs(s, out)
+            m   : Socket & Result<&1, &1, U32 & String, Unit> <- send.segs(s, out, srv.idle(srv))
             sp2 : Socket & Plan <- turn.ws(srv, m, wr)
-            conn(g, srv, sem, sp2, conn.waits())
+            conn(g, srv, sem, (sp2, NoHead{}), conn.waits())
         case Hold{wr}:
           match w:
             case 0n:
@@ -2566,18 +2779,18 @@ def conn(f: Nat, +srv: Srv, +sem: Chan(Unit), sp: Socket & Plan, w: Nat) -> IO(U
             case 1n+v:
               do IO<Unit>:
                 sp2 : Socket & Plan <- turn.wr(srv, s, wr)
-                conn(g, srv, sem, sp2, v)
-        case Go{out, p2}:
+                conn(g, srv, sem, (sp2, NoHead{}), v)
+        case Go{out, +p2}:
           do IO<Unit>:
-            m   : Socket & Result<&1, &1, U32 & String, Unit> <- send.segs(s, out)
-            sp2 : Socket & Plan <- turn(srv, m, p2)
+            m   : Socket & Result<&1, &1, U32 & String, Unit> <- send.segs(s, out, srv.idle(srv))
+            sp2 : (Socket & Plan) & Hw <- turn(srv, m, p2, hw.next(p.head(p2), NoHead{}))
             conn(g, srv, sem, sp2, conn.waits())
 
 def start(+srv: Srv, +sem: Chan(Unit), s: Socket) -> IO(Unit):
   do IO<Unit>:
     m : Socket & Result<&1, &1, U32 & String, Maybe<&1, List<&2, U32>>> <-
       TCP.poll_bytes(s, chunk(), srv.idle(srv))
-    conn(conn.fuel(), srv, sem, plan.poll(srv, m, p.new()), conn.waits())
+    conn(conn.fuel(), srv, sem, (plan.poll(srv, m, p.new()), NoHead{}), conn.waits())
 
 # how often the accept loop looks up from the listener, in ms: the most
 # a stop request waits before it is seen
