@@ -390,28 +390,42 @@ awake, which made each of them look faster than one alone.
 
 | 32 keep-alive conns, `--threads 1` | Bend | C control | C over Bend |
 |---|---|---|---|
-| pipeline 1 | 69,346 req/s | 155,162 req/s | 2.2x |
-| pipeline 8 | 121,986 req/s | 852,207 req/s | 7.0x |
+| pipeline 1 | 80,052 req/s | 155,162 req/s | 1.9x |
+| pipeline 8 | 128,028 req/s | 852,207 req/s | 6.7x |
 | per request at pipeline 1 | 6.1 µs user + 6.7 µs sys | 1.1 µs user + 5.0 µs sys | |
 | peak RSS under load | **3.5 MB** | 5.8 MB | |
 
-The engine was at 76,009 and 148,498 before it learned WebSocket: the
-upgrade widened `Pend`, the node the parser rebuilds at every header
-that closes, from five fields to eight, and that is on every request
-whether or not it is an upgrade. Narrowing it again is the next engine
-change, and it is measured, not guessed.
+WebSocket cost the request path about a tenth when it landed, and the
+obvious culprit -- `Pend`, the node the parser rebuilds at every header
+that closes, widened from five fields to eight -- turned out not to be
+it. Narrowing it back (to six, with the upgrade state a sum whose
+ordinary value carries no fields) changed nothing measurable, and nor
+did a throwaway build with the upgrade's two parser states removed
+entirely. The cost is spread thinly across everything the feature
+widened. The profile below is where the work actually was.
 
 The two depths fail differently, and forty stack samples under load at
-pipeline 1 say why: every one of them was in a syscall or the loop
+pipeline 1 said why: every one of them was in a syscall or the loop
 around it -- twenty in `send`, ten in `epoll_ctl`, nine in `recv`, one
 in `epoll_wait` -- and **none in the parser**. At pipeline 1 this
-server is a syscall machine, and a quarter of its syscalls are the
-`epoll_ctl` pair that `io_wait_on` does on every park and `io_fire`
-undoes on every wake. The C control does not pay them: its descriptors
-are registered once and stay registered. Keeping a descriptor
-registered and re-arming it in place (`EPOLLONESHOT`) would take the
-engine from four syscalls a request to two, and that is the next
-runtime change.
+server is a syscall machine, and a quarter of its syscalls were the
+`epoll_ctl` pair that `io_wait_on` did on every park and `io_fire`
+undid on every wake -- which the C control does not pay, because its
+descriptors are registered once and stay registered.
+
+Now Bend's are too. A waiter goes into the poller with
+`EPOLLONESHOT`, the kernel disarms it as it fires, and the next park
+is one `MOD` instead of an `ADD` and a `DEL`; `io_reg` is a byte per
+descriptor saying whether the poller is believed to hold it, and every
+call takes the other operation when the first is refused, so a
+descriptor closed and its number reused corrects itself. Under load
+the engine now makes 22,793 `sendto`, 23,159 `recvfrom` and **380**
+`epoll_ctl` in three seconds -- one per sixty requests rather than one
+per request, because a read that finds its bytes already waiting never
+parks at all. That is the control's own syscall profile, and it is
+worth 13% at pipeline 1 (68,924 and 70,779 req/s became 77,245 and
+80,052) and nothing at pipeline 8, where the syscalls were already
+amortised eight ways.
 
 At pipeline 8 the kernel is amortised eight ways, the compute is all
 that is left, and the gap widens to the compute gap: about 6 µs of

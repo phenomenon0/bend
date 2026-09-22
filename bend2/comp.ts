@@ -6908,9 +6908,41 @@ static IoQue io_jobs;
 #ifdef __linux__
 static int     io_ep = -1;
 static u32     io_fds;
+static u8*     io_reg;
+static u32     io_reg_cap;
 static IoAct** io_time;
 static u32     io_time_n;
 static u32     io_time_cap;
+
+// Whether a descriptor is believed to be in the poller's set. A waiter
+// is registered with EPOLLONESHOT and left there: the kernel disarms it
+// as it fires, so a wake costs no syscall and the next park is one MOD
+// rather than an ADD and a DEL. The belief can be wrong in one way --
+// a descriptor closed and its number handed out again -- so every call
+// takes the other operation when the first is refused, which is what
+// makes the table a hint rather than bookkeeping to be kept exact.
+static bool io_reg_has(int fd) {
+  return fd >= 0 && (u32)fd < io_reg_cap && io_reg[fd] != 0;
+}
+
+static void io_reg_put(int fd, u8 v) {
+  if (fd < 0) {
+    return;
+  }
+  if ((u32)fd >= io_reg_cap) {
+    if (v == 0) {
+      return;
+    }
+    u32 was = io_reg_cap;
+    io_reg_cap = io_reg_cap != 0 ? io_reg_cap * 2 : 1024;
+    while ((u32)fd >= io_reg_cap) {
+      io_reg_cap *= 2;
+    }
+    io_reg = io_mem(realloc(io_reg, io_reg_cap));
+    memset(io_reg + was, 0, io_reg_cap - was);
+  }
+  io_reg[fd] = v;
+}
 
 static void io_time_put(IoAct* a, u32 i) {
   io_time[i] = a;
@@ -7011,15 +7043,17 @@ static Term io_wait_on(IoWork* w, int fd, short evts, u64 time, IoPack more) {
 #ifdef __linux__
   if (evts != 0) {
     struct epoll_event ev;
-    ev.events   = evts == POLLOUT ? EPOLLOUT : EPOLLIN;
+    ev.events   = (evts == POLLOUT ? EPOLLOUT : EPOLLIN) | EPOLLONESHOT;
     ev.data.ptr = a;
-    if (epoll_ctl(io_ep, EPOLL_CTL_ADD, fd, &ev) == 0) {
-      io_fds += 1;
-    } else if (errno == EEXIST) {
-      epoll_ctl(io_ep, EPOLL_CTL_MOD, fd, &ev);
-    } else {
-      err_fail("the poller refused a descriptor");
+    bool known  = io_reg_has(fd);
+    int  op     = known ? EPOLL_CTL_MOD : EPOLL_CTL_ADD;
+    if (epoll_ctl(io_ep, op, fd, &ev) != 0) {
+      if (epoll_ctl(io_ep, known ? EPOLL_CTL_ADD : EPOLL_CTL_MOD, fd, &ev) != 0) {
+        err_fail("the poller refused a descriptor");
+      }
     }
+    io_reg_put(fd, 1);
+    io_fds += 1;
   }
   if (time != 0) {
     io_time_push(a);
@@ -7232,10 +7266,17 @@ static bool io_idle(void) {
 // Takes the activation out of both sets and runs its continuation. A
 // re-park puts it back through io_wait_on, so nothing is left behind
 // when the effect changes what it waits for.
-static void io_fire(Env e, IoAct* a) {
+// ready says the descriptor is what woke this activation, so the poller
+// has already disarmed it and the registration can stay for the next
+// park. A deadline that fires first leaves the descriptor armed and
+// pointing at an activation that has moved on, so that one is taken out.
+static void io_fire(Env e, IoAct* a, bool ready) {
   io_time_drop(a);
   if (a->evts != 0) {
-    epoll_ctl(io_ep, EPOLL_CTL_DEL, (int)a->work.word, NULL);
+    if (!ready) {
+      epoll_ctl(io_ep, EPOLL_CTL_DEL, (int)a->work.word, NULL);
+      io_reg_put((int)a->work.word, 0);
+    }
     io_fds -= 1;
     a->evts = 0;
   }
@@ -7270,11 +7311,11 @@ static void io_wait(Env e) {
       io_take(e);
       continue;
     }
-    io_fire(e, a);
+    io_fire(e, a, true);
   }
   u64 now = io_tick();
   while (io_time_n != 0 && io_time[0]->time <= now) {
-    io_fire(e, io_time[0]);
+    io_fire(e, io_time[0], false);
   }
 }
 
