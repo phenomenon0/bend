@@ -5,7 +5,8 @@ server, with the parser's laws proved by the stock checker. No host
 language in the path — the socket is Bend's own effect.
 
     bend demos/io_http_engine/PROOF.bend        # the gate: laws hold
-    bend demos/io_http_engine/main.bend -o httpd && ./httpd
+    bend demos/io_http_engine/main.bend -o httpd
+    ./httpd --port 8080 --root www              # both optional
     curl -i http://127.0.0.1:8080/health
 
 The binary is the server: it links libc and libm and nothing else, and
@@ -65,6 +66,42 @@ left.
 bytes forever runs it out and is dropped. The accept loop is the one
 `@unsafe` def, as in `demos/io_http_server`.
 
+## Configuration, routes, files
+
+The binary reads its arguments with the same shape as it reads a
+request: a state fed one argument at a time, a step that does not
+recurse, and a refusal (`IO.die`) for anything it does not know.
+`--port N` and `--root DIR` are the settings; `--log` is reserved.
+
+The route table is data: a list of `Route{path, prefix, act}` built
+once from the configuration and shared by every connection, walked
+first match wins. Without a root it is `/health`, `/echo`, `/events`
+and `/`; with one, `/` becomes a prefix route to `Files{}` and every
+path the fixed routes leave is a file under the root, `/` itself being
+`index.html`. Because the table is a value, LAWS.bend pins what it
+answers and that no two entries claim one path, and the checker
+refuses the build when someone adds a route that shadows another.
+
+A file's name is the request path split on `/`, normalised (`.`
+dropped, `..` climbing, a climb out of the root refused rather than
+clamped, because a clamped path is a path someone will probe), and
+gated to printable ASCII. Percent escapes are not decoded, so an
+escaped `..` names a file that does not exist rather than a climb. The
+type comes from the extension; a directory opens and then refuses to
+be read, which is a miss; a file past 4 MiB is refused rather than
+loaded, until pages are written in pieces.
+
+A reply is a list of segments: bytes as they are, or a page to read
+when the reply is written. Fixed routes stay pure and cost what they
+cost before; only a file route puts IO on the path, and only for its
+own request, so a pipelined batch mixing both still answers in order.
+
+`HEAD` answers with the head of what `GET` would have sent, cut at the
+blank line by a scanner rather than rebuilt, so the two can never
+disagree about a length or a type; LAWS.bend says the scanner and the
+head builder agree on the fixed replies. A `405` names the methods that
+would have worked.
+
 ## The laws
 
 `feed_split` is the one that matters: `feed(a ++ b, p)` equals
@@ -82,22 +119,36 @@ of nine pieces cost more per request than parsing the request that
 asked for it; nobody should read the numbers, and nobody has to, since
 the checker refuses the engine the moment an edit makes one false.
 
-Each was checked by breaking it: a one-digit content-length, a linefeed
-that escapes `Bad{}`, and a `feed` that drops state at a chunk boundary
-are all rejected, with the two terms printed.
+The route laws pin what the default table answers and what a table
+with a root answers (`/health` still, `/` and everything else to the
+files), that neither table has two entries for one path, and that an
+empty table routes nothing. The two HEAD laws say the scanner that cuts
+a reply at its blank line agrees, byte for byte, with the builder that
+writes a head from a length. The four normaliser laws pin the paths
+that matter: a climb from the root, a climb from under a real
+directory, dots, and a climb that stays inside. Those four are pins,
+not a proof over every path; that proof needs a lemma over classified
+segments and is the next one to write.
+
+Each law was checked by breaking it: a one-digit content-length, a
+linefeed that escapes `Bad{}`, a `feed` that drops state at a chunk
+boundary, a head one byte long, a climb claimed to resolve, and a
+duplicate route are all rejected, with the two terms printed.
 
 ## The control and the checks
 
 `control.c` is the same engine written the way a C server is written:
 one epoll loop, the same modes, the same byte-at-a-time transitions,
 the same routes, byte-identical replies, the same policy. `check.c`
-runs fourteen behavioural cases against either, the last of which
-reads the server's CPU when given its pid. `load.c` drives either;
+runs its behavioural cases against either: fifteen for any server,
+the last of which reads the server's CPU when given its pid, and nine
+more for static files when the server was started with `--root` on the
+fixture directory and the check with `--files`. `load.c` drives either;
 `ramp.c` opens connections in blocks and never closes them; `sched.c`
 is the scheduler's two halves measured in isolation.
 
     cc -std=c11 -O3 control.c -o control && ./control 8081
-    cc -std=c11 -O3 check.c -o check && ./check 8080 $(pgrep -x httpd)
+    cc -std=c11 -O3 check.c -o check && ./check 8080 $(pgrep -x httpd) --files
     cc -std=c11 -O3 load.c -o load && ./load 8080 32 5 8 /health
     cc -std=c11 -O2 ramp.c -o ramp && ./ramp 8080 /events
 

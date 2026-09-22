@@ -494,13 +494,14 @@ def resp.missing() -> List<&2, U32>:
 def resp.method() -> List<&2, U32>:
   [
   72, 84, 84, 80, 47, 49, 46, 49, 32, 52, 48, 53, 32, 77, 101, 116, 104,
-  111, 100, 32, 78, 111, 116, 32, 65, 108, 108, 111, 119, 101, 100, 13,
-  10, 99, 111, 110, 116, 101, 110, 116, 45, 116, 121, 112, 101, 58, 32,
-  116, 101, 120, 116, 47, 112, 108, 97, 105, 110, 13, 10, 99, 111, 110,
-  116, 101, 110, 116, 45, 108, 101, 110, 103, 116, 104, 58, 32, 49, 48,
-  13, 10, 99, 111, 110, 110, 101, 99, 116, 105, 111, 110, 58, 32, 107,
-  101, 101, 112, 45, 97, 108, 105, 118, 101, 13, 10, 13, 10, 110, 111, 32,
-  109, 101, 116, 104, 111, 100, 10]
+  111, 100, 32, 78, 111, 116, 32, 65, 108, 108, 111, 119, 101, 100, 13, 10,
+  99, 111, 110, 116, 101, 110, 116, 45, 116, 121, 112, 101, 58, 32, 116,
+  101, 120, 116, 47, 112, 108, 97, 105, 110, 13, 10, 99, 111, 110, 116,
+  101, 110, 116, 45, 108, 101, 110, 103, 116, 104, 58, 32, 49, 48, 13, 10,
+  97, 108, 108, 111, 119, 58, 32, 71, 69, 84, 44, 32, 72, 69, 65, 68, 13,
+  10, 99, 111, 110, 110, 101, 99, 116, 105, 111, 110, 58, 32, 107, 101,
+  101, 112, 45, 97, 108, 105, 118, 101, 13, 10, 13, 10, 110, 111, 32, 109,
+  101, 116, 104, 111, 100, 10]
 
 def resp.bad() -> List<&2, U32>:
   [
@@ -531,60 +532,741 @@ def sse.count() -> U32:
 def sse.gap() -> U32:
   1000
 
+# Configuration
+# =============
+
+# What the binary was started with: the port, the directory static
+# files come from if any, and whether to log. The route table is built
+# from it once, in main, and every connection shares that one table.
+type Cfg is Data:
+  Cfg{port: U32, root: Maybe<&2, List<&2, U32>>, log: Bool}
+
+def cfg.new() -> Cfg:
+  Cfg{8080, None{}, False{}}
+
+def cfg.port(c: Cfg) -> U32:
+  match c:
+    case Cfg{port, root, log}:
+      port
+
+def cfg.root(c: Cfg) -> List<&2, U32>:
+  match c:
+    case Cfg{port, root, log}:
+      Maybe.default(&2, List<&2, U32>, root, bytes("."))
+
+def cfg.set_port(c: Cfg, n: U32) -> Cfg:
+  match c:
+    case Cfg{port, root, log}:
+      Cfg{n, root, log}
+
+def cfg.set_root(c: Cfg, dir: List<&2, U32>) -> Cfg:
+  match c:
+    case Cfg{port, root, log}:
+      Cfg{port, Some{dir}, log}
+
+def cfg.set_log(c: Cfg) -> Cfg:
+  match c:
+    case Cfg{port, root, log}:
+      Cfg{port, root, True{}}
+
+# a non-empty run of decimal digits
+def digits.go(bs: List<&2, U32>, ok: Bool) -> Bool:
+  match bs:
+    case Nil{}:
+      ok
+    case Con{+c, t}:
+      digits.go(t, ok && U32.is_le(48, c) && U32.is_le(c, 57))
+
+def digits(bs: List<&2, U32>) -> Bool:
+  match bs:
+    case Nil{}:
+      False{}
+    case Con{c, t}:
+      digits.go(Con{c, t}, True{})
+
+def u32.of(bs: List<&2, U32>, acc: U32) -> U32:
+  match bs:
+    case Nil{}:
+      acc
+    case Con{c, t}:
+      u32.of(t, ((acc * 10 : U32) + (c - 48 : U32) : U32))
+
+# bytes back to text, for the effects that take a String
+def text(bs: List<&2, U32>) -> String:
+  match bs:
+    case Nil{}:
+      SNil{}
+    case Con{c, t}:
+      SCon{Chr{c}, text(t)}
+
+# The argument reader has the shape of the request reader: a state fed
+# one argument at a time, and a step that does not recurse.
+type Want is Data:
+  Flag{}
+  PortOf{}
+  RootOf{}
+  Wrong{why: List<&2, U32>}
+
+type Args is Data:
+  Args{cfg: Cfg, want: Want}
+
+def args.flag(c: Cfg, a: List<&2, U32>, log: Bool, port: Bool, root: Bool) -> Args:
+  match log port root:
+    case True{} _ _:
+      Args{cfg.set_log(c), Flag{}}
+    case False{} True{} _:
+      Args{c, PortOf{}}
+    case False{} False{} True{}:
+      Args{c, RootOf{}}
+    case False{} False{} False{}:
+      Args{c, Wrong{cat(bytes("unknown flag: "), a)}}
+
+def args.num(c: Cfg, a: List<&2, U32>, ok: Bool) -> Args:
+  match ok:
+    case True{}:
+      Args{cfg.set_port(c, u32.of(a, 0)), Flag{}}
+    case False{}:
+      Args{c, Wrong{cat(bytes("not a port: "), a)}}
+
+def args.feed(st: Args, +a: List<&2, U32>) -> Args:
+  match st:
+    case Args{c, want}:
+      match want:
+        case Flag{}:
+          args.flag(c, a, beq(a, bytes("--log"), True{}), beq(a, bytes("--port"), True{}),
+            beq(a, bytes("--root"), True{}))
+        case PortOf{}:
+          args.num(c, a, digits(a))
+        case RootOf{}:
+          Args{cfg.set_root(c, a), Flag{}}
+        case Wrong{why}:
+          Args{c, Wrong{why}}
+
+def args.read(xs: List<String>, st: Args) -> Args:
+  match xs:
+    case Nil{}:
+      st
+    case Con{a, t}:
+      args.read(t, args.feed(st, bytes(a)))
+
+def args.done(st: Args) -> IO(Cfg):
+  match st:
+    case Args{c, want}:
+      match want:
+        case Flag{}:
+          do IO<Cfg>:
+            return c
+        case PortOf{}:
+          IO.die(Cfg, 2, "--port needs a number")
+        case RootOf{}:
+          IO.die(Cfg, 2, "--root needs a directory")
+        case Wrong{why}:
+          IO.die(Cfg, 2, text(why))
+
+# Replies by size
+# ===============
+
+# A reply head for a body of n bytes, and the reply around a body whose
+# size is already known, as a file's is. reply() measures its body;
+# these do not, so a body is never walked twice.
+def reply.n.head(status: String, ct: List<&2, U32>, n: U32) -> List<&2, U32>:
+  cat(bytes("HTTP/1.1 "), cat(bytes(status),
+  cat(bytes("\r\ncontent-type: "), cat(ct,
+  cat(bytes("\r\ncontent-length: "), cat(bytes(U32.show(n)),
+  bytes("\r\nconnection: keep-alive\r\n\r\n")))))))
+
+def reply.n(status: String, ct: List<&2, U32>, n: U32, body: List<&2, U32>) -> List<&2, U32>:
+  cat(reply.n.head(status, ct, n), body)
+
+# the 405 names the methods that would have worked
+def reply.allow(status: String, ct: String, +body: List<&2, U32>) -> List<&2, U32>:
+  cat(bytes("HTTP/1.1 "), cat(bytes(status),
+  cat(bytes("\r\ncontent-type: "), cat(bytes(ct),
+  cat(bytes("\r\ncontent-length: "),
+  cat(bytes(Nat.show(List.length(&2, U32, body))),
+  cat(bytes("\r\nallow: GET, HEAD\r\nconnection: keep-alive\r\n\r\n"), body)))))))
+
+# The head of a reply: its bytes through the blank line. HEAD answers
+# with the head of what GET would have sent, so the two can never
+# disagree about a length or a type. The walk goes to the end of the
+# reply, as every walk here does, and stops keeping bytes once the
+# blank line has passed.
+def head.pick(b: Bool, x: U32, y: U32) -> U32:
+  match b:
+    case True{}:
+      x
+    case False{}:
+      y
+
+def head.lf(one: Bool, three: Bool) -> U32:
+  match one three:
+    case True{} _:
+      2
+    case False{} True{}:
+      4
+    case False{} False{}:
+      0
+
+# how far into "\r\n\r\n" the reply is after a byte, given it was k in
+def head.next(+k: U32, cr: Bool, lf: Bool) -> U32:
+  match cr lf:
+    case True{} _:
+      head.pick(U32.is_eq(k, 2), 3, 1)
+    case False{} True{}:
+      head.lf(U32.is_eq(k, 1), U32.is_eq(k, 3))
+    case False{} False{}:
+      0
+
+def head.keep(acc: List<&2, U32>, c: U32, done: Bool) -> List<&2, U32>:
+  match done:
+    case True{}:
+      acc
+    case False{}:
+      Con{c, acc}
+
+# the scanner's state: how far into the blank line, the bytes kept so
+# far (reversed), and whether the blank line has passed
+type Hd is Data:
+  Hd{k: U32, acc: List<&2, U32>, done: Bool}
+
+def head.step.k(+k2: U32, acc: List<&2, U32>, c: U32, +done: Bool) -> Hd:
+  Hd{k2, head.keep(acc, c, done), done || U32.is_eq(k2, 4)}
+
+def head.step(st: Hd, +c: U32) -> Hd:
+  match st:
+    case Hd{k, acc, done}:
+      head.step.k(head.next(k, U32.is_eq(c, 13), U32.is_eq(c, 10)), acc, c, done)
+
+def head.out(st: Hd) -> List<&2, U32>:
+  match st:
+    case Hd{k, acc, done}:
+      rev(acc)
+
+def head.of.go(bs: List<&2, U32>, st: Hd) -> List<&2, U32>:
+  match bs:
+    case Nil{}:
+      head.out(st)
+    case Con{c, t}:
+      head.of.go(t, head.step(st, c))
+
+def head.of(bs: List<&2, U32>) -> List<&2, U32>:
+  head.of.go(bs, Hd{0, Nil{}, False{}})
+
+# Routes
+# ======
+
+# What a route does. The table is data, built from the configuration,
+# so LAWS.bend can pin what the default table answers and that no two
+# entries claim one path.
+type Act is Data:
+  Health{}
+  Root{}
+  Echo{}
+  Events{}
+  Files{}
+
+# an entry: an exact path, or every path under it when prefix is set
+type Route is Data:
+  Route{path: List<&2, U32>, prefix: Bool, act: Act}
+
+def routes.base() -> List<&2, Route>:
+  [Route{bytes("/health"), False{}, Health{}},
+   Route{bytes("/echo"), False{}, Echo{}},
+   Route{bytes("/events"), False{}, Events{}}]
+
+# with a root directory everything the fixed routes leave is a file
+# under it, "/" included; without one "/" is the banner
+def routes.tail(root: Maybe<&2, List<&2, U32>>) -> List<&2, Route>:
+  match root:
+    case None{}:
+      [Route{bytes("/"), False{}, Root{}}]
+    case Some{dir}:
+      [Route{bytes("/"), True{}, Files{}}]
+
+def routes(c: Cfg) -> List<&2, Route>:
+  match c:
+    case Cfg{port, root, log}:
+      List.append(&2, Route, routes.base(), routes.tail(root))
+
+# a is a prefix of b
+def bpre(a: List<&2, U32>, b: List<&2, U32>, acc: Bool) -> Bool:
+  match a b:
+    case Nil{} _:
+      acc
+    case Con{x, t} Nil{}:
+      False{}
+    case Con{x, t} Con{y, u}:
+      bpre(t, u, acc && U32.is_eq(x, y))
+
+def hit(rp: List<&2, U32>, path: List<&2, U32>, prefix: Bool) -> Bool:
+  match prefix:
+    case True{}:
+      bpre(rp, path, True{})
+    case False{}:
+      beq(rp, path, True{})
+
+def route.one.go(act: Act, ok: Bool) -> Maybe<&2, Act>:
+  match ok:
+    case True{}:
+      Some{act}
+    case False{}:
+      None{}
+
+def route.one(r: Route, path: List<&2, U32>) -> Maybe<&2, Act>:
+  match r:
+    case Route{rp, prefix, act}:
+      route.one.go(act, hit(rp, path, prefix))
+
+# an entry is only tested while nothing earlier has matched
+def route.keep(acc: Maybe<&2, Act>, r: Route, path: List<&2, U32>) -> Maybe<&2, Act>:
+  match acc:
+    case Some{a}:
+      Some{a}
+    case None{}:
+      route.one(r, path)
+
+def route.go(table: List<&2, Route>, +path: List<&2, U32>, acc: Maybe<&2, Act>) -> Maybe<&2, Act>:
+  match table:
+    case Nil{}:
+      acc
+    case Con{r, t}:
+      route.go(t, path, route.keep(acc, r, path))
+
+# the first entry that matches wins
+def route(table: List<&2, Route>, +path: List<&2, U32>) -> Maybe<&2, Act>:
+  route.go(table, path, None{})
+
+# no two entries claim one path
+def same(a: Route, b: Route) -> Bool:
+  match a b:
+    case Route{p, x, i} Route{q, y, j}:
+      beq(p, q, True{})
+
+def taken(+r: Route, rs: List<&2, Route>) -> Bool:
+  match rs:
+    case Nil{}:
+      False{}
+    case Con{s, t}:
+      same(r, s) || taken(r, t)
+
+def distinct(rs: List<&2, Route>) -> Bool:
+  match rs:
+    case Nil{}:
+      True{}
+    case Con{+r, +t}:
+      Bool.not(taken(r, t)) && distinct(t)
+
+# what every connection shares: the configuration and its table
+type Srv is Data:
+  Srv{cfg: Cfg, table: List<&2, Route>}
+
+def srv.new(+c: Cfg) -> Srv:
+  Srv{c, routes(c)}
+
+def srv.table(s: Srv) -> List<&2, Route>:
+  match s:
+    case Srv{c, table}:
+      table
+
+def srv.root(s: Srv) -> List<&2, U32>:
+  match s:
+    case Srv{c, table}:
+      cfg.root(c)
+
+# Static files
+# ============
+
+# The request path as segments, split on '/', empty ones dropped.
+def segs.push(cur: List<&2, U32>, acc: List<&2, List<&2, U32>>) -> List<&2, List<&2, U32>>:
+  match cur:
+    case Nil{}:
+      acc
+    case Con{c, t}:
+      Con{rev(Con{c, t}), acc}
+
+# the splitter's state: the segment being read (reversed) and the
+# segments done (reversed)
+type Sg is Data:
+  Sg{cur: List<&2, U32>, acc: List<&2, List<&2, U32>>}
+
+def segs.step.go(cur: List<&2, U32>, acc: List<&2, List<&2, U32>>, c: U32, slash: Bool) -> Sg:
+  match slash:
+    case True{}:
+      Sg{Nil{}, segs.push(cur, acc)}
+    case False{}:
+      Sg{Con{c, cur}, acc}
+
+def segs.step(st: Sg, +c: U32) -> Sg:
+  match st:
+    case Sg{cur, acc}:
+      segs.step.go(cur, acc, c, U32.is_eq(c, 47))
+
+def segs.out(st: Sg) -> List<&2, List<&2, U32>>:
+  match st:
+    case Sg{cur, acc}:
+      segs.push(cur, acc)
+
+def segs.go(bs: List<&2, U32>, st: Sg) -> List<&2, List<&2, U32>>:
+  match bs:
+    case Nil{}:
+      segs.out(st)
+    case Con{c, t}:
+      segs.go(t, segs.step(st, c))
+
+def segs(path: List<&2, U32>) -> List<&2, List<&2, U32>>:
+  List.reverse(&2, List<&2, U32>, segs.go(path, Sg{Nil{}, Nil{}}))
+
+# A segment is a name, ".", or "..".
+type Piece is Data:
+  Up{}
+  Here{}
+  Name{}
+
+def piece.of(up: Bool, here: Bool) -> Piece:
+  match up here:
+    case True{} _:
+      Up{}
+    case False{} True{}:
+      Here{}
+    case False{} False{}:
+      Name{}
+
+def piece(+s: List<&2, U32>) -> Piece:
+  piece.of(beq(s, [46, 46], True{}), beq(s, [46], True{}))
+
+def norm.pop(st: List<&2, List<&2, U32>>) -> Maybe<&2, List<&2, List<&2, U32>>>:
+  match st:
+    case Nil{}:
+      None{}
+    case Con{h, t}:
+      Some{t}
+
+def norm.step(k: Piece, s: List<&2, U32>, st: List<&2, List<&2, U32>>) -> Maybe<&2, List<&2, List<&2, U32>>>:
+  match k:
+    case Up{}:
+      norm.pop(st)
+    case Here{}:
+      Some{st}
+    case Name{}:
+      Some{Con{s, st}}
+
+# ".." climbs; climbing out of the root is refused for good, not
+# clamped, because a clamped path is a path someone will probe
+def norm.acc(acc: Maybe<&2, List<&2, List<&2, U32>>>, +s: List<&2, U32>) -> Maybe<&2, List<&2, List<&2, U32>>>:
+  match acc:
+    case None{}:
+      None{}
+    case Some{st}:
+      norm.step(piece(s), s, st)
+
+def norm.go(ss: List<&2, List<&2, U32>>, acc: Maybe<&2, List<&2, List<&2, U32>>>) -> Maybe<&2, List<&2, List<&2, U32>>>:
+  match ss:
+    case Nil{}:
+      acc
+    case Con{s, t}:
+      norm.go(t, norm.acc(acc, s))
+
+def norm.rev(may: Maybe<&2, List<&2, List<&2, U32>>>) -> Maybe<&2, List<&2, List<&2, U32>>>:
+  match may:
+    case None{}:
+      None{}
+    case Some{st}:
+      Some{List.reverse(&2, List<&2, U32>, st)}
+
+# the segments a request may name under the root, or None when it
+# tried to climb out
+def norm(ss: List<&2, List<&2, U32>>) -> Maybe<&2, List<&2, List<&2, U32>>>:
+  norm.rev(norm.go(ss, Some{Nil{}}))
+
+# every byte of a file name is printable ASCII and not a backslash
+def clean.go(bs: List<&2, U32>, ok: Bool) -> Bool:
+  match bs:
+    case Nil{}:
+      ok
+    case Con{+c, t}:
+      clean.go(t, ok && U32.is_le(33, c) && U32.is_le(c, 126)
+        && Bool.not(U32.is_eq(c, 92)))
+
+def clean(bs: List<&2, U32>) -> Bool:
+  clean.go(bs, True{})
+
+def join.rest(ss: List<&2, List<&2, U32>>) -> List<&2, U32>:
+  match ss:
+    case Nil{}:
+      Nil{}
+    case Con{s, t}:
+      Con{47, cat(s, join.rest(t))}
+
+def join(ss: List<&2, List<&2, U32>>) -> List<&2, U32>:
+  match ss:
+    case Nil{}:
+      Nil{}
+    case Con{s, t}:
+      cat(s, join.rest(t))
+
+def last(ss: List<&2, List<&2, U32>>, acc: List<&2, U32>) -> List<&2, U32>:
+  match ss:
+    case Nil{}:
+      acc
+    case Con{s, t}:
+      last(t, s)
+
+def ext.step(cur: List<&2, U32>, c: U32, dot: Bool) -> List<&2, U32>:
+  match dot:
+    case True{}:
+      Nil{}
+    case False{}:
+      Con{c, cur}
+
+# the bytes after the last '.'
+def ext.go(bs: List<&2, U32>, cur: List<&2, U32>) -> List<&2, U32>:
+  match bs:
+    case Nil{}:
+      rev(cur)
+    case Con{+c, t}:
+      ext.go(t, ext.step(cur, c, U32.is_eq(c, 46)))
+
+type Mime is Data:
+  Mime{ext: List<&2, U32>, name: List<&2, U32>}
+
+def mimes() -> List<&2, Mime>:
+  [Mime{bytes("html"), bytes("text/html; charset=utf-8")},
+   Mime{bytes("htm"), bytes("text/html; charset=utf-8")},
+   Mime{bytes("css"), bytes("text/css; charset=utf-8")},
+   Mime{bytes("js"), bytes("application/javascript; charset=utf-8")},
+   Mime{bytes("json"), bytes("application/json")},
+   Mime{bytes("txt"), bytes("text/plain; charset=utf-8")},
+   Mime{bytes("svg"), bytes("image/svg+xml")},
+   Mime{bytes("png"), bytes("image/png")},
+   Mime{bytes("jpg"), bytes("image/jpeg")},
+   Mime{bytes("jpeg"), bytes("image/jpeg")},
+   Mime{bytes("gif"), bytes("image/gif")},
+   Mime{bytes("ico"), bytes("image/x-icon")},
+   Mime{bytes("wasm"), bytes("application/wasm")},
+   Mime{bytes("pdf"), bytes("application/pdf")}]
+
+def mime.one.go(name: List<&2, U32>, ok: Bool) -> Maybe<&2, List<&2, U32>>:
+  match ok:
+    case True{}:
+      Some{name}
+    case False{}:
+      None{}
+
+def mime.one(mi: Mime, e: List<&2, U32>) -> Maybe<&2, List<&2, U32>>:
+  match mi:
+    case Mime{x, name}:
+      mime.one.go(name, beq(x, e, True{}))
+
+def mime.keep(acc: Maybe<&2, List<&2, U32>>, mi: Mime, e: List<&2, U32>) -> Maybe<&2, List<&2, U32>>:
+  match acc:
+    case Some{n}:
+      Some{n}
+    case None{}:
+      mime.one(mi, e)
+
+def mime.go(ms: List<&2, Mime>, +e: List<&2, U32>, acc: Maybe<&2, List<&2, U32>>) -> Maybe<&2, List<&2, U32>>:
+  match ms:
+    case Nil{}:
+      acc
+    case Con{mi, t}:
+      mime.go(t, e, mime.keep(acc, mi, e))
+
+def ctype(e: List<&2, U32>) -> List<&2, U32>:
+  Maybe.default(&2, List<&2, U32>, mime.go(mimes(), e, None{}),
+    bytes("application/octet-stream"))
+
+# One piece of a reply: bytes as they are, or a page to read when the
+# reply is written. Fixed routes stay pure; only a file route puts IO
+# on the path, and only for its own request.
+type Seg is Data:
+  Raw{bs: List<&2, U32>}
+  Page{path: List<&2, U32>, ct: List<&2, U32>, head: Bool}
+
+def miss(head: Bool) -> List<&2, U32>:
+  match head:
+    case True{}:
+      head.of(resp.missing())
+    case False{}:
+      resp.missing()
+
+def page.name(root: List<&2, U32>, +ss: List<&2, List<&2, U32>>, head: Bool) -> Seg:
+  Page{cat(root, Con{47, join(ss)}), ctype(ext.go(last(ss, Nil{}), Nil{})), head}
+
+def page.of(root: List<&2, U32>, ss: List<&2, List<&2, U32>>, head: Bool) -> Seg:
+  match ss:
+    case Nil{}:
+      Page{cat(root, bytes("/index.html")), bytes("text/html; charset=utf-8"), head}
+    case Con{s, t}:
+      page.name(root, Con{s, t}, head)
+
+def page.pick(root: List<&2, U32>, may: Maybe<&2, List<&2, List<&2, U32>>>, head: Bool, ok: Bool) -> Seg:
+  match may ok:
+    case _ False{}:
+      Raw{miss(head)}
+    case None{} True{}:
+      Raw{miss(head)}
+    case Some{ss} True{}:
+      page.of(root, ss, head)
+
+# a file under the root, named by the request path: split, normalised,
+# and gated to printable ASCII. Percent escapes are not decoded, so an
+# escaped ".." is a name no file has rather than a climb.
+def page(root: List<&2, U32>, +path: List<&2, U32>, head: Bool) -> Seg:
+  page.pick(root, norm(segs(path)), head, clean(path))
+
+# Reading a page: open, size, read, close. A directory opens and then
+# refuses to be read, which is a miss. A file past the cap is refused
+# rather than loaded, until pages are written in pieces.
+def page.close(f: File, out: List<&2, U32>) -> IO(List<&2, U32>):
+  do IO<List<&2, U32>>:
+    u : Unit <- File.close(f)
+    return out
+
+def page.got(got: File & Result<&1, &1, U32 & String, List<&2, U32>>, ct: List<&2, U32>, n: U32) -> IO(List<&2, U32>):
+  (f, r) = got
+  match r:
+    case Fail{e}:
+      page.close(f, resp.missing())
+    case Done{bs}:
+      page.close(f, reply.n("200 OK", ct, n, bs))
+
+def page.peek(got: File & Result<&1, &1, U32 & String, List<&2, U32>>, ct: List<&2, U32>, n: U32) -> IO(List<&2, U32>):
+  (f, r) = got
+  match r:
+    case Fail{e}:
+      page.close(f, head.of(resp.missing()))
+    case Done{bs}:
+      page.close(f, reply.n.head("200 OK", ct, n))
+
+def page.cap() -> U32:
+  4194304
+
+def page.body(f: File, ct: List<&2, U32>, +n: U32, head: Bool, big: Bool) -> IO(List<&2, U32>):
+  match head big:
+    case True{} _:
+      do IO<List<&2, U32>>:
+        got : File & Result<&1, &1, U32 & String, List<&2, U32>> <- File.read_bytes(f, 1)
+        page.peek(got, ct, n)
+    case False{} True{}:
+      page.close(f, reply("500 Internal Server Error", "text/plain", bytes("file too large\n")))
+    case False{} False{}:
+      do IO<List<&2, U32>>:
+        got : File & Result<&1, &1, U32 & String, List<&2, U32>> <- File.read_bytes(f, n)
+        page.got(got, ct, n)
+
+def page.sized(got: File & Result<&1, &1, U32 & String, U32>, ct: List<&2, U32>, head: Bool) -> IO(List<&2, U32>):
+  (f, r) = got
+  match r:
+    case Fail{e}:
+      page.close(f, miss(head))
+    case Done{+n}:
+      page.body(f, ct, n, head, U32.is_lt(page.cap(), n))
+
+def page.opened(r: Result<&1, &1, U32 & String, File>, ct: List<&2, U32>, head: Bool) -> IO(List<&2, U32>):
+  match r:
+    case Fail{e}:
+      do IO<List<&2, U32>>:
+        return miss(head)
+    case Done{f}:
+      do IO<List<&2, U32>>:
+        got : File & Result<&1, &1, U32 & String, U32> <- File.size(f)
+        page.sized(got, ct, head)
+
+def page.read(path: List<&2, U32>, ct: List<&2, U32>, head: Bool) -> IO(List<&2, U32>):
+  do IO<List<&2, U32>>:
+    r : Result<&1, &1, U32 & String, File> <- File.open(text(path), "r")
+    page.opened(r, ct, head)
+
+# the bytes to write for one chunk's answers, in order: literal ones as
+# they are, pages read as they come up
+def flat.cat(a: List<&2, U32>, b: List<&2, U32>) -> List<&2, U32>:
+  match b:
+    case Nil{}:
+      a
+    case Con{h, t}:
+      cat(a, Con{h, t})
+
+def flat(xs: List<&2, Seg>) -> IO(List<&2, U32>):
+  match xs:
+    case Nil{}:
+      do IO<List<&2, U32>>:
+        return Nil{}
+    case Con{s, t}:
+      match s:
+        case Raw{bs}:
+          do IO<List<&2, U32>>:
+            rest : List<&2, U32> <- flat(t)
+            return flat.cat(bs, rest)
+        case Page{path, ct, head}:
+          do IO<List<&2, U32>>:
+            out  : List<&2, U32> <- page.read(path, ct, head)
+            rest : List<&2, U32> <- flat(t)
+            return flat.cat(out, rest)
+
+
 # What answering a chunk produced: the bytes to write, whether the peer
 # asked to close, and how many stream events to send afterwards (0 for
 # an ordinary reply).
 type Ans is Data:
-  Ans{out: List<&2, U32>, close: Bool, stream: U32}
+  Ans{out: List<&2, Seg>, close: Bool, stream: U32}
 
-def route.go(
-  path: List<&2, U32>, body: List<&2, U32>, health: Bool, echo: Bool, root: Bool
-) -> List<&2, U32>:
-  match health echo root:
-    case True{} _ _:
-      resp.health()
-    case _ True{} _:
-      reply("200 OK", "application/octet-stream", body)
-    case _ _ True{}:
-      resp.root()
-    case _ _ _:
-      resp.missing()
+# Serving
+# =======
 
-def route.ev(+path: List<&2, U32>, body: List<&2, U32>, ev: Bool) -> Ans:
-  match ev:
+# HEAD takes the head of what GET would have sent.
+def fixed(r: List<&2, U32>, head: Bool) -> List<&2, U32>:
+  match head:
     case True{}:
-      Ans{sse.head(), False{}, sse.count()}
+      head.of(r)
     case False{}:
-      Ans{route.go(path, body, beq(path, bytes("/health"), True{}),
-        beq(path, bytes("/echo"), True{}), beq(path, bytes("/"), True{})),
-        False{}, 0}
+      r
 
-def route(+path: List<&2, U32>, body: List<&2, U32>) -> Ans:
-  route.ev(path, body, beq(path, bytes("/events"), True{}))
+def act.run(+srv: Srv, a: Act, path: List<&2, U32>, body: List<&2, U32>, head: Bool) -> Ans:
+  match a:
+    case Health{}:
+      Ans{[Raw{fixed(resp.health(), head)}], False{}, 0}
+    case Root{}:
+      Ans{[Raw{fixed(resp.root(), head)}], False{}, 0}
+    case Echo{}:
+      Ans{[Raw{fixed(reply("200 OK", "application/octet-stream", body), head)}],
+        False{}, 0}
+    case Events{}:
+      Ans{[Raw{sse.head()}], False{}, sse.count()}
+    case Files{}:
+      Ans{[page(srv.root(srv), path, head)], False{}, 0}
+
+def serve.act(+srv: Srv, found: Maybe<&2, Act>, path: List<&2, U32>, body: List<&2, U32>, head: Bool) -> Ans:
+  match found:
+    case None{}:
+      Ans{[Raw{miss(head)}], False{}, 0}
+    case Some{a}:
+      act.run(srv, a, path, body, head)
 
 # A method this engine does not implement is refused before routing, so
 # no route ever sees one.
-def serve.go(path: List<&2, U32>, body: List<&2, U32>, ok: Bool) -> Ans:
+def serve.go(+srv: Srv, +path: List<&2, U32>, body: List<&2, U32>, ok: Bool, head: Bool) -> Ans:
   match ok:
     case True{}:
-      route(path, body)
+      serve.act(srv, route(srv.table(srv), path), path, body, head)
     case False{}:
-      Ans{resp.method(), False{}, 0}
+      Ans{[Raw{resp.method()}], False{}, 0}
 
-def serve(r: Req) -> Ans:
+def serve(+srv: Srv, r: Req) -> Ans:
   match r:
     case Req{+meth, path, body, close}:
-      serve.go(path, body,
-        U32.is_eq(meth, m.get()) || U32.is_eq(meth, m.head()))
+      serve.go(srv, path, body,
+        U32.is_eq(meth, m.get()) || U32.is_eq(meth, m.head()),
+        U32.is_eq(meth, m.head()))
 
-def answer.cat(one: List<&2, U32>, tail: List<&2, U32>, cl: Bool, st: U32) -> Ans:
+
+def answer.cat(one: List<&2, Seg>, tail: List<&2, Seg>, cl: Bool, st: U32) -> Ans:
   match tail:
     case Nil{}:
       Ans{one, cl, st}
     case Con{h, t}:
-      Ans{cat(one, Con{h, t}), cl, st}
+      Ans{List.append(&2, Seg, one, Con{h, t}), cl, st}
 
-def answer.rest(a: List<&2, U32>, c1: Bool, s1: U32, rest: Ans) -> Ans:
+def answer.rest(a: List<&2, Seg>, c1: Bool, s1: U32, rest: Ans) -> Ans:
   match rest:
     case Ans{b, c2, s2}:
       answer.cat(a, b, c1 || c2, U32.max(s1, s2))
@@ -604,12 +1286,12 @@ def answer.one(a: Ans, cl: Bool) -> Ans:
     case Ans{out, c, st}:
       Ans{out, c || cl, st}
 
-def answer(rs: List<&2, Req>, cl: Bool) -> Ans:
+def answer(+srv: Srv, rs: List<&2, Req>, cl: Bool) -> Ans:
   match rs:
     case Nil{}:
       Ans{Nil{}, cl, 0}
     case Con{+r, t}:
-      answer.go(answer.one(serve(r), req.close(r)), answer(t, cl))
+      answer.go(answer.one(serve(srv, r), req.close(r)), answer(srv, t, cl))
 
 # The server
 # ==========
@@ -618,13 +1300,13 @@ def answer(rs: List<&2, Req>, cl: Bool) -> Ans:
 # write them and close, write them and keep streaming without reading
 # again, or close now. Feed is the one that holds a connection open.
 type Plan is Data:
-  Go{out: List<&2, U32>, p2: P}
-  End{out: List<&2, U32>}
-  Feed{out: List<&2, U32>, n: U32}
+  Go{out: List<&2, Seg>, p2: P}
+  End{out: List<&2, Seg>}
+  Feed{out: List<&2, Seg>, n: U32}
   Stop{}
 
 def plan.pick(
-  out: List<&2, U32>, p2: P, plain: Bool, cl: Bool, st: U32
+  out: List<&2, Seg>, p2: P, plain: Bool, cl: Bool, st: U32
 ) -> Plan:
   match plain cl:
     case False{} _:
@@ -639,61 +1321,61 @@ def plan.ans(a: Ans, p2: P) -> Plan:
     case Ans{out, cl, +st}:
       plan.pick(out, p2, U32.is_zero(st), cl, st)
 
-def plan.take(pr: P & List<&2, Req>) -> Plan:
+def plan.take(+srv: Srv, pr: P & List<&2, Req>) -> Plan:
   (p2, rs) = pr
-  plan.ans(answer(rs, False{}), p2)
+  plan.ans(answer(srv, rs, False{}), p2)
 
-def plan.go(q: P, bad: Bool) -> Plan:
+def plan.go(+srv: Srv, q: P, bad: Bool) -> Plan:
   match bad:
     case True{}:
-      End{resp.bad()}
+      End{[Raw{resp.bad()}]}
     case False{}:
-      plan.take(p.take(q))
+      plan.take(srv, p.take(q))
 
-def plan.on(pb: P & Bool) -> Plan:
+def plan.on(+srv: Srv, pb: P & Bool) -> Plan:
   (q, bad) = pb
-  plan.go(q, bad)
+  plan.go(srv, q, bad)
 
 # the plan after one chunk: parse it, then decide
 # An empty chunk is the peer's FIN: nothing more will ever arrive, so
 # the connection ends here rather than reading again. As first written
 # the engine read again, and one peer that connected and closed without
 # a byte cost most of a core in passes until the fuel ran out.
-def plan.chunk(buf: List<&2, U32>, p: P) -> Plan:
+def plan.chunk(+srv: Srv, buf: List<&2, U32>, p: P) -> Plan:
   match buf:
     case Nil{}:
       Stop{}
     case Con{b, bs}:
-      plan.on(p.dead(feed(Con{b, bs}, p)))
+      plan.on(srv, p.dead(feed(Con{b, bs}, p)))
 
 def plan.read(
-  s: Socket, r: Result<&1, &1, U32 & String, List<&2, U32>>, p: P
+  +srv: Srv, s: Socket, r: Result<&1, &1, U32 & String, List<&2, U32>>, p: P
 ) -> Socket & Plan:
   match r:
     case Done{buf}:
-      (s, plan.chunk(buf, p))
+      (s, plan.chunk(srv, buf, p))
     case Fail{e}:
       (s, Stop{})
 
 # the socket and the plan, out of one recv
 def plan.recv(
-  m: Socket & Result<&1, &1, U32 & String, List<&2, U32>>, p: P
+  +srv: Srv, m: Socket & Result<&1, &1, U32 & String, List<&2, U32>>, p: P
 ) -> Socket & Plan:
   (s, r) = m
-  plan.read(s, r, p)
+  plan.read(srv, s, r, p)
 
 def chunk() -> U32:
   16384
 
 # read the next chunk and plan from it. Splitting the send's socket out
 # here is what lets the connection loop below be one self-recursive def.
-def turn(sent: Socket & Result<&1, &1, U32 & String, Unit>, p: P) ->
+def turn(+srv: Srv, sent: Socket & Result<&1, &1, U32 & String, Unit>, p: P) ->
   IO(Socket & Plan):
   (s, r) = sent
   do IO<Socket & Plan>:
     m : Socket & Result<&1, &1, U32 & String, List<&2, U32>> <-
       TCP.recv_bytes(s, chunk())
-    return plan.recv(m, p)
+    return plan.recv(srv, m, p)
 
 # the next event, or the end of the stream. A stream terminates because
 # the count runs out, the same way a connection does: no @unsafe, and a
@@ -703,7 +1385,7 @@ def plan.more(s: Socket, +n: U32, done: Bool) -> Socket & Plan:
     case True{}:
       (s, Stop{})
     case False{}:
-      (s, Feed{sse.event(n), (n - 1 : U32)})
+      (s, Feed{[Raw{sse.event(n)}], (n - 1 : U32)})
 
 def plan.next(
   s: Socket, r: Result<&1, &1, U32 & String, Unit>, +n: U32
@@ -731,7 +1413,7 @@ def shut(m: Socket & Result<&1, &1, U32 & String, Unit>) -> IO(Unit):
 # One connection. fuel is the most chunks it will ever read, so the
 # loop terminates by Bend's own rule rather than by @unsafe: a peer
 # that dribbles bytes forever runs the fuel out and is dropped.
-def conn(f: Nat, sp: Socket & Plan) -> IO(Unit):
+def conn(f: Nat, +srv: Srv, sp: Socket & Plan) -> IO(Unit):
   match f:
     case 0n:
       (s, pl) = sp
@@ -743,21 +1425,24 @@ def conn(f: Nat, sp: Socket & Plan) -> IO(Unit):
           Socket.close(s)
         case End{out}:
           do IO<Unit>:
-            m : Socket & Result<&1, &1, U32 & String, Unit> <-
-              TCP.send_bytes(s, out)
+            bs : List<&2, U32> <- flat(out)
+            m  : Socket & Result<&1, &1, U32 & String, Unit> <-
+              TCP.send_bytes(s, bs)
             shut(m)
         case Feed{out, n}:
           do IO<Unit>:
+            bs  : List<&2, U32> <- flat(out)
             m   : Socket & Result<&1, &1, U32 & String, Unit> <-
-              TCP.send_bytes(s, out)
+              TCP.send_bytes(s, bs)
             sp2 : Socket & Plan <- tick(m, n)
-            conn(g, sp2)
+            conn(g, srv, sp2)
         case Go{out, p2}:
           do IO<Unit>:
+            bs  : List<&2, U32> <- flat(out)
             m   : Socket & Result<&1, &1, U32 & String, Unit> <-
-              TCP.send_bytes(s, out)
-            sp2 : Socket & Plan <- turn(m, p2)
-            conn(g, sp2)
+              TCP.send_bytes(s, bs)
+            sp2 : Socket & Plan <- turn(srv, m, p2)
+            conn(g, srv, sp2)
 
 # the most chunks one connection may ever ask for. It is a real bound,
 # not a formality: it is what stops a peer from holding a computation
@@ -765,34 +1450,41 @@ def conn(f: Nat, sp: Socket & Plan) -> IO(Unit):
 def conn.fuel() -> Nat:
   U32.to_nat(1048576)
 
-def start(s: Socket) -> IO(Unit):
+def start(+srv: Srv, s: Socket) -> IO(Unit):
   do IO<Unit>:
     m : Socket & Result<&1, &1, U32 & String, List<&2, U32>> <-
       TCP.recv_bytes(s, chunk())
-    conn(conn.fuel(), plan.recv(m, p.new()))
+    conn(conn.fuel(), srv, plan.recv(srv, m, p.new()))
 
-def accept.one(m: Listener & Result<&1, &1, U32 & String, Socket>) ->
+def accept.one(+srv: Srv, m: Listener & Result<&1, &1, U32 & String, Socket>) ->
   IO(Listener):
   (l, r) = m
   do IO<Listener>:
     s : Socket <- IO.pass(Socket, r)
-    IO.spawn(Unit, start(s))
+    IO.spawn(Unit, start(srv, s))
     return l
 
 # The accept loop is the one place that runs until the process is
 # killed, so it is the one @unsafe def in the engine.
 @unsafe
-def accept(l: Listener) -> IO(Unit):
+def accept(+srv: Srv, l: Listener) -> IO(Unit):
   do IO<Unit>:
     m  : Listener & Result<&1, &1, U32 & String, Socket> <- TCP.accept(l)
-    l2 : Listener <- accept.one(m)
-    accept(l2)
+    l2 : Listener <- accept.one(srv, m)
+    accept(srv, l2)
 
-def port() -> U32:
-  8080
+def banner(+c: Cfg) -> String:
+  String.append("bend-http on http://127.0.0.1:", U32.show(cfg.port(c)))
 
+def run(+c: Cfg) -> IO(Unit):
+  do IO<Unit>:
+    l : Listener <- IO.try(Listener, TCP.listen(cfg.port(c)))
+    IO.print(banner(c))
+    accept(srv.new(c), l)
+
+# bend-http [--port N] [--root DIR] [--log]
 def main() -> IO(Unit):
   do IO<Unit>:
-    l : Listener <- IO.try(Listener, TCP.listen(port()))
-    IO.print("bend-http on http://127.0.0.1:8080")
-    accept(l)
+    xs : List<String> <- IO.args()
+    c  : Cfg <- args.done(args.read(xs, Args{cfg.new(), Flag{}}))
+    run(c)

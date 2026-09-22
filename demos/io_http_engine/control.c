@@ -54,14 +54,16 @@ static uint32_t lower(uint32_t c) { return c >= 65 && c <= 90 ? c + 32 : c; }
 static void put(Conn* k, const char* s, int n) {
   if (k->outn + n <= (int)sizeof(k->out)) { memcpy(k->out + k->outn, s, n); k->outn += n; }
 }
+// HEAD gets GET's head and no body; the 405 names the methods that work
 static void reply(Conn* k, const char* status, const char* ctype,
                   const char* body, int bn) {
   char h[256];
   int n = snprintf(h, sizeof(h),
-    "HTTP/1.1 %s\r\ncontent-type: %s\r\ncontent-length: %d"
-    "\r\nconnection: keep-alive\r\n\r\n", status, ctype, bn);
+    "HTTP/1.1 %s\r\ncontent-type: %s\r\ncontent-length: %d%s"
+    "\r\nconnection: keep-alive\r\n\r\n", status, ctype, bn,
+    status[0] == '4' && status[1] == '0' && status[2] == '5' ? "\r\nallow: GET, HEAD" : "");
   put(k, h, n);
-  put(k, body, bn);
+  if (k->meth != M_HEAD) put(k, body, bn);
 }
 
 // the same routes as main.bend, in the same order

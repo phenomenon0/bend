@@ -42,3 +42,54 @@ def Laws.method_is_built():
 
 def Laws.bad_is_built():
   {==}
+
+def Laws.head_of_health():
+  {==}
+
+def Laws.head_of_missing():
+  {==}
+
+def Laws.route_health():
+  {==}
+
+def Laws.route_root():
+  {==}
+
+def Laws.route_echo():
+  {==}
+
+def Laws.route_events():
+  {==}
+
+def Laws.route_missing():
+  {==}
+
+def Laws.route_files():
+  {==}
+
+def Laws.route_files_index():
+  {==}
+
+def Laws.route_files_fixed():
+  {==}
+
+def Laws.routes_distinct():
+  {==}
+
+def Laws.routes_distinct_root():
+  {==}
+
+def Laws.route_empty(path):
+  {==}
+
+def Laws.norm_climb():
+  {==}
+
+def Laws.norm_deep_climb():
+  {==}
+
+def Laws.norm_dots():
+  {==}
+
+def Laws.norm_flat():
+  {==}

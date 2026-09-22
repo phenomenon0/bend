@@ -60,10 +60,92 @@ law missing_is_built:
 
 law method_is_built:
   {Eng.resp.method() ==
-    Eng.reply("405 Method Not Allowed", "text/plain", Eng.bytes("no method\n")) :
+    Eng.reply.allow("405 Method Not Allowed", "text/plain", Eng.bytes("no method\n")) :
     List<&2, U32>}
 
 law bad_is_built:
   {Eng.resp.bad() ==
     Eng.reply("400 Bad Request", "text/plain", Eng.bytes("bad request\n")) :
     List<&2, U32>}
+
+# LAW: HEAD is GET's head. The scanner that cuts a reply at its blank
+# line and the builder that writes a head from a length agree, byte for
+# byte, on the replies the engine keeps ready.
+law head_of_health:
+  {Eng.head.of(Eng.resp.health()) ==
+    Eng.reply.n.head("200 OK", Eng.bytes("application/json"), 11) :
+    List<&2, U32>}
+
+law head_of_missing:
+  {Eng.head.of(Eng.resp.missing()) ==
+    Eng.reply.n.head("404 Not Found", Eng.bytes("text/plain"), 9) :
+    List<&2, U32>}
+
+# LAW: the default table answers what the engine has always answered;
+# with a root, the fixed routes still win and everything else is a file
+# under it, "/" included.
+law route_health:
+  {Eng.route(Eng.routes(Eng.cfg.new()), Eng.bytes("/health")) ==
+    Some{Eng.Health{}} : Maybe<&2, Eng.Act>}
+
+law route_root:
+  {Eng.route(Eng.routes(Eng.cfg.new()), Eng.bytes("/")) ==
+    Some{Eng.Root{}} : Maybe<&2, Eng.Act>}
+
+law route_echo:
+  {Eng.route(Eng.routes(Eng.cfg.new()), Eng.bytes("/echo")) ==
+    Some{Eng.Echo{}} : Maybe<&2, Eng.Act>}
+
+law route_events:
+  {Eng.route(Eng.routes(Eng.cfg.new()), Eng.bytes("/events")) ==
+    Some{Eng.Events{}} : Maybe<&2, Eng.Act>}
+
+law route_missing:
+  {Eng.route(Eng.routes(Eng.cfg.new()), Eng.bytes("/nope")) ==
+    None{} : Maybe<&2, Eng.Act>}
+
+law route_files:
+  {Eng.route(Eng.routes(Eng.cfg.set_root(Eng.cfg.new(), Eng.bytes("www"))),
+    Eng.bytes("/css/site.css")) == Some{Eng.Files{}} : Maybe<&2, Eng.Act>}
+
+law route_files_index:
+  {Eng.route(Eng.routes(Eng.cfg.set_root(Eng.cfg.new(), Eng.bytes("www"))),
+    Eng.bytes("/")) == Some{Eng.Files{}} : Maybe<&2, Eng.Act>}
+
+law route_files_fixed:
+  {Eng.route(Eng.routes(Eng.cfg.set_root(Eng.cfg.new(), Eng.bytes("www"))),
+    Eng.bytes("/health")) == Some{Eng.Health{}} : Maybe<&2, Eng.Act>}
+
+# LAW: no two entries of either table claim one path.
+law routes_distinct:
+  {Eng.distinct(Eng.routes(Eng.cfg.new())) == True{} : Bool}
+
+law routes_distinct_root:
+  {Eng.distinct(Eng.routes(Eng.cfg.set_root(Eng.cfg.new(), Eng.bytes("www")))) ==
+    True{} : Bool}
+
+# LAW: an empty table routes nothing, whatever is asked.
+law route_empty:
+  for +path: List<&2, U32>
+  {Eng.route(Nil{}, path) == None{} : Maybe<&2, Eng.Act>}
+
+# LAW: a request cannot name a file outside the root. These pin the
+# normaliser on the paths that matter, including the one that climbs
+# from under a real directory; they are pins, not a proof over every
+# path -- that proof needs a lemma over classified segments and is the
+# next one to write.
+law norm_climb:
+  {Eng.norm(Eng.segs(Eng.bytes("/../etc/passwd"))) == None{} :
+    Maybe<&2, List<&2, List<&2, U32>>>}
+
+law norm_deep_climb:
+  {Eng.norm(Eng.segs(Eng.bytes("/a/b/../../../x"))) == None{} :
+    Maybe<&2, List<&2, List<&2, U32>>>}
+
+law norm_dots:
+  {Eng.norm(Eng.segs(Eng.bytes("/a/./b/../c/"))) ==
+    Some{[Eng.bytes("a"), Eng.bytes("c")]} : Maybe<&2, List<&2, List<&2, U32>>>}
+
+law norm_flat:
+  {Eng.norm(Eng.segs(Eng.bytes("/sub/../a.txt"))) ==
+    Some{[Eng.bytes("a.txt")]} : Maybe<&2, List<&2, List<&2, U32>>>}

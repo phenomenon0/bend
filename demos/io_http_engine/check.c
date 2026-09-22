@@ -4,7 +4,7 @@
 // sentence in a README. Given the server's pid, the last case also
 // reads its CPU.
 //
-//   cc -std=c11 -O3 check.c -o check && ./check 8080 [pid]
+//   cc -std=c11 -O3 check.c -o check && ./check 8080 [pid] [--files]
 #define _GNU_SOURCE
 #include <netinet/in.h>
 #include <netinet/tcp.h>
@@ -94,12 +94,15 @@ int main(int argc, char** argv) {
   if (argc > 1) PORT = atoi(argv[1]);
   static char b[262144];
   int n;
+  // under --root, "/" is index.html rather than the banner
+  int files = argc > 3 && strcmp(argv[3], "--files") == 0;
+  const char* root_body = files ? "<h1>hi</h1>" : "bend-http";
 
   n = one(TEXT("GET /health HTTP/1.1\r\nHost: x\r\n\r\n"), b, sizeof(b), 106);
   check("GET /health", has(b, n, "200 OK") && has(b, n, "{\"ok\":true}"), b, n);
 
-  n = one(TEXT("GET / HTTP/1.1\r\nHost: x\r\n\r\n"), b, sizeof(b), 98);
-  check("GET / root", has(b, n, "200 OK") && has(b, n, "bend-http"), b, n);
+  n = one(TEXT("GET / HTTP/1.1\r\nHost: x\r\n\r\n"), b, sizeof(b), 0);
+  check("GET / root", has(b, n, "200 OK") && has(b, n, root_body), b, n);
 
   n = one(TEXT("GET /nope HTTP/1.1\r\nHost: x\r\n\r\n"), b, sizeof(b), 96);
   check("unknown route is 404", has(b, n, "404 Not Found"), b, n);
@@ -116,7 +119,7 @@ int main(int argc, char** argv) {
   n = one(TEXT("GET /health HTTP/1.1\r\nHost: x\r\n\r\nGET / HTTP/1.1\r\nHost: x\r\n\r\n"),
     b, sizeof(b), 204);
   check("two pipelined requests, two replies",
-    has(b, n, "{\"ok\":true}") && has(b, n, "bend-http"), b, n);
+    has(b, n, "{\"ok\":true}") && has(b, n, root_body), b, n);
 
   n = one(TEXT("GET /echo HTTP/1.1\r\nHOST: x\r\nCoNtEnT-LeNgTh: 3\r\n\r\nabc"),
     b, sizeof(b), 108);
@@ -162,6 +165,57 @@ int main(int argc, char** argv) {
     if (ok) for (int i = 0; i < 256; i++)
       ok = ok && (uint8_t)body[4 + i] == (uint8_t)i;
     check("all 256 byte values survive a body round trip", ok, b, n);
+  }
+
+  n = one(TEXT("HEAD /health HTTP/1.1\r\nHost: x\r\n\r\n"), b, sizeof(b), 0);
+  check("HEAD is GET's head and no body",
+    has(b, n, "content-length: 11") && memmem(b, (size_t)n, "\r\n\r\n", 4) != NULL
+    && n == (int)(memmem(b, (size_t)n, "\r\n\r\n", 4) - (void*)b) + 4, b, n);
+
+  n = one(TEXT("POST /health HTTP/1.1\r\nHost: x\r\n\r\n"), b, sizeof(b), 0);
+  check("405 names the methods that work", has(b, n, "allow: GET, HEAD"), b, n);
+
+  // Static files, when the server was started with --root on the
+  // fixture directory the harness writes: index.html "<h1>hi</h1>\n",
+  // a.txt "alpha\n", img.png the 256 byte values, sub/b.css "b{}\n".
+  if (files) {
+    n = one(TEXT("GET /a.txt HTTP/1.1\r\nHost: x\r\n\r\n"), b, sizeof(b), 0);
+    check("a file is served with its type",
+      has(b, n, "200 OK") && has(b, n, "text/plain") && has(b, n, "alpha\n"), b, n);
+
+    n = one(TEXT("HEAD /a.txt HTTP/1.1\r\nHost: x\r\n\r\n"), b, sizeof(b), 0);
+    check("HEAD of a file is its head",
+      has(b, n, "content-length: 6") && !has(b, n, "alpha"), b, n);
+
+    n = one(TEXT("GET / HTTP/1.1\r\nHost: x\r\n\r\n"), b, sizeof(b), 0);
+    check("/ is index.html under a root",
+      has(b, n, "text/html") && has(b, n, "<h1>hi</h1>"), b, n);
+
+    n = one(TEXT("GET /sub/b.css HTTP/1.1\r\nHost: x\r\n\r\n"), b, sizeof(b), 0);
+    check("a nested file, typed by extension",
+      has(b, n, "text/css") && has(b, n, "b{}"), b, n);
+
+    n = one(TEXT("GET /img.png HTTP/1.1\r\nHost: x\r\n\r\n"), b, sizeof(b), 0);
+    {
+      char* body = memmem(b, (size_t)n, "\r\n\r\n", 4);
+      int   ok   = body != NULL && has(b, n, "image/png")
+        && (n - (int)(body + 4 - b)) == 256;
+      if (ok) for (int i = 0; i < 256; i++) ok = ok && (uint8_t)body[4 + i] == (uint8_t)i;
+      check("a binary file arrives byte for byte", ok, b, n);
+    }
+
+    n = one(TEXT("GET /nope.txt HTTP/1.1\r\nHost: x\r\n\r\n"), b, sizeof(b), 0);
+    check("a missing file is 404", has(b, n, "404 Not Found"), b, n);
+
+    n = one(TEXT("GET /../etc/passwd HTTP/1.1\r\nHost: x\r\n\r\n"), b, sizeof(b), 0);
+    check("a climb out of the root is refused", has(b, n, "404 Not Found"), b, n);
+
+    n = one(TEXT("GET /sub/../a.txt HTTP/1.1\r\nHost: x\r\n\r\n"), b, sizeof(b), 0);
+    check("a climb that stays under the root resolves",
+      has(b, n, "200 OK") && has(b, n, "alpha\n"), b, n);
+
+    n = one(TEXT("GET /sub HTTP/1.1\r\nHost: x\r\n\r\n"), b, sizeof(b), 0);
+    check("a directory is not a file", has(b, n, "404 Not Found"), b, n);
   }
 
   // A peer that connects and closes without sending a byte. The engine
