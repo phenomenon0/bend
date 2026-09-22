@@ -647,6 +647,30 @@ law ws_reserved_is_bad_buf:
   {Ws.dead(Ws.feed_buf(Bytes.from_list([193]), Ws.new())) ==
     (Ws.W{Ws.Bad{}, Nil{}}, True{}) : Ws.W & Bool}
 
+# LAW: a control frame announcing more than 125 bytes is refused at its
+# length byte (a ping with the 126 marker), and a length in more bytes
+# than it needed is refused at its last byte: 125 in the two-byte form,
+# 65535 in the eight-byte one. The least lengths each form may carry
+# are read.
+law ws_control_long_is_bad:
+  {Ws.dead(Ws.feed([137, 254], Ws.new())) ==
+    (Ws.W{Ws.Bad{}, Nil{}}, True{}) : Ws.W & Bool}
+
+law ws_short_126_is_bad:
+  {Ws.dead(Ws.feed([130, 254, 0, 125], Ws.new())) ==
+    (Ws.W{Ws.Bad{}, Nil{}}, True{}) : Ws.W & Bool}
+
+law ws_short_127_is_bad:
+  {Ws.dead(Ws.feed([130, 255, 0, 0, 0, 0, 0, 0, 255, 255], Ws.new())) ==
+    (Ws.W{Ws.Bad{}, Nil{}}, True{}) : Ws.W & Bool}
+
+law ws_len_126_least:
+  {Ws.feed([130, 254, 0, 126], Ws.new()) == Ws.W{Ws.Msk{2, 126, 4, 0}, Nil{}} : Ws.W}
+
+law ws_len_127_least:
+  {Ws.feed([130, 255, 0, 0, 0, 0, 0, 1, 0, 0], Ws.new()) ==
+    Ws.W{Ws.Msk{2, 65536, 4, 0}, Nil{}} : Ws.W}
+
 # LAW: what the server writes, one block: a short frame, the two-byte
 # length past 125, a close code.
 law ws_frame_short:
@@ -657,6 +681,184 @@ law ws_len_two_bytes:
 
 law ws_close_code:
   {Ws.close.frame(1002) == Bytes.from_list([136, 2, 3, 234]) : Bytes()}
+
+# The close codes a peer may send, stated here on their own: 1000-1003,
+# 1007-1014, 3000-4999.
+def ws_code_ok(+c: U32) -> Bool:
+  (U32.is_le(1000, c) && U32.is_le(c, 1003)) || (U32.is_le(1007, c) && U32.is_le(c, 1014))
+    || (U32.is_le(3000, c) && U32.is_le(c, 4999))
+
+def ws_code_by(ref: Bool, +c: U32) -> Bool:
+  match ref:
+    case True{}:
+      ws_code_ok(c)
+    case False{}:
+      Ws.close.code.ok(c)
+
+def ws_codes(+ref: Bool, cs: List<&2, U32>) -> List<&2, Bool>:
+  match cs:
+    case Nil{}:
+      Nil{}
+    case Con{+c, t}:
+      Con{ws_code_by(ref, c), ws_codes(ref, t)}
+
+# every edge of the rule, and what it says of each
+def ws_code_edges() -> List<&2, U32>:
+  [0, 999, 1000, 1003, 1004, 1005, 1006, 1007, 1011, 1014, 1015, 1016, 2999, 3000,
+   4999, 5000, 65535]
+
+def ws_code_want() -> List<&2, Bool>:
+  [False{}, False{}, True{}, True{}, False{}, False{}, False{}, True{}, True{}, True{},
+   False{}, False{}, False{}, True{}, True{}, False{}, False{}]
+
+# LAW: the engine's close codes and the rule above say the same of every
+# edge of it.
+law ws_close_codes:
+  {ws_codes(False{}, ws_code_edges()) == ws_code_want() : List<&2, Bool>}
+
+law ws_close_codes_rule:
+  {ws_codes(True{}, ws_code_edges()) == ws_code_want() : List<&2, Bool>}
+
+# LAW: a close is answered with its code when a peer may send it, with
+# 1002 when not (1005, which is never sent) or when the payload is one
+# byte, and with 1007 when its reason is not UTF-8; a close ends the
+# connection either way.
+law ws_close_echo:
+  {Ws.reply([Ws.Frm{8, Bytes.from_list([3, 232, 111, 107])}], False{}) ==
+    Ws.Rep{Ws.frame(8, Bytes.from_list([3, 232])), True{}} : Ws.Rep}
+
+law ws_close_reserved:
+  {Ws.reply([Ws.Frm{8, Bytes.from_list([3, 237])}], False{}) ==
+    Ws.Rep{Ws.close.frame(1002), True{}} : Ws.Rep}
+
+law ws_close_one_byte:
+  {Ws.reply([Ws.Frm{8, Bytes.from_list([3])}], False{}) ==
+    Ws.Rep{Ws.close.frame(1002), True{}} : Ws.Rep}
+
+law ws_close_bad_reason:
+  {Ws.reply([Ws.Frm{8, Bytes.from_list([3, 232, 255])}], False{}) ==
+    Ws.Rep{Ws.close.frame(1007), True{}} : Ws.Rep}
+
+# LAW: a text frame that is not UTF-8 is answered with 1007 and ends the
+# connection, after the frames before it and with nothing after; binary
+# is not read as text.
+law ws_text_bad:
+  {Ws.reply([Ws.Frm{1, "a"}, Ws.Frm{1, Bytes.from_list([192, 175])}, Ws.Frm{1, "b"}],
+    False{}) ==
+    Ws.Rep{Bytes.append(Ws.frame(1, "a"), Ws.close.frame(1007)), True{}} : Ws.Rep}
+
+law ws_binary_any:
+  {Ws.reply([Ws.Frm{2, Bytes.from_list([192, 175])}], False{}) ==
+    Ws.Rep{Ws.frame(2, Bytes.from_list([192, 175])), False{}} : Ws.Rep}
+
+# A reference for UTF-8, written the other way round from ws.bend's:
+# decode each character, then ask whether it is a scalar value (at most
+# 10FFFF, no surrogate) its length was needed for. need bytes to go, cp
+# the value so far, min the least value that many bytes may carry.
+def u8_lead_ok(+b: U32) -> Bool:
+  U32.is_lt(b, 128) || (U32.is_le(192, b) && U32.is_le(b, 247))
+
+def u8_len(one: Bool, two: Bool, three: Bool) -> Nat:
+  match one two three:
+    case True{} _ _:
+      0n
+    case False{} True{} _:
+      1n
+    case False{} False{} True{}:
+      2n
+    case False{} False{} False{}:
+      3n
+
+def u8_lead_n(+b: U32) -> Nat:
+  u8_len(U32.is_lt(b, 128), U32.is_lt(b, 224), U32.is_lt(b, 240))
+
+def u8_bits(+b: U32, n: Nat) -> U32:
+  match n:
+    case 0n:
+      b
+    case 1n:
+      U32.and(b, 31)
+    case 2n:
+      U32.and(b, 15)
+    case 1n+1n+1n+p:
+      U32.and(b, 7)
+
+def u8_lead_bits(+b: U32) -> U32:
+  u8_bits(b, u8_lead_n(b))
+
+def u8_min(n: Nat) -> U32:
+  match n:
+    case 0n:
+      0
+    case 1n:
+      128
+    case 2n:
+      2048
+    case 1n+1n+1n+p:
+      65536
+
+def u8_lead_min(+b: U32) -> U32:
+  u8_min(u8_lead_n(b))
+
+def u8_scalar(+cp: U32, +min: U32) -> Bool:
+  U32.is_le(min, cp) && U32.is_le(cp, 1114111)
+    && Bool.not(U32.is_le(55296, cp) && U32.is_le(cp, 57343))
+
+def u8_done(n: Nat, +cp: U32, +min: U32) -> Bool:
+  match n:
+    case 0n:
+      u8_scalar(cp, min)
+    case 1n+p:
+      True{}
+
+def u8_ref(xs: List<&2, U32>, +need: Nat, +cp: U32, +min: U32) -> Bool:
+  match xs need:
+    case Nil{} 0n:
+      True{}
+    case Nil{} 1n+p:
+      False{}
+    case Con{+b, t} 0n:
+      u8_lead_ok(b) && u8_ref(t, u8_lead_n(b), u8_lead_bits(b), u8_lead_min(b))
+    case Con{+b, t} 1n+p:
+      +cp2 = ((cp * 64 : U32) + U32.and(b, 63) : U32)
+      U32.is_eq(U32.and(b, 192), 128) && u8_done(p, cp2, min) && u8_ref(t, p, cp2, min)
+
+def u8_by(ref: Bool, v: List<&2, U32>) -> Bool:
+  match ref:
+    case True{}:
+      u8_ref(v, 0n, 0, 0)
+    case False{}:
+      Ws.utf8(Bytes.from_list(v))
+
+def u8_all(+ref: Bool, vs: List<&2, List<&2, U32>>) -> List<&2, Bool>:
+  match vs:
+    case Nil{}:
+      Nil{}
+    case Con{v, t}:
+      Con{u8_by(ref, v), u8_all(ref, t)}
+
+# the empty text, ASCII, Greek, an emoji, U+FFFF, U+10FFFF and a euro
+# sign between letters are UTF-8; overlong forms in two, three and four
+# bytes, a surrogate, a code point past 10FFFF, a character cut short, a
+# lone continuation byte, FF, and a stray continuation after a character
+# are not
+def u8_vecs() -> List<&2, List<&2, U32>>:
+  [[], [104, 105], [206, 186, 225, 189, 185, 207, 131, 206, 188, 206, 181],
+   [240, 159, 152, 128], [239, 191, 191], [244, 143, 191, 191], [104, 226, 130, 172, 105],
+   [192, 175], [224, 128, 175], [240, 128, 128, 175], [237, 160, 128],
+   [244, 144, 128, 128], [226, 130], [128], [255], [206, 186, 128]]
+
+def u8_want() -> List<&2, Bool>:
+  [True{}, True{}, True{}, True{}, True{}, True{}, True{},
+   False{}, False{}, False{}, False{}, False{}, False{}, False{}, False{}, False{}]
+
+# LAW: the validator and the reference say the same of every vector, and
+# it is what the vectors are.
+law ws_utf8_vectors:
+  {u8_all(False{}, u8_vecs()) == u8_want() : List<&2, Bool>}
+
+law ws_utf8_reference:
+  {u8_all(True{}, u8_vecs()) == u8_want() : List<&2, Bool>}
 
 # LAW: the batch budget. After a reply of any size joins the batch of
 # pages being written, what stays waiting is below send.cap(): a batch

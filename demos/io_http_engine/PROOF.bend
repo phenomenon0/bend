@@ -749,6 +749,21 @@ def Laws.ws_fragment_is_bad_buf():
 def Laws.ws_reserved_is_bad_buf():
   {==}
 
+def Laws.ws_control_long_is_bad():
+  {==}
+
+def Laws.ws_short_126_is_bad():
+  {==}
+
+def Laws.ws_short_127_is_bad():
+  {==}
+
+def Laws.ws_len_126_least():
+  {==}
+
+def Laws.ws_len_127_least():
+  {==}
+
 def Laws.ws_frame_short():
   {==}
 
@@ -756,6 +771,36 @@ def Laws.ws_len_two_bytes():
   {==}
 
 def Laws.ws_close_code():
+  {==}
+
+def Laws.ws_close_codes_rule():
+  {==}
+
+def Laws.ws_close_codes():
+  {==}
+
+def Laws.ws_close_echo():
+  {==}
+
+def Laws.ws_close_reserved():
+  {==}
+
+def Laws.ws_close_one_byte():
+  {==}
+
+def Laws.ws_close_bad_reason():
+  {==}
+
+def Laws.ws_text_bad():
+  {==}
+
+def Laws.ws_binary_any():
+  {==}
+
+def Laws.ws_utf8_reference():
+  {==}
+
+def Laws.ws_utf8_vectors():
   {==}
 
 # batch_under: the comparison is generalised with its equation. Below

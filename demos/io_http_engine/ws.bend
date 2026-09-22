@@ -39,7 +39,8 @@ type Frm is Data:
 
 # Op   the first byte: FIN, reserved bits, opcode
 # Len  the second: the mask bit and the length, or how long the length is
-# Ext  the extended length, need bytes to go, len so far
+# Ext  the extended length, need bytes to go, len so far, and the least
+#      length its form may carry (126 or 65536): a shorter one is refused
 # Msk  the mask, need bytes to go, the bytes so far big-endian in a word
 # Pay  the payload, rem bytes to go, the mask turned so its top byte is
 #      the next key, the bytes unmasked so far (reversed)
@@ -47,7 +48,7 @@ type Frm is Data:
 type Fs is Data:
   Op{}
   Len{op: U32}
-  Ext{op: U32, need: U32, len: U32}
+  Ext{op: U32, need: U32, len: U32, min: U32}
   Msk{op: U32, len: U32, need: U32, m: U32}
   Pay{op: U32, rem: U32, m: U32, acc: Bytes()}
   Bad{}
@@ -83,43 +84,54 @@ def step.op(+b: U32) -> Fs:
     && U32.is_zero(U32.and(b, 112)) && known(U32.and(b, 15)))
 
 # the second byte: the mask bit is required; the low seven bits are the
-# length, or 126 for two more bytes of it, or 127 for eight
+# length, or 126 for two more bytes of it, or 127 for eight. A control
+# frame (opcode 8 and up) carries at most 125, so either marker on one
+# is refused here.
 def step.len.on(op: U32, n: U32, two: Bool, eight: Bool) -> Fs:
   match two eight:
     case True{} _:
-      Ext{op, 2, 0}
+      Ext{op, 2, 0, 126}
     case False{} True{}:
-      Ext{op, 8, 0}
+      Ext{op, 8, 0, 65536}
     case False{} False{}:
       Msk{op, n, 4, 0}
 
-def step.len.go(op: U32, +n: U32, masked: Bool) -> Fs:
-  match masked:
-    case False{}:
+def step.len.go(op: U32, +n: U32, masked: Bool, long_ctl: Bool) -> Fs:
+  match masked long_ctl:
+    case False{} _:
       Bad{}
-    case True{}:
+    case True{} True{}:
+      Bad{}
+    case True{} False{}:
       step.len.on(op, n, U32.is_eq(n, 126), U32.is_eq(n, 127))
 
-def step.len(op: U32, +b: U32) -> Fs:
-  step.len.go(op, U32.and(b, 127), U32.is_eq(U32.and(b, 128), 128))
+def step.len(+op: U32, +b: U32) -> Fs:
+  step.len.go(op, U32.and(b, 127), U32.is_eq(U32.and(b, 128), 128),
+    U32.is_le(8, op) && U32.is_lt(125, U32.and(b, 127)))
 
 # the extended length, big-endian; a length past the cap is refused as
 # soon as it shows, which is before any byte of an eight-byte length
-# could wrap
-def step.ext.go(op: U32, left: U32, len2: U32, big: Bool, done: Bool) -> Fs:
-  match big done:
-    case True{} _:
+# could wrap, and a length its form did not need is refused at its last
+# byte (RFC 6455 5.2: the minimal number of bytes)
+def step.ext.go(
+  op: U32, left: U32, len2: U32, min: U32, big: Bool, done: Bool, short: Bool
+) -> Fs:
+  match big done short:
+    case True{} _ _:
       Bad{}
-    case False{} True{}:
+    case False{} True{} True{}:
+      Bad{}
+    case False{} True{} False{}:
       Msk{op, len2, 4, 0}
-    case False{} False{}:
-      Ext{op, left, len2}
+    case False{} False{} _:
+      Ext{op, left, len2, min}
 
-def step.ext.on(op: U32, +left: U32, +len2: U32) -> Fs:
-  step.ext.go(op, left, len2, U32.is_lt(cap(), len2), U32.is_zero(left))
+def step.ext.on(op: U32, +left: U32, +len2: U32, +min: U32) -> Fs:
+  step.ext.go(op, left, len2, min, U32.is_lt(cap(), len2), U32.is_zero(left),
+    U32.is_lt(len2, min))
 
-def step.ext(op: U32, need: U32, len: U32, b: U32) -> Fs:
-  step.ext.on(op, (need - 1 : U32), ((len * 256 : U32) + b : U32))
+def step.ext(op: U32, need: U32, len: U32, min: U32, b: U32) -> Fs:
+  step.ext.on(op, (need - 1 : U32), ((len * 256 : U32) + b : U32), min)
 
 # the four mask bytes, gathered into one word; an empty payload is a
 # frame the moment the mask is in
@@ -173,8 +185,8 @@ def step.at(st: Fs, out: List<&2, Frm>, b: U32) -> W:
       W{step.op(b), out}
     case Len{op}:
       W{step.len(op, b), out}
-    case Ext{op, need, len}:
-      W{step.ext(op, need, len, b), out}
+    case Ext{op, need, len, min}:
+      W{step.ext(op, need, len, min, b), out}
     case Msk{op, len, need, m}:
       step.msk(op, len, need, m, b, out)
     case Pay{op, rem, m, acc}:
@@ -219,8 +231,8 @@ def dead.at(st: Fs, out: List<&2, Frm>) -> W & Bool:
       (W{Op{}, out}, False{})
     case Len{op}:
       (W{Len{op}, out}, False{})
-    case Ext{op, need, len}:
-      (W{Ext{op, need, len}, out}, False{})
+    case Ext{op, need, len, min}:
+      (W{Ext{op, need, len, min}, out}, False{})
     case Msk{op, len, need, m}:
       (W{Msk{op, len, need, m}, out}, False{})
     case Pay{op, rem, m, acc}:
@@ -233,6 +245,76 @@ def dead(w: W) -> W & Bool:
   match w:
     case W{st, out}:
       dead.at(st, out)
+
+# UTF-8
+# =====
+
+# A text frame's payload must be UTF-8 (RFC 3629), or the connection is
+# failed with 1007. The validator is a walk with its state in one node:
+# need continuation bytes to go and the next one's range lo..hi, which
+# is narrower than 80..BF right after E0, ED, F0 and F4 -- that is what
+# refuses an overlong form, a surrogate and a code point past 10FFFF --
+# or broken.
+type Ut is Data:
+  Ut{need: U32, lo: U32, hi: U32}
+  Utx{}
+
+def utf8.pick(c: Bool, a: Ut, b: Ut) -> Ut:
+  match c:
+    case True{}:
+      a
+    case False{}:
+      b
+
+def utf8.multi(+b: U32) -> Ut:
+  utf8.pick(U32.is_lt(b, 194), Utx{},
+  utf8.pick(U32.is_lt(b, 224), Ut{1, 128, 191},
+  utf8.pick(U32.is_eq(b, 224), Ut{2, 160, 191},
+  utf8.pick(U32.is_eq(b, 237), Ut{2, 128, 159},
+  utf8.pick(U32.is_lt(b, 240), Ut{2, 128, 191},
+  utf8.pick(U32.is_eq(b, 240), Ut{3, 144, 191},
+  utf8.pick(U32.is_lt(b, 244), Ut{3, 128, 191},
+  utf8.pick(U32.is_eq(b, 244), Ut{3, 128, 143}, Utx{}))))))))
+
+def utf8.lead(+b: U32, ascii: Bool) -> Ut:
+  match ascii:
+    case True{}:
+      Ut{0, 128, 191}
+    case False{}:
+      utf8.multi(b)
+
+def utf8.at(need: U32, +lo: U32, +hi: U32, +b: U32, first: Bool) -> Ut:
+  match first:
+    case True{}:
+      utf8.lead(b, U32.is_lt(b, 128))
+    case False{}:
+      utf8.pick(U32.is_le(lo, b) && U32.is_le(b, hi),
+        Ut{(need - 1 : U32), 128, 191}, Utx{})
+
+def utf8.step(s: Ut, b: U32) -> Ut:
+  match s:
+    case Ut{+need, lo, hi}:
+      utf8.at(need, lo, hi, b, U32.is_zero(need))
+    case Utx{}:
+      Utx{}
+
+def utf8.go(bs: Bytes(), s: Ut) -> Ut:
+  match bs:
+    case SNil{}:
+      s
+    case SCon{Chr{c}, t}:
+      utf8.go(t, utf8.step(s, c))
+
+def utf8.end(s: Ut) -> Bool:
+  match s:
+    case Ut{need, lo, hi}:
+      U32.is_zero(need)
+    case Utx{}:
+      False{}
+
+# whether the bytes are UTF-8; a character cut short at the end is not
+def utf8(bs: Bytes()) -> Bool:
+  utf8.end(utf8.go(bs, Ut{0, 128, 191}))
 
 # Writing
 # =======
@@ -271,20 +353,55 @@ def close.frame(+code: U32) -> Bytes():
 type Rep is Data:
   Rep{out: Bytes(), close: Bool}
 
-# a close is answered with the peer's status code if it sent one; a
-# one-byte payload is not a code and gets 1002
+# the status codes a peer may send (RFC 6455 7.4 and the IANA registry):
+# 1000-1003, 1007-1014, and 3000-4999 for libraries and applications.
+# 0-999, 1004-1006, 1015 and 1016-2999 are reserved or never sent, and
+# nothing past 4999 is a code.
+def close.code.ok(+c: U32) -> Bool:
+  (U32.is_le(1000, c) && U32.is_le(c, 1003)) || (U32.is_le(1007, c) && U32.is_le(c, 1014))
+    || (U32.is_le(3000, c) && U32.is_le(c, 4999))
+
+def close.two(+a: U32, +b: U32, ok: Bool, text: Bool) -> Bytes():
+  match ok text:
+    case False{} _:
+      close.frame(1002)
+    case True{} False{}:
+      close.frame(1007)
+    case True{} True{}:
+      frame(8, Bytes.from_list([a, b]))
+
+# a close is answered with the peer's status code if it sent one a peer
+# may send; a one-byte payload or any other code gets 1002, and a reason
+# that is not UTF-8 gets 1007
 def close.echo(body: Bytes()) -> Bytes():
   match body:
     case SNil{}:
       close.frame(1000)
-    case SCon{Chr{a}, t}:
+    case SCon{Chr{+a}, t}:
       match t:
         case SNil{}:
           close.frame(1002)
-        case SCon{Chr{b}, u}:
-          frame(8, Bytes.from_list([a, b]))
+        case SCon{Chr{+b}, u}:
+          close.two(a, b, close.code.ok(((a * 256 : U32) + b : U32)), utf8(u))
 
-def rep.op(op: U32, +body: Bytes(), is_close: Bool, is_ping: Bool, is_pong: Bool) -> Rep:
+# text must be UTF-8; binary is whatever it is
+def data.ok(+body: Bytes(), bin: Bool) -> Bool:
+  match bin:
+    case True{}:
+      True{}
+    case False{}:
+      utf8(body)
+
+def rep.data(op: U32, +body: Bytes(), ok: Bool) -> Rep:
+  match ok:
+    case True{}:
+      Rep{frame(op, body), False{}}
+    case False{}:
+      Rep{close.frame(1007), True{}}
+
+def rep.op(
+  +op: U32, +body: Bytes(), is_close: Bool, is_ping: Bool, is_pong: Bool
+) -> Rep:
   match is_close is_ping is_pong:
     case True{} _ _:
       Rep{close.echo(body), True{}}
@@ -293,7 +410,7 @@ def rep.op(op: U32, +body: Bytes(), is_close: Bool, is_ping: Bool, is_pong: Bool
     case False{} False{} True{}:
       Rep{SNil{}, False{}}
     case False{} False{} False{}:
-      Rep{frame(op, body), False{}}
+      rep.data(op, body, data.ok(body, U32.is_eq(op, 2)))
 
 def rep.one(f: Frm) -> Rep:
   match f:
