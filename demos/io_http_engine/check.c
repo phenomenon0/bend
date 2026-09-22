@@ -1,9 +1,10 @@
 // Behavioural checks for demos/io_http_engine, over a raw socket. The
 // same binary checks the Bend engine and control.c, so "the same
-// twelve checks" is a claim the two are measured against rather than a
-// sentence in a README.
+// checks" is a claim the two are measured against rather than a
+// sentence in a README. Given the server's pid, the last case also
+// reads its CPU.
 //
-//   cc -std=c11 -O3 check.c -o check && ./check 8080
+//   cc -std=c11 -O3 check.c -o check && ./check 8080 [pid]
 #define _GNU_SOURCE
 #include <netinet/in.h>
 #include <netinet/tcp.h>
@@ -67,6 +68,24 @@ static void check(const char* name, int ok, const char* got, int n) {
 // does the reply hold this text
 static int has(const char* b, int n, const char* s) {
   return memmem(b, (size_t)n, s, strlen(s)) != NULL;
+}
+
+// The server's CPU seconds, for the case that needs them.
+static double cpu_of(long pid) {
+  char path[64], buf[4096];
+  snprintf(path, sizeof(path), "/proc/%ld/stat", pid);
+  FILE* f = fopen(path, "r");
+  if (f == NULL) return -1;
+  size_t n = fread(buf, 1, sizeof(buf) - 1, f);
+  fclose(f);
+  buf[n] = 0;
+  char* p = strrchr(buf, ')');
+  if (p == NULL) return -1;
+  long ut = 0, st = 0;
+  // fields 3..15 after the comm; utime is the 14th field, stime the 15th
+  if (sscanf(p + 2, "%*c %*d %*d %*d %*d %*d %*u %*u %*u %*u %*u %ld %ld",
+    &ut, &st) != 2) return -1;
+  return (double)(ut + st) / (double)sysconf(_SC_CLK_TCK);
 }
 
 #define TEXT(s) s, (int)(sizeof(s) - 1)
@@ -143,6 +162,24 @@ int main(int argc, char** argv) {
     if (ok) for (int i = 0; i < 256; i++)
       ok = ok && (uint8_t)body[4 + i] == (uint8_t)i;
     check("all 256 byte values survive a body round trip", ok, b, n);
+  }
+
+  // A peer that connects and closes without sending a byte. The engine
+  // as first written read again on the empty recv, and one such peer
+  // cost most of a core in passes until its fuel ran out. Given the
+  // server's pid (./check 8080 <pid>) this measures it: twenty silent
+  // closes, one second, and the server's CPU must not have moved.
+  if (argc > 2) {
+    long   pid = atol(argv[2]);
+    double c0  = cpu_of(pid);
+    for (int i = 0; i < 20; i++) { int fd = dial(); if (fd >= 0) close(fd); }
+    usleep(1000000);
+    double c1 = cpu_of(pid);
+    n = one(TEXT("GET /health HTTP/1.1\r\nHost: x\r\n\r\n"), b, sizeof(b), 106);
+    char why[96];
+    snprintf(why, sizeof(why), "cpu moved %.3fs", c1 - c0);
+    check("twenty silent closes cost no CPU",
+      c0 >= 0 && c1 - c0 < 0.05 && has(b, n, "200 OK"), why, (int)strlen(why));
   }
 
   printf("\n%d/%d pass\n", pass, pass + fail);

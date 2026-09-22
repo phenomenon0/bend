@@ -26,9 +26,8 @@ for files; `base.bend` declares them beside `TCP.recv` and `TCP.send`.
 Nothing there is new machinery — it is the byte pair files have and
 sockets did not, and it belongs upstream rather than in a demo.
 
-`check.c`'s last case is the one that catches this, and it is the only
-one that does: the engine as first written passes twelve of thirteen
-and fails that one.
+`check.c`'s byte round trip is the one case that catches this: the
+engine as first written passes every other case and fails that one.
 
 ## What it is
 
@@ -86,7 +85,8 @@ are all rejected, with the two terms printed.
 `control.c` is the same engine written the way a C server is written:
 one epoll loop, the same modes, the same byte-at-a-time transitions,
 the same routes, byte-identical replies, the same policy. `check.c`
-runs thirteen behavioural cases against either. `load.c` drives either.
+runs fourteen behavioural cases against either, the last of which
+reads the server's CPU when given its pid. `load.c` drives either.
 
     cc -std=c11 -O3 control.c -o control && ./control 8081
     cc -std=c11 -O3 check.c -o check && ./check 8080 && ./check 8081
