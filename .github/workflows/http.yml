@@ -1,0 +1,71 @@
+# The HTTP engine's gate: the laws check, the server builds, the checks
+# pass against it and against the C control, the fuzzer finds no
+# difference between the two, and the binary is kept. Runs on the
+# branch that carries the engine and only when it or the runtime moves.
+name: http engine
+on:
+  push:
+    branches: [omen-http]
+    paths: ["demos/io_http_engine/**", "bend2/**", ".github/workflows/http.yml"]
+  pull_request:
+    paths: ["demos/io_http_engine/**", "bend2/**", ".github/workflows/http.yml"]
+jobs:
+  engine:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - name: clang
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq clang
+      - name: the laws hold
+        run: bun bend2/main.ts demos/io_http_engine/PROOF.bend
+      - name: the server builds
+        run: |
+          bun bend2/main.ts demos/io_http_engine/main.bend -o httpd
+          ldd httpd
+      - name: the C twins build
+        working-directory: demos/io_http_engine
+        run: |
+          cc -std=c11 -O3 -Wall control.c -o control
+          cc -std=c11 -O3 -Wall check.c -o check
+          cc -std=c11 -O2 -Wall fuzz.c -o fuzz
+          cc -std=c11 -O3 -Wall load.c -o load
+      - name: fixtures
+        run: |
+          mkdir -p www/sub
+          printf '<h1>hi</h1>\n' > www/index.html
+          printf 'alpha\n' > www/a.txt
+          python3 -c "open('www/img.png','wb').write(bytes(range(256)))"
+          printf 'b{}\n' > www/sub/b.css
+      - name: the checks, every mode
+        run: |
+          up() { for i in $(seq 1 50); do (exec 3<>/dev/tcp/127.0.0.1/$1) 2>/dev/null && return 0; sleep 0.1; done; echo "never listened on $1"; return 1; }
+          C=demos/io_http_engine
+          ./httpd --root www --idle-ms 400 & up 8080; $C/check 8080 $! --files --idle=400 --ws; kill $!; wait $! || true
+          ./httpd --max-conns 2 & up 8080; $C/check 8080 $! --conns=2; kill $!; wait $! || true
+          ./httpd --grace-ms 3000 & up 8080; $C/check 8080 $! --term
+          $C/control 8081 & up 8081; $C/check 8081 $!; kill $!; wait $! || true
+      - name: the engine and the control agree on 500 random streams
+        run: |
+          up() { for i in $(seq 1 50); do (exec 3<>/dev/tcp/127.0.0.1/$1) 2>/dev/null && return 0; sleep 0.1; done; return 1; }
+          C=demos/io_http_engine
+          ./httpd --port 8090 & A=$!; up 8090
+          $C/control 8091 & B=$!; up 8091
+          $C/fuzz 8090 8091 500 7
+          kill $A $B; wait $A $B || true
+      - name: a shared port takes two copies
+        run: |
+          up() { for i in $(seq 1 50); do (exec 3<>/dev/tcp/127.0.0.1/$1) 2>/dev/null && return 0; sleep 0.1; done; return 1; }
+          ./httpd --shared --port 8085 & A=$!; ./httpd --shared --port 8085 & B=$!; up 8085
+          LOAD_SPIN=1 demos/io_http_engine/load 8085 32 2 8 /health
+          kill $A $B; wait $A $B || true
+      - uses: actions/upload-artifact@v4
+        with:
+          name: httpd-linux-x86_64
+          path: httpd
