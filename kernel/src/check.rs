@@ -586,6 +586,13 @@ impl Ck {
                 uadd(ue, &uf)
             }
             Tm::Hol(k) => unsup(format!("a hole ?{}", k)),
+            Tm::App(..) if matches!(&*spine(t).0, Tm::Lam(..)) => {
+                // (λ f)(a) checks as its one beta step (appLam), at the goal
+                let (h, xs) = spine(t);
+                let Tm::Lam(_, f) = &*h else { unreachable!() };
+                let r = xs[1..].iter().fold(subst(f, &xs[0]), |r, x| mk(Tm::App(r, x.clone())));
+                self.check(l, &r, qt, ty)
+            }
             _ => {
                 let (a, u) = self.infer(l, t, qt, &[]);
                 if !le(&a, ty, self.lvl()) {
