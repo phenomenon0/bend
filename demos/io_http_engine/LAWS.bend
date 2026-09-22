@@ -7,6 +7,7 @@ import ./main.bend as Eng
 import ./sha1.bend as Sha1
 import ./b64.bend as B64
 import ./ws.bend as Ws
+import ./spec.bend as Spec
 
 # LAW: chunking does not change the parse. Feeding a chunk and then
 # another one lands exactly where feeding the two joined would have.
@@ -40,6 +41,258 @@ law bad_feeds:
   for +out: List<&2, Eng.Req>
   {Eng.feed(s, Eng.P{Eng.Bad{}, pd, out}) ==
     Eng.P{Eng.Bad{}, pd, out} : Eng.P}
+
+# Framing
+# =======
+#
+# spec.bend is the reference: RFC 9110's character sets and field
+# names, written the obvious way. These laws hold the reader to it --
+# over every byte, every name, every message state -- and then pin the
+# vectors requests are smuggled with, run through the real reader.
+
+# LAW: the reader's classes are the RFC's, byte for byte, all 256 of
+# them; and so is its lowercasing. Every law below that speaks of a
+# byte's class speaks of these.
+law cls_is_spec:
+  {Spec.cls.eng(Spec.all()) == Spec.cls.ref(Spec.all()) : List<&2, Eng.Cls>}
+
+law lower_is_spec:
+  {Spec.lower.eng(Spec.all()) == Spec.lower.ref(Spec.all()) : List<&2, U32>}
+
+# LAW: a field is known by its bytes. For every name the reader can
+# hold, the field it takes that name for is the reference's: the one
+# spelled with exactly those bytes, or none. No other name is ever a
+# Content-Length or a Transfer-Encoding, whatever it hashes to.
+law field_by_bytes:
+  for +k: List<&2, U32>
+  {Eng.fld.of(k) == Spec.field(k) : Eng.Fld}
+
+# LAW: a Transfer-Encoding is refused at its colon, whatever message it
+# is in and whatever came before it.
+law te_refused:
+  for +k: List<&2, U32>
+  for +pd: Eng.Pend
+  for +out: List<&2, Eng.Req>
+  for e: {Spec.eq(k, Spec.name("transfer-encoding")) == True{} : Bool}
+  {Eng.step(Eng.P{Eng.InN{k}, pd, out}, 58) == Eng.P{Eng.Bad{}, pd, out} : Eng.P}
+
+# LAW: a name is a token and ends at its colon. Any other byte in it --
+# a space or a tab before the colon, a CR with no colon, a bare LF, a
+# control -- is refused, in every message.
+law name_refuses:
+  for +c: U32
+  for +n: List<&2, U32>
+  for +pd: Eng.Pend
+  for +out: List<&2, Eng.Req>
+  for e: {Spec.in.name(Eng.cls(c)) == False{} : Bool}
+  {Eng.step(Eng.P{Eng.InN{n}, pd, out}, c) == Eng.P{Eng.Bad{}, pd, out} : Eng.P}
+
+# LAW: a field line starts with a token byte, or is the blank line. A
+# line folded onto the one before it starts with a space or a tab, and
+# is refused; so is a bare LF there.
+law line_refuses:
+  for +c: U32
+  for +pd: Eng.Pend
+  for +out: List<&2, Eng.Req>
+  for e: {Spec.in.line(Eng.cls(c)) == False{} : Bool}
+  {Eng.step(Eng.P{Eng.Lin{}, pd, out}, c) == Eng.P{Eng.Bad{}, pd, out} : Eng.P}
+
+# LAW: a Content-Length is digits, then whitespace, then its CR. A sign,
+# a comma, a letter, a control is refused where it stands, whatever the
+# digits so far, in every message.
+law clen_refuses:
+  for +c: U32
+  for +v: U32
+  for +pd: Eng.Pend
+  for +out: List<&2, Eng.Req>
+  for e: {Spec.in.clen(Eng.cls(c)) == False{} : Bool}
+  {Eng.step(Eng.P{Eng.InL{v}, pd, out}, c) == Eng.P{Eng.Bad{}, pd, out} : Eng.P}
+
+# LAW: and a second Content-Length that disagrees with the first is
+# refused as it closes (RFC 9112 6.3), whatever else the message says.
+law clen_disagree:
+  for +v: U32
+  for +w: U32
+  for +m: Eng.Meth
+  for +path: List<&2, U32>
+  for +cl: Bool
+  for +h: Eng.Hosts
+  for +ws: Eng.Up
+  for +out: List<&2, Eng.Req>
+  for e: {U32.is_eq(w, v) == False{} : Bool}
+  {Eng.step(Eng.P{Eng.InL{w}, Eng.Pend{m, path, Eng.Has{v}, cl, h, ws}, out}, 13) ==
+    Eng.P{Eng.Bad{}, Eng.Pend{m, path, Eng.Has{v}, cl, h, ws}, out} : Eng.P}
+
+# LAW: the target carries no control, tab or line end: a CR, LF or NUL
+# in it is refused, so none reaches a route or the log.
+law target_refuses:
+  for +c: U32
+  for +p: List<&2, U32>
+  for +pd: Eng.Pend
+  for +out: List<&2, Eng.Req>
+  for e: {Spec.in.target(Eng.cls(c)) == False{} : Bool}
+  {Eng.step(Eng.P{Eng.InT{p}, pd, out}, c) == Eng.P{Eng.Bad{}, pd, out} : Eng.P}
+
+# LAW: a value carries no bare LF and no control: in any field this
+# engine does not act on, and in Connection, where it would otherwise
+# end a line the next hop reads differently.
+law value_refuses:
+  for +c: U32
+  for +pd: Eng.Pend
+  for +out: List<&2, Eng.Req>
+  for e: {Spec.in.value(Eng.cls(c)) == False{} : Bool}
+  {Eng.step(Eng.P{Eng.InLx{}, pd, out}, c) == Eng.P{Eng.Bad{}, pd, out} : Eng.P}
+
+law conn_refuses:
+  for +c: U32
+  for +t: List<&2, U32>
+  for +a: Bool
+  for +b: Bool
+  for +pd: Eng.Pend
+  for +out: List<&2, Eng.Req>
+  for e: {Spec.in.value(Eng.cls(c)) == False{} : Bool}
+  {Eng.step(Eng.P{Eng.InLc{t, a, b}, pd, out}, c) == Eng.P{Eng.Bad{}, pd, out} : Eng.P}
+
+# LAW: a head without exactly one Host is refused at its blank line
+# (RFC 9112 3.2), whatever else it carried.
+law host_once:
+  for +m: Eng.Meth
+  for +path: List<&2, U32>
+  for +l: Eng.Cl
+  for +cl: Bool
+  for +h: Eng.Hosts
+  for +ws: Eng.Up
+  for +out: List<&2, Eng.Req>
+  for e: {Spec.one(h) == False{} : Bool}
+  {Eng.step(Eng.P{Eng.CrL{}, Eng.Pend{m, path, l, cl, h, ws}, out}, 10) ==
+    Eng.P{Eng.Bad{}, Eng.Pend{m, path, l, cl, h, ws}, out} : Eng.P}
+
+# LAW: after a request that asked to upgrade, nothing is read as HTTP:
+# every byte is kept, in order, for the frame reader, and no message
+# is completed.
+law rest_feeds:
+  for +s: List<&2, U32>
+  for +bs: List<&2, U32>
+  for +pd: Eng.Pend
+  for +out: List<&2, Eng.Req>
+  {Eng.feed(s, Eng.P{Eng.Rest{bs}, pd, out}) ==
+    Eng.P{Eng.Rest{List.reverse.go(&2, U32, s, bs)}, pd, out} : Eng.P}
+
+# LAW: the vectors. Each is a whole input run through the real reader
+# from a fresh state -- the messages it completed, and whether it
+# refused -- and feed_split carries each one to every way TCP could
+# have cut it. First what is served as it should be.
+law parse_get:
+  {Eng.parse(Eng.bytes("GET /health HTTP/1.1\r\nHost: x\r\n\r\n")) ==
+    ([Eng.Req{Eng.MGet{}, Eng.bytes("/health"), Nil{}, False{}, False{}, Nil{}}], False{}) :
+    List<&2, Eng.Req> & Bool}
+
+law parse_body:
+  {Eng.parse(Eng.bytes("GET /echo HTTP/1.1\r\nhost: x\r\nCoNtEnT-LeNgTh:\t5 \r\n\r\nhello")) ==
+    ([Eng.Req{Eng.MGet{}, Eng.bytes("/echo"), Eng.bytes("hello"), False{}, False{}, Nil{}}], False{}) :
+    List<&2, Eng.Req> & Bool}
+
+# a name that hashes as Content-Length did is not one: the bytes after
+# its head are the next request, not its body
+law parse_hash_twin:
+  {Eng.parse(Eng.bytes("GET /echo HTTP/1.1\r\nHost: x\r\nx-v5fged: 5\r\n\r\nhelloGET / HTTP/1.1\r\nHost: x\r\n\r\n")) ==
+    ([Eng.Req{Eng.MGet{}, Eng.bytes("/echo"), Nil{}, False{}, False{}, Nil{}},
+      Eng.Req{Eng.MOther{}, Eng.bytes("/"), Nil{}, False{}, False{}, Nil{}}], False{}) :
+    List<&2, Eng.Req> & Bool}
+
+# two lengths that agree are one length; empty lines before a request
+# line are skipped; close anywhere in a Connection list closes
+law parse_agree:
+  {Eng.parse(Eng.bytes("\r\n\r\nHEAD /echo HTTP/1.1\r\nHost: x\r\nContent-Length: 2\r\nConnection: keep-alive, CLOSE\r\ncontent-length: 2\r\n\r\nhi")) ==
+    ([Eng.Req{Eng.MHead{}, Eng.bytes("/echo"), Eng.bytes("hi"), True{}, False{}, Nil{}}], False{}) :
+    List<&2, Eng.Req> & Bool}
+
+# the upgrade a browser asks for, Connection a list; what follows it is
+# kept for the frame reader
+law parse_upgrade:
+  {Eng.parse(Eng.bytes("GET /ws HTTP/1.1\r\nHost: x\r\nUpgrade: websocket\r\nConnection: keep-alive, Upgrade\r\nSec-WebSocket-Key: k\r\n\r\nGET / HTTP/1.1\r\n\r\n")) ==
+    ([Eng.Req{Eng.MGet{}, Eng.bytes("/ws"), Nil{}, False{}, True{}, Eng.bytes("k")}], False{}) :
+    List<&2, Eng.Req> & Bool}
+
+law rest_upgrade:
+  {Eng.p.rest(Eng.feed(Eng.cat(Eng.bytes("GET /ws HTTP/1.1\r\nHost: x\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: k\r\n\r\n"), [129, 128]), Eng.p.new())) ==
+    [129, 128] : List<&2, U32>}
+
+# LAW: and what is refused. None of these completes a message: each is
+# how a request is smuggled past a reader that frames it another way.
+law refuse_space_colon:
+  {Eng.parse(Eng.bytes("GET /echo HTTP/1.1\r\nHost: x\r\nContent-Length : 5\r\n\r\nhello")) ==
+    (Nil{}, True{}) : List<&2, Eng.Req> & Bool}
+
+law refuse_te_space_colon:
+  {Eng.parse(Eng.bytes("GET /echo HTTP/1.1\r\nHost: x\r\nTransfer-Encoding : chunked\r\nContent-Length: 5\r\n\r\nhello")) ==
+    (Nil{}, True{}) : List<&2, Eng.Req> & Bool}
+
+law refuse_te:
+  {Eng.parse(Eng.bytes("GET /echo HTTP/1.1\r\nHost: x\r\nContent-Length: 5\r\nTRANSFER-encoding: chunked\r\n\r\n0\r\n\r\n")) ==
+    (Nil{}, True{}) : List<&2, Eng.Req> & Bool}
+
+law refuse_two_lengths:
+  {Eng.parse(Eng.bytes("GET /echo HTTP/1.1\r\nHost: x\r\nContent-Length: 3\r\nContent-Length: 5\r\n\r\nabcde")) ==
+    (Nil{}, True{}) : List<&2, Eng.Req> & Bool}
+
+law refuse_wrap:
+  {Eng.parse(Eng.bytes("GET /echo HTTP/1.1\r\nHost: x\r\nContent-Length: 4294967301\r\n\r\nhello")) ==
+    (Nil{}, True{}) : List<&2, Eng.Req> & Bool}
+
+law refuse_past_cap:
+  {Eng.parse(Eng.bytes("GET /echo HTTP/1.1\r\nHost: x\r\nContent-Length: 1048577\r\n")) ==
+    (Nil{}, True{}) : List<&2, Eng.Req> & Bool}
+
+law refuse_not_digits:
+  {Eng.parse(Eng.bytes("GET /echo HTTP/1.1\r\nHost: x\r\nContent-Length: 5x\r\n\r\nhello")) ==
+    (Nil{}, True{}) : List<&2, Eng.Req> & Bool}
+
+law refuse_list:
+  {Eng.parse(Eng.bytes("GET /echo HTTP/1.1\r\nHost: x\r\nContent-Length: 5, 5\r\n\r\nhello")) ==
+    (Nil{}, True{}) : List<&2, Eng.Req> & Bool}
+
+law refuse_fold:
+  {Eng.parse(Eng.bytes("GET /echo HTTP/1.1\r\nHost: x\r\nX: a\r\n Content-Length: 5\r\n\r\nhello")) ==
+    (Nil{}, True{}) : List<&2, Eng.Req> & Bool}
+
+law refuse_bare_lf:
+  {Eng.parse(Eng.bytes("GET /echo HTTP/1.1\r\nHost: x\r\nX: a\nContent-Length: 5\r\n\r\nhello")) ==
+    (Nil{}, True{}) : List<&2, Eng.Req> & Bool}
+
+law refuse_no_colon:
+  {Eng.parse(Eng.bytes("GET /echo HTTP/1.1\r\nHost: x\r\nFoo\r\nContent-Length: 5\r\n\r\nhello")) ==
+    (Nil{}, True{}) : List<&2, Eng.Req> & Bool}
+
+law refuse_target_cr:
+  {Eng.parse(Eng.bytes("GET /a\rb HTTP/1.1\r\nHost: x\r\n\r\n")) ==
+    (Nil{}, True{}) : List<&2, Eng.Req> & Bool}
+
+law refuse_no_host:
+  {Eng.parse(Eng.bytes("GET /health HTTP/1.1\r\n\r\n")) == (Nil{}, True{}) :
+    List<&2, Eng.Req> & Bool}
+
+law refuse_two_hosts:
+  {Eng.parse(Eng.bytes("GET /health HTTP/1.1\r\nHost: a\r\nhost: a\r\n\r\n")) ==
+    (Nil{}, True{}) : List<&2, Eng.Req> & Bool}
+
+law refuse_version:
+  {Eng.parse(Eng.bytes("GET /health HTTP/1.0\r\nHost: x\r\n\r\n")) ==
+    (Nil{}, True{}) : List<&2, Eng.Req> & Bool}
+
+# a refusal does not take back the message completed before it: its
+# reply is owed, and goes out before the 400
+law refuse_after_one:
+  {Eng.parse(Eng.bytes("GET / HTTP/1.1\r\nHost: x\r\n\r\nGET / HTTP/1.1\r\nHost : x\r\n\r\n")) ==
+    ([Eng.Req{Eng.MGet{}, Eng.bytes("/"), Nil{}, False{}, False{}, Nil{}}], True{}) :
+    List<&2, Eng.Req> & Bool}
+
+# LAW: the reply that ends a connection says so, and is otherwise the
+# reply it was.
+law health_closing:
+  {Eng.closing(Eng.resp.health()) ==
+    "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: 11\r\nconnection: close\r\n\r\n{\"ok\":true}" :
+    Bytes()}
 
 # LAW: the replies the engine keeps ready are the replies it would have
 # built. Writing a fixed reply out by hand is worth roughly a third of
@@ -297,10 +550,11 @@ law b64_fooba:
 law b64_foobar:
   {B64.enc(Eng.bytes("foobar")) == Eng.bytes("Zm9vYmFy") : List<&2, U32>}
 
-# LAW: the WebSocket accept key of RFC 6455's own example, the two
-# composed: the client's nonce joined to the GUID, hashed, encoded.
+# LAW: the WebSocket accept key of RFC 6455's own example, computed by
+# the engine's own Ws.accept: the nonce joined to Ws.guid(), hashed,
+# encoded.
 law ws_accept:
-  {B64.enc(Sha1.hash(Eng.bytes("dGhlIHNhbXBsZSBub25jZQ==258EAFA5-E914-47DA-95CA-C5AB0DC85B11"))) ==
+  {Ws.accept(Eng.bytes("dGhlIHNhbXBsZSBub25jZQ==")) ==
     Eng.bytes("s3pPLMBiTxaQ9kYGzzhZRbK+xOo=") : List<&2, U32>}
 
 # LAW: chunking does not change the frame parse, as for requests: a

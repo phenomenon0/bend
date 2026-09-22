@@ -12,6 +12,7 @@ import ./main.bend as Eng
 import ./sha1.bend as Sha1
 import ./b64.bend as B64
 import ./ws.bend as Ws
+import ./spec.bend as Spec
 import ./LAWS.bend as Laws
 
 def Laws.feed_split(a, b, p):
@@ -30,6 +31,378 @@ def Laws.bad_feeds(s, pd, out):
       {==}
     case Con{c, t}:
       Laws.bad_feeds(t, pd, out)
+
+# Framing
+# =======
+#
+# cls_is_spec, lower_is_spec and the vectors compute. field_by_bytes is
+# an induction over the table: at each entry both lookups test the same
+# name, the engine with bytes.eq and the reference with Spec.eq, and
+# eq_is_spec says those two are one function. The laws with a class in
+# their premise go through one lemma each over the ten classes: where
+# the premise says the class is allowed, it reads True == False and the
+# case is refuted through BD; everywhere else the step computes to Bad.
+
+# a type chosen by a Bool, for refuting True == False
+def BD(b: Bool, tc: Type, fc: Type) -> Type:
+  match b:
+    case True{}:
+      tc
+    case False{}:
+      fc
+
+def eq_is_spec(+a: List<&2, U32>, +b: List<&2, U32>) ->
+  {Eng.bytes.eq(a, b) == Spec.eq(a, b) : Bool}:
+  match a b:
+    case Nil{} Nil{}:
+      {==}
+    case Nil{} Con{y, u}:
+      {==}
+    case Con{x, t} Nil{}:
+      {==}
+    case Con{x, t} Con{y, u}:
+      %eq_is_spec(t, u) : {Bool.and(U32.is_eq(x, y), Eng.bytes.eq(t, u)) ==
+        Bool.and(U32.is_eq(x, y), _) : Bool}
+      {==}
+
+def find_is_spec(+k: List<&2, U32>, tbl: List<&2, Eng.Known>) ->
+  {Eng.fld.find(k, tbl) == Spec.find(k, tbl) : Eng.Fld}:
+  match tbl:
+    case Nil{}:
+      {==}
+    case Con{h, t}:
+      match h:
+        case Eng.Known{n, f}:
+          %find_is_spec(k, t) : {Eng.fld.pick(Eng.bytes.eq(k, n), f, Eng.fld.find(k, t)) ==
+            Eng.fld.pick(Spec.eq(k, n), f, _) : Eng.Fld}
+          %eq_is_spec(k, n) : {Eng.fld.pick(Eng.bytes.eq(k, n), f, Eng.fld.find(k, t)) ==
+            Eng.fld.pick(_, f, Eng.fld.find(k, t)) : Eng.Fld}
+          {==}
+
+def Laws.cls_is_spec():
+  {==}
+
+def Laws.lower_is_spec():
+  {==}
+
+def Laws.field_by_bytes(k):
+  find_is_spec(k, Eng.fld.table())
+
+def Laws.te_refused(k, pd, out, e):
+  %Equal.sym(Eng.Fld, Eng.fld.of(k), Spec.field(k), Laws.field_by_bytes(k)) :
+    {Eng.step.name(_, pd, out) == Eng.P{Eng.Bad{}, pd, out} : Eng.P}
+  %Equal.sym(Bool, Spec.eq(k, Spec.name("transfer-encoding")), True{}, e) :
+    {Eng.step.name(Eng.fld.pick(_, Eng.FTe{}, Spec.find(k, Spec.fields.rest())), pd, out) ==
+      Eng.P{Eng.Bad{}, pd, out} : Eng.P}
+  {==}
+
+def Laws.clen_disagree(v, w, m, path, cl, h, ws, out, e):
+  %Equal.sym(Bool, U32.is_eq(w, v), False{}, e) :
+    {Eng.step.clen.dup(Eng.Pend{m, path, Eng.Has{v}, cl, h, ws}, out, _) ==
+      Eng.P{Eng.Bad{}, Eng.Pend{m, path, Eng.Has{v}, cl, h, ws}, out} : Eng.P}
+  {==}
+
+def Laws.host_once(m, path, l, cl, h, ws, out, e):
+  match l h:
+    case Eng.NoCl{} Eng.H0{}:
+      {==}
+    case Eng.Has{v} Eng.H0{}:
+      {==}
+    case Eng.NoCl{} Eng.H2{}:
+      {==}
+    case Eng.Has{v} Eng.H2{}:
+      {==}
+    case Eng.NoCl{} Eng.H1{}:
+      %e : BD(_, Unit, {Eng.step(Eng.P{Eng.CrL{}, Eng.Pend{m, path, Eng.NoCl{}, cl, Eng.H1{}, ws}, out}, 10) ==
+        Eng.P{Eng.Bad{}, Eng.Pend{m, path, Eng.NoCl{}, cl, Eng.H1{}, ws}, out} : Eng.P})
+      Unit{}
+    case Eng.Has{v} Eng.H1{}:
+      %e : BD(_, Unit, {Eng.step(Eng.P{Eng.CrL{}, Eng.Pend{m, path, Eng.Has{v}, cl, Eng.H1{}, ws}, out}, 10) ==
+        Eng.P{Eng.Bad{}, Eng.Pend{m, path, Eng.Has{v}, cl, Eng.H1{}, ws}, out} : Eng.P})
+      Unit{}
+
+def Laws.rest_feeds(s, bs, pd, out):
+  match s:
+    case Nil{}:
+      {==}
+    case Con{c, t}:
+      Laws.rest_feeds(t, Con{c, bs}, pd, out)
+
+def name_bad(
+  k: Eng.Cls, c: U32, n: List<&2, U32>, pd: Eng.Pend, out: List<&2, Eng.Req>,
+  e: {Spec.in.name(k) == False{} : Bool}
+) -> {Eng.step.at(Eng.InN{n}, k, c, pd, out) == Eng.P{Eng.Bad{}, pd, out} : Eng.P}:
+  match k:
+    case Eng.KSp{}:
+      {==}
+    case Eng.KHt{}:
+      {==}
+    case Eng.KCr{}:
+      {==}
+    case Eng.KLf{}:
+      {==}
+    case Eng.KCo{}:
+      %e : BD(_, Unit, {Eng.step.at(Eng.InN{n}, Eng.KCo{}, c, pd, out) == Eng.P{Eng.Bad{}, pd, out} : Eng.P})
+      Unit{}
+    case Eng.KCm{}:
+      {==}
+    case Eng.KDg{}:
+      %e : BD(_, Unit, {Eng.step.at(Eng.InN{n}, Eng.KDg{}, c, pd, out) == Eng.P{Eng.Bad{}, pd, out} : Eng.P})
+      Unit{}
+    case Eng.KTk{}:
+      %e : BD(_, Unit, {Eng.step.at(Eng.InN{n}, Eng.KTk{}, c, pd, out) == Eng.P{Eng.Bad{}, pd, out} : Eng.P})
+      Unit{}
+    case Eng.KVc{}:
+      {==}
+    case Eng.KCt{}:
+      {==}
+
+def Laws.name_refuses(c, n, pd, out, e):
+  name_bad(Eng.cls(c), c, n, pd, out, e)
+
+def line_bad(
+  k: Eng.Cls, c: U32, pd: Eng.Pend, out: List<&2, Eng.Req>,
+  e: {Spec.in.line(k) == False{} : Bool}
+) -> {Eng.step.at(Eng.Lin{}, k, c, pd, out) == Eng.P{Eng.Bad{}, pd, out} : Eng.P}:
+  match k:
+    case Eng.KSp{}:
+      {==}
+    case Eng.KHt{}:
+      {==}
+    case Eng.KCr{}:
+      %e : BD(_, Unit, {Eng.step.at(Eng.Lin{}, Eng.KCr{}, c, pd, out) == Eng.P{Eng.Bad{}, pd, out} : Eng.P})
+      Unit{}
+    case Eng.KLf{}:
+      {==}
+    case Eng.KCo{}:
+      {==}
+    case Eng.KCm{}:
+      {==}
+    case Eng.KDg{}:
+      %e : BD(_, Unit, {Eng.step.at(Eng.Lin{}, Eng.KDg{}, c, pd, out) == Eng.P{Eng.Bad{}, pd, out} : Eng.P})
+      Unit{}
+    case Eng.KTk{}:
+      %e : BD(_, Unit, {Eng.step.at(Eng.Lin{}, Eng.KTk{}, c, pd, out) == Eng.P{Eng.Bad{}, pd, out} : Eng.P})
+      Unit{}
+    case Eng.KVc{}:
+      {==}
+    case Eng.KCt{}:
+      {==}
+
+def Laws.line_refuses(c, pd, out, e):
+  line_bad(Eng.cls(c), c, pd, out, e)
+
+def clen_bad(
+  k: Eng.Cls, c: U32, v: U32, pd: Eng.Pend, out: List<&2, Eng.Req>,
+  e: {Spec.in.clen(k) == False{} : Bool}
+) -> {Eng.step.at(Eng.InL{v}, k, c, pd, out) == Eng.P{Eng.Bad{}, pd, out} : Eng.P}:
+  match k:
+    case Eng.KSp{}:
+      %e : BD(_, Unit, {Eng.step.at(Eng.InL{v}, Eng.KSp{}, c, pd, out) == Eng.P{Eng.Bad{}, pd, out} : Eng.P})
+      Unit{}
+    case Eng.KHt{}:
+      %e : BD(_, Unit, {Eng.step.at(Eng.InL{v}, Eng.KHt{}, c, pd, out) == Eng.P{Eng.Bad{}, pd, out} : Eng.P})
+      Unit{}
+    case Eng.KCr{}:
+      %e : BD(_, Unit, {Eng.step.at(Eng.InL{v}, Eng.KCr{}, c, pd, out) == Eng.P{Eng.Bad{}, pd, out} : Eng.P})
+      Unit{}
+    case Eng.KLf{}:
+      {==}
+    case Eng.KCo{}:
+      {==}
+    case Eng.KCm{}:
+      {==}
+    case Eng.KDg{}:
+      %e : BD(_, Unit, {Eng.step.at(Eng.InL{v}, Eng.KDg{}, c, pd, out) == Eng.P{Eng.Bad{}, pd, out} : Eng.P})
+      Unit{}
+    case Eng.KTk{}:
+      {==}
+    case Eng.KVc{}:
+      {==}
+    case Eng.KCt{}:
+      {==}
+
+def Laws.clen_refuses(c, v, pd, out, e):
+  clen_bad(Eng.cls(c), c, v, pd, out, e)
+
+def target_bad(
+  k: Eng.Cls, c: U32, p: List<&2, U32>, pd: Eng.Pend, out: List<&2, Eng.Req>,
+  e: {Spec.in.target(k) == False{} : Bool}
+) -> {Eng.step.at(Eng.InT{p}, k, c, pd, out) == Eng.P{Eng.Bad{}, pd, out} : Eng.P}:
+  match k:
+    case Eng.KSp{}:
+      %e : BD(_, Unit, {Eng.step.at(Eng.InT{p}, Eng.KSp{}, c, pd, out) == Eng.P{Eng.Bad{}, pd, out} : Eng.P})
+      Unit{}
+    case Eng.KHt{}:
+      {==}
+    case Eng.KCr{}:
+      {==}
+    case Eng.KLf{}:
+      {==}
+    case Eng.KCo{}:
+      %e : BD(_, Unit, {Eng.step.at(Eng.InT{p}, Eng.KCo{}, c, pd, out) == Eng.P{Eng.Bad{}, pd, out} : Eng.P})
+      Unit{}
+    case Eng.KCm{}:
+      %e : BD(_, Unit, {Eng.step.at(Eng.InT{p}, Eng.KCm{}, c, pd, out) == Eng.P{Eng.Bad{}, pd, out} : Eng.P})
+      Unit{}
+    case Eng.KDg{}:
+      %e : BD(_, Unit, {Eng.step.at(Eng.InT{p}, Eng.KDg{}, c, pd, out) == Eng.P{Eng.Bad{}, pd, out} : Eng.P})
+      Unit{}
+    case Eng.KTk{}:
+      %e : BD(_, Unit, {Eng.step.at(Eng.InT{p}, Eng.KTk{}, c, pd, out) == Eng.P{Eng.Bad{}, pd, out} : Eng.P})
+      Unit{}
+    case Eng.KVc{}:
+      %e : BD(_, Unit, {Eng.step.at(Eng.InT{p}, Eng.KVc{}, c, pd, out) == Eng.P{Eng.Bad{}, pd, out} : Eng.P})
+      Unit{}
+    case Eng.KCt{}:
+      {==}
+
+def Laws.target_refuses(c, p, pd, out, e):
+  target_bad(Eng.cls(c), c, p, pd, out, e)
+
+def value_bad(
+  k: Eng.Cls, c: U32, pd: Eng.Pend, out: List<&2, Eng.Req>,
+  e: {Spec.in.value(k) == False{} : Bool}
+) -> {Eng.step.at(Eng.InLx{}, k, c, pd, out) == Eng.P{Eng.Bad{}, pd, out} : Eng.P}:
+  match k:
+    case Eng.KSp{}:
+      %e : BD(_, Unit, {Eng.step.at(Eng.InLx{}, Eng.KSp{}, c, pd, out) == Eng.P{Eng.Bad{}, pd, out} : Eng.P})
+      Unit{}
+    case Eng.KHt{}:
+      %e : BD(_, Unit, {Eng.step.at(Eng.InLx{}, Eng.KHt{}, c, pd, out) == Eng.P{Eng.Bad{}, pd, out} : Eng.P})
+      Unit{}
+    case Eng.KCr{}:
+      %e : BD(_, Unit, {Eng.step.at(Eng.InLx{}, Eng.KCr{}, c, pd, out) == Eng.P{Eng.Bad{}, pd, out} : Eng.P})
+      Unit{}
+    case Eng.KLf{}:
+      {==}
+    case Eng.KCo{}:
+      %e : BD(_, Unit, {Eng.step.at(Eng.InLx{}, Eng.KCo{}, c, pd, out) == Eng.P{Eng.Bad{}, pd, out} : Eng.P})
+      Unit{}
+    case Eng.KCm{}:
+      %e : BD(_, Unit, {Eng.step.at(Eng.InLx{}, Eng.KCm{}, c, pd, out) == Eng.P{Eng.Bad{}, pd, out} : Eng.P})
+      Unit{}
+    case Eng.KDg{}:
+      %e : BD(_, Unit, {Eng.step.at(Eng.InLx{}, Eng.KDg{}, c, pd, out) == Eng.P{Eng.Bad{}, pd, out} : Eng.P})
+      Unit{}
+    case Eng.KTk{}:
+      %e : BD(_, Unit, {Eng.step.at(Eng.InLx{}, Eng.KTk{}, c, pd, out) == Eng.P{Eng.Bad{}, pd, out} : Eng.P})
+      Unit{}
+    case Eng.KVc{}:
+      %e : BD(_, Unit, {Eng.step.at(Eng.InLx{}, Eng.KVc{}, c, pd, out) == Eng.P{Eng.Bad{}, pd, out} : Eng.P})
+      Unit{}
+    case Eng.KCt{}:
+      {==}
+
+def Laws.value_refuses(c, pd, out, e):
+  value_bad(Eng.cls(c), c, pd, out, e)
+
+def conn_bad(
+  k: Eng.Cls, c: U32, t: List<&2, U32>, a: Bool, b: Bool, pd: Eng.Pend, out: List<&2, Eng.Req>,
+  e: {Spec.in.value(k) == False{} : Bool}
+) -> {Eng.step.at(Eng.InLc{t, a, b}, k, c, pd, out) == Eng.P{Eng.Bad{}, pd, out} : Eng.P}:
+  match k:
+    case Eng.KSp{}:
+      %e : BD(_, Unit, {Eng.step.at(Eng.InLc{t, a, b}, Eng.KSp{}, c, pd, out) == Eng.P{Eng.Bad{}, pd, out} : Eng.P})
+      Unit{}
+    case Eng.KHt{}:
+      %e : BD(_, Unit, {Eng.step.at(Eng.InLc{t, a, b}, Eng.KHt{}, c, pd, out) == Eng.P{Eng.Bad{}, pd, out} : Eng.P})
+      Unit{}
+    case Eng.KCr{}:
+      %e : BD(_, Unit, {Eng.step.at(Eng.InLc{t, a, b}, Eng.KCr{}, c, pd, out) == Eng.P{Eng.Bad{}, pd, out} : Eng.P})
+      Unit{}
+    case Eng.KLf{}:
+      {==}
+    case Eng.KCo{}:
+      %e : BD(_, Unit, {Eng.step.at(Eng.InLc{t, a, b}, Eng.KCo{}, c, pd, out) == Eng.P{Eng.Bad{}, pd, out} : Eng.P})
+      Unit{}
+    case Eng.KCm{}:
+      %e : BD(_, Unit, {Eng.step.at(Eng.InLc{t, a, b}, Eng.KCm{}, c, pd, out) == Eng.P{Eng.Bad{}, pd, out} : Eng.P})
+      Unit{}
+    case Eng.KDg{}:
+      %e : BD(_, Unit, {Eng.step.at(Eng.InLc{t, a, b}, Eng.KDg{}, c, pd, out) == Eng.P{Eng.Bad{}, pd, out} : Eng.P})
+      Unit{}
+    case Eng.KTk{}:
+      %e : BD(_, Unit, {Eng.step.at(Eng.InLc{t, a, b}, Eng.KTk{}, c, pd, out) == Eng.P{Eng.Bad{}, pd, out} : Eng.P})
+      Unit{}
+    case Eng.KVc{}:
+      %e : BD(_, Unit, {Eng.step.at(Eng.InLc{t, a, b}, Eng.KVc{}, c, pd, out) == Eng.P{Eng.Bad{}, pd, out} : Eng.P})
+      Unit{}
+    case Eng.KCt{}:
+      {==}
+
+def Laws.conn_refuses(c, t, a, b, pd, out, e):
+  conn_bad(Eng.cls(c), c, t, a, b, pd, out, e)
+
+
+def Laws.parse_get():
+  {==}
+
+def Laws.parse_body():
+  {==}
+
+def Laws.parse_hash_twin():
+  {==}
+
+def Laws.parse_agree():
+  {==}
+
+def Laws.parse_upgrade():
+  {==}
+
+def Laws.rest_upgrade():
+  {==}
+
+def Laws.refuse_space_colon():
+  {==}
+
+def Laws.refuse_te_space_colon():
+  {==}
+
+def Laws.refuse_te():
+  {==}
+
+def Laws.refuse_two_lengths():
+  {==}
+
+def Laws.refuse_wrap():
+  {==}
+
+def Laws.refuse_past_cap():
+  {==}
+
+def Laws.refuse_not_digits():
+  {==}
+
+def Laws.refuse_list():
+  {==}
+
+def Laws.refuse_fold():
+  {==}
+
+def Laws.refuse_bare_lf():
+  {==}
+
+def Laws.refuse_no_colon():
+  {==}
+
+def Laws.refuse_target_cr():
+  {==}
+
+def Laws.refuse_no_host():
+  {==}
+
+def Laws.refuse_two_hosts():
+  {==}
+
+def Laws.refuse_version():
+  {==}
+
+def Laws.refuse_after_one():
+  {==}
+
+def Laws.health_closing():
+  {==}
 
 def Laws.health_is_built():
   {==}
