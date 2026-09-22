@@ -53,16 +53,37 @@ buffer rebuilding a dead state. So the machine never stops: completing
 a message emits it and rolls straight into the next one, which is what
 a pipelining parser should do anyway.
 
-Field names are recognised by their FNV-1a hash, folded byte by byte as
-the name is read, so a name is never built, stored or compared as
-bytes. At the colon the value scanner is chosen by that hash: a
-Content-Length value accumulates a decimal, a Connection value a hash,
-and every other value takes the scanner that does no work per byte.
+Every byte is first classed as the RFC's grammar sees it (a space, a
+tab, a line end, a colon, a comma, a digit, a token byte, any other
+visible byte, a control), and every state has a row only for the
+classes it can carry. A field name is kept as its bytes, lowercased,
+and at the colon it is looked up in a table of the six names this
+engine acts on by comparing those bytes: it once went by a 32-bit
+FNV-1a hash of them, and `x-v5fged` hashed to Content-Length's value
+and was framed as one. The value scanner is chosen by the field: a
+Content-Length accumulates digits, Connection and Upgrade are read as
+comma lists of tokens, and every other value takes the scanner that
+does no work per byte.
 
 What it accepts is deliberately small, because a framing disagreement
-is how requests get smuggled: HTTP/1.1 only, Content-Length only, that
-length all digits, and no Transfer-Encoding at all. `Bad{}` is never
+is how requests get smuggled: HTTP/1.1 only, exactly one Host,
+Content-Length only, that length all digits (refused at the digit that
+crosses the body cap, so it cannot wrap) and the same wherever it is
+repeated, and no Transfer-Encoding at all, refused at its colon in any
+case. A space before a colon, a folded line, a line with no colon, a
+bare LF, a control byte in a value or in the target are each a `400`.
+Empty lines before a request line are skipped (RFC 9112 2.2), and a
+query is no part of the path a request routes by. `Bad{}` is never
 left.
+
+What a read's requests earn goes out in order, and a request that ends
+what the connection reads is the last one served from it: after a
+`Connection: close` (anywhere in its list), a `/events` stream or a
+`101`, nothing further is answered as HTTP. A broken grammar later in a
+read still sends the replies owed before it, then the `400`, then
+closes. The reply that ends a connection says `connection: close`.
+After a `101` the bytes that followed the upgrade in the same read go
+to the frame reader, and their replies leave with the `101`.
 
 `conn` is bounded by fuel rather than `@unsafe`, so a peer that dribbles
 bytes forever runs it out and is dropped. The accept loop is the one
@@ -272,6 +293,27 @@ decides to split a message. It is also what licenses keeping no buffer.
 `bad_absorbs` and `bad_feeds` say no byte moves the reader out of
 `Bad{}` — without them a smuggled request could follow a refused one on
 the same connection and be served.
+
+The framing laws hold the reader to `spec.bend`, a reference written
+from RFC 9110's character sets and field names the obvious way.
+`cls_is_spec` and `lower_is_spec` say the reader classes and lowercases
+all 256 bytes as the reference does. `field_by_bytes` says, for every
+name, that the field the reader takes it for is the table entry spelled
+with exactly its bytes, or none. Then, for every message state:
+`te_refused` (a Transfer-Encoding dies at its colon), `name_refuses`,
+`line_refuses`, `clen_refuses`, `target_refuses`, `value_refuses` and
+`conn_refuses` (each part of a head refuses every byte class the grammar
+has no place for there: a space before a colon, a fold, a sign in a
+length, a control in the target), `clen_disagree` (two lengths that
+differ are refused), `host_once` and `rest_feeds` (after an upgrade
+nothing is read as HTTP). Twenty-two closed laws run the real reader
+on the smuggling inputs; `feed_split` carries each to every chunking.
+Every one of the review's mutations of the reader -- a target refused,
+a Transfer-Encoding accepted, a body one byte short, a non-digit length
+accepted, a name constant changed -- and six more of the same kind
+(a fold, a disagreeing length or a missing Host accepted, a space
+before a colon, a length that wraps, names matched by their first byte)
+is rejected by the checker.
 
 The five `*_is_built` laws each say one written-out reply is byte for
 byte what `reply()` returns for the arguments named beside it. Those

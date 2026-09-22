@@ -44,17 +44,21 @@ timeouts, graceful shutdown, and a shared port for running one copy per
 core. 1.6 MB static binary. `demos/io_resp` is a RESP reader written to
 test whether the approach generalises (see **What is unfinished**).
 
-    bend demos/io_http_engine/PROOF.bend          # 58 laws
+    bend demos/io_http_engine/PROOF.bend          # 95 laws
     bend demos/io_http_engine/main.bend -o httpd
     ./httpd --port 8080 --root www --tls-cert cert.pem --tls-key key.pem
 
 Four gates, and it is worth knowing what each one is for, because they
 catch different things and three of them have caught real bugs:
 
-- **`PROOF.bend`** -- 58 laws. 12 are theorems quantified over all
+- **`PROOF.bend`** -- 95 laws. 23 are theorems quantified over all
   inputs (chunking never changes a parse; a refused message is never
-  revived; no request target opens a path outside the root, a dotfile
-  or a name with a control byte); 46 are closed instances -- RFC vectors, route tables,
+  revived; a field is known by its bytes, and every framing ambiguity
+  a request is smuggled with is refused in every message state; no
+  request target opens a path outside the root, a dotfile or a name
+  with a control byte), and two more cover all 256 bytes by exhaustion;
+  70 are closed instances -- RFC vectors, smuggling vectors run through
+  the reader, route tables,
   specific paths, literals proved equal to their builder -- which are
   test vectors the compiler recomputes and so cannot rot.
 - **`check.c`** -- 39 behavioural cases over a socket, plus 17 for the
