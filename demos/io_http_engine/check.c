@@ -377,8 +377,7 @@ int main(int argc, char** argv) {
 
   n = one(TEXT("GET /echo HTTP/1.1\r\nHost: x\r\ncontent-length: 5x\r\n\r\n"),
     b, sizeof(b), 0);
-  check("a non-digit Content-Length is not a length",
-    has(b, n, "200 OK") && has(b, n, "content-length: 0"), b, n);
+  check("a non-digit Content-Length is refused", has(b, n, "400 Bad Request"), b, n);
 
   n = one(TEXT("GET /health HTTP/1.1\r\nHost: x\r\nconnection: close\r\n\r\n"),
     b, sizeof(b), 0);

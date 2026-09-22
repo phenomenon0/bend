@@ -15,10 +15,12 @@
 # wants.
 #
 # What it accepts is deliberately small, because a framing disagreement
-# is how requests get smuggled: HTTP/1.1 only, Content-Length only, that
-# length all digits, and no Transfer-Encoding at all. Everything else is
-# refused, and Bad{} is never left. LAWS.bend states those as laws and
-# PROOF.bend proves them.
+# is how requests get smuggled: HTTP/1.1 only, exactly one Host,
+# Content-Length only, that length all digits and the same wherever it
+# is repeated, no Transfer-Encoding at all, and every field name known by
+# its bytes. A space before a colon, a folded line, a bare LF, a control
+# byte are each refused, and Bad{} is never left. LAWS.bend states those
+# as laws and PROOF.bend proves them.
 #
 # Every byte on the wire is a byte. TCP.recv and TCP.send carry String,
 # and a String is decoded as UTF-8, so a body that is not text comes
@@ -36,32 +38,94 @@ import ./ws.bend as Ws
 # Bytes
 # =====
 
-# The head grammar branches on four delimiters; everything else is a
-# token byte, so one class per delimiter and one for the rest.
+# What a byte is to the head grammar (RFC 9110 5.6.2, RFC 9112 5): a
+# space, a tab, the two line ends, the colon, the comma that separates
+# list members, a digit, any other token character, any other visible
+# byte (or obs-text), and a control, which no part of a head may carry.
+# Every state below branches on these ten classes and nothing finer.
 type Cls is Data:
   KSp{}
+  KHt{}
   KCr{}
   KLf{}
   KCo{}
-  KCh{}
+  KCm{}
+  KDg{}
+  KTk{}
+  KVc{}
+  KCt{}
 
-def cls.go(sp: Bool, cr: Bool, lf: Bool, co: Bool) -> Cls:
-  match sp cr lf co:
+def cls.low(sp: Bool, ht: Bool, cr: Bool, lf: Bool) -> Cls:
+  match sp ht cr lf:
     case True{} _ _ _:
       KSp{}
     case _ True{} _ _:
-      KCr{}
+      KHt{}
     case _ _ True{} _:
-      KLf{}
+      KCr{}
     case _ _ _ True{}:
-      KCo{}
+      KLf{}
     case _ _ _ _:
-      KCh{}
+      KCt{}
+
+# 127 is DEL, a control; past it is obs-text, which a value may carry
+def cls.high(del: Bool) -> Cls:
+  match del:
+    case True{}:
+      KCt{}
+    case False{}:
+      KVc{}
+
+def any(+c: U32, xs: List<&2, U32>) -> Bool:
+  match xs:
+    case Nil{}:
+      False{}
+    case Con{x, t}:
+      U32.is_eq(c, x) || any(c, t)
+
+# the token characters that are neither letters nor digits
+def tsym(+c: U32) -> Bool:
+  any(c, [45, 46, 95, 33, 35, 36, 37, 38, 39, 42, 43, 94, 96, 124, 126])
+
+def cls.sym(co: Bool, cm: Bool, tk: Bool) -> Cls:
+  match co cm tk:
+    case True{} _ _:
+      KCo{}
+    case _ True{} _:
+      KCm{}
+    case _ _ True{}:
+      KTk{}
+    case _ _ _:
+      KVc{}
+
+def alpha(+c: U32) -> Bool:
+  (U32.is_le(65, c) && U32.is_le(c, 90)) || (U32.is_le(97, c) && U32.is_le(c, 122))
+
+def digit(+c: U32) -> Bool:
+  U32.is_le(48, c) && U32.is_le(c, 57)
+
+def cls.vis(+c: U32, al: Bool, dg: Bool) -> Cls:
+  match al dg:
+    case True{} _:
+      KTk{}
+    case False{} True{}:
+      KDg{}
+    case False{} False{}:
+      cls.sym(U32.is_eq(c, 58), U32.is_eq(c, 44), tsym(c))
+
+def cls.go(+c: U32, lo: Bool, hi: Bool) -> Cls:
+  match lo hi:
+    case True{} _:
+      cls.low(U32.is_eq(c, 32), U32.is_eq(c, 9), U32.is_eq(c, 13), U32.is_eq(c, 10))
+    case False{} True{}:
+      cls.high(U32.is_eq(c, 127))
+    case False{} False{}:
+      cls.vis(c, alpha(c), digit(c))
 
 def cls(+c: U32) -> Cls:
-  cls.go(U32.is_eq(c, 32), U32.is_eq(c, 13), U32.is_eq(c, 10), U32.is_eq(c, 58))
+  cls.go(c, U32.is_lt(c, 33), U32.is_le(127, c))
 
-# Field names are case-insensitive, so they hash lowercased.
+# Field names are case-insensitive, so they are read lowercased.
 def lower.go(+c: U32, up: Bool) -> U32:
   match up:
     case True{}:
@@ -71,9 +135,6 @@ def lower.go(+c: U32, up: Bool) -> U32:
 
 def lower(+c: U32) -> U32:
   lower.go(c, U32.is_le(65, c) && U32.is_le(c, 90))
-
-def digit(+c: U32) -> Bool:
-  U32.is_le(48, c) && U32.is_le(c, 57)
 
 # The reader's unit. A byte list, one cell per byte, is what the socket
 # hands over; replies go back as Bytes.
@@ -106,51 +167,130 @@ def beq(a: List<&2, U32>, b: List<&2, U32>, acc: Bool) -> Bool:
     case Con{x, t} Con{y, u}:
       beq(t, u, acc && U32.is_eq(x, y))
 
-# FNV-1a over a token, one byte at a time. A field name is recognised
-# by its hash, so a name is never built, stored or compared as bytes.
-def fnv(h: U32, c: U32) -> U32:
-  (U32.xor(h, c) * 16777619 : U32)
+# Byte-list equality, structurally: what names, methods and the version
+# are recognised by. LAWS.bend proves it is the reference's equality.
+def bytes.eq(a: List<&2, U32>, b: List<&2, U32>) -> Bool:
+  match a b:
+    case Nil{} Nil{}:
+      True{}
+    case Nil{} Con{y, u}:
+      False{}
+    case Con{x, t} Nil{}:
+      False{}
+    case Con{x, t} Con{y, u}:
+      U32.is_eq(x, y) && bytes.eq(t, u)
 
-def fnv.new() -> U32:
-  2166136261
+# Names
+# =====
 
-def hash.version() -> U32:
-  4120326248
+# The fields this engine acts on. A name is recognised by its bytes,
+# never by a digest of them: two names that differ in one byte are two
+# names, so no other field can be taken for a Content-Length.
+type Fld is Data:
+  FTe{}
+  FCl{}
+  FConn{}
+  FUp{}
+  FKey{}
+  FHost{}
+  FOther{}
 
-def hash.content_length() -> U32:
-  1308181789
+# a name as the reader holds it, lowercased and backwards, and the field
+# it names
+type Known is Data:
+  Known{k: List<&2, U32>, f: Fld}
 
-def hash.transfer_encoding() -> U32:
-  3719590988
+# transfer-encoding, content-length, connection, upgrade,
+# sec-websocket-key and host, each backwards; LAWS.bend proves the
+# lookup through this table is the lookup through the readable one
+def fld.table() -> List<&2, Known>:
+  [Known{[103, 110, 105, 100, 111, 99, 110, 101, 45, 114, 101, 102, 115, 110, 97, 114, 116], FTe{}},
+   Known{[104, 116, 103, 110, 101, 108, 45, 116, 110, 101, 116, 110, 111, 99], FCl{}},
+   Known{[110, 111, 105, 116, 99, 101, 110, 110, 111, 99], FConn{}},
+   Known{[101, 100, 97, 114, 103, 112, 117], FUp{}},
+   Known{[121, 101, 107, 45, 116, 101, 107, 99, 111, 115, 98, 101, 119, 45, 99, 101, 115], FKey{}},
+   Known{[116, 115, 111, 104], FHost{}}]
 
-def hash.connection() -> U32:
-  951688921
+def fld.pick(b: Bool, f: Fld, rest: Fld) -> Fld:
+  match b:
+    case True{}:
+      f
+    case False{}:
+      rest
 
-def hash.close() -> U32:
-  667630371
+def fld.find(+k: List<&2, U32>, tbl: List<&2, Known>) -> Fld:
+  match tbl:
+    case Nil{}:
+      FOther{}
+    case Con{h, t}:
+      match h:
+        case Known{n, f}:
+          fld.pick(bytes.eq(k, n), f, fld.find(k, t))
 
-def hash.upgrade() -> U32:
-  3700935799
+def fld.of(+k: List<&2, U32>) -> Fld:
+  fld.find(k, fld.table())
 
-def hash.sec_websocket_key() -> U32:
-  3400920102
+# the method, by its bytes: GET and HEAD are served, and anything else
+# is a method this engine does not implement
+type Meth is Data:
+  MGet{}
+  MHead{}
+  MOther{}
 
-def hash.websocket() -> U32:
-  3470555248
+def meth.pick(get: Bool, head: Bool) -> Meth:
+  match get head:
+    case True{} _:
+      MGet{}
+    case False{} True{}:
+      MHead{}
+    case False{} False{}:
+      MOther{}
 
-def m.get() -> U32:
-  2531704439
+# the method as read, backwards
+def meth.of(+m: List<&2, U32>) -> Meth:
+  meth.pick(bytes.eq(m, [84, 69, 71]), bytes.eq(m, [68, 65, 69, 72]))
 
-def m.head() -> U32:
-  811237315
+def meth.get(m: Meth) -> Bool:
+  match m:
+    case MGet{}:
+      True{}
+    case MHead{}:
+      False{}
+    case MOther{}:
+      False{}
+
+def meth.head(m: Meth) -> Bool:
+  match m:
+    case MGet{}:
+      False{}
+    case MHead{}:
+      True{}
+    case MOther{}:
+      False{}
+
+# HTTP/1.1, backwards
+def ver.lit() -> List<&2, U32>:
+  [49, 46, 49, 47, 80, 84, 84, 72]
+
+# the list members this engine acts on, backwards: close and upgrade in
+# a Connection, websocket in an Upgrade
+def tok.close() -> List<&2, U32>:
+  [101, 115, 111, 108, 99]
+
+def tok.upgrade() -> List<&2, U32>:
+  [101, 100, 97, 114, 103, 112, 117]
+
+def tok.websocket() -> List<&2, U32>:
+  [116, 101, 107, 99, 111, 115, 98, 101, 119]
 
 # Requests
 # ========
 
-# A parsed message: the method as a hash, the target and body as bytes,
-# and whether the peer asked to close.
+# A parsed message: the method, the target and body as bytes, whether
+# the peer asked to close, and whether it asked to become a WebSocket
+# and with what key.
 type Req is Data:
-  Req{meth: U32, path: List<&2, U32>, body: List<&2, U32>, close: Bool,
+  Req{meth: Meth, path: List<&2, U32>, body: List<&2, U32>, close: Bool,
     ws: Bool, key: List<&2, U32>}
 
 def req.close(r: Req) -> Bool:
@@ -158,8 +298,11 @@ def req.close(r: Req) -> Bool:
     case Req{meth, path, body, close, ws, key}:
       close
 
-# The fields of the message being read. It is rebuilt only when a token
-# closes, so an ordinary byte leaves it untouched and shares it.
+def req.ws(r: Req) -> Bool:
+  match r:
+    case Req{meth, path, body, close, ws, key}:
+      ws
+
 # What a message has said about becoming a WebSocket. Plain{} is the
 # answer for every request that never names one of the three headers,
 # and it carries no fields, so the ordinary path allocates nothing for
@@ -175,19 +318,24 @@ def up.key(u: Up, k: List<&2, U32>) -> Up:
     case Asks{key, up, cu}:
       Asks{k, up, cu}
 
+# an Upgrade or a Connection field adds to what the earlier ones said
 def up.up(u: Up, v: Bool) -> Up:
-  match u:
-    case Plain{}:
-      Asks{Nil{}, v, False{}}
-    case Asks{key, up, cu}:
-      Asks{key, v, cu}
+  match u v:
+    case Plain{} False{}:
+      Plain{}
+    case Plain{} True{}:
+      Asks{Nil{}, True{}, False{}}
+    case Asks{key, up, cu} w:
+      Asks{key, up || w, cu}
 
 def up.cu(u: Up, v: Bool) -> Up:
-  match u:
-    case Plain{}:
-      Asks{Nil{}, False{}, v}
-    case Asks{key, up, cu}:
-      Asks{key, up, v}
+  match u v:
+    case Plain{} False{}:
+      Plain{}
+    case Plain{} True{}:
+      Asks{Nil{}, False{}, True{}}
+    case Asks{key, up, cu} w:
+      Asks{key, up, cu || w}
 
 def has(k: List<&2, U32>) -> Bool:
   match k:
@@ -205,86 +353,71 @@ def up.asked(u: Up) -> Bool & List<&2, U32>:
     case Asks{+key, up, cu}:
       (up && cu && has(key), key)
 
+# The length a message announced: none, or one value every
+# Content-Length field agreed on.
+type Cl is Data:
+  NoCl{}
+  Has{v: U32}
+
+# how many Host fields the message carried: HTTP/1.1 requires exactly one
+type Hosts is Data:
+  H0{}
+  H1{}
+  H2{}
+
+# The fields of the message being read. It is rebuilt only when a token
+# closes, so an ordinary byte leaves it untouched and shares it.
 type Pend is Data:
-  Pend{meth: U32, path: List<&2, U32>, clen: U32, close: Bool, te: Bool,
+  Pend{meth: Meth, path: List<&2, U32>, cl: Cl, close: Bool, host: Hosts,
     ws: Up}
 
 def pend.new() -> Pend:
-  Pend{0, Nil{}, 0, False{}, False{}, Plain{}}
+  Pend{MOther{}, Nil{}, NoCl{}, False{}, H0{}, Plain{}}
 
 # a new method token starts a new message, so the rest resets with it
-def pend.meth(pd: Pend, h: U32) -> Pend:
+def pend.meth(pd: Pend, m: Meth) -> Pend:
   match pd:
-    case Pend{meth, path, clen, close, te, ws}:
-      Pend{h, Nil{}, 0, False{}, False{}, Plain{}}
+    case Pend{meth, path, cl, close, host, ws}:
+      Pend{m, Nil{}, NoCl{}, False{}, H0{}, Plain{}}
 
 def pend.path(pd: Pend, p: List<&2, U32>) -> Pend:
   match pd:
-    case Pend{meth, path, clen, close, te, ws}:
-      Pend{meth, p, clen, close, te, ws}
+    case Pend{meth, path, cl, close, host, ws}:
+      Pend{meth, p, cl, close, host, ws}
 
-# A closed field, applied by name hash: a length, a connection token,
-# or a Transfer-Encoding, which poisons the message rather than framing
-# it a second way.
-def pend.set.go(
-  meth: U32, path: List<&2, U32>, clen: U32, close: Bool, te: Bool, ws: Up,
-  v: U32, isc: Bool, cl: Bool, isl: Bool, ist: Bool
-) -> Pend:
-  match isc isl ist:
-    case True{} _ _:
-      Pend{meth, path, clen, cl, te, ws}
-    case _ True{} _:
-      Pend{meth, path, v, close, te, ws}
-    case _ _ True{}:
-      Pend{meth, path, clen, close, True{}, ws}
-    case _ _ _:
-      Pend{meth, path, clen, close, te, ws}
+def hosts.more(h: Hosts) -> Hosts:
+  match h:
+    case H0{}:
+      H1{}
+    case H1{}:
+      H2{}
+    case H2{}:
+      H2{}
 
-def pend.set(pd: Pend, v: U32, isc: Bool, cl: Bool, isl: Bool, ist: Bool) -> Pend:
+def pend.host(pd: Pend) -> Pend:
   match pd:
-    case Pend{meth, path, clen, close, te, ws}:
-      pend.set.go(meth, path, clen, close, te, ws, v, isc, cl, isl, ist)
+    case Pend{meth, path, cl, close, host, ws}:
+      Pend{meth, path, cl, close, hosts.more(host), ws}
 
-def pend.poison(pd: Pend) -> Pend:
+# a Connection value closes: close anywhere in its list asks to close,
+# upgrade anywhere asks to upgrade
+def pend.conn(pd: Pend, cl: Bool, up: Bool) -> Pend:
   match pd:
-    case Pend{meth, path, clen, close, te, ws}:
-      Pend{meth, path, clen, close, True{}, ws}
+    case Pend{meth, path, c, close, host, ws}:
+      Pend{meth, path, c, close || cl, host, up.cu(ws, up)}
 
-def pend.len(pd: Pend) -> Pend & U32:
-  match pd:
-    case Pend{meth, path, +clen, close, te, ws}:
-      (Pend{meth, path, clen, close, te, ws}, clen)
-
-def pend.te_if(pd: Pend, is_te: Bool) -> Pend:
-  match is_te:
-    case True{}:
-      pend.poison(pd)
-    case False{}:
-      pd
-
-def pend.te(pd: Pend) -> Pend & Bool:
-  match pd:
-    case Pend{meth, path, clen, close, +te, ws}:
-      (Pend{meth, path, clen, close, te, ws}, te)
-
-# the upgrade state, changed as each of its headers closes
 def pend.up(pd: Pend, v: Bool) -> Pend:
   match pd:
-    case Pend{meth, path, clen, close, te, ws}:
-      Pend{meth, path, clen, close, te, up.up(ws, v)}
-
-def pend.cu(pd: Pend, v: Bool) -> Pend:
-  match pd:
-    case Pend{meth, path, clen, close, te, ws}:
-      Pend{meth, path, clen, close, te, up.cu(ws, v)}
+    case Pend{meth, path, cl, close, host, ws}:
+      Pend{meth, path, cl, close, host, up.up(ws, v)}
 
 def pend.key(pd: Pend, k: List<&2, U32>) -> Pend:
   match pd:
-    case Pend{meth, path, clen, close, te, ws}:
-      Pend{meth, path, clen, close, te, up.key(ws, k)}
+    case Pend{meth, path, cl, close, host, ws}:
+      Pend{meth, path, cl, close, host, up.key(ws, k)}
 
 def pend.req.go(
-  meth: U32, path: List<&2, U32>, body: List<&2, U32>, close: Bool,
+  meth: Meth, path: List<&2, U32>, body: List<&2, U32>, close: Bool,
   asked: Bool & List<&2, U32>
 ) -> Req:
   (ws, key) = asked
@@ -292,35 +425,44 @@ def pend.req.go(
 
 def pend.req(pd: Pend, body: List<&2, U32>) -> Req:
   match pd:
-    case Pend{meth, path, clen, close, te, ws}:
+    case Pend{meth, path, cl, close, host, ws}:
       pend.req.go(meth, path, body, close, up.asked(ws))
 
 # The reader
 # ==========
 
-# InM  the method token            Lin  at the start of a line
-# InT  the target token            InN  a field name
-# InV  the version token           Ows  the space after its colon
-# CrM  a CR inside the head        InL  a Content-Length value
-# InLc a Connection value          InLx any other value, skipped
-# InLu an Upgrade value             InLk a Sec-WebSocket-Key value
-# CrL  the CR of the blank line    Bod  the body, r bytes to go
+# Pre  before a request line        PreLf the LF of an empty line there
+# InM  the method, backwards         InT  the target, backwards
+# InV  the version, backwards        CrM  a CR inside the head
+# Lin  at the start of a field line  InN  a field name, lowercased, backwards
+# InL0 a Content-Length, no digit    InL  its digits, v so far
+# InLt the whitespace after them     InLc a Connection list: the member
+#                                         being read, close and upgrade seen
+# InLu an Upgrade list, websocket    InLk0/InLk a Sec-WebSocket-Key value
+# InLx any other value, skipped      CrL  the CR of the blank line
+# Bod  the body, r bytes to go       Rest what follows a request that
+#                                         asked to upgrade, for the frame reader
 # Bad  the grammar broke; absorbing, and never left
 type St is Data:
-  InM{h: U32}
+  Pre{}
+  PreLf{}
+  InM{m: List<&2, U32>}
   InT{p: List<&2, U32>}
-  InV{h: U32}
+  InV{v: List<&2, U32>}
   CrM{}
   Lin{}
-  InN{h: U32}
-  Ows{n: U32}
-  InL{v: U32, d: Bool}
-  InLc{g: U32}
-  InLx{}
-  InLu{g: U32}
+  InN{n: List<&2, U32>}
+  InL0{}
+  InL{v: U32}
+  InLt{v: U32}
+  InLc{t: List<&2, U32>, cl: Bool, up: Bool}
+  InLu{t: List<&2, U32>, ws: Bool}
+  InLk0{}
   InLk{k: List<&2, U32>}
+  InLx{}
   CrL{}
   Bod{r: U32, b: List<&2, U32>}
+  Rest{bs: List<&2, U32>}
   Bad{}
 
 # The whole reader: where the machine is, the message it is filling,
@@ -329,94 +471,168 @@ type P is Data:
   P{st: St, pd: Pend, out: List<&2, Req>}
 
 def p.new() -> P:
-  P{InM{fnv.new()}, pend.new(), Nil{}}
+  P{Pre{}, pend.new(), Nil{}}
+
+# after a message that asked to upgrade, what follows is not HTTP: it
+# is kept as it came for the frame reader
+def emit.next(ws: Bool) -> St:
+  match ws:
+    case True{}:
+      Rest{Nil{}}
+    case False{}:
+      Pre{}
+
+def emit.go(r: Req, out: List<&2, Req>) -> P:
+  match r:
+    case Req{meth, path, body, close, +ws, key}:
+      P{emit.next(ws), pend.new(), Req{meth, path, body, close, ws, key} <> out}
 
 # a completed message rolls the machine straight into the next one
 def emit(pd: Pend, body: List<&2, U32>, out: List<&2, Req>) -> P:
-  P{InM{fnv.new()}, pend.new(), pend.req(pd, body) <> out}
+  emit.go(pend.req(pd, body), out)
+
+# the method closes at its space, and a new message starts with it
+def step.meth(+m: List<&2, U32>, pd: Pend, out: List<&2, Req>) -> P:
+  P{InT{Nil{}}, pend.meth(pd, meth.of(m)), out}
+
+# the target closes at its space; an empty one is no target
+def step.target(p: List<&2, U32>, pd: Pend, out: List<&2, Req>) -> P:
+  match p:
+    case Nil{}:
+      P{Bad{}, pd, out}
+    case Con{c, t}:
+      P{InV{Nil{}}, pend.path(pd, rev(Con{c, t})), out}
 
 # the version token must read exactly HTTP/1.1
-def step.ver(h: U32, pd: Pend, out: List<&2, Req>, ok: Bool) -> P:
+def step.ver(ok: Bool, pd: Pend, out: List<&2, Req>) -> P:
   match ok:
     case True{}:
       P{CrM{}, pd, out}
     case False{}:
       P{Bad{}, pd, out}
 
-# a Content-Length value closes: it counts only if every byte was a
-# digit, so "5x" is not a length and cannot disagree with anything
-def step.clen(v: U32, d: Bool, pd: Pend, out: List<&2, Req>) -> P:
-  P{CrM{}, pend.set(pd, v, False{}, False{}, d, False{}), out}
+# where a value starts, by the field it belongs to
+def val.init(f: Fld) -> St:
+  match f:
+    case FTe{}:
+      Bad{}
+    case FCl{}:
+      InL0{}
+    case FConn{}:
+      InLc{Nil{}, False{}, False{}}
+    case FUp{}:
+      InLu{Nil{}, False{}}
+    case FKey{}:
+      InLk0{}
+    case FHost{}:
+      InLx{}
+    case FOther{}:
+      InLx{}
 
-# a Connection value closes
-def step.conn(+g: U32, pd: Pend, out: List<&2, Req>) -> P:
-  P{CrM{}, pend.cu(pend.set(pd, 0, True{}, U32.is_eq(g, hash.close()), False{},
-    False{}), U32.is_eq(g, hash.upgrade())), out}
+# a name closes at its colon. A Transfer-Encoding is refused there,
+# whatever it says: this engine frames by length only, and a message
+# that names a second framing is how requests get smuggled.
+def step.name(f: Fld, pd: Pend, out: List<&2, Req>) -> P:
+  match f:
+    case FTe{}:
+      P{Bad{}, pd, out}
+    case FCl{}:
+      P{InL0{}, pd, out}
+    case FConn{}:
+      P{InLc{Nil{}, False{}, False{}}, pd, out}
+    case FUp{}:
+      P{InLu{Nil{}, False{}}, pd, out}
+    case FKey{}:
+      P{InLk0{}, pd, out}
+    case FHost{}:
+      P{InLx{}, pend.host(pd), out}
+    case FOther{}:
+      P{InLx{}, pd, out}
 
-# an Upgrade value closes: it named websocket or it did not
-def step.up(g: U32, pd: Pend, out: List<&2, Req>) -> P:
-  P{CrM{}, pend.up(pd, U32.is_eq(g, hash.websocket())), out}
+# the most body this engine will hold for one message. A length past it
+# is refused at the digit that crosses it, so an announced length is
+# never a way to make the engine allocate, and never wraps: the value
+# so far is at most this, so ten times it plus a digit fits a U32.
+def body.cap() -> U32:
+  1048576
+
+def step.digit.go(+n: U32, pd: Pend, out: List<&2, Req>, big: Bool) -> P:
+  match big:
+    case True{}:
+      P{Bad{}, pd, out}
+    case False{}:
+      P{InL{n}, pd, out}
+
+def step.digit.n(+n: U32, pd: Pend, out: List<&2, Req>) -> P:
+  step.digit.go(n, pd, out, U32.is_lt(body.cap(), n))
+
+def step.digit(v: U32, c: U32, pd: Pend, out: List<&2, Req>) -> P:
+  step.digit.n((v * 10 + (c - 48) : U32), pd, out)
+
+# a second Content-Length must say what the first did (RFC 9112 6.3)
+def step.clen.dup(pd: Pend, out: List<&2, Req>, agree: Bool) -> P:
+  match agree:
+    case True{}:
+      P{CrM{}, pd, out}
+    case False{}:
+      P{Bad{}, pd, out}
+
+def step.clen.go(
+  meth: Meth, path: List<&2, U32>, cl: Cl, close: Bool, host: Hosts, ws: Up,
+  +v: U32, out: List<&2, Req>
+) -> P:
+  match cl:
+    case NoCl{}:
+      P{CrM{}, Pend{meth, path, Has{v}, close, host, ws}, out}
+    case Has{+w}:
+      step.clen.dup(Pend{meth, path, Has{w}, close, host, ws}, out, U32.is_eq(v, w))
+
+# a Content-Length value closes
+def step.clen(+v: U32, pd: Pend, out: List<&2, Req>) -> P:
+  match pd:
+    case Pend{meth, path, cl, close, host, ws}:
+      step.clen.go(meth, path, cl, close, host, ws, v, out)
+
+# a list member closes at a comma, a space or the line's end
+def step.conn(+t: List<&2, U32>, cl: Bool, up: Bool, pd: Pend, out: List<&2, Req>) -> P:
+  P{CrM{}, pend.conn(pd, cl || bytes.eq(t, tok.close()), up || bytes.eq(t, tok.upgrade())), out}
+
+def tok.conn(+t: List<&2, U32>, cl: Bool, up: Bool) -> St:
+  InLc{Nil{}, cl || bytes.eq(t, tok.close()), up || bytes.eq(t, tok.upgrade())}
+
+def step.upv(+t: List<&2, U32>, ws: Bool, pd: Pend, out: List<&2, Req>) -> P:
+  P{CrM{}, pend.up(pd, ws || bytes.eq(t, tok.websocket())), out}
+
+def tok.up(+t: List<&2, U32>, ws: Bool) -> St:
+  InLu{Nil{}, ws || bytes.eq(t, tok.websocket())}
 
 # a Sec-WebSocket-Key value closes, kept as it came
 def step.key(k: List<&2, U32>, pd: Pend, out: List<&2, Req>) -> P:
   P{CrM{}, pend.key(pd, rev(k)), out}
 
-# the first byte of a value picks the scanner the field needs, and
-# every other field gets the one that does no work per byte at all
-def step.val.go(
-  +c: U32, pd: Pend, out: List<&2, Req>, isl: Bool, isc: Bool, isu: Bool, isk: Bool
-) -> P:
-  match isl isc isu isk:
-    case True{} _ _ _:
-      P{InL{(c - 48 : U32), digit(c)}, pd, out}
-    case _ True{} _ _:
-      P{InLc{fnv(fnv.new(), lower(c))}, pd, out}
-    case _ _ True{} _:
-      P{InLu{fnv(fnv.new(), lower(c))}, pd, out}
-    case _ _ _ True{}:
-      P{InLk{[c]}, pd, out}
-    case _ _ _ _:
-      P{InLx{}, pd, out}
-
-def step.val(+n: U32, +c: U32, pd: Pend, out: List<&2, Req>) -> P:
-  step.val.go(c, pd, out, U32.is_eq(n, hash.content_length()),
-    U32.is_eq(n, hash.connection()), U32.is_eq(n, hash.upgrade()),
-    U32.is_eq(n, hash.sec_websocket_key()))
-
-# the most body this engine will hold for one message. A head that
-# announces more is refused as it completes, before a byte of the body
-# is read, so an announced length is never a way to make it allocate.
-def body.cap() -> U32:
-  1048576
-
-def step.head.on(pd: Pend, n: U32, out: List<&2, Req>, z: Bool, big: Bool) -> P:
-  match z big:
-    case True{} _:
-      emit(pd, Nil{}, out)
-    case False{} True{}:
-      P{Bad{}, pd, out}
-    case False{} False{}:
-      P{Bod{n, Nil{}}, pd, out}
-
-def step.head.len(pn: Pend & U32, out: List<&2, Req>) -> P:
-  (pd, +n) = pn
-  step.head.on(pd, n, out, U32.is_zero(n), U32.is_lt(body.cap(), n))
-
-def step.head.go(pd: Pend, te: Bool, out: List<&2, Req>) -> P:
-  match te:
+def step.head.len(pd: Pend, +v: U32, out: List<&2, Req>, z: Bool) -> P:
+  match z:
     case True{}:
-      P{Bad{}, pd, out}
+      emit(pd, Nil{}, out)
     case False{}:
-      step.head.len(pend.len(pd), out)
+      P{Bod{v, Nil{}}, pd, out}
 
-def step.head.te(pt: Pend & Bool, out: List<&2, Req>) -> P:
-  (pd, te) = pt
-  step.head.go(pd, te, out)
+def step.head.at(pd: Pend, cl: Cl, host: Hosts, out: List<&2, Req>) -> P:
+  match cl host:
+    case NoCl{} H1{}:
+      emit(pd, Nil{}, out)
+    case Has{+v} H1{}:
+      step.head.len(pd, v, out, U32.is_zero(v))
+    case _ _:
+      P{Bad{}, pd, out}
 
-# the blank line closes the head: refuse a message that named a second
-# framing, emit a bodyless one, or start counting the body down
+# the blank line closes the head: a message without exactly one Host is
+# refused (RFC 9112 3.2); one without a length has no body; one with a
+# length starts counting it down
 def step.head(pd: Pend, out: List<&2, Req>) -> P:
-  step.head.te(pend.te(pd), out)
+  match pd:
+    case Pend{meth, path, +cl, close, +host, ws}:
+      step.head.at(Pend{meth, path, cl, close, host, ws}, cl, host, out)
 
 def step.body.go(
   r: U32, b: List<&2, U32>, c: U32, pd: Pend, out: List<&2, Req>, last: Bool
@@ -431,67 +647,166 @@ def step.body.go(
 def step.body(+r: U32, b: List<&2, U32>, c: U32, pd: Pend, out: List<&2, Req>) -> P:
   step.body.go(r, b, c, pd, out, U32.is_eq(r, 1))
 
-# the machine: one classified byte moves it once. A token state grows
-# its hash or its bytes until its delimiter arrives; the delimiter
-# closes the token into the pending message and hands over.
+# The machine: one classified byte moves it once. A token state grows
+# its bytes until its delimiter arrives; the delimiter closes the token
+# into the pending message and hands over. Any byte a state has no row
+# for breaks the grammar: a space before a colon, a line folded onto
+# the one before, a bare LF, a control in a value or the target, a
+# length that is not all digits.
 def step.at(st: St, k: Cls, +c: U32, pd: Pend, out: List<&2, Req>) -> P:
   match st k:
-    case InM{h} KSp{}:
-      P{InT{Nil{}}, pend.meth(pd, h), out}
-    case InM{h} _:
-      P{InM{fnv(h, c)}, pd, out}
+    case Pre{} KCr{}:
+      P{PreLf{}, pd, out}
+    case Pre{} KTk{}:
+      P{InM{[c]}, pd, out}
+    case Pre{} KDg{}:
+      P{InM{[c]}, pd, out}
+    case Pre{} _:
+      P{Bad{}, pd, out}
+    case PreLf{} KLf{}:
+      P{Pre{}, pd, out}
+    case PreLf{} _:
+      P{Bad{}, pd, out}
+    case InM{m} KSp{}:
+      step.meth(m, pd, out)
+    case InM{m} KTk{}:
+      P{InM{Con{c, m}}, pd, out}
+    case InM{m} KDg{}:
+      P{InM{Con{c, m}}, pd, out}
+    case InM{m} _:
+      P{Bad{}, pd, out}
     case InT{p} KSp{}:
-      P{InV{fnv.new()}, pend.path(pd, rev(p)), out}
+      step.target(p, pd, out)
+    case InT{p} KHt{}:
+      P{Bad{}, pd, out}
+    case InT{p} KCr{}:
+      P{Bad{}, pd, out}
+    case InT{p} KLf{}:
+      P{Bad{}, pd, out}
+    case InT{p} KCt{}:
+      P{Bad{}, pd, out}
     case InT{p} _:
       P{InT{Con{c, p}}, pd, out}
-    case InV{+h} KCr{}:
-      step.ver(h, pd, out, U32.is_eq(h, hash.version()))
-    case InV{h} _:
-      P{InV{fnv(h, c)}, pd, out}
+    case InV{+v} KCr{}:
+      step.ver(bytes.eq(v, ver.lit()), pd, out)
+    case InV{v} KTk{}:
+      P{InV{Con{c, v}}, pd, out}
+    case InV{v} KDg{}:
+      P{InV{Con{c, v}}, pd, out}
+    case InV{v} KVc{}:
+      P{InV{Con{c, v}}, pd, out}
+    case InV{v} _:
+      P{Bad{}, pd, out}
     case CrM{} KLf{}:
       P{Lin{}, pd, out}
     case CrM{} _:
       P{Bad{}, pd, out}
     case Lin{} KCr{}:
       P{CrL{}, pd, out}
+    case Lin{} KTk{}:
+      P{InN{[lower(c)]}, pd, out}
+    case Lin{} KDg{}:
+      P{InN{[c]}, pd, out}
     case Lin{} _:
-      P{InN{fnv(fnv.new(), lower(c))}, pd, out}
-    case InN{+h} KCo{}:
-      P{Ows{h}, pend.te_if(pd, U32.is_eq(h, hash.transfer_encoding())), out}
-    case InN{h} _:
-      P{InN{fnv(h, lower(c))}, pd, out}
-    case Ows{n} KSp{}:
-      P{Ows{n}, pd, out}
-    case Ows{n} KCr{}:
-      P{CrM{}, pd, out}
-    case Ows{n} _:
-      step.val(n, c, pd, out)
-    case InL{v, d} KCr{}:
-      step.clen(v, d, pd, out)
-    case InL{v, d} _:
-      P{InL{(v * 10 + (c - 48) : U32), d && digit(c)}, pd, out}
-    case InLc{g} KCr{}:
-      step.conn(g, pd, out)
-    case InLc{g} _:
-      P{InLc{fnv(g, lower(c))}, pd, out}
-    case InLx{} KCr{}:
-      P{CrM{}, pd, out}
-    case InLx{} _:
-      P{InLx{}, pd, out}
-    case InLu{g} KCr{}:
-      step.up(g, pd, out)
-    case InLu{g} _:
-      P{InLu{fnv(g, lower(c))}, pd, out}
+      P{Bad{}, pd, out}
+    case InN{+n} KCo{}:
+      step.name(fld.of(n), pd, out)
+    case InN{n} KTk{}:
+      P{InN{Con{lower(c), n}}, pd, out}
+    case InN{n} KDg{}:
+      P{InN{Con{c, n}}, pd, out}
+    case InN{n} _:
+      P{Bad{}, pd, out}
+    case InL0{} KSp{}:
+      P{InL0{}, pd, out}
+    case InL0{} KHt{}:
+      P{InL0{}, pd, out}
+    case InL0{} KDg{}:
+      step.digit(0, c, pd, out)
+    case InL0{} _:
+      P{Bad{}, pd, out}
+    case InL{v} KDg{}:
+      step.digit(v, c, pd, out)
+    case InL{v} KSp{}:
+      P{InLt{v}, pd, out}
+    case InL{v} KHt{}:
+      P{InLt{v}, pd, out}
+    case InL{v} KCr{}:
+      step.clen(v, pd, out)
+    case InL{v} _:
+      P{Bad{}, pd, out}
+    case InLt{v} KSp{}:
+      P{InLt{v}, pd, out}
+    case InLt{v} KHt{}:
+      P{InLt{v}, pd, out}
+    case InLt{v} KCr{}:
+      step.clen(v, pd, out)
+    case InLt{v} _:
+      P{Bad{}, pd, out}
+    case InLc{t, a, b} KCr{}:
+      step.conn(t, a, b, pd, out)
+    case InLc{t, a, b} KSp{}:
+      P{tok.conn(t, a, b), pd, out}
+    case InLc{t, a, b} KHt{}:
+      P{tok.conn(t, a, b), pd, out}
+    case InLc{t, a, b} KCm{}:
+      P{tok.conn(t, a, b), pd, out}
+    case InLc{t, a, b} KLf{}:
+      P{Bad{}, pd, out}
+    case InLc{t, a, b} KCt{}:
+      P{Bad{}, pd, out}
+    case InLc{t, a, b} _:
+      P{InLc{Con{lower(c), t}, a, b}, pd, out}
+    case InLu{t, w} KCr{}:
+      step.upv(t, w, pd, out)
+    case InLu{t, w} KSp{}:
+      P{tok.up(t, w), pd, out}
+    case InLu{t, w} KHt{}:
+      P{tok.up(t, w), pd, out}
+    case InLu{t, w} KCm{}:
+      P{tok.up(t, w), pd, out}
+    case InLu{t, w} KLf{}:
+      P{Bad{}, pd, out}
+    case InLu{t, w} KCt{}:
+      P{Bad{}, pd, out}
+    case InLu{t, w} _:
+      P{InLu{Con{lower(c), t}, w}, pd, out}
+    case InLk0{} KSp{}:
+      P{InLk0{}, pd, out}
+    case InLk0{} KHt{}:
+      P{InLk0{}, pd, out}
+    case InLk0{} KCr{}:
+      step.key(Nil{}, pd, out)
+    case InLk0{} KLf{}:
+      P{Bad{}, pd, out}
+    case InLk0{} KCt{}:
+      P{Bad{}, pd, out}
+    case InLk0{} _:
+      P{InLk{[c]}, pd, out}
     case InLk{k} KCr{}:
       step.key(k, pd, out)
+    case InLk{k} KLf{}:
+      P{Bad{}, pd, out}
+    case InLk{k} KCt{}:
+      P{Bad{}, pd, out}
     case InLk{k} _:
       P{InLk{Con{c, k}}, pd, out}
+    case InLx{} KCr{}:
+      P{CrM{}, pd, out}
+    case InLx{} KLf{}:
+      P{Bad{}, pd, out}
+    case InLx{} KCt{}:
+      P{Bad{}, pd, out}
+    case InLx{} _:
+      P{InLx{}, pd, out}
     case CrL{} KLf{}:
       step.head(pd, out)
     case CrL{} _:
       P{Bad{}, pd, out}
     case Bod{r, b} _:
       step.body(r, b, c, pd, out)
+    case Rest{bs} _:
+      P{Rest{Con{c, bs}}, pd, out}
     case Bad{} _:
       P{Bad{}, pd, out}
 
@@ -516,44 +831,82 @@ def p.take(p: P) -> P & List<&2, Req>:
     case P{st, pd, out}:
       (P{st, pd, Nil{}}, List.reverse(&2, Req, out))
 
-def p.dead.at(st: St, pd: Pend, out: List<&2, Req>) -> P & Bool:
+def st.dead(st: St) -> St & Bool:
   match st:
-    case InM{h}:
-      (P{InM{h}, pd, out}, False{})
-    case InT{p}:
-      (P{InT{p}, pd, out}, False{})
-    case InV{h}:
-      (P{InV{h}, pd, out}, False{})
-    case CrM{}:
-      (P{CrM{}, pd, out}, False{})
-    case Lin{}:
-      (P{Lin{}, pd, out}, False{})
-    case InN{h}:
-      (P{InN{h}, pd, out}, False{})
-    case Ows{n}:
-      (P{Ows{n}, pd, out}, False{})
-    case InL{v, d}:
-      (P{InL{v, d}, pd, out}, False{})
-    case InLc{g}:
-      (P{InLc{g}, pd, out}, False{})
-    case InLx{}:
-      (P{InLx{}, pd, out}, False{})
-    case InLu{g}:
-      (P{InLu{g}, pd, out}, False{})
-    case InLk{k}:
-      (P{InLk{k}, pd, out}, False{})
-    case CrL{}:
-      (P{CrL{}, pd, out}, False{})
-    case Bod{r, b}:
-      (P{Bod{r, b}, pd, out}, False{})
     case Bad{}:
-      (P{Bad{}, pd, out}, True{})
+      (Bad{}, True{})
+    case Pre{}:
+      (Pre{}, False{})
+    case PreLf{}:
+      (PreLf{}, False{})
+    case InM{m}:
+      (InM{m}, False{})
+    case InT{p}:
+      (InT{p}, False{})
+    case InV{v}:
+      (InV{v}, False{})
+    case CrM{}:
+      (CrM{}, False{})
+    case Lin{}:
+      (Lin{}, False{})
+    case InN{n}:
+      (InN{n}, False{})
+    case InL0{}:
+      (InL0{}, False{})
+    case InL{v}:
+      (InL{v}, False{})
+    case InLt{v}:
+      (InLt{v}, False{})
+    case InLc{t, a, b}:
+      (InLc{t, a, b}, False{})
+    case InLu{t, w}:
+      (InLu{t, w}, False{})
+    case InLk0{}:
+      (InLk0{}, False{})
+    case InLk{k}:
+      (InLk{k}, False{})
+    case InLx{}:
+      (InLx{}, False{})
+    case CrL{}:
+      (CrL{}, False{})
+    case Bod{r, b}:
+      (Bod{r, b}, False{})
+    case Rest{bs}:
+      (Rest{bs}, False{})
+
+def p.dead.at(sd: St & Bool, pd: Pend, out: List<&2, Req>) -> P & Bool:
+  (st, d) = sd
+  (P{st, pd, out}, d)
 
 # whether the grammar broke, with the reader handed back
 def p.dead(p: P) -> P & Bool:
   match p:
     case P{st, pd, out}:
-      p.dead.at(st, pd, out)
+      p.dead.at(st.dead(st), pd, out)
+
+# the bytes that followed a request that asked to upgrade, in order
+def p.rest(p: P) -> List<&2, U32>:
+  match p:
+    case P{st, pd, out}:
+      match st:
+        case Rest{bs}:
+          rev(bs)
+        case _:
+          Nil{}
+
+# A whole input, parsed from a fresh reader: the messages it completed,
+# oldest first, and whether the grammar broke. LAWS.bend holds the
+# reader to this on the vectors that matter.
+def parse.out(pr: P & List<&2, Req>, dead: Bool) -> List<&2, Req> & Bool:
+  (p, rs) = pr
+  (rs, dead)
+
+def parse.of(pb: P & Bool) -> List<&2, Req> & Bool:
+  (p, dead) = pb
+  parse.out(p.take(p), dead)
+
+def parse(bs: List<&2, U32>) -> List<&2, Req> & Bool:
+  parse.of(p.dead(feed(bs, p.new())))
 
 # Routes
 # ======
@@ -1743,15 +2096,16 @@ def serve.go(
     case False{}:
       Ans{[Raw{resp.method()}], False{}, 0, False{}}
 
-# what a log line says was asked. The method is a hash by then, so the
-# two this engine serves are named and anything else is "?".
-def shown(+meth: U32, get: Bool, head: Bool) -> List<&2, U32>:
-  match get head:
-    case True{} _:
+# what a log line says was asked: the two methods this engine serves
+# are named, and anything else is "?", so a log line never carries a
+# method's bytes
+def shown(m: Meth) -> List<&2, U32>:
+  match m:
+    case MGet{}:
       bytes("GET")
-    case False{} True{}:
+    case MHead{}:
       bytes("HEAD")
-    case False{} False{}:
+    case MOther{}:
       bytes("?")
 
 def noted.on(note: List<&2, U32>, a: Ans) -> Ans:
@@ -1769,12 +2123,9 @@ def noted(on: Bool, note: List<&2, U32>, a: Ans) -> Ans:
 def serve.log(+srv: Srv, r: Req) -> Ans:
   match r:
     case Req{+meth, +path, body, close, ws, key}:
-      noted(srv.log(srv),
-        cat(shown(meth, U32.is_eq(meth, m.get()), U32.is_eq(meth, m.head())),
-          cat(bytes(" "), path)),
-        serve.go(srv, path, body,
-          U32.is_eq(meth, m.get()) || U32.is_eq(meth, m.head()),
-          U32.is_eq(meth, m.head()), ws, key))
+      noted(srv.log(srv), cat(shown(meth), cat(bytes(" "), path)),
+        serve.go(srv, path, body, meth.get(meth) || meth.head(meth),
+          meth.head(meth), ws, key))
 
 def serve(+srv: Srv, r: Req) -> Ans:
   serve.log(srv, r)
