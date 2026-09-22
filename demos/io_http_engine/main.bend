@@ -547,68 +547,79 @@ def sse.gap() -> U32:
 # files come from if any, and whether to log. The route table is built
 # from it once, in main, and every connection shares that one table.
 type Cfg is Data:
-  Cfg{port: U32, root: Maybe<&2, List<&2, U32>>, log: Bool, idle: U32, conns: U32, grace: U32}
+  Cfg{port: U32, root: Maybe<&2, List<&2, U32>>, log: Bool, idle: U32, conns: U32, grace: U32, shared: Bool}
 
 def cfg.new() -> Cfg:
-  Cfg{8080, None{}, False{}, 10000, 1024, 5000}
+  Cfg{8080, None{}, False{}, 10000, 1024, 5000, False{}}
 
 def cfg.port(c: Cfg) -> U32:
   match c:
-    case Cfg{port, root, log, idle, conns, grace}:
+    case Cfg{port, root, log, idle, conns, grace, shared}:
       port
 
 # how long a connection may be silent, in ms, before it is dropped
 def cfg.idle(c: Cfg) -> U32:
   match c:
-    case Cfg{port, root, log, idle, conns, grace}:
+    case Cfg{port, root, log, idle, conns, grace, shared}:
       idle
 
 def cfg.root(c: Cfg) -> List<&2, U32>:
   match c:
-    case Cfg{port, root, log, idle, conns, grace}:
+    case Cfg{port, root, log, idle, conns, grace, shared}:
       Maybe.default(&2, List<&2, U32>, root, bytes("."))
 
 def cfg.set_port(c: Cfg, n: U32) -> Cfg:
   match c:
-    case Cfg{port, root, log, idle, conns, grace}:
-      Cfg{n, root, log, idle, conns, grace}
+    case Cfg{port, root, log, idle, conns, grace, shared}:
+      Cfg{n, root, log, idle, conns, grace, shared}
 
 # the most connections open at once; past it, accepting waits
 def cfg.conns(c: Cfg) -> U32:
   match c:
-    case Cfg{port, root, log, idle, conns, grace}:
+    case Cfg{port, root, log, idle, conns, grace, shared}:
       conns
 
 # how long open connections get to finish after a stop is asked, in ms
 def cfg.grace(c: Cfg) -> U32:
   match c:
-    case Cfg{port, root, log, idle, conns, grace}:
+    case Cfg{port, root, log, idle, conns, grace, shared}:
       grace
 
 def cfg.set_conns(c: Cfg, n: U32) -> Cfg:
   match c:
-    case Cfg{port, root, log, idle, conns, grace}:
-      Cfg{port, root, log, idle, n, grace}
+    case Cfg{port, root, log, idle, conns, grace, shared}:
+      Cfg{port, root, log, idle, n, grace, shared}
 
 def cfg.set_grace(c: Cfg, n: U32) -> Cfg:
   match c:
-    case Cfg{port, root, log, idle, conns, grace}:
-      Cfg{port, root, log, idle, conns, n}
+    case Cfg{port, root, log, idle, conns, grace, shared}:
+      Cfg{port, root, log, idle, conns, n, shared}
+
+# whether the port is shared with other copies of this server
+def cfg.shared(c: Cfg) -> Bool:
+  match c:
+    case Cfg{port, root, log, idle, conns, grace, shared}:
+      shared
+
+def cfg.set_shared(c: Cfg) -> Cfg:
+  match c:
+    case Cfg{port, root, log, idle, conns, grace, shared}:
+      Cfg{port, root, log, idle, conns, grace, True{}}
 
 def cfg.set_idle(c: Cfg, n: U32) -> Cfg:
   match c:
-    case Cfg{port, root, log, idle, conns, grace}:
-      Cfg{port, root, log, n, conns, grace}
+    case Cfg{port, root, log, idle, conns, grace, shared}:
+      Cfg{port, root, log, n, conns, grace, shared}
 
 def cfg.set_root(c: Cfg, dir: List<&2, U32>) -> Cfg:
   match c:
-    case Cfg{port, root, log, idle, conns, grace}:
-      Cfg{port, Some{dir}, log, idle, conns, grace}
+    case Cfg{port, root, log, idle, conns, grace, shared}:
+      Cfg{port, Some{dir}, log, idle, conns, grace, shared}
 
 def cfg.set_log(c: Cfg) -> Cfg:
   match c:
-    case Cfg{port, root, log, idle, conns, grace}:
-      Cfg{port, root, True{}, idle, conns, grace}
+    case Cfg{port, root, log, idle, conns, grace, shared}:
+      Cfg{port, root, True{}, idle, conns, grace, shared}
 
 # a non-empty run of decimal digits
 def digits.go(bs: List<&2, U32>, ok: Bool) -> Bool:
@@ -656,22 +667,24 @@ type Args is Data:
 
 def args.flag(
   c: Cfg, a: List<&2, U32>, log: Bool, port: Bool, root: Bool, idle: Bool,
-  conns: Bool, grace: Bool
+  conns: Bool, grace: Bool, shared: Bool
 ) -> Args:
-  match log port root idle conns grace:
-    case True{} _ _ _ _ _:
+  match log port root idle conns grace shared:
+    case True{} _ _ _ _ _ _:
       Args{cfg.set_log(c), Flag{}}
-    case False{} True{} _ _ _ _:
+    case False{} True{} _ _ _ _ _:
       Args{c, PortOf{}}
-    case False{} False{} True{} _ _ _:
+    case False{} False{} True{} _ _ _ _:
       Args{c, RootOf{}}
-    case False{} False{} False{} True{} _ _:
+    case False{} False{} False{} True{} _ _ _:
       Args{c, IdleOf{}}
-    case False{} False{} False{} False{} True{} _:
+    case False{} False{} False{} False{} True{} _ _:
       Args{c, ConnsOf{}}
-    case False{} False{} False{} False{} False{} True{}:
+    case False{} False{} False{} False{} False{} True{} _:
       Args{c, GraceOf{}}
-    case False{} False{} False{} False{} False{} False{}:
+    case False{} False{} False{} False{} False{} False{} True{}:
+      Args{cfg.set_shared(c), Flag{}}
+    case False{} False{} False{} False{} False{} False{} False{}:
       Args{c, Wrong{cat(bytes("unknown flag: "), a)}}
 
 def args.num(c: Cfg, a: List<&2, U32>, ok: Bool) -> Args:
@@ -710,7 +723,8 @@ def args.feed(st: Args, +a: List<&2, U32>) -> Args:
         case Flag{}:
           args.flag(c, a, beq(a, bytes("--log"), True{}), beq(a, bytes("--port"), True{}),
             beq(a, bytes("--root"), True{}), beq(a, bytes("--idle-ms"), True{}),
-            beq(a, bytes("--max-conns"), True{}), beq(a, bytes("--grace-ms"), True{}))
+            beq(a, bytes("--max-conns"), True{}), beq(a, bytes("--grace-ms"), True{}),
+            beq(a, bytes("--shared"), True{}))
         case PortOf{}:
           args.num(c, a, digits(a))
         case RootOf{}:
@@ -873,7 +887,7 @@ def routes.tail(root: Maybe<&2, List<&2, U32>>) -> List<&2, Route>:
 
 def routes(c: Cfg) -> List<&2, Route>:
   match c:
-    case Cfg{port, root, log, idle, conns, grace}:
+    case Cfg{port, root, log, idle, conns, grace, shared}:
       List.append(&2, Route, routes.base(), routes.tail(root))
 
 # a is a prefix of b
@@ -1696,14 +1710,25 @@ def accept(+srv: Srv, +sem: Chan(Unit), lb: Listener & Bool) -> IO(Unit):
 def banner(+c: Cfg) -> String:
   String.append("bend-http on http://127.0.0.1:", U32.show(cfg.port(c)))
 
+# a shared port: several copies of this server on one port, the kernel
+# dealing the connections out; how a single-threaded server takes more
+# than one core
+def listen(port: U32, shared: Bool) -> IO(Result<&1, &1, U32 & String, Listener>):
+  match shared:
+    case True{}:
+      TCP.listen_shared(port)
+    case False{}:
+      TCP.listen(port)
+
 def run(+c: Cfg) -> IO(Unit):
   do IO<Unit>:
-    l   : Listener <- IO.try(Listener, TCP.listen(cfg.port(c)))
+    l   : Listener <- IO.try(Listener, listen(cfg.port(c), cfg.shared(c)))
     sem : Chan(Unit) <- Chan.new(Unit, cfg.conns(c))
     IO.print(banner(c))
     accept(srv.new(c), sem, (l, True{}))
 
-# bend-http [--port N] [--root DIR] [--idle-ms N] [--max-conns N] [--grace-ms N] [--log]
+# bend-http [--port N] [--root DIR] [--idle-ms N] [--max-conns N] [--grace-ms N]
+#           [--shared] [--log]
 def main() -> IO(Unit):
   do IO<Unit>:
     xs : List<String> <- IO.args()
