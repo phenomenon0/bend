@@ -2692,8 +2692,7 @@ def plan.up.take(out: List<&2, Seg>, tk: Ws.W & List<&2, Ws.Frm>) -> Plan:
   plan.up.dead(out, fs, Ws.dead(wr))
 
 def plan.up(out: List<&2, Seg>, rest: Bytes()) -> Plan:
-  # ws: Bytes when Ws.feed_buf lands
-  plan.up.take(out, Ws.take(Ws.feed(Bytes.to_list(rest), Ws.new())))
+  plan.up.take(out, Ws.take(Ws.feed_buf(rest, Ws.new())))
 
 def plan.pick(
   out: List<&2, Seg>, p2: P, plain: Bool, cl: Bool, st: U32, sock: Bool
@@ -2941,8 +2940,7 @@ def plan.wsm(s: Socket, may: Maybe<&1, Bytes()>, wr: Ws.W) -> Socket & Plan:
         case SNil{}:
           (s, Stop{})
         case SCon{b, t}:
-          # ws: Bytes when Ws.feed_buf lands
-          plan.frames(s, Ws.take(Ws.feed(Bytes.to_list(SCon{b, t}), wr)))
+          plan.frames(s, Ws.take(Ws.feed_buf(SCon{b, t}, wr)))
 
 def plan.wsr(
   s: Socket, r: Result<&1, &1, U32 & String, Maybe<&1, Bytes()>>, wr: Ws.W
