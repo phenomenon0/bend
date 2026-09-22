@@ -6,6 +6,8 @@
 //
 //   cc -std=c11 -O3 check.c -o check && ./check 8080 [pid] [--files] [--idle=MS]
 //   ./check 8080 [pid] [--conns=N] [--term] [--ws] [--log=FILE] [--root=DIR]
+//   ./check 8080 pid --guard   (server under ulimit -n 64, with --root
+//                               www --idle-ms 1000 --head-ms 1500)
 #define _GNU_SOURCE
 #include <errno.h>
 #include <netinet/in.h>
@@ -16,6 +18,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
+#include <sys/wait.h>
+#include <dirent.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -325,12 +329,13 @@ int main(int argc, char** argv) {
   // fixture directory; --idle=MS when it was started with --idle-ms MS
   // --conns=N when it was started with --max-conns N; --term to end by
   // sending it SIGTERM (last, since the server is gone afterwards)
-  int files = 0, idle = 0, conns = 0, term = 0, ws = 0;
+  int files = 0, idle = 0, conns = 0, term = 0, ws = 0, guard = 0;
   // --log=PATH: the file the server's stderr was sent to, when it was
   // started with --log
   for (int i = 3; i < argc; i++) {
     if (strcmp(argv[i], "--files") == 0) files = 1;
     else if (strcmp(argv[i], "--ws") == 0) ws = 1;
+    else if (strcmp(argv[i], "--guard") == 0) guard = 1;
     else if (strncmp(argv[i], "--idle=", 7) == 0) idle = atoi(argv[i] + 7);
     else if (strncmp(argv[i], "--conns=", 8) == 0) conns = atoi(argv[i] + 8);
     else if (strcmp(argv[i], "--term") == 0) term = 1;
@@ -715,6 +720,15 @@ int main(int argc, char** argv) {
     n = one(TEXT("HEAD /events HTTP/1.1\r\nHost: x\r\n\r\n"), b, sizeof(b), 0);
     check("HEAD /events is the head and no stream",
       has(b, n, "text/event-stream") && !has(b, n, "event: tick"), b, n);
+
+    n = one(TEXT("GET /ws HTTP/1.1\r\nHost: x\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
+      "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ\r\nSec-WebSocket-Version: 13\r\n\r\n"), b, sizeof(b), 0);
+    check("a key that is not 24 characters of base64 is 400", has(b, n, "400 Bad Request"), b, n);
+
+    n = one(TEXT("GET /ws HTTP/1.1\r\nHost: x\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
+      "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 99\r\n\r\n"), b, sizeof(b), 0);
+    check("a version other than 13 is 426 naming 13",
+      has(b, n, "426 Upgrade Required") && has(b, n, "sec-websocket-version: 13"), b, n);
   }
 
   // The access log: one line per request, what was asked, the status
@@ -771,6 +785,150 @@ int main(int argc, char** argv) {
       waited && n > 0 && has(b, n, "200 OK"), b, n > 0 ? n : 0);
     wire_close(extra);
     for (int i = 1; i < m; i++) close(held[i]);
+  }
+
+  // Budgets, against a server started under `ulimit -n 64` with --root
+  // on the fixture directory (big.bin is 100000 bytes), --idle-ms 1000
+  // and --head-ms 1500. Each case is a way for one peer to stop the
+  // server or to hold what the others need; the last one stops it.
+  if (guard && argc > 2) {
+    static const char req[] = "GET /health HTTP/1.1\r\nHost: x\r\n\r\n";
+    static const char big[] = "GET /big.bin HTTP/1.1\r\nHost: x\r\n\r\n";
+    const int reqn = (int)(sizeof(req) - 1), bign = (int)(sizeof(big) - 1);
+    long pid = atol(argv[2]);
+    char path[64], why[96];
+
+    // Pipelined page requests are answered a budget at a time: 600 GETs
+    // of a 100 KB file in one write all come back, and the server never
+    // held them all at once.
+    {
+      static char all[600 * 64], r[1 << 16];
+      for (int i = 0; i < 600; i++) memcpy(all + i * bign, big, (size_t)bign);
+      int fd = wire_open(), ok = fd >= 0 && wire_write(fd, all, (size_t)(600 * bign)) == 600 * bign;
+      long got = 0, want = 600L * 100000, hwm = -1;
+      while (ok && got < want) {
+        ssize_t k = wire_read(fd, r, sizeof(r), 0);
+        if (k <= 0) break;
+        got += k;
+      }
+      wire_close(fd);
+      char line[256];
+      snprintf(path, sizeof(path), "/proc/%ld/status", pid);
+      FILE* f = fopen(path, "r");
+      while (f != NULL && fgets(line, sizeof(line), f)) sscanf(line, "VmHWM: %ld", &hwm);
+      if (f != NULL) fclose(f);
+      snprintf(why, sizeof(why), "read %ld bytes, VmHWM %ld kB", got, hwm);
+      check("600 pipelined 100 KB pages are sent a budget at a time",
+        got >= want && hwm > 0 && hwm < 40 * 1024, why, (int)strlen(why));
+    }
+
+    // A peer that asks for more than its socket holds and never reads
+    // is let go once a send makes no progress for the idle time: its
+    // descriptor is gone from the server within the idle time and a
+    // margin.
+    {
+      int before = 0, after = 0, small = 4096;
+      snprintf(path, sizeof(path), "/proc/%ld/fd", pid);
+      usleep(300000);
+      DIR* d = opendir(path);
+      for (struct dirent* e; d != NULL && (e = readdir(d)) != NULL;) before += e->d_name[0] != '.';
+      if (d != NULL) closedir(d);
+      int fd = dial();
+      setsockopt(fd, SOL_SOCKET, SO_RCVBUF, &small, sizeof(small));
+      for (int i = 0; i < 100; i++) if (write(fd, big, (size_t)bign) < 0) break;
+      usleep(2600000);
+      d = opendir(path);
+      for (struct dirent* e; d != NULL && (e = readdir(d)) != NULL;) after += e->d_name[0] != '.';
+      if (d != NULL) closedir(d);
+      close(fd);
+      snprintf(why, sizeof(why), "descriptors %d after, %d before the peer", after, before);
+      check("a peer that never reads is let go after the idle time", after <= before, why, (int)strlen(why));
+    }
+
+    // A head dribbled inside the idle time is dropped once the head's
+    // own time is up, not after the wait budget.
+    {
+      static const char slow[] = "GET /health HTTP/1.1\r\nx-a: 0123456789012345678901234567890123456789\r\n";
+      int fd = wire_open(), dropped = 0;
+      struct timespec t0, t1;
+      clock_gettime(CLOCK_MONOTONIC, &t0);
+      for (int i = 0; slow[i] != 0 && !dropped; i++) {
+        if (wire_write(fd, slow + i, 1) != 1) dropped = 1;
+        usleep(300000);
+        n = (int)wire_read(fd, b, sizeof(b), MSG_DONTWAIT);
+        if (n == 0 || (n < 0 && errno != EAGAIN && errno != EWOULDBLOCK)) dropped = 1;
+      }
+      clock_gettime(CLOCK_MONOTONIC, &t1);
+      double dt = (double)(t1.tv_sec - t0.tv_sec) + (double)(t1.tv_nsec - t0.tv_nsec) / 1e9;
+      snprintf(why, sizeof(why), "dropped %d after %.1fs", dropped, dt);
+      check("a head still coming after --head-ms is dropped", dropped && dt < 3.0, why, (int)strlen(why));
+      wire_close(fd);
+    }
+
+    // A head past its budget is a 431, a target past 8 KiB a 414.
+    {
+      static char h[48 * 1024];
+      int k = snprintf(h, sizeof(h), "GET /health HTTP/1.1\r\nHost: x\r\n");
+      while (k < (int)sizeof(h) - 1024) k += snprintf(h + k, sizeof(h) - (size_t)k, "x-pad: %0900d\r\n", 0);
+      k += snprintf(h + k, sizeof(h) - (size_t)k, "\r\n");
+      n = one(h, k, b, sizeof(b), 0);
+      check("a head past its budget is 431", has(b, n, "431 Request Header Fields Too Large"), b, n);
+      k = snprintf(h, sizeof(h), "GET /");
+      for (int i = 0; i < 9000; i++) h[k++] = 'a';
+      k += snprintf(h + k, sizeof(h) - (size_t)k, " HTTP/1.1\r\nHost: x\r\n\r\n");
+      n = one(h, k, b, sizeof(b), 0);
+      check("a target past 8 KiB is 414", has(b, n, "414 URI Too Long"), b, n);
+    }
+
+    // Out of descriptors, the server keeps going: 80 idle peers against
+    // a limit of 64, all of them gone again, and a fresh request served.
+    {
+      int held[80], m = 0;
+      for (int i = 0; i < 80; i++) { held[i] = dial(); m += held[i] >= 0; }
+      usleep(300000);
+      for (int i = 0; i < 80; i++) if (held[i] >= 0) close(held[i]);
+      usleep(300000);
+      n = one(req, reqn, b, sizeof(b), 0);
+      check("running out of descriptors does not stop the server",
+        m == 80 && kill((pid_t)pid, 0) == 0 && has(b, n, "200 OK"), b, n > 0 ? n : 0);
+    }
+
+    // SIGTERM under a storm of arrivals: seen at once, the listener
+    // closes, a connection already open is still answered, then gone.
+    {
+      pid_t kid = fork();
+      if (kid == 0) {
+        static const char bye[] = "GET /health HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n";
+        for (;;) {
+          int fd = dial();
+          if (fd < 0) { usleep(1000); continue; }
+          if (write(fd, bye, sizeof(bye) - 1) < 0) {}
+          char x[256];
+          while (recv(fd, x, sizeof(x), 0) > 0) {}
+          close(fd);
+        }
+      }
+      usleep(300000);
+      int open_ = wire_open();
+      usleep(100000);
+      kill((pid_t)pid, SIGTERM);
+      usleep(600000);
+      int fresh = dial(), refused = fresh < 0;
+      if (fresh >= 0) close(fresh);
+      if (wire_write(open_, req, (size_t)reqn) != reqn) perror("write");
+      n = (int)wire_read(open_, b, sizeof(b), 0);
+      int served = n > 0 && has(b, n, "200 OK");
+      kill(kid, SIGKILL);
+      waitpid(kid, NULL, 0);
+      wire_close(open_);
+      int gone = 0;
+      for (int i = 0; i < 100 && !gone; i++) {
+        usleep(50000);
+        gone = kill((pid_t)pid, 0) != 0;
+      }
+      check("SIGTERM under a storm of arrivals: refused, served, then gone",
+        refused && served && gone, b, n > 0 ? n : 0);
+    }
   }
 
   // Stopping. After SIGTERM the port refuses new connections within a

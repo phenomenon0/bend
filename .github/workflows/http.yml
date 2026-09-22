@@ -55,6 +55,18 @@ jobs:
           ./httpd --max-conns 2 & up 8080; $C/check 8080 $! --conns=2; kill $!; wait $! || true
           ./httpd --grace-ms 3000 & up 8080; $C/check 8080 $! --term
           $C/control 8081 & up 8081; $C/check 8081 $!; kill $!; wait $! || true
+      # --guard: 600 pipelined GETs of a 100 KB file against VmHWM, a
+      # peer that never reads, a head dribbled past --head-ms, a 431 and
+      # a 414, 80 idle peers against `ulimit -n 64`, and SIGTERM under a
+      # storm of arrivals, which also ends the server
+      - name: the budgets hold
+        run: |
+          up() { for i in $(seq 1 50); do (exec 3<>/dev/tcp/127.0.0.1/$1) 2>/dev/null && return 0; sleep 0.1; done; echo "never listened on $1"; return 1; }
+          C=demos/io_http_engine
+          python3 -c "open('www/big.bin','wb').write(bytes(i % 251 for i in range(100000)))"
+          (ulimit -n 64; exec ./httpd --root www --idle-ms 1000 --head-ms 1500 --grace-ms 3000) & up 8080
+          $C/check 8080 $! --files --guard
+          wait $! || true
       - name: the engine and the control agree on 500 random streams
         run: |
           up() { for i in $(seq 1 50); do (exec 3<>/dev/tcp/127.0.0.1/$1) 2>/dev/null && return 0; sleep 0.1; done; return 1; }
