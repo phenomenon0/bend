@@ -401,6 +401,21 @@ def TCP.connect(host: String, port: U32) ->
   import "./effs/tcp_connect.c"
   import "./effs/tcp_connect.js"
 
+# The byte pair. A String is decoded as UTF-8, so TCP.recv and TCP.send
+# carry text and only text: a byte that is not valid UTF-8 arrives as
+# U+FFFD, three bytes for one. A protocol that carries bytes -- any
+# body that is not text -- needs these, which are to sockets what
+# File.read_bytes and File.write_bytes already are to files.
+def TCP.recv_bytes(sock: Socket, max: U32) ->
+  IO(Socket & Result<&1, &1, U32 & String, List<&2, U32>>):
+  import "./effs/tcp_recv_bytes.c"
+  import "./effs/tcp_recv_bytes.js"
+
+def TCP.send_bytes(sock: Socket, data: List<&2, U32>) ->
+  IO(Socket & Result<&1, &1, U32 & String, Unit>):
+  import "./effs/tcp_send_bytes.c"
+  import "./effs/tcp_send_bytes.js"
+
 def TCP.send(sock: Socket, data: String) ->
   IO(Socket & Result<&1, &1, U32 & String, Unit>):
   import "./effs/tcp_send.c"
