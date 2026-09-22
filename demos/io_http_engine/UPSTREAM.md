@@ -9,6 +9,13 @@ each, with its own test where a test is possible:
     fix/listen-backlog    one line, both twins
     fix/epoll-scheduler   the poller, with the select loop kept under #else
 
+Every one was run against canon's own `tests/io` in both lanes, beside
+a run of `main` on the same box, and **each fails the identical set of
+files as `main`**: 89/116 interpreted and 72/98 native on `main`,
+90/117 and 73/99 on the byte branch because it brings a test with it,
+and 89/116 and 72/98 on the other two. None of the three regresses
+anything canon already passes.
+
 ---
 
 ## 1. `TCP.recv` and `TCP.send` corrupt every byte that is not UTF-8

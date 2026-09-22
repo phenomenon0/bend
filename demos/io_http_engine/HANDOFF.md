@@ -21,6 +21,21 @@ fork**. They are cut from canon's current `main`, one bug each, and
 pushed here only so they survive. No pull request has been opened
 anywhere: that is a decision waiting on the repository's owner.
 
+Each was run against canon's own `tests/io`, in both lanes, beside a
+run of `main` on the same box:
+
+| tree | interpreted | native | failing files |
+|---|---|---|---|
+| canon `main` | 89 / 116 | 72 / 98 | -- |
+| `fix/socket-bytes` | 90 / 117 | 73 / 99 | identical to `main` |
+| `fix/listen-backlog` | 89 / 116 | 72 / 98 | identical to `main` |
+| `fix/epoll-scheduler` | 89 / 116 | 72 / 98 | identical to `main` |
+
+The byte branch is one higher in each lane because it brings a test
+with it. The other two change no test's outcome. The failing files are
+the same set on every tree, so none of the three regresses anything
+canon already passes.
+
 ## What works, and how it is checked
 
 `demos/io_http_engine` is an HTTP/1.1 server: keep-alive, pipelining,
