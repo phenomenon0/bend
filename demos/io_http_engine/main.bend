@@ -193,6 +193,7 @@ type Fld is Data:
   FUp{}
   FKey{}
   FHost{}
+  FVer{}
   FOther{}
 
 # a name as the reader holds it, lowercased and backwards, and the field
@@ -201,7 +202,7 @@ type Known is Data:
   Known{k: List<&2, U32>, f: Fld}
 
 # transfer-encoding, content-length, connection, upgrade,
-# sec-websocket-key and host, each backwards; LAWS.bend proves the
+# sec-websocket-key, host and sec-websocket-version, each backwards; LAWS.bend proves the
 # lookup through this table is the lookup through the readable one
 def fld.table() -> List<&2, Known>:
   [Known{[103, 110, 105, 100, 111, 99, 110, 101, 45, 114, 101, 102, 115, 110, 97, 114, 116], FTe{}},
@@ -209,7 +210,8 @@ def fld.table() -> List<&2, Known>:
    Known{[110, 111, 105, 116, 99, 101, 110, 110, 111, 99], FConn{}},
    Known{[101, 100, 97, 114, 103, 112, 117], FUp{}},
    Known{[121, 101, 107, 45, 116, 101, 107, 99, 111, 115, 98, 101, 119, 45, 99, 101, 115], FKey{}},
-   Known{[116, 115, 111, 104], FHost{}}]
+   Known{[116, 115, 111, 104], FHost{}},
+   Known{[110, 111, 105, 115, 114, 101, 118, 45, 116, 101, 107, 99, 111, 115, 98, 101, 119, 45, 99, 101, 115], FVer{}}]
 
 def fld.pick(b: Bool, f: Fld, rest: Fld) -> Fld:
   match b:
@@ -307,16 +309,17 @@ def req.ws(r: Req) -> Bool:
 # answer for every request that never names one of the three headers,
 # and it carries no fields, so the ordinary path allocates nothing for
 # an upgrade that is not happening.
+# vb says a Sec-WebSocket-Version named something other than 13.
 type Up is Data:
   Plain{}
-  Asks{key: List<&2, U32>, up: Bool, cu: Bool}
+  Asks{key: List<&2, U32>, up: Bool, cu: Bool, vb: Bool}
 
 def up.key(u: Up, k: List<&2, U32>) -> Up:
   match u:
     case Plain{}:
-      Asks{k, False{}, False{}}
-    case Asks{key, up, cu}:
-      Asks{k, up, cu}
+      Asks{k, False{}, False{}, False{}}
+    case Asks{key, up, cu, vb}:
+      Asks{k, up, cu, vb}
 
 # an Upgrade or a Connection field adds to what the earlier ones said
 def up.up(u: Up, v: Bool) -> Up:
@@ -324,18 +327,28 @@ def up.up(u: Up, v: Bool) -> Up:
     case Plain{} False{}:
       Plain{}
     case Plain{} True{}:
-      Asks{Nil{}, True{}, False{}}
-    case Asks{key, up, cu} w:
-      Asks{key, up || w, cu}
+      Asks{Nil{}, True{}, False{}, False{}}
+    case Asks{key, up, cu, vb} w:
+      Asks{key, up || w, cu, vb}
 
 def up.cu(u: Up, v: Bool) -> Up:
   match u v:
     case Plain{} False{}:
       Plain{}
     case Plain{} True{}:
-      Asks{Nil{}, False{}, True{}}
-    case Asks{key, up, cu} w:
-      Asks{key, up, cu || w}
+      Asks{Nil{}, False{}, True{}, False{}}
+    case Asks{key, up, cu, vb} w:
+      Asks{key, up, cu || w, vb}
+
+# a Sec-WebSocket-Version names 13, the one version there is, or not
+def up.ver(u: Up, v: Bool) -> Up:
+  match u v:
+    case Plain{} True{}:
+      Plain{}
+    case Plain{} False{}:
+      Asks{Nil{}, False{}, False{}, True{}}
+    case Asks{key, up, cu, vb} w:
+      Asks{key, up, cu, vb || Bool.not(w)}
 
 def has(k: List<&2, U32>) -> Bool:
   match k:
@@ -345,13 +358,15 @@ def has(k: List<&2, U32>) -> Bool:
       True{}
 
 # a message asks to become a WebSocket when it carried Upgrade:
-# websocket, Connection: Upgrade and a key
+# websocket, Connection: Upgrade and a key, and named no version but
+# 13; one that named another is answered as one that did not ask, with
+# the 426 that says which version to ask for
 def up.asked(u: Up) -> Bool & List<&2, U32>:
   match u:
     case Plain{}:
       (False{}, Nil{})
-    case Asks{+key, up, cu}:
-      (up && cu && has(key), key)
+    case Asks{+key, up, cu, vb}:
+      (up && cu && has(key) && Bool.not(vb), key)
 
 # The length a message announced: none, or one value every
 # Content-Length field agreed on.
@@ -416,6 +431,11 @@ def pend.key(pd: Pend, k: List<&2, U32>) -> Pend:
     case Pend{meth, path, cl, close, host, ws}:
       Pend{meth, path, cl, close, host, up.key(ws, k)}
 
+def pend.ver(pd: Pend, v: Bool) -> Pend:
+  match pd:
+    case Pend{meth, path, cl, close, host, ws}:
+      Pend{meth, path, cl, close, host, up.ver(ws, v)}
+
 def pend.req.go(
   meth: Meth, path: List<&2, U32>, body: List<&2, U32>, close: Bool,
   asked: Bool & List<&2, U32>
@@ -459,6 +479,7 @@ type St is Data:
   InLu{t: List<&2, U32>, ws: Bool}
   InLk0{}
   InLk{k: List<&2, U32>}
+  InLv{v: List<&2, U32>}
   InLx{}
   CrL{}
   Bod{r: U32, b: List<&2, U32>}
@@ -526,6 +547,8 @@ def val.init(f: Fld) -> St:
       InLk0{}
     case FHost{}:
       InLx{}
+    case FVer{}:
+      InLv{Nil{}}
     case FOther{}:
       InLx{}
 
@@ -546,6 +569,8 @@ def step.name(f: Fld, pd: Pend, out: List<&2, Req>) -> P:
       P{InLk0{}, pd, out}
     case FHost{}:
       P{InLx{}, pend.host(pd), out}
+    case FVer{}:
+      P{InLv{Nil{}}, pd, out}
     case FOther{}:
       P{InLx{}, pd, out}
 
@@ -609,6 +634,10 @@ def tok.up(+t: List<&2, U32>, ws: Bool) -> St:
 # a Sec-WebSocket-Key value closes, kept as it came
 def step.key(k: List<&2, U32>, pd: Pend, out: List<&2, Req>) -> P:
   P{CrM{}, pend.key(pd, rev(k)), out}
+
+# a Sec-WebSocket-Version value closes: it named 13 (backwards) or not
+def step.wsv(+v: List<&2, U32>, pd: Pend, out: List<&2, Req>) -> P:
+  P{CrM{}, pend.ver(pd, bytes.eq(v, [51, 49])), out}
 
 def step.head.len(pd: Pend, +v: U32, out: List<&2, Req>, z: Bool) -> P:
   match z:
@@ -791,6 +820,18 @@ def step.at(st: St, k: Cls, +c: U32, pd: Pend, out: List<&2, Req>) -> P:
       P{Bad{}, pd, out}
     case InLk{k} _:
       P{InLk{Con{c, k}}, pd, out}
+    case InLv{v} KSp{}:
+      P{InLv{v}, pd, out}
+    case InLv{v} KHt{}:
+      P{InLv{v}, pd, out}
+    case InLv{v} KCr{}:
+      step.wsv(v, pd, out)
+    case InLv{v} KLf{}:
+      P{Bad{}, pd, out}
+    case InLv{v} KCt{}:
+      P{Bad{}, pd, out}
+    case InLv{v} _:
+      P{InLv{Con{c, v}}, pd, out}
     case InLx{} KCr{}:
       P{CrM{}, pd, out}
     case InLx{} KLf{}:
@@ -865,6 +906,8 @@ def st.dead(st: St) -> St & Bool:
       (InLk0{}, False{})
     case InLk{k}:
       (InLk{k}, False{})
+    case InLv{v}:
+      (InLv{v}, False{})
     case InLx{}:
       (InLx{}, False{})
     case CrL{}:
@@ -2181,12 +2224,42 @@ def live.head(key: List<&2, U32>) -> Bytes():
     Bytes.from_list(Ws.accept(key)), "\r\n\r\n"])
 
 # /ws: a WebSocket echo, or a 426 for a request that did not ask to upgrade
-def live.answer(key: List<&2, U32>, ws: Bool, head: Bool) -> Ans:
-  match ws:
+# A key is sixteen random bytes in base64: 22 characters of the
+# alphabet and "==", 24 in all (RFC 6455 4.1). Anything else is refused
+# before it is hashed, so a key is never a way to make the engine spend.
+def key.b64(+c: U32) -> Bool:
+  (U32.is_le(65, c) && U32.is_le(c, 90)) || (U32.is_le(97, c) && U32.is_le(c, 122))
+    || (U32.is_le(48, c) && U32.is_le(c, 57)) || U32.is_eq(c, 43) || U32.is_eq(c, 47)
+
+def key.at(+i: U32, +c: U32) -> Bool:
+  (U32.is_lt(i, 22) && key.b64(c)) || (U32.is_le(22, i) && U32.is_eq(c, 61))
+
+def key.ok(bs: List<&2, U32>, +i: U32, ok: Bool) -> Bool:
+  match bs:
+    case Nil{}:
+      ok && U32.is_eq(i, 24)
+    case Con{+c, t}:
+      key.ok(t, (i + 1 : U32), ok && key.at(i, c))
+
+# the 426 names the version it would have spoken
+def reply.v13(status: Bytes(), ct: Bytes(), +body: Bytes()) -> Bytes():
+  Bytes.concat(["HTTP/1.1 ", status, "\r\ncontent-type: ", ct,
+    "\r\ncontent-length: ", Nat.show(Bytes.len(body)),
+    "\r\nsec-websocket-version: 13\r\nconnection: keep-alive\r\n\r\n", body])
+
+def live.keyed(key: List<&2, U32>, ok: Bool) -> Ans:
+  match ok:
     case True{}:
       Ans{[Raw{live.head(key)}], False{}, 0, True{}}
     case False{}:
-      Ans{[Raw{fixed(reply("426 Upgrade Required", "text/plain", "websocket only\n"), head)}],
+      Ans{[Raw{resp.bad()}], True{}, 0, False{}}
+
+def live.answer(+key: List<&2, U32>, ws: Bool, head: Bool) -> Ans:
+  match ws:
+    case True{}:
+      live.keyed(key, key.ok(key, 0, True{}))
+    case False{}:
+      Ans{[Raw{fixed(reply.v13("426 Upgrade Required", "text/plain", "websocket only\n"), head)}],
         False{}, 0, False{}}
 
 # /events: the stream's head, then the events; a HEAD gets the head
@@ -2226,6 +2299,26 @@ def serve.act(
       Ans{[Raw{miss(head)}], False{}, 0, False{}}
     case Some{a}:
       act.run(srv, a, path, body, head, ws, key)
+
+# the longest request target served; a longer one is a 414. The head's
+# own budget bounds what a target can cost before it gets here.
+def target.cap() -> Nat:
+  8192n
+
+# whether bs has more than k bytes, looking at no more than k + 1
+def long(k: Nat, bs: List<&2, U32>) -> Bool:
+  match k bs:
+    case 0n Nil{}:
+      False{}
+    case 0n Con{h, t}:
+      True{}
+    case 1n+j Nil{}:
+      False{}
+    case 1n+j Con{h, t}:
+      long(j, t)
+
+def resp.long() -> Bytes():
+  reply("414 URI Too Long", "text/plain", "target too long\n")
 
 # A method this engine does not implement is refused before routing, so
 # no route ever sees one.
@@ -2284,12 +2377,22 @@ def path.go(p: List<&2, U32>, stop: Bool, acc: List<&2, U32>) -> List<&2, U32>:
 def path.of(p: List<&2, U32>) -> List<&2, U32>:
   path.go(p, False{}, Nil{})
 
+def serve.fit(
+  +srv: Srv, +path: List<&2, U32>, body: List<&2, U32>, ok: Bool, head: Bool,
+  ws: Bool, key: List<&2, U32>, far: Bool
+) -> Ans:
+  match far:
+    case True{}:
+      Ans{[Raw{fixed(resp.long(), head)}], False{}, 0, False{}}
+    case False{}:
+      serve.go(srv, path, body, ok, head, ws, key)
+
 def serve.log(+srv: Srv, r: Req) -> Ans:
   match r:
     case Req{+meth, +path, body, close, ws, key}:
       noted(srv.log(srv), cat(shown(meth), cat(bytes(" "), path)),
-        serve.go(srv, path.of(path), body, meth.get(meth) || meth.head(meth),
-          meth.head(meth), ws, key))
+        serve.fit(srv, path.of(path), body, meth.get(meth) || meth.head(meth),
+          meth.head(meth), ws, key, long(target.cap(), path)))
 
 def serve(+srv: Srv, r: Req) -> Ans:
   serve.log(srv, r)

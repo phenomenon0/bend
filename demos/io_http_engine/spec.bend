@@ -205,7 +205,8 @@ def fields.rest() -> List<&2, Eng.Known>:
    Eng.Known{name("connection"), Eng.FConn{}},
    Eng.Known{name("upgrade"), Eng.FUp{}},
    Eng.Known{name("sec-websocket-key"), Eng.FKey{}},
-   Eng.Known{name("host"), Eng.FHost{}}]
+   Eng.Known{name("host"), Eng.FHost{}},
+   Eng.Known{name("sec-websocket-version"), Eng.FVer{}}]
 
 # the fields the engine acts on, spelled as RFC 9110 and RFC 6455 spell
 # them. The names are distinct, so the order of the table is no part
