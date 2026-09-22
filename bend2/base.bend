@@ -312,8 +312,26 @@ def TCP.send(sock: Socket, data: String) ->
   import "./effs/tcp_send.c"
   import "./effs/tcp_send.js"
 
+# The bytes as they are, one List cell each, as File.write_bytes takes
+# them. TCP.send carries a String and re-encodes it as UTF-8, which is
+# a corruption on a socket rather than a cost: anything that is not
+# text leaves mangled and no longer the length it was announced to be.
+def TCP.send_bytes(sock: Socket, data: List<&2, U32>) ->
+  IO(Socket & Result<&1, &1, U32 & String, Unit>):
+  import "./effs/tcp_send.c"
+  import "./effs/tcp_send.js"
+
 def TCP.recv(sock: Socket, max: U32) ->
   IO(Socket & Result<&1, &1, U32 & String, String>):
+  import "./effs/tcp_recv.c"
+  import "./effs/tcp_recv.js"
+
+# The bytes as they are, one List cell each, as File.read_bytes gives
+# them. TCP.recv decodes them as UTF-8, so every byte that is not valid
+# UTF-8 comes back as U+FFFD -- three bytes out for one byte in, under
+# a length that no longer matches.
+def TCP.recv_bytes(sock: Socket, max: U32) ->
+  IO(Socket & Result<&1, &1, U32 & String, List<&2, U32>>):
   import "./effs/tcp_recv.c"
   import "./effs/tcp_recv.js"
 
