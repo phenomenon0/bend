@@ -13,10 +13,11 @@ import ./main.bend as Eng
 # parse the same as the whole stream. It is also what lets the engine
 # keep no buffer of its own.
 law feed_split:
-  for +a: String
-  for +b: String
+  for +a: List<&2, U32>
+  for +b: List<&2, U32>
   for +p: Eng.P
-  {Eng.feed(a ++ b, p) == Eng.feed(b, Eng.feed(a, p)) : Eng.P}
+  {Eng.feed(List.append(&2, U32, a, b), p) ==
+    Eng.feed(b, Eng.feed(a, p)) : Eng.P}
 
 # LAW: a broken grammar stays broken. No byte moves the reader out of
 # Bad{}, so once a message has been refused nothing later in the stream
@@ -31,7 +32,7 @@ law bad_absorbs:
 
 # LAW: and it stays broken for a whole chunk, not just one byte.
 law bad_feeds:
-  for +s: String
+  for +s: List<&2, U32>
   for +pd: Eng.Pend
   for +out: List<&2, Eng.Req>
   {Eng.feed(s, Eng.P{Eng.Bad{}, pd, out}) ==
@@ -44,20 +45,25 @@ law bad_feeds:
 # checker refuses the engine if anyone edits one without the other.
 law health_is_built:
   {Eng.resp.health() ==
-    Eng.reply("200 OK", "application/json", "{\"ok\":true}") : String}
+    Eng.reply("200 OK", "application/json", Eng.bytes("{\"ok\":true}")) :
+    List<&2, U32>}
 
 law root_is_built:
   {Eng.resp.root() ==
-    Eng.reply("200 OK", "text/plain", "bend-http\n") : String}
+    Eng.reply("200 OK", "text/plain", Eng.bytes("bend-http\n")) :
+    List<&2, U32>}
 
 law missing_is_built:
   {Eng.resp.missing() ==
-    Eng.reply("404 Not Found", "text/plain", "no route\n") : String}
+    Eng.reply("404 Not Found", "text/plain", Eng.bytes("no route\n")) :
+    List<&2, U32>}
 
 law method_is_built:
   {Eng.resp.method() ==
-    Eng.reply("405 Method Not Allowed", "text/plain", "no method\n") : String}
+    Eng.reply("405 Method Not Allowed", "text/plain", Eng.bytes("no method\n")) :
+    List<&2, U32>}
 
 law bad_is_built:
   {Eng.resp.bad() ==
-    Eng.reply("400 Bad Request", "text/plain", "bad request\n") : String}
+    Eng.reply("400 Bad Request", "text/plain", Eng.bytes("bad request\n")) :
+    List<&2, U32>}

@@ -20,6 +20,14 @@
 # refused, and Bad{} is never left. LAWS.bend states those as laws and
 # PROOF.bend proves them.
 #
+# Every byte on the wire is a byte. TCP.recv and TCP.send carry String,
+# and a String is decoded as UTF-8, so a body that is not text comes
+# back as one U+FFFD per ill-formed byte -- three bytes out for one in,
+# while Content-Length still says one. That is a framing break, not a
+# cost, so this engine reads and writes List<&2, U32> through
+# TCP.recv_bytes and TCP.send_bytes instead, the byte pair that files
+# have always had.
+#
 #   bend demos/io_http_engine/main.bend -o httpd && ./httpd
 #   curl -i http://127.0.0.1:8080/health
 import Base
@@ -66,6 +74,37 @@ def lower(+c: U32) -> U32:
 def digit(+c: U32) -> Bool:
   U32.is_le(48, c) && U32.is_le(c, 57)
 
+# The wire's unit. A byte list, one cell per byte, is what the socket
+# hands over and what it takes back.
+def cat(a: List<&2, U32>, b: List<&2, U32>) -> List<&2, U32>:
+  List.append(&2, U32, a, b)
+
+def rev(a: List<&2, U32>) -> List<&2, U32>:
+  List.reverse(&2, U32, a)
+
+# An ASCII literal as bytes. Written text stays readable in the source
+# and becomes bytes here; a code point past 255 is not a byte and
+# TCP.send_bytes refuses it rather than re-encoding it.
+def bytes(s: String) -> List<&2, U32>:
+  match s:
+    case SNil{}:
+      Nil{}
+    case SCon{Chr{c}, t}:
+      Con{c, bytes(t)}
+
+# Byte-list equality, with no early exit: a route match reads every
+# byte of the shorter list whatever the first one says.
+def beq(a: List<&2, U32>, b: List<&2, U32>, acc: Bool) -> Bool:
+  match a b:
+    case Nil{} Nil{}:
+      acc
+    case Nil{} Con{y, u}:
+      False{}
+    case Con{x, t} Nil{}:
+      False{}
+    case Con{x, t} Con{y, u}:
+      beq(t, u, acc && U32.is_eq(x, y))
+
 # FNV-1a over a token, one byte at a time. A field name is recognised
 # by its hash, so a name is never built, stored or compared as bytes.
 def fnv(h: U32, c: U32) -> U32:
@@ -101,7 +140,7 @@ def m.head() -> U32:
 # A parsed message: the method as a hash, the target and body as bytes,
 # and whether the peer asked to close.
 type Req is Data:
-  Req{meth: U32, path: String, body: String, close: Bool}
+  Req{meth: U32, path: List<&2, U32>, body: List<&2, U32>, close: Bool}
 
 def req.close(r: Req) -> Bool:
   match r:
@@ -111,18 +150,18 @@ def req.close(r: Req) -> Bool:
 # The fields of the message being read. It is rebuilt only when a token
 # closes, so an ordinary byte leaves it untouched and shares it.
 type Pend is Data:
-  Pend{meth: U32, path: String, clen: U32, close: Bool, te: Bool}
+  Pend{meth: U32, path: List<&2, U32>, clen: U32, close: Bool, te: Bool}
 
 def pend.new() -> Pend:
-  Pend{0, SNil{}, 0, False{}, False{}}
+  Pend{0, Nil{}, 0, False{}, False{}}
 
 # a new method token starts a new message, so the rest resets with it
 def pend.meth(pd: Pend, h: U32) -> Pend:
   match pd:
     case Pend{meth, path, clen, close, te}:
-      Pend{h, SNil{}, 0, False{}, False{}}
+      Pend{h, Nil{}, 0, False{}, False{}}
 
-def pend.path(pd: Pend, p: String) -> Pend:
+def pend.path(pd: Pend, p: List<&2, U32>) -> Pend:
   match pd:
     case Pend{meth, path, clen, close, te}:
       Pend{meth, p, clen, close, te}
@@ -131,7 +170,7 @@ def pend.path(pd: Pend, p: String) -> Pend:
 # or a Transfer-Encoding, which poisons the message rather than framing
 # it a second way.
 def pend.set.go(
-  meth: U32, path: String, clen: U32, close: Bool, te: Bool,
+  meth: U32, path: List<&2, U32>, clen: U32, close: Bool, te: Bool,
   v: U32, isc: Bool, cl: Bool, isl: Bool, ist: Bool
 ) -> Pend:
   match isc isl ist:
@@ -171,7 +210,7 @@ def pend.te(pd: Pend) -> Pend & Bool:
     case Pend{meth, path, clen, close, +te}:
       (Pend{meth, path, clen, close, te}, te)
 
-def pend.req(pd: Pend, body: String) -> Req:
+def pend.req(pd: Pend, body: List<&2, U32>) -> Req:
   match pd:
     case Pend{meth, path, clen, close, te}:
       Req{meth, path, body, close}
@@ -188,7 +227,7 @@ def pend.req(pd: Pend, body: String) -> Req:
 # Bad  the grammar broke; absorbing, and never left
 type St is Data:
   InM{h: U32}
-  InT{p: String}
+  InT{p: List<&2, U32>}
   InV{h: U32}
   CrM{}
   Lin{}
@@ -198,7 +237,7 @@ type St is Data:
   InLc{g: U32}
   InLx{}
   CrL{}
-  Bod{r: U32, b: String}
+  Bod{r: U32, b: List<&2, U32>}
   Bad{}
 
 # The whole reader: where the machine is, the message it is filling,
@@ -210,7 +249,7 @@ def p.new() -> P:
   P{InM{fnv.new()}, pend.new(), Nil{}}
 
 # a completed message rolls the machine straight into the next one
-def emit(pd: Pend, body: String, out: List<&2, Req>) -> P:
+def emit(pd: Pend, body: List<&2, U32>, out: List<&2, Req>) -> P:
   P{InM{fnv.new()}, pend.new(), pend.req(pd, body) <> out}
 
 # the version token must read exactly HTTP/1.1
@@ -251,9 +290,9 @@ def step.val(+n: U32, +c: U32, pd: Pend, out: List<&2, Req>) -> P:
 def step.head.on(pd: Pend, n: U32, out: List<&2, Req>, z: Bool) -> P:
   match z:
     case True{}:
-      emit(pd, SNil{}, out)
+      emit(pd, Nil{}, out)
     case False{}:
-      P{Bod{n, SNil{}}, pd, out}
+      P{Bod{n, Nil{}}, pd, out}
 
 def step.head.len(pn: Pend & U32, out: List<&2, Req>) -> P:
   (pd, +n) = pn
@@ -276,16 +315,16 @@ def step.head(pd: Pend, out: List<&2, Req>) -> P:
   step.head.te(pend.te(pd), out)
 
 def step.body.go(
-  r: U32, b: String, c: U32, pd: Pend, out: List<&2, Req>, last: Bool
+  r: U32, b: List<&2, U32>, c: U32, pd: Pend, out: List<&2, Req>, last: Bool
 ) -> P:
   match last:
     case True{}:
-      emit(pd, String.reverse(SCon{Chr{c}, b}), out)
+      emit(pd, rev(Con{c, b}), out)
     case False{}:
-      P{Bod{(r - 1 : U32), SCon{Chr{c}, b}}, pd, out}
+      P{Bod{(r - 1 : U32), Con{c, b}}, pd, out}
 
 # one body byte: the last one emits the message, the rest accumulate
-def step.body(+r: U32, b: String, c: U32, pd: Pend, out: List<&2, Req>) -> P:
+def step.body(+r: U32, b: List<&2, U32>, c: U32, pd: Pend, out: List<&2, Req>) -> P:
   step.body.go(r, b, c, pd, out, U32.is_eq(r, 1))
 
 # the machine: one classified byte moves it once. A token state grows
@@ -294,13 +333,13 @@ def step.body(+r: U32, b: String, c: U32, pd: Pend, out: List<&2, Req>) -> P:
 def step.at(st: St, k: Cls, +c: U32, pd: Pend, out: List<&2, Req>) -> P:
   match st k:
     case InM{h} KSp{}:
-      P{InT{SNil{}}, pend.meth(pd, h), out}
+      P{InT{Nil{}}, pend.meth(pd, h), out}
     case InM{h} _:
       P{InM{fnv(h, c)}, pd, out}
     case InT{p} KSp{}:
-      P{InV{fnv.new()}, pend.path(pd, String.reverse(p)), out}
+      P{InV{fnv.new()}, pend.path(pd, rev(p)), out}
     case InT{p} _:
-      P{InT{SCon{Chr{c}, p}}, pd, out}
+      P{InT{Con{c, p}}, pd, out}
     case InV{+h} KCr{}:
       step.ver(h, pd, out, U32.is_eq(h, hash.version()))
     case InV{h} _:
@@ -352,11 +391,11 @@ def step(p: P, +c: U32) -> P:
 # feed: one structural walk over a chunk. The reader state that comes
 # out is the reader state to feed the next chunk, so a message split
 # anywhere parses exactly like a message that arrived whole.
-def feed(s: String, p: P) -> P:
+def feed(s: List<&2, U32>, p: P) -> P:
   match s:
-    case SNil{}:
+    case Nil{}:
       p
-    case SCon{Chr{c}, t}:
+    case Con{c, t}:
       feed(t, step(p, c))
 
 # the finished messages, oldest first, and the reader with them cleared
@@ -407,35 +446,75 @@ def p.dead(p: P) -> P & Bool:
 # always sends, a blank line, then the body. Content-Length is always
 # written, so every reply is framed by length and the connection stays
 # usable.
-def reply(status: String, ctype: String, +body: String) -> String:
-  "HTTP/1.1 " ++ status ++ "\r\ncontent-type: " ++ ctype ++
-  "\r\ncontent-length: " ++ Nat.show(String.length(body)) ++
-  "\r\nconnection: keep-alive\r\n\r\n" ++ body
+def reply(status: String, ctype: String, +body: List<&2, U32>) -> List<&2, U32>:
+  cat(bytes("HTTP/1.1 "), cat(bytes(status),
+  cat(bytes("\r\ncontent-type: "), cat(bytes(ctype),
+  cat(bytes("\r\ncontent-length: "),
+  cat(bytes(Nat.show(List.length(&2, U32, body))),
+  cat(bytes("\r\nconnection: keep-alive\r\n\r\n"), body)))))))
 
-# A reply whose body is fixed has fixed bytes, so it is written out
-# once instead of being rebuilt per request: measured here, building a
-# 106-byte reply out of nine pieces cost more than parsing the request
-# that asked for it. These five are byte for byte what reply() returns
-# for the same arguments, and LAWS.bend states exactly that, so the
-# checker is what keeps them honest rather than a comment.
-def resp.health() -> String:
-  "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: 11\r\nconnection: keep-alive\r\n\r\n{\"ok\":true}"
+# A reply whose body is fixed has fixed bytes, so it is written out as
+# those bytes instead of being rebuilt per request: measured here,
+# building a 106-byte reply out of nine pieces cost more than parsing
+# the request that asked for it. Nobody should read these numbers --
+# LAWS.bend says each one equals reply() called with the arguments
+# named beside it, and the checker refuses the engine if an edit ever
+# makes that false, so the readable form is the specification and this
+# is only its image.
+def resp.health() -> List<&2, U32>:
+  [
+  72, 84, 84, 80, 47, 49, 46, 49, 32, 50, 48, 48, 32, 79, 75, 13, 10, 99,
+  111, 110, 116, 101, 110, 116, 45, 116, 121, 112, 101, 58, 32, 97, 112,
+  112, 108, 105, 99, 97, 116, 105, 111, 110, 47, 106, 115, 111, 110, 13,
+  10, 99, 111, 110, 116, 101, 110, 116, 45, 108, 101, 110, 103, 116, 104,
+  58, 32, 49, 49, 13, 10, 99, 111, 110, 110, 101, 99, 116, 105, 111, 110,
+  58, 32, 107, 101, 101, 112, 45, 97, 108, 105, 118, 101, 13, 10, 13, 10,
+  123, 34, 111, 107, 34, 58, 116, 114, 117, 101, 125]
 
-def resp.root() -> String:
-  "HTTP/1.1 200 OK\r\ncontent-type: text/plain\r\ncontent-length: 10\r\nconnection: keep-alive\r\n\r\nbend-http\n"
+def resp.root() -> List<&2, U32>:
+  [
+  72, 84, 84, 80, 47, 49, 46, 49, 32, 50, 48, 48, 32, 79, 75, 13, 10, 99,
+  111, 110, 116, 101, 110, 116, 45, 116, 121, 112, 101, 58, 32, 116, 101,
+  120, 116, 47, 112, 108, 97, 105, 110, 13, 10, 99, 111, 110, 116, 101,
+  110, 116, 45, 108, 101, 110, 103, 116, 104, 58, 32, 49, 48, 13, 10, 99,
+  111, 110, 110, 101, 99, 116, 105, 111, 110, 58, 32, 107, 101, 101, 112,
+  45, 97, 108, 105, 118, 101, 13, 10, 13, 10, 98, 101, 110, 100, 45, 104,
+  116, 116, 112, 10]
 
-def resp.missing() -> String:
-  "HTTP/1.1 404 Not Found\r\ncontent-type: text/plain\r\ncontent-length: 9\r\nconnection: keep-alive\r\n\r\nno route\n"
+def resp.missing() -> List<&2, U32>:
+  [
+  72, 84, 84, 80, 47, 49, 46, 49, 32, 52, 48, 52, 32, 78, 111, 116, 32,
+  70, 111, 117, 110, 100, 13, 10, 99, 111, 110, 116, 101, 110, 116, 45,
+  116, 121, 112, 101, 58, 32, 116, 101, 120, 116, 47, 112, 108, 97, 105,
+  110, 13, 10, 99, 111, 110, 116, 101, 110, 116, 45, 108, 101, 110, 103,
+  116, 104, 58, 32, 57, 13, 10, 99, 111, 110, 110, 101, 99, 116, 105, 111,
+  110, 58, 32, 107, 101, 101, 112, 45, 97, 108, 105, 118, 101, 13, 10, 13,
+  10, 110, 111, 32, 114, 111, 117, 116, 101, 10]
 
-def resp.method() -> String:
-  "HTTP/1.1 405 Method Not Allowed\r\ncontent-type: text/plain\r\ncontent-length: 10\r\nconnection: keep-alive\r\n\r\nno method\n"
+def resp.method() -> List<&2, U32>:
+  [
+  72, 84, 84, 80, 47, 49, 46, 49, 32, 52, 48, 53, 32, 77, 101, 116, 104,
+  111, 100, 32, 78, 111, 116, 32, 65, 108, 108, 111, 119, 101, 100, 13,
+  10, 99, 111, 110, 116, 101, 110, 116, 45, 116, 121, 112, 101, 58, 32,
+  116, 101, 120, 116, 47, 112, 108, 97, 105, 110, 13, 10, 99, 111, 110,
+  116, 101, 110, 116, 45, 108, 101, 110, 103, 116, 104, 58, 32, 49, 48,
+  13, 10, 99, 111, 110, 110, 101, 99, 116, 105, 111, 110, 58, 32, 107,
+  101, 101, 112, 45, 97, 108, 105, 118, 101, 13, 10, 13, 10, 110, 111, 32,
+  109, 101, 116, 104, 111, 100, 10]
 
-def resp.bad() -> String:
-  "HTTP/1.1 400 Bad Request\r\ncontent-type: text/plain\r\ncontent-length: 12\r\nconnection: keep-alive\r\n\r\nbad request\n"
+def resp.bad() -> List<&2, U32>:
+  [
+  72, 84, 84, 80, 47, 49, 46, 49, 32, 52, 48, 48, 32, 66, 97, 100, 32, 82,
+  101, 113, 117, 101, 115, 116, 13, 10, 99, 111, 110, 116, 101, 110, 116,
+  45, 116, 121, 112, 101, 58, 32, 116, 101, 120, 116, 47, 112, 108, 97,
+  105, 110, 13, 10, 99, 111, 110, 116, 101, 110, 116, 45, 108, 101, 110,
+  103, 116, 104, 58, 32, 49, 50, 13, 10, 99, 111, 110, 110, 101, 99, 116,
+  105, 111, 110, 58, 32, 107, 101, 101, 112, 45, 97, 108, 105, 118, 101,
+  13, 10, 13, 10, 98, 97, 100, 32, 114, 101, 113, 117, 101, 115, 116, 10]
 
 def route.go(
-  path: String, body: String, health: Bool, echo: Bool, root: Bool
-) -> String:
+  path: List<&2, U32>, body: List<&2, U32>, health: Bool, echo: Bool, root: Bool
+) -> List<&2, U32>:
   match health echo root:
     case True{} _ _:
       resp.health()
@@ -446,33 +525,37 @@ def route.go(
     case _ _ _:
       resp.missing()
 
-def route(+path: String, body: String) -> String:
-  route.go(path, body, String.eq(path, "/health"), String.eq(path, "/echo"),
-    String.eq(path, "/"))
+def route(+path: List<&2, U32>, body: List<&2, U32>) -> List<&2, U32>:
+  route.go(path, body, beq(path, bytes("/health"), True{}),
+    beq(path, bytes("/echo"), True{}), beq(path, bytes("/"), True{}))
 
 # A method this engine does not implement is refused before routing, so
 # no route ever sees one.
-def serve.go(path: String, body: String, ok: Bool) -> String:
+def serve.go(path: List<&2, U32>, body: List<&2, U32>, ok: Bool) -> List<&2, U32>:
   match ok:
     case True{}:
       route(path, body)
     case False{}:
       resp.method()
 
-def serve(r: Req) -> String:
+def serve(r: Req) -> List<&2, U32>:
   match r:
     case Req{+meth, path, body, close}:
       serve.go(path, body,
         U32.is_eq(meth, m.get()) || U32.is_eq(meth, m.head()))
 
-def answer.cat(one: String, tail: String, cl: Bool) -> String & Bool:
+def answer.cat(
+  one: List<&2, U32>, tail: List<&2, U32>, cl: Bool
+) -> List<&2, U32> & Bool:
   match tail:
-    case SNil{}:
+    case Nil{}:
       (one, cl)
-    case SCon{h, t}:
-      (one ++ SCon{h, t}, cl)
+    case Con{h, t}:
+      (cat(one, Con{h, t}), cl)
 
-def answer.go(one: String, cl1: Bool, rest: String & Bool) -> String & Bool:
+def answer.go(
+  one: List<&2, U32>, cl1: Bool, rest: List<&2, U32> & Bool
+) -> List<&2, U32> & Bool:
   (tail, cl) = rest
   answer.cat(one, tail, cl1 || cl)
 
@@ -481,10 +564,10 @@ def answer.go(one: String, cl1: Bool, rest: String & Bool) -> String & Bool:
 # each one is copied once: folding them into an accumulator instead
 # would copy the accumulator per message and go quadratic in the depth
 # of a pipelined batch.
-def answer(rs: List<&2, Req>, cl: Bool) -> String & Bool:
+def answer(rs: List<&2, Req>, cl: Bool) -> List<&2, U32> & Bool:
   match rs:
     case Nil{}:
-      ("", cl)
+      (Nil{}, cl)
     case Con{+r, t}:
       answer.go(serve(r), req.close(r), answer(t, cl))
 
@@ -494,20 +577,20 @@ def answer(rs: List<&2, Req>, cl: Bool) -> String & Bool:
 # What the connection does next: write these bytes and read again,
 # write them and close, or close now.
 type Plan is Data:
-  Go{bytes: String, p2: P}
-  End{bytes: String}
+  Go{out: List<&2, U32>, p2: P}
+  End{out: List<&2, U32>}
   Stop{}
 
-def plan.cl(bytes: String, p2: P, cl: Bool) -> Plan:
+def plan.cl(out: List<&2, U32>, p2: P, cl: Bool) -> Plan:
   match cl:
     case True{}:
-      End{bytes}
+      End{out}
     case False{}:
-      Go{bytes, p2}
+      Go{out, p2}
 
-def plan.of(bc: String & Bool, p2: P) -> Plan:
-  (bytes, cl) = bc
-  plan.cl(bytes, p2, cl)
+def plan.of(bc: List<&2, U32> & Bool, p2: P) -> Plan:
+  (out, cl) = bc
+  plan.cl(out, p2, cl)
 
 def plan.take(pr: P & List<&2, Req>) -> Plan:
   (p2, rs) = pr
@@ -525,11 +608,12 @@ def plan.on(pb: P & Bool) -> Plan:
   plan.go(q, bad)
 
 # the plan after one chunk: parse it, then decide
-def plan.chunk(buf: String, p: P) -> Plan:
+def plan.chunk(buf: List<&2, U32>, p: P) -> Plan:
   plan.on(p.dead(feed(buf, p)))
 
-def plan.read(s: Socket, r: Result<&1, &1, U32 & String, String>, p: P) ->
-  Socket & Plan:
+def plan.read(
+  s: Socket, r: Result<&1, &1, U32 & String, List<&2, U32>>, p: P
+) -> Socket & Plan:
   match r:
     case Done{buf}:
       (s, plan.chunk(buf, p))
@@ -537,8 +621,9 @@ def plan.read(s: Socket, r: Result<&1, &1, U32 & String, String>, p: P) ->
       (s, Stop{})
 
 # the socket and the plan, out of one recv
-def plan.recv(m: Socket & Result<&1, &1, U32 & String, String>, p: P) ->
-  Socket & Plan:
+def plan.recv(
+  m: Socket & Result<&1, &1, U32 & String, List<&2, U32>>, p: P
+) -> Socket & Plan:
   (s, r) = m
   plan.read(s, r, p)
 
@@ -551,7 +636,8 @@ def turn(sent: Socket & Result<&1, &1, U32 & String, Unit>, p: P) ->
   IO(Socket & Plan):
   (s, r) = sent
   do IO<Socket & Plan>:
-    m : Socket & Result<&1, &1, U32 & String, String> <- TCP.recv(s, chunk())
+    m : Socket & Result<&1, &1, U32 & String, List<&2, U32>> <-
+      TCP.recv_bytes(s, chunk())
     return plan.recv(m, p)
 
 def shut(m: Socket & Result<&1, &1, U32 & String, Unit>) -> IO(Unit):
@@ -571,14 +657,15 @@ def conn(f: Nat, sp: Socket & Plan) -> IO(Unit):
       match pl:
         case Stop{}:
           Socket.close(s)
-        case End{bytes}:
+        case End{out}:
           do IO<Unit>:
-            m : Socket & Result<&1, &1, U32 & String, Unit> <- TCP.send(s, bytes)
+            m : Socket & Result<&1, &1, U32 & String, Unit> <-
+              TCP.send_bytes(s, out)
             shut(m)
-        case Go{bytes, p2}:
+        case Go{out, p2}:
           do IO<Unit>:
             m   : Socket & Result<&1, &1, U32 & String, Unit> <-
-              TCP.send(s, bytes)
+              TCP.send_bytes(s, out)
             sp2 : Socket & Plan <- turn(m, p2)
             conn(g, sp2)
 
@@ -590,7 +677,8 @@ def conn.fuel() -> Nat:
 
 def start(s: Socket) -> IO(Unit):
   do IO<Unit>:
-    m : Socket & Result<&1, &1, U32 & String, String> <- TCP.recv(s, chunk())
+    m : Socket & Result<&1, &1, U32 & String, List<&2, U32>> <-
+      TCP.recv_bytes(s, chunk())
     conn(conn.fuel(), plan.recv(m, p.new()))
 
 def accept.one(m: Listener & Result<&1, &1, U32 & String, Socket>) ->

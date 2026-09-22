@@ -13,9 +13,9 @@ import ./LAWS.bend as Laws
 
 def Laws.feed_split(a, b, p):
   match a:
-    case SNil{}:
+    case Nil{}:
       {==}
-    case SCon{Chr{c}, t}:
+    case Con{c, t}:
       Laws.feed_split(t, b, Eng.step(p, c))
 
 def Laws.bad_absorbs(c, pd, out):
@@ -23,9 +23,9 @@ def Laws.bad_absorbs(c, pd, out):
 
 def Laws.bad_feeds(s, pd, out):
   match s:
-    case SNil{}:
+    case Nil{}:
       {==}
-    case SCon{Chr{c}, t}:
+    case Con{c, t}:
       Laws.bad_feeds(t, pd, out)
 
 def Laws.health_is_built():
