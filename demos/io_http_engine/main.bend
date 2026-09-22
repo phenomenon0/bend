@@ -3347,8 +3347,9 @@ def conn.start(
 # listener, ~C what it accepts, ~E what serving needs, ~lsn one timed
 # accept (TCP.accept_poll), ~sig whether a stop was asked (SIGTERM),
 # ~hand the hand-off of an accepted connection. A turn ends the loop
-# only for a stop request or for a listener that is no longer one:
-# accept_poll answers every other accept failure itself.
+# only for a stop request or for a listener that is no longer one; an
+# accept that failed for one connection, or for a passing shortage, is
+# a turn like any other.
 
 # why the loop ended: it spent its turns, a stop was asked, or the
 # listener died with this code
@@ -3356,6 +3357,24 @@ type Why is Data:
   Spent{}
   Asked{}
   Dead{code: U32}
+
+# The errors accept(2) answers for one connection or for the moment
+# (tcp_accept_poll.c's passing set, and EAGAIN), by their numbers on
+# Linux and on macOS. The effect answers them itself, so none should
+# arrive here; if one does, it is one more turn and not the end.
+def accept.soft.codes() -> List<&2, U32>:
+  [1, 4, 11, 12, 23, 24, 35, 42, 45, 50, 51, 53, 55, 64, 65, 71, 92, 95, 100, 101,
+   102, 103, 105, 112, 113]
+
+def accept.soft.in(+code: U32, cs: List<&2, U32>) -> Bool:
+  match cs:
+    case Nil{}:
+      False{}
+    case Con{+c, t}:
+      U32.is_eq(code, c) || accept.soft.in(code, t)
+
+def accept.soft(+code: U32) -> Bool:
+  accept.soft.in(code, accept.soft.codes())
 
 # after a turn: a stop request ends the loop, anything else goes on
 def accept.asked(
@@ -3388,13 +3407,32 @@ def accept.on(
         bind(L & Bool, L & Maybe<&2, Why>, sig(l2), lb => accept.asked(~M, ~pure, ~bind, ~L,
             lb)))
 
+# a failure ends the loop only when the listener is no longer one
+def accept.dead(
+  ~M: Type -> Type, ~pure: @-A: Type -> A -> M(A),
+  ~bind: @-A: Type -> @-B: Type -> M(A) -> (A -> M(B)) -> M(B), ~L: Type,
+  ~sig: L -> M(L & Bool), l: L, +code: U32, soft: Bool
+) -> M(L & Maybe<&2, Why>):
+  match soft:
+    case True{}:
+      bind(L & Bool, L & Maybe<&2, Why>, sig(l), lb => accept.asked(~M, ~pure, ~bind, ~L, lb))
+    case False{}:
+      pure(L & Maybe<&2, Why>, (l, Some{Dead{code}}))
+
+def accept.fail.at(
+  ~M: Type -> Type, ~pure: @-A: Type -> A -> M(A),
+  ~bind: @-A: Type -> @-B: Type -> M(A) -> (A -> M(B)) -> M(B), ~L: Type,
+  ~sig: L -> M(L & Bool), l: L, +code: U32
+) -> M(L & Maybe<&2, Why>):
+  accept.dead(~M, ~pure, ~bind, ~L, ~sig, l, code, accept.soft(code))
+
 def accept.fail(
   ~M: Type -> Type, ~pure: @-A: Type -> A -> M(A),
   ~bind: @-A: Type -> @-B: Type -> M(A) -> (A -> M(B)) -> M(B), ~L: Type,
   ~sig: L -> M(L & Bool), l: L, e: U32 & String
 ) -> M(L & Maybe<&2, Why>):
   (code, msg) = e
-  pure(L & Maybe<&2, Why>, (l, Some{Dead{code}}))
+  accept.fail.at(~M, ~pure, ~bind, ~L, ~sig, l, code)
 
 def accept.got(
   ~M: Type -> Type, ~pure: @-A: Type -> A -> M(A),
