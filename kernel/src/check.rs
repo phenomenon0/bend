@@ -700,7 +700,7 @@ pub fn check_def(k: u32, z: u32) -> (Verdict, BTreeSet<u32>) {
     let g = glob(k);
     let d = match &g.g {
         GK::Def(d) => d,
-        GK::Bad(m) => return (Verdict::Unsup(format!("unreadable: {}", m)), BTreeSet::new()),
+        GK::Bad(m) => return (Verdict::Reject(format!("ill-formed: {}", m)), BTreeSet::new()),
         GK::Fam(_) => return check_fam(k),
     };
     let mut deps = BTreeSet::new();
@@ -712,7 +712,22 @@ pub fn check_def(k: u32, z: u32) -> (Verdict, BTreeSet<u32>) {
             deps.extend(ck.deps);
         }
         let body = match &d.body {
-            None if d.foreign => return Verdict::Axiom("foreign"),
+            None if d.foreign => {
+                // foreign code answers only through IO: its type's tip is
+                // an application of base's IO, so it proves nothing
+                let mut t = d.ty.clone().expect("a typed def");
+                while let Tm::All(_, _, b) = &*t.clone() {
+                    t = b.clone();
+                }
+                let io = match &*spine(&t).0 {
+                    Tm::Ref(h) => matches!(&glob(*h).g, GK::Def(Def { base: true, .. })) && gname(*h) == "IO",
+                    _ => false,
+                };
+                if !io {
+                    reject("a foreign def that does not return base IO(..)".into());
+                }
+                return Verdict::Axiom("foreign");
+            }
             None if d.base => return Verdict::Axiom("native"),
             None => return Verdict::Axiom("unfilled"),
             Some(_) if d.unsafe_ => return Verdict::Axiom("unsafe"),

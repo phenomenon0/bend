@@ -14,8 +14,9 @@
 //
 // An item that leans on a REJECT or UNSUPPORTED one lists it among its
 // axioms as !name: nothing is accepted silently. The verdict (and exit
-// status 0) is PASS when every item outside base is OK or AXIOM and no
-// law of the file, nor main, leans on a refused item; -q prints only the
+// status 0) is PASS when every item outside base is OK or AXIOM, no law
+// of the file is left unfilled or leans on an @unsafe def or an unfilled
+// law, and no law of the file, nor main, leans on a refused item; -q prints only the
 // refusals and the file's laws (and main) with their axioms.
 //
 // usage: bend-kernel <file.core> [-q] [--axioms NAME]..
@@ -133,7 +134,10 @@ fn run() -> i32 {
                     for d in deps {
                         axioms(d, &mut out, &mut seen);
                     }
-                    if own && out.iter().any(|a| a.starts_with('!')) {
+                    // a law of the file proves nothing if it leans on a
+                    // refused item, an @unsafe def or an unfilled law
+                    let weak = |a: &String| a.starts_with('!') || (law && (a.ends_with("(unsafe)") || a.ends_with("(unfilled)")));
+                    if own && out.iter().any(weak) {
                         leans += 1;
                     }
                     let list: Vec<String> = out.into_iter().collect();
@@ -146,6 +150,14 @@ fn run() -> i32 {
             }
             Verdict::Axiom(kind) => {
                 cnt[!base as usize][1] += 1;
+                if !base && *kind == "unfilled" {
+                    leans += 1;
+                    println!("OPEN {}: an unfilled law, a claim with no proof", g.name);
+                }
+                if !base && law && *kind == "unsafe" {
+                    leans += 1;
+                    println!("OPEN {}: a law filled by an @unsafe def, a claim with no proof", g.name);
+                }
                 (!quiet).then(|| format!("AXIOM {}{} ({})", g.name, tag, kind))
             }
             Verdict::Reject(m) => {
@@ -165,8 +177,9 @@ fn run() -> i32 {
         let c = cnt[i];
         println!("summary {}: {} ok, {} axiom, {} reject, {} unsupported", what, c[0], c[1], c[2], c[3]);
     }
-    // the verdict: every item of the file checks, and no law of the file
-    // (nor main) leans on an item the kernel refused
+    // the verdict: every item of the file checks, no law of the file is
+    // left unfilled, and no law of the file (nor main) leans on an item
+    // the kernel refused
     let pass = cnt[1][2] + cnt[1][3] == 0 && leans == 0;
     println!("verdict: {}", if pass { "PASS" } else { "FAIL" });
     if pass {

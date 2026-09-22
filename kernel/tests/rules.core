@@ -54,7 +54,7 @@
 # expect: REJECT peek
 # an unfilled law is a dead claim: live code cannot use it
 (def "claim" 0 0 (flags law) (ref "Empty") none)
-# expect: AXIOM claim
+# expect: OPEN claim
 (def "use_claim" 0 0 (flags) (ref "Empty") (ref "claim"))
 # expect: REJECT use_claim
 # an @unsafe def is an axiom, and a law resting on it lists it
