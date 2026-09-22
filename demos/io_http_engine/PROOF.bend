@@ -1614,6 +1614,12 @@ def Laws.parse_version_13():
 def Laws.parse_version_other():
   {==}
 
+def Laws.parse_ows_trimmed():
+  {==}
+
+def Laws.parse_version_inner():
+  {==}
+
 # The world
 # =========
 #

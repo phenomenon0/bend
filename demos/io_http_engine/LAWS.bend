@@ -949,6 +949,19 @@ law parse_version_other:
     ([Eng.Req{Eng.MGet{}, "/ws", "", False{}, False{}, "k"}], False{}) :
     List<&2, Eng.Req> & Bool}
 
+# LAW: whitespace at either end of a field value is no part of it (RFC
+# 9110 5.5), so a key and a version padded with it read as the key and
+# as 13; whitespace inside a value stays in it, so "1 3" is not 13
+law parse_ows_trimmed:
+  {Eng.parse("GET /ws HTTP/1.1\r\nHost: x\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: k \t\r\nSec-WebSocket-Version: \t13 \r\n\r\n") ==
+    ([Eng.Req{Eng.MGet{}, "/ws", "", False{}, True{}, "k"}], False{}) :
+    List<&2, Eng.Req> & Bool}
+
+law parse_version_inner:
+  {Eng.parse("GET /ws HTTP/1.1\r\nHost: x\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: k\r\nSec-WebSocket-Version: 1 3\r\n\r\n") ==
+    ([Eng.Req{Eng.MGet{}, "/ws", "", False{}, False{}, "k"}], False{}) :
+    List<&2, Eng.Req> & Bool}
+
 # The world
 # =========
 #

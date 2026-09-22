@@ -647,13 +647,56 @@ def step.upv(+t: Bytes(), ws: Bool, pd: Pend, out: List<&2, Req>) -> P:
 def tok.up(+t: Bytes(), ws: Bool) -> St:
   InLu{"", ws || bytes.eq(t, tok.websocket())}
 
-# a Sec-WebSocket-Key value closes, kept as it came
+# Whitespace at either end of a field value is no part of it (RFC 9110
+# 5.5: a parser MUST exclude it before the value is evaluated), so a
+# key or a version is read with it cut off; whitespace inside stays.
+def ows(k: Cls) -> Bool:
+  match k:
+    case KSp{}:
+      True{}
+    case KHt{}:
+      True{}
+    case _:
+      False{}
+
+def trim.lead.pick(w: Bool, c: U32, t: Bytes(), r: Bytes()) -> Bytes():
+  match w:
+    case True{}:
+      r
+    case False{}:
+      SCon{Chr{c}, t}
+
+def trim.lead(s: Bytes()) -> Bytes():
+  match s:
+    case SNil{}:
+      SNil{}
+    case SCon{Chr{+c}, +t}:
+      trim.lead.pick(ows(cls(c)), c, t, trim.lead(t))
+
+def trim.end.pick(w: Bool, c: U32, r: Bytes()) -> Bytes():
+  match w r:
+    case True{} SNil{}:
+      SNil{}
+    case _ _:
+      SCon{Chr{c}, r}
+
+def trim.end(s: Bytes()) -> Bytes():
+  match s:
+    case SNil{}:
+      SNil{}
+    case SCon{Chr{+c}, t}:
+      trim.end.pick(ows(cls(c)), c, trim.end(t))
+
+def trim(s: Bytes()) -> Bytes():
+  trim.end(trim.lead(s))
+
+# a Sec-WebSocket-Key value closes
 def step.key(k: Bytes(), pd: Pend, out: List<&2, Req>) -> P:
-  P{CrM{}, pend.key(pd, k), out}
+  P{CrM{}, pend.key(pd, trim(k)), out}
 
 # a Sec-WebSocket-Version value closes: it named 13 or not
-def step.wsv(+v: Bytes(), pd: Pend, out: List<&2, Req>) -> P:
-  P{CrM{}, pend.ver(pd, bytes.eq(v, "13")), out}
+def step.wsv(v: Bytes(), pd: Pend, out: List<&2, Req>) -> P:
+  P{CrM{}, pend.ver(pd, bytes.eq(trim(v), "13")), out}
 
 # a body of v bytes: none emits the message now; otherwise the count is
 # of the bytes after the next one, so the last byte is the one it finds
@@ -834,10 +877,6 @@ def step.at(st: St, k: Cls, +c: U32, pd: Pend, out: List<&2, Req>) -> P:
       P{Bad{}, pd, out}
     case InLk{k} _:
       P{InLk{push(k, c)}, pd, out}
-    case InLv{v} KSp{}:
-      P{InLv{v}, pd, out}
-    case InLv{v} KHt{}:
-      P{InLv{v}, pd, out}
     case InLv{v} KCr{}:
       step.wsv(v, pd, out)
     case InLv{v} KLf{}:

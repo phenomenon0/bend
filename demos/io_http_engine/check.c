@@ -817,6 +817,20 @@ int main(int argc, char** argv) {
       "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 99\r\n\r\n"), b, sizeof(b), 0);
     check("a version other than 13 is 426 naming 13",
       has(b, n, "426 Upgrade Required") && has(b, n, "sec-websocket-version: 13"), b, n);
+
+    // whitespace at either end of a value is no part of it (RFC 9110
+    // 5.5), so a key and a version padded with it are the key and 13
+    n = one(TEXT("GET /ws HTTP/1.1\r\nHost: x\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
+      "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ== \t\r\nSec-WebSocket-Version: \t13 \r\n\r\n"),
+      b, sizeof(b), 129);
+    check("a key and a version with whitespace around them upgrade",
+      has(b, n, "101 Switching") && has(b, n, "sec-websocket-accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo="),
+      b, n);
+
+    // and whitespace inside a value stays: "1 3" is not 13
+    n = one(TEXT("GET /ws HTTP/1.1\r\nHost: x\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
+      "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 1 3\r\n\r\n"), b, sizeof(b), 0);
+    check("a version with whitespace inside it is not 13", has(b, n, "426 Upgrade Required"), b, n);
   }
 
   // The access log: one line per request, what was asked, the status
