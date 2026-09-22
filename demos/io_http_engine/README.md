@@ -103,27 +103,44 @@ makes the loop terminate without `@unsafe`.
 
 Holding concurrent live streams, one event per second each:
 
-| live streams | RSS | per stream | CPU over 6s wall |
-|---|---|---|---|
-| 1,000 | 2.6 MB | 0.24 KB | 0.11 s |
-| 5,000 | 3.7 MB | 0.22 KB | 2.77 s |
-| 10,000 | 5.8 MB | 0.21 KB | **22.97 s** |
+| live streams | RSS | per stream |
+|---|---|---|
+| 1,000 | 2.6 MB | 0.24 KB |
+| 5,000 | 3.7 MB | 0.22 KB |
+| 10,000 | 5.8 MB | 0.21 KB |
 
 Memory is flat per stream and about an order of magnitude under what
-the kernel spends on the socket itself (measured: 10,000 sockets cost
-34.6 MB of `TCP` and `sock_inode_cache` slab while the engine grew
-1.8 MB). On that axis there is no headroom left for anyone.
+the kernel spends on the socket itself: 10,000 sockets cost 34.6 MB of
+`TCP` and `sock_inode_cache` slab while the engine grew 1.8 MB. On that
+axis there is no headroom left for anyone, in any language.
 
-CPU is the opposite, and the cause is not in this engine. `io_wait` in
-`bend2/comp.ts` rebuilds a `pollfd` array over every parked computation
-each cycle, calls `poll()` (itself linear in the kernel), then walks the
-park list again to dispatch -- O(n) per ready event, so O(n^2) per round
-over n streams. Spacing the events four times further apart cut the CPU
-only in half rather than to a quarter, which is what that shape
-predicts: the loop still iterates about once per ready timer and pays
-the full scan each time. The fix is the one everyone else made twenty
-years ago -- epoll/kqueue for readiness and a heap for the timers --
-and it is a runtime change, not an engine one.
+Holding them costs almost nothing either. Two thousand live streams,
+each waking once a second, run at **2.1% of one core**, and twelve stack
+samples under ten thousand streams were all blocked in `poll` with two
+descriptors in the set and a several-hundred-millisecond timeout. The
+loop is asleep, as it should be.
+
+Establishing them is the problem, and it is quadratic. Adding
+connections in blocks, never closing any, the wall time for each block
+against the live set it was added to:
+
+| live after | wall for the block | per connection |
+|---|---|---|
+| 1,000 | 0.03s | 57 us |
+| 2,000 | 2.08s | 2.1 ms |
+| 4,000 | 13.31s | 6.7 ms |
+| 8,000 | 141.29s | **35.3 ms** |
+
+`io_wait` in `bend2/comp.ts` does work proportional to every parked
+computation on each pass -- it mallocs a `pollfd` array sized by the
+live count, walks the park list to fill it and to find the soonest
+deadline, polls, then walks the list again to dispatch. Accepting a
+connection needs a pass, so accepting n connections needs n passes and
+costs O(n^2). Holding them needs almost no passes, which is why holding
+is free and arriving is not. The fix is the one everyone else made
+twenty years ago: persistent registration through epoll or kqueue so a
+pass is O(ready) rather than O(live), and a heap for the deadlines. It
+is a runtime change, not an engine one.
 
 ## Measured
 
