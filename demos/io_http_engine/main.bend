@@ -160,84 +160,34 @@ def req.close(r: Req) -> Bool:
 
 # The fields of the message being read. It is rebuilt only when a token
 # closes, so an ordinary byte leaves it untouched and shares it.
-type Pend is Data:
-  Pend{meth: U32, path: List<&2, U32>, clen: U32, close: Bool, te: Bool,
-    key: List<&2, U32>, up: Bool, cu: Bool}
+# What a message has said about becoming a WebSocket. Plain{} is the
+# answer for every request that never names one of the three headers,
+# and it carries no fields, so the ordinary path allocates nothing for
+# an upgrade that is not happening.
+type Up is Data:
+  Plain{}
+  Asks{key: List<&2, U32>, up: Bool, cu: Bool}
 
-def pend.new() -> Pend:
-  Pend{0, Nil{}, 0, False{}, False{}, Nil{}, False{}, False{}}
+def up.key(u: Up, k: List<&2, U32>) -> Up:
+  match u:
+    case Plain{}:
+      Asks{k, False{}, False{}}
+    case Asks{key, up, cu}:
+      Asks{k, up, cu}
 
-# a new method token starts a new message, so the rest resets with it
-def pend.meth(pd: Pend, h: U32) -> Pend:
-  match pd:
-    case Pend{meth, path, clen, close, te, key, up, cu}:
-      Pend{h, Nil{}, 0, False{}, False{}, Nil{}, False{}, False{}}
+def up.up(u: Up, v: Bool) -> Up:
+  match u:
+    case Plain{}:
+      Asks{Nil{}, v, False{}}
+    case Asks{key, up, cu}:
+      Asks{key, v, cu}
 
-def pend.path(pd: Pend, p: List<&2, U32>) -> Pend:
-  match pd:
-    case Pend{meth, path, clen, close, te, key, up, cu}:
-      Pend{meth, p, clen, close, te, key, up, cu}
-
-# A closed field, applied by name hash: a length, a connection token,
-# or a Transfer-Encoding, which poisons the message rather than framing
-# it a second way.
-def pend.set.go(
-  meth: U32, path: List<&2, U32>, clen: U32, close: Bool, te: Bool,
-  key: List<&2, U32>, up: Bool, cu: Bool,
-  v: U32, isc: Bool, cl: Bool, isl: Bool, ist: Bool
-) -> Pend:
-  match isc isl ist:
-    case True{} _ _:
-      Pend{meth, path, clen, cl, te, key, up, cu}
-    case _ True{} _:
-      Pend{meth, path, v, close, te, key, up, cu}
-    case _ _ True{}:
-      Pend{meth, path, clen, close, True{}, key, up, cu}
-    case _ _ _:
-      Pend{meth, path, clen, close, te, key, up, cu}
-
-def pend.set(pd: Pend, v: U32, isc: Bool, cl: Bool, isl: Bool, ist: Bool) -> Pend:
-  match pd:
-    case Pend{meth, path, clen, close, te, key, up, cu}:
-      pend.set.go(meth, path, clen, close, te, key, up, cu, v, isc, cl, isl, ist)
-
-def pend.poison(pd: Pend) -> Pend:
-  match pd:
-    case Pend{meth, path, clen, close, te, key, up, cu}:
-      Pend{meth, path, clen, close, True{}, key, up, cu}
-
-def pend.len(pd: Pend) -> Pend & U32:
-  match pd:
-    case Pend{meth, path, +clen, close, te, key, up, cu}:
-      (Pend{meth, path, clen, close, te, key, up, cu}, clen)
-
-def pend.te_if(pd: Pend, is_te: Bool) -> Pend:
-  match is_te:
-    case True{}:
-      pend.poison(pd)
-    case False{}:
-      pd
-
-def pend.te(pd: Pend) -> Pend & Bool:
-  match pd:
-    case Pend{meth, path, clen, close, +te, key, up, cu}:
-      (Pend{meth, path, clen, close, te, key, up, cu}, te)
-
-# the upgrade fields, set as their headers close
-def pend.up(pd: Pend, v: Bool) -> Pend:
-  match pd:
-    case Pend{meth, path, clen, close, te, key, up, cu}:
-      Pend{meth, path, clen, close, te, key, v, cu}
-
-def pend.cu(pd: Pend, v: Bool) -> Pend:
-  match pd:
-    case Pend{meth, path, clen, close, te, key, up, cu}:
-      Pend{meth, path, clen, close, te, key, up, v}
-
-def pend.key(pd: Pend, k: List<&2, U32>) -> Pend:
-  match pd:
-    case Pend{meth, path, clen, close, te, key, up, cu}:
-      Pend{meth, path, clen, close, te, k, up, cu}
+def up.cu(u: Up, v: Bool) -> Up:
+  match u:
+    case Plain{}:
+      Asks{Nil{}, False{}, v}
+    case Asks{key, up, cu}:
+      Asks{key, up, v}
 
 def has(k: List<&2, U32>) -> Bool:
   match k:
@@ -248,10 +198,102 @@ def has(k: List<&2, U32>) -> Bool:
 
 # a message asks to become a WebSocket when it carried Upgrade:
 # websocket, Connection: Upgrade and a key
+def up.asked(u: Up) -> Bool & List<&2, U32>:
+  match u:
+    case Plain{}:
+      (False{}, Nil{})
+    case Asks{+key, up, cu}:
+      (up && cu && has(key), key)
+
+type Pend is Data:
+  Pend{meth: U32, path: List<&2, U32>, clen: U32, close: Bool, te: Bool,
+    ws: Up}
+
+def pend.new() -> Pend:
+  Pend{0, Nil{}, 0, False{}, False{}, Plain{}}
+
+# a new method token starts a new message, so the rest resets with it
+def pend.meth(pd: Pend, h: U32) -> Pend:
+  match pd:
+    case Pend{meth, path, clen, close, te, ws}:
+      Pend{h, Nil{}, 0, False{}, False{}, Plain{}}
+
+def pend.path(pd: Pend, p: List<&2, U32>) -> Pend:
+  match pd:
+    case Pend{meth, path, clen, close, te, ws}:
+      Pend{meth, p, clen, close, te, ws}
+
+# A closed field, applied by name hash: a length, a connection token,
+# or a Transfer-Encoding, which poisons the message rather than framing
+# it a second way.
+def pend.set.go(
+  meth: U32, path: List<&2, U32>, clen: U32, close: Bool, te: Bool, ws: Up,
+  v: U32, isc: Bool, cl: Bool, isl: Bool, ist: Bool
+) -> Pend:
+  match isc isl ist:
+    case True{} _ _:
+      Pend{meth, path, clen, cl, te, ws}
+    case _ True{} _:
+      Pend{meth, path, v, close, te, ws}
+    case _ _ True{}:
+      Pend{meth, path, clen, close, True{}, ws}
+    case _ _ _:
+      Pend{meth, path, clen, close, te, ws}
+
+def pend.set(pd: Pend, v: U32, isc: Bool, cl: Bool, isl: Bool, ist: Bool) -> Pend:
+  match pd:
+    case Pend{meth, path, clen, close, te, ws}:
+      pend.set.go(meth, path, clen, close, te, ws, v, isc, cl, isl, ist)
+
+def pend.poison(pd: Pend) -> Pend:
+  match pd:
+    case Pend{meth, path, clen, close, te, ws}:
+      Pend{meth, path, clen, close, True{}, ws}
+
+def pend.len(pd: Pend) -> Pend & U32:
+  match pd:
+    case Pend{meth, path, +clen, close, te, ws}:
+      (Pend{meth, path, clen, close, te, ws}, clen)
+
+def pend.te_if(pd: Pend, is_te: Bool) -> Pend:
+  match is_te:
+    case True{}:
+      pend.poison(pd)
+    case False{}:
+      pd
+
+def pend.te(pd: Pend) -> Pend & Bool:
+  match pd:
+    case Pend{meth, path, clen, close, +te, ws}:
+      (Pend{meth, path, clen, close, te, ws}, te)
+
+# the upgrade state, changed as each of its headers closes
+def pend.up(pd: Pend, v: Bool) -> Pend:
+  match pd:
+    case Pend{meth, path, clen, close, te, ws}:
+      Pend{meth, path, clen, close, te, up.up(ws, v)}
+
+def pend.cu(pd: Pend, v: Bool) -> Pend:
+  match pd:
+    case Pend{meth, path, clen, close, te, ws}:
+      Pend{meth, path, clen, close, te, up.cu(ws, v)}
+
+def pend.key(pd: Pend, k: List<&2, U32>) -> Pend:
+  match pd:
+    case Pend{meth, path, clen, close, te, ws}:
+      Pend{meth, path, clen, close, te, up.key(ws, k)}
+
+def pend.req.go(
+  meth: U32, path: List<&2, U32>, body: List<&2, U32>, close: Bool,
+  asked: Bool & List<&2, U32>
+) -> Req:
+  (ws, key) = asked
+  Req{meth, path, body, close, ws, key}
+
 def pend.req(pd: Pend, body: List<&2, U32>) -> Req:
   match pd:
-    case Pend{meth, path, clen, close, te, +key, up, cu}:
-      Req{meth, path, body, close, up && cu && has(key), key}
+    case Pend{meth, path, clen, close, te, ws}:
+      pend.req.go(meth, path, body, close, up.asked(ws))
 
 # The reader
 # ==========

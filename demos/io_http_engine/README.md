@@ -401,12 +401,30 @@ that closes, from five fields to eight, and that is on every request
 whether or not it is an upgrade. Narrowing it again is the next engine
 change, and it is measured, not guessed.
 
-At pipeline 1 both servers pay the same kernel for a recv and a send,
-and the gap is the compute: 6 µs of Bend against 1 µs of C per request.
-At pipeline 8 the kernel is amortised eight ways and the compute is
-all that is left, so the gap widens to the compute gap itself. That
-6 µs is the engine's real cost and the thing to attack: the parse, the
-reply, the plan.
+The two depths fail differently, and forty stack samples under load at
+pipeline 1 say why: every one of them was in a syscall or the loop
+around it -- twenty in `send`, ten in `epoll_ctl`, nine in `recv`, one
+in `epoll_wait` -- and **none in the parser**. At pipeline 1 this
+server is a syscall machine, and a quarter of its syscalls are the
+`epoll_ctl` pair that `io_wait_on` does on every park and `io_fire`
+undoes on every wake. The C control does not pay them: its descriptors
+are registered once and stay registered. Keeping a descriptor
+registered and re-arming it in place (`EPOLLONESHOT`) would take the
+engine from four syscalls a request to two, and that is the next
+runtime change.
+
+At pipeline 8 the kernel is amortised eight ways, the compute is all
+that is left, and the gap widens to the compute gap: about 6 µs of
+Bend against 1 µs of C. That is the parse, the reply and the plan, and
+it is the engine's own to answer.
+
+Guessing at either is a waste. Narrowing `Pend` from eight fields to
+six -- the widening WebSocket had caused, which looked like the
+obvious cost -- changed nothing measurable (69,466 against 70,154 at
+pipeline 1), and neither did removing the two parser states the
+upgrade added (122,976 against 124,145 at pipeline 8). The cost
+WebSocket added is spread thinly across everything it widened, and the
+cost worth chasing is the one the profile actually points at.
 
 ### One port, several processes
 
