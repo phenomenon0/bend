@@ -128,6 +128,35 @@ way to make the engine allocate. It is refused as `Bad{}`, a `400` and
 a close, which keeps the parser's absorbing state the one the laws
 already cover.
 
+## WebSocket
+
+`/ws` is a WebSocket echo. The request reader learned the three headers
+the upgrade needs -- `Upgrade` by the hash of its value, `Connection:
+Upgrade` beside `Connection: close`, `Sec-WebSocket-Key` as the bytes
+it came in -- and a message that carried all three becomes a `101`
+whose accept key is `base64(sha1(key ++ GUID))`, computed by the Bend
+in `sha1.bend` and `b64.bend` once per handshake. After the `101` the
+connection reads frames instead of requests.
+
+`ws.bend` is the frame reader and writer (RFC 6455). The reader has the
+request reader's shape, one structural walk with its state in one node,
+and the same chunking law: `ws_feed_split` says a frame split across
+reads parses where the whole would have, proved by the same induction.
+What it accepts is deliberately small: client frames are masked or the
+connection is failed with 1002, as the RFC requires; fragments and
+reserved bits are refused; a payload past 1 MiB is refused at the byte
+that announces it, before an eight-byte length could wrap. Text and
+binary come back as they came, a ping is answered with a pong, a close
+with a close and the end of the connection. The laws pin a masked text
+frame and an empty ping reading back, the three refusals, and the
+bytes the writer produces for a short frame, a two-byte length and a
+close code.
+
+`check.c` under `--ws` does the handshake with RFC 6455's own key and
+expects the RFC's accept value, then the echo, the pong, a 300-byte
+binary frame with its two-byte length, a frame split across two writes,
+the close, the unmasked frame, and the `426` a plain `GET /ws` earns.
+
 ## Many, and stopping
 
 The connection limit is a channel. `Chan.new(Unit, n)` has room for n
@@ -213,9 +242,10 @@ the last of which reads the server's CPU when given its pid; nine more
 for static files when the server was started with `--root` on the
 fixture directory and the check with `--files`; five more for time and
 size when the server was started with `--idle-ms MS` and the check with
-`--idle=MS`; one for the limit with `--max-conns N` and `--conns=N`; and
-one, last, for stopping, with `--term`, which sends the server SIGTERM
-and watches it refuse, finish and go. `load.c` drives either;
+`--idle=MS`; one for the limit with `--max-conns N` and `--conns=N`;
+eight for WebSocket with `--ws`; and one, last, for stopping, with
+`--term`, which sends the server SIGTERM and watches it refuse, finish
+and go. `load.c` drives either;
 `ramp.c` opens connections in blocks and never closes them; `sched.c`
 is the scheduler's two halves measured in isolation.
 

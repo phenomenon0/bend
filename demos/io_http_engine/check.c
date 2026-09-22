@@ -5,7 +5,7 @@
 // reads its CPU.
 //
 //   cc -std=c11 -O3 check.c -o check && ./check 8080 [pid] [--files] [--idle=MS]
-//   ./check 8080 [pid] [--conns=N] [--term]
+//   ./check 8080 [pid] [--conns=N] [--term] [--ws]
 #define _GNU_SOURCE
 #include <errno.h>
 #include <netinet/in.h>
@@ -91,6 +91,49 @@ static double cpu_of(long pid) {
   return (double)(ut + st) / (double)sysconf(_SC_CLK_TCK);
 }
 
+
+// WebSocket, for the --ws cases: the handshake with RFC 6455's own key,
+// whose accept value the RFC gives; masked client frames built here;
+// the server's unmasked frames read back.
+static int ws_open(void) {
+  static const char up[] = "GET /ws HTTP/1.1\r\nHost: x\r\nUpgrade: websocket\r\n"
+    "Connection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n"
+    "Sec-WebSocket-Version: 13\r\n\r\n";
+  int fd = dial();
+  if (write(fd, up, sizeof(up) - 1) != (ssize_t)(sizeof(up) - 1)) perror("write");
+  char b[1024];
+  int n = (int)recv(fd, b, sizeof(b), 0);
+  if (n <= 0 || !has(b, n, "101 Switching Protocols")
+      || !has(b, n, "sec-websocket-accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo=")) { close(fd); return -1; }
+  return fd;
+}
+
+// a client frame: FIN, the opcode, the mask bit, the length, a mask, the
+// payload masked; returns the bytes written into out
+static int ws_frame(char* out, int op, const char* body, int n, int masked) {
+  int k = 0;
+  out[k++] = (char)(0x80 | op);
+  if (n < 126) out[k++] = (char)((masked ? 0x80 : 0) | n);
+  else { out[k++] = (char)((masked ? 0x80 : 0) | 126); out[k++] = (char)(n >> 8); out[k++] = (char)(n & 255); }
+  const char m[4] = { 0x11, 0x22, 0x33, 0x44 };
+  if (masked) { memcpy(out + k, m, 4); k += 4; }
+  for (int i = 0; i < n; i++) out[k++] = masked ? (char)(body[i] ^ m[i % 4]) : body[i];
+  return k;
+}
+
+// read until want bytes have arrived, the peer closed, or the socket's
+// two-second timeout passed
+static int ws_read(int fd, char* b, int cap, int want, int* closed) {
+  int n = 0;
+  while (n < want && n < cap) {
+    int got = (int)recv(fd, b + n, (size_t)(cap - n), 0);
+    if (got == 0) { *closed = 1; break; }
+    if (got < 0) break;
+    n += got;
+  }
+  return n;
+}
+
 #define TEXT(s) s, (int)(sizeof(s) - 1)
 
 int main(int argc, char** argv) {
@@ -101,9 +144,10 @@ int main(int argc, char** argv) {
   // fixture directory; --idle=MS when it was started with --idle-ms MS
   // --conns=N when it was started with --max-conns N; --term to end by
   // sending it SIGTERM (last, since the server is gone afterwards)
-  int files = 0, idle = 0, conns = 0, term = 0;
+  int files = 0, idle = 0, conns = 0, term = 0, ws = 0;
   for (int i = 3; i < argc; i++) {
     if (strcmp(argv[i], "--files") == 0) files = 1;
+    else if (strcmp(argv[i], "--ws") == 0) ws = 1;
     else if (strncmp(argv[i], "--idle=", 7) == 0) idle = atoi(argv[i] + 7);
     else if (strncmp(argv[i], "--conns=", 8) == 0) conns = atoi(argv[i] + 8);
     else if (strcmp(argv[i], "--term") == 0) term = 1;
@@ -297,6 +341,61 @@ int main(int argc, char** argv) {
     snprintf(why, sizeof(why), "cpu moved %.3fs", c1 - c0);
     check("twenty silent closes cost no CPU",
       c0 >= 0 && c1 - c0 < 0.05 && has(b, n, "200 OK"), why, (int)strlen(why));
+  }
+
+  // WebSocket. The handshake earns the RFC's accept value; text comes
+  // back as text, a ping as a pong, a 300-byte binary with its two-byte
+  // length, a frame split across two writes whole; an unmasked client
+  // frame ends the connection with 1002; a close is answered and ends
+  // it; a plain GET of /ws is a 426.
+  if (ws) {
+    char f[1024], r[1024];
+    int fd = ws_open(), k, closed;
+    check("the handshake answers RFC 6455's accept key", fd >= 0, "", 0);
+
+    k = ws_frame(f, 1, "hello", 5, 1); if (write(fd, f, (size_t)k) != k) perror("write");
+    closed = 0; n = ws_read(fd, r, sizeof(r), 7, &closed);
+    check("a masked text frame comes back as text",
+      n == 7 && (uint8_t)r[0] == 0x81 && r[1] == 5 && !memcmp(r + 2, "hello", 5), r, n);
+
+    k = ws_frame(f, 9, "p", 1, 1); if (write(fd, f, (size_t)k) != k) perror("write");
+    n = ws_read(fd, r, sizeof(r), 3, &closed);
+    check("a ping is answered with a pong", n == 3 && (uint8_t)r[0] == 0x8A && r[1] == 1 && r[2] == 'p', r, n);
+
+    {
+      char big[300]; for (int i = 0; i < 300; i++) big[i] = (char)(i * 7);
+      k = ws_frame(f, 2, big, 300, 1); if (write(fd, f, (size_t)k) != k) perror("write");
+      n = ws_read(fd, r, sizeof(r), 304, &closed);
+      int ok = n == 304 && (uint8_t)r[0] == 0x82 && (uint8_t)r[1] == 126 && r[2] == 1 && (uint8_t)r[3] == 44
+        && !memcmp(r + 4, big, 300);
+      check("a 300-byte binary frame comes back with its two-byte length", ok, r, n > 40 ? 40 : n);
+    }
+
+    k = ws_frame(f, 1, "split", 5, 1);
+    if (write(fd, f, 4) != 4) perror("write");
+    usleep(20000);
+    if (write(fd, f + 4, (size_t)(k - 4)) != k - 4) perror("write");
+    n = ws_read(fd, r, sizeof(r), 7, &closed);
+    check("a frame split across two writes still parses",
+      n == 7 && (uint8_t)r[0] == 0x81 && r[1] == 5 && !memcmp(r + 2, "split", 5), r, n);
+
+    k = ws_frame(f, 8, "\x03\xe8", 2, 1); if (write(fd, f, (size_t)k) != k) perror("write");
+    n = ws_read(fd, r, sizeof(r), 4, &closed);
+    int gone = closed; if (!gone) { char x[8]; gone = recv(fd, x, sizeof(x), 0) == 0; }
+    check("a close is answered with a close and the connection ends",
+      n == 4 && (uint8_t)r[0] == 0x88 && r[1] == 2 && r[2] == 3 && (uint8_t)r[3] == 0xe8 && gone, r, n);
+    close(fd);
+
+    fd = ws_open();
+    k = ws_frame(f, 1, "bare", 4, 0); if (write(fd, f, (size_t)k) != k) perror("write");
+    closed = 0; n = ws_read(fd, r, sizeof(r), 4, &closed);
+    gone = closed; if (!gone) { char x[8]; gone = recv(fd, x, sizeof(x), 0) == 0; }
+    check("an unmasked client frame ends the connection with 1002",
+      n == 4 && (uint8_t)r[0] == 0x88 && r[1] == 2 && r[2] == 3 && (uint8_t)r[3] == 0xea && gone, r, n);
+    close(fd);
+
+    n = one(TEXT("GET /ws HTTP/1.1\r\nHost: x\r\n\r\n"), b, sizeof(b), 0);
+    check("GET /ws without an upgrade is 426", has(b, n, "426 Upgrade Required"), b, n);
   }
 
   // The connection limit. With N connections held open and idle, one

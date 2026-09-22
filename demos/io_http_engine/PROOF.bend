@@ -11,6 +11,7 @@ import Base
 import ./main.bend as Eng
 import ./sha1.bend as Sha1
 import ./b64.bend as B64
+import ./ws.bend as Ws
 import ./LAWS.bend as Laws
 
 def Laws.feed_split(a, b, p):
@@ -127,4 +128,45 @@ def Laws.b64_foobar():
   {==}
 
 def Laws.ws_accept():
+  {==}
+
+def Laws.ws_feed_split(a, b, w):
+  match a:
+    case Nil{}:
+      {==}
+    case Con{c, t}:
+      Laws.ws_feed_split(t, b, Ws.step(w, c))
+
+def Laws.ws_bad_absorbs(c, out):
+  {==}
+
+def Laws.ws_bad_feeds(s, out):
+  match s:
+    case Nil{}:
+      {==}
+    case Con{c, t}:
+      Laws.ws_bad_feeds(t, out)
+
+def Laws.ws_read_text():
+  {==}
+
+def Laws.ws_read_ping():
+  {==}
+
+def Laws.ws_unmasked_is_bad():
+  {==}
+
+def Laws.ws_fragment_is_bad():
+  {==}
+
+def Laws.ws_reserved_is_bad():
+  {==}
+
+def Laws.ws_frame_short():
+  {==}
+
+def Laws.ws_len_two_bytes():
+  {==}
+
+def Laws.ws_close_code():
   {==}
