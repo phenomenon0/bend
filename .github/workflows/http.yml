@@ -6,9 +6,9 @@ name: http engine
 on:
   push:
     branches: [omen-http, claude/next-gen-tier-review-xss592]
-    paths: ["demos/io_http_engine/**", "bend2/**", ".github/workflows/http.yml"]
+    paths: ["demos/io_http_engine/**", "bend2/**", "kernel/**", ".github/workflows/http.yml"]
   pull_request:
-    paths: ["demos/io_http_engine/**", "bend2/**", ".github/workflows/http.yml"]
+    paths: ["demos/io_http_engine/**", "bend2/**", "kernel/**", ".github/workflows/http.yml"]
 jobs:
   engine:
     runs-on: ubuntu-24.04
@@ -30,6 +30,17 @@ jobs:
           for f in demos/io_http_engine/PROOF.bend demos/io_resp/PROOF.bend; do
             out=$(bun bend2/main.ts "$f"); echo "$out"
             [ "$out" = "All terms check." ] || { echo "$f: not a clean proof"; exit 1; }
+          done
+      # The de Bruijn criterion: a second, independent kernel (kernel/,
+      # Rust, no crates) re-checks the exported core of each proof from
+      # scratch; its verdict must be PASS too
+      - name: the laws hold in a second kernel
+        run: |
+          cargo build --release --manifest-path kernel/Cargo.toml
+          bash kernel/tests/run.sh
+          for f in demos/io_http_engine/PROOF.bend demos/io_resp/PROOF.bend; do
+            bun bend2/main.ts "$f" --export proof.core
+            kernel/target/release/bend-kernel -q proof.core || { echo "$f: the kernel refuses it"; exit 1; }
           done
       - name: the server builds
         run: |
