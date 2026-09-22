@@ -476,6 +476,13 @@ def TCP.send_buf(sock: Socket, data: Bytes()) ->
   import "./effs/tcp_send_buf.c"
   import "./effs/tcp_send_buf.js"
 
+# TCP.send_buf with a deadline: a send that makes no progress for ms
+# fails with ETIMEDOUT, so a peer that stops reading cannot hold it.
+def TCP.send_buf_poll(sock: Socket, data: Bytes(), ms: U32) ->
+  IO(Socket & Result<&1, &1, U32 & String, Unit>):
+  import "./effs/tcp_send_buf_poll.c"
+  import "./effs/tcp_send_buf_poll.js"
+
 def TCP.poll_buf(sock: Socket, max: U32, ms: U32) ->
   IO(Socket & Result<&1, &1, U32 & String, Maybe<&1, Bytes()>>):
   import "./effs/tcp_poll_buf.c"
