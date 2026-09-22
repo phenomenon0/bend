@@ -2798,8 +2798,10 @@ def accept.tick() -> U32:
   250
 
 # A connection to serve takes a slot first, so accepting parks while the
-# limit is reached and the backlog holds what arrives meanwhile. Nothing
-# within the tick is the moment to look for a stop request.
+# limit is reached and the backlog holds what arrives meanwhile. A stop
+# request is looked for on every turn, an arrival or not: asked only
+# when nothing arrived, it went unseen for as long as arrivals kept
+# coming. The ask is a flag read, not a syscall.
 def accept.on(
   +srv: Srv, +sem: Chan(Unit), l: Listener, may: Maybe<&1, Socket>
 ) -> IO(Listener & Bool):
@@ -2810,9 +2812,10 @@ def accept.on(
         return (l, Bool.not(stop))
     case Some{s}:
       do IO<Listener & Bool>:
-        ok : Bool <- Chan.send(Unit, sem, Unit{})
+        ok   : Bool <- Chan.send(Unit, sem, Unit{})
         IO.spawn(Unit, start(srv, sem, s))
-        return (l, True{})
+        stop : Bool <- IO.signal_pending(15)
+        return (l, Bool.not(stop))
 
 def accept.got(
   +srv: Srv, +sem: Chan(Unit),
@@ -2860,7 +2863,9 @@ def stopping(+srv: Srv, +sem: Chan(Unit), l: Listener) -> IO(Unit):
     IO.die(Unit, 0, "bend-http: stopped")
 
 # The accept loop is the one place that runs until it is told to stop,
-# so it is the one @unsafe def in the engine.
+# so it is the one @unsafe def in the engine. It stops for a stop
+# request and for a listener that is no longer one; accept_poll answers
+# every other accept failure itself.
 @unsafe
 def accept(+srv: Srv, +sem: Chan(Unit), lb: Listener & Bool) -> IO(Unit):
   (l, go) = lb
@@ -2911,10 +2916,11 @@ def run(+c: Cfg) -> IO(Unit):
     l   : Listener <- IO.try(Listener, listen(cfg.port(c), cfg.shared(c), cfg.pem(c)))
     sem : Chan(Unit) <- Chan.new(Unit, cfg.conns(c))
     IO.print(banner(c))
-    accept(srv.new(c), sem, (l, True{}))
+    early : Bool <- IO.signal_pending(15)
+    accept(srv.new(c), sem, (l, Bool.not(early)))
 
-# bend-http [--port N] [--root DIR] [--idle-ms N] [--max-conns N] [--grace-ms N]
-#           [--shared] [--tls-cert PEM --tls-key PEM] [--log]
+# bend-http [--port N] [--root DIR] [--idle-ms N] [--head-ms N] [--max-conns N]
+#           [--grace-ms N] [--shared] [--tls-cert PEM --tls-key PEM] [--log]
 def main() -> IO(Unit):
   do IO<Unit>:
     xs : List<String> <- IO.args()

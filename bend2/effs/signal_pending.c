@@ -29,9 +29,9 @@ Term io_signal_pending_run(Env e, Term* f, IoWork* w) {
     sigaction((int)sig, &sa, NULL);
     io_sig_hook[sig] = 1;
   }
-  bool seen = io_sig_seen[sig] != 0;
-  io_sig_seen[sig] = 0;
-  return chan_bool(seen);
+  // read and cleared in one step, so a signal landing between the two
+  // is not lost
+  return chan_bool(__atomic_exchange_n(&io_sig_seen[sig], 0, __ATOMIC_SEQ_CST) != 0);
 }
 
 static void __attribute__((constructor)) io_signal_pending_use(void) {
