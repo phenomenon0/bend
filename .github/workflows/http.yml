@@ -47,7 +47,7 @@ jobs:
         run: |
           up() { for i in $(seq 1 50); do (exec 3<>/dev/tcp/127.0.0.1/$1) 2>/dev/null && return 0; sleep 0.1; done; echo "never listened on $1"; return 1; }
           C=demos/io_http_engine
-          ./httpd --root www --idle-ms 400 & up 8080; $C/check 8080 $! --files --idle=400 --ws; kill $!; wait $! || true
+          ./httpd --root www --idle-ms 400 --log 2>log.txt & up 8080; $C/check 8080 $! --files --idle=400 --ws --log=log.txt; kill $!; wait $! || true
           ./httpd --max-conns 2 & up 8080; $C/check 8080 $! --conns=2; kill $!; wait $! || true
           ./httpd --grace-ms 3000 & up 8080; $C/check 8080 $! --term
           $C/control 8081 & up 8081; $C/check 8081 $!; kill $!; wait $! || true

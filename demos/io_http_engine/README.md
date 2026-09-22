@@ -72,7 +72,8 @@ bytes forever runs it out and is dropped. The accept loop is the one
 The binary reads its arguments with the same shape as it reads a
 request: a state fed one argument at a time, a step that does not
 recurse, and a refusal (`IO.die`) for anything it does not know.
-`--port N` and `--root DIR` are the settings; `--log` is reserved.
+`--port N`, `--root DIR`, `--idle-ms N`, `--max-conns N`, `--grace-ms
+N`, `--shared` and `--log` are the settings.
 
 The route table is data: a list of `Route{path, prefix, act}` built
 once from the configuration and shared by every connection, walked
@@ -156,6 +157,30 @@ close code.
 expects the RFC's accept value, then the echo, the pong, a 300-byte
 binary frame with its two-byte length, a frame split across two writes,
 the close, the unmasked frame, and the `426` a plain `GET /ws` earns.
+
+## The log
+
+`--log` writes one line per request to stderr and nowhere else: what
+was asked, the status it got, and how many bytes went back.
+
+    GET /health 200 106
+    GET /nope 404 104
+    ? /echo 405 133
+    HEAD /a.txt 200 103
+
+No timestamp, and no effect for one: whatever supervises the process
+already stamps and collects what it writes, and a clock effect that
+exists to duplicate that would not have earned its place. The method
+is a hash by the time a reply exists, so the two this engine serves
+are named and anything else is `?`.
+
+A log line is a `Note` segment the router puts before the reply's
+segments; `flat`, which already resolves segments in IO, prints it
+against the bytes the next segment resolves to. So a pipelined batch
+logs in the order its requests arrived, a file logs the size it
+actually read, and a `HEAD` logs the head it actually sent. It is off
+by default because a line per request is a syscall per request:
+69,819 req/s becomes 52,187 with it on.
 
 ## Many, and stopping
 
@@ -243,7 +268,8 @@ for static files when the server was started with `--root` on the
 fixture directory and the check with `--files`; five more for time and
 size when the server was started with `--idle-ms MS` and the check with
 `--idle=MS`; one for the limit with `--max-conns N` and `--conns=N`;
-eight for WebSocket with `--ws`; and one, last, for stopping, with
+one for the log with `--log` and `--log=FILE`; eight for WebSocket
+with `--ws`; and one, last, for stopping, with
 `--term`, which sends the server SIGTERM and watches it refuse, finish
 and go. `load.c` drives either;
 `ramp.c` opens connections in blocks and never closes them; `sched.c`

@@ -662,6 +662,11 @@ def cfg.set_grace(c: Cfg, n: U32) -> Cfg:
       Cfg{port, root, log, idle, conns, n, shared}
 
 # whether the port is shared with other copies of this server
+def cfg.log(c: Cfg) -> Bool:
+  match c:
+    case Cfg{port, root, log, idle, conns, grace, shared}:
+      log
+
 def cfg.shared(c: Cfg) -> Bool:
   match c:
     case Cfg{port, root, log, idle, conns, grace, shared}:
@@ -1043,6 +1048,11 @@ def srv.root(s: Srv) -> List<&2, U32>:
     case Srv{c, table}:
       cfg.root(c)
 
+def srv.log(s: Srv) -> Bool:
+  match s:
+    case Srv{c, table}:
+      cfg.log(c)
+
 def srv.idle(s: Srv) -> U32:
   match s:
     case Srv{c, table}:
@@ -1266,6 +1276,7 @@ def ctype(e: List<&2, U32>) -> List<&2, U32>:
 type Seg is Data:
   Raw{bs: List<&2, U32>}
   Page{path: List<&2, U32>, ct: List<&2, U32>, head: Bool}
+  Note{bs: List<&2, U32>}
 
 def miss(head: Bool) -> List<&2, U32>:
   match head:
@@ -1364,6 +1375,58 @@ def page.read(path: List<&2, U32>, ct: List<&2, U32>, head: Bool) -> IO(List<&2,
 
 # the bytes to write for one chunk's answers, in order: literal ones as
 # they are, pages read as they come up
+# The access log: one line per request, what was asked, the status it
+# got and how many bytes went back, on stderr and nowhere else, so
+# whatever supervises the process is what timestamps and collects it.
+# A Note carries what is known before the reply exists; the segment
+# after it completes the line. --log turns it on, and it is off by
+# default because a line per request is a syscall per request.
+def nth(i: Nat, xs: List<&2, U32>) -> U32:
+  match i xs:
+    case 0n Nil{}:
+      32
+    case 0n Con{h, t}:
+      h
+    case 1n+j Nil{}:
+      32
+    case 1n+j Con{h, t}:
+      nth(j, t)
+
+# "HTTP/1.1 200 OK": the status is the three bytes after the version,
+# taken in one walk so the reply is read once
+def status.take(bs: List<&2, U32>) -> List<&2, U32>:
+  match bs:
+    case Nil{}:
+      bytes("???")
+    case Con{a, t1}:
+      match t1:
+        case Nil{}:
+          bytes("???")
+        case Con{b, t2}:
+          match t2:
+            case Nil{}:
+              bytes("???")
+            case Con{c, t}:
+              [a, b, c]
+
+def status.go(k: Nat, bs: List<&2, U32>) -> List<&2, U32>:
+  match k:
+    case 0n:
+      status.take(bs)
+    case 1n+j:
+      match bs:
+        case Nil{}:
+          bytes("???")
+        case Con{h, t}:
+          status.go(j, t)
+
+def status(bs: List<&2, U32>) -> List<&2, U32>:
+  status.go(9n, bs)
+
+def log.line(+note: List<&2, U32>, +out: List<&2, U32>) -> String:
+  text(cat(note, cat(bytes(" "), cat(status(out),
+    cat(bytes(" "), bytes(Nat.show(List.length(&2, U32, out))))))))
+
 def flat.cat(a: List<&2, U32>, b: List<&2, U32>) -> List<&2, U32>:
   match b:
     case Nil{}:
@@ -1371,22 +1434,43 @@ def flat.cat(a: List<&2, U32>, b: List<&2, U32>) -> List<&2, U32>:
     case Con{h, t}:
       cat(a, Con{h, t})
 
-def flat(xs: List<&2, Seg>) -> IO(List<&2, U32>):
+# a resolved segment, logged against the note that was waiting if there
+# was one, and handed straight back: the line goes out before the
+# segments after it, so the log reads in the order the requests came
+def flat.note(may: Maybe<&2, List<&2, U32>>, +out: List<&2, U32>) ->
+  IO(List<&2, U32>):
+  match may:
+    case None{}:
+      do IO<List<&2, U32>>:
+        return out
+    case Some{note}:
+      do IO<List<&2, U32>>:
+        u : Unit <- IO.print_err(log.line(note, out))
+        return out
+
+def flat.go(xs: List<&2, Seg>, may: Maybe<&2, List<&2, U32>>) -> IO(List<&2, U32>):
   match xs:
     case Nil{}:
       do IO<List<&2, U32>>:
         return Nil{}
     case Con{s, t}:
       match s:
+        case Note{bs}:
+          flat.go(t, Some{bs})
         case Raw{bs}:
           do IO<List<&2, U32>>:
-            rest : List<&2, U32> <- flat(t)
-            return flat.cat(bs, rest)
+            out  : List<&2, U32> <- flat.note(may, bs)
+            rest : List<&2, U32> <- flat.go(t, None{})
+            return flat.cat(out, rest)
         case Page{path, ct, head}:
           do IO<List<&2, U32>>:
-            out  : List<&2, U32> <- page.read(path, ct, head)
-            rest : List<&2, U32> <- flat(t)
+            got  : List<&2, U32> <- page.read(path, ct, head)
+            out  : List<&2, U32> <- flat.note(may, got)
+            rest : List<&2, U32> <- flat.go(t, None{})
             return flat.cat(out, rest)
+
+def flat(xs: List<&2, Seg>) -> IO(List<&2, U32>):
+  flat.go(xs, None{})
 
 
 # What answering a chunk produced: the bytes to write, whether the peer
@@ -1462,12 +1546,41 @@ def serve.go(
     case False{}:
       Ans{[Raw{resp.method()}], False{}, 0, False{}}
 
-def serve(+srv: Srv, r: Req) -> Ans:
+# what a log line says was asked. The method is a hash by then, so the
+# two this engine serves are named and anything else is "?".
+def shown(+meth: U32, get: Bool, head: Bool) -> List<&2, U32>:
+  match get head:
+    case True{} _:
+      bytes("GET")
+    case False{} True{}:
+      bytes("HEAD")
+    case False{} False{}:
+      bytes("?")
+
+def noted.on(note: List<&2, U32>, a: Ans) -> Ans:
+  match a:
+    case Ans{out, cl, st, sk}:
+      Ans{Con{Note{note}, out}, cl, st, sk}
+
+def noted(on: Bool, note: List<&2, U32>, a: Ans) -> Ans:
+  match on:
+    case False{}:
+      a
+    case True{}:
+      noted.on(note, a)
+
+def serve.log(+srv: Srv, r: Req) -> Ans:
   match r:
-    case Req{+meth, path, body, close, ws, key}:
-      serve.go(srv, path, body,
-        U32.is_eq(meth, m.get()) || U32.is_eq(meth, m.head()),
-        U32.is_eq(meth, m.head()), ws, key)
+    case Req{+meth, +path, body, close, ws, key}:
+      noted(srv.log(srv),
+        cat(shown(meth, U32.is_eq(meth, m.get()), U32.is_eq(meth, m.head())),
+          cat(bytes(" "), path)),
+        serve.go(srv, path, body,
+          U32.is_eq(meth, m.get()) || U32.is_eq(meth, m.head()),
+          U32.is_eq(meth, m.head()), ws, key))
+
+def serve(+srv: Srv, r: Req) -> Ans:
+  serve.log(srv, r)
 
 
 def answer.cat(one: List<&2, Seg>, tail: List<&2, Seg>, cl: Bool, st: U32, sk: Bool) -> Ans:

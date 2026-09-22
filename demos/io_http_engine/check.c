@@ -5,7 +5,7 @@
 // reads its CPU.
 //
 //   cc -std=c11 -O3 check.c -o check && ./check 8080 [pid] [--files] [--idle=MS]
-//   ./check 8080 [pid] [--conns=N] [--term] [--ws]
+//   ./check 8080 [pid] [--conns=N] [--term] [--ws] [--log=FILE]
 #define _GNU_SOURCE
 #include <errno.h>
 #include <netinet/in.h>
@@ -140,17 +140,21 @@ int main(int argc, char** argv) {
   if (argc > 1) PORT = atoi(argv[1]);
   static char b[262144];
   int n;
+  const char* logf = NULL;
   // flags after the pid: --files when the server has --root on the
   // fixture directory; --idle=MS when it was started with --idle-ms MS
   // --conns=N when it was started with --max-conns N; --term to end by
   // sending it SIGTERM (last, since the server is gone afterwards)
   int files = 0, idle = 0, conns = 0, term = 0, ws = 0;
+  // --log=PATH: the file the server's stderr was sent to, when it was
+  // started with --log
   for (int i = 3; i < argc; i++) {
     if (strcmp(argv[i], "--files") == 0) files = 1;
     else if (strcmp(argv[i], "--ws") == 0) ws = 1;
     else if (strncmp(argv[i], "--idle=", 7) == 0) idle = atoi(argv[i] + 7);
     else if (strncmp(argv[i], "--conns=", 8) == 0) conns = atoi(argv[i] + 8);
     else if (strcmp(argv[i], "--term") == 0) term = 1;
+    else if (strncmp(argv[i], "--log=", 6) == 0) logf = argv[i] + 6;
   }
   // under --root, "/" is index.html rather than the banner
   const char* root_body = files ? "<h1>hi</h1>" : "bend-http";
@@ -396,6 +400,26 @@ int main(int argc, char** argv) {
 
     n = one(TEXT("GET /ws HTTP/1.1\r\nHost: x\r\n\r\n"), b, sizeof(b), 0);
     check("GET /ws without an upgrade is 426", has(b, n, "426 Upgrade Required"), b, n);
+  }
+
+  // The access log: one line per request, what was asked, the status
+  // and the bytes back, in the order the requests came. A pipelined
+  // pair is two lines; a HEAD reports the head it sent.
+  if (logf != NULL) {
+    n = one(TEXT("GET /health HTTP/1.1\r\nHost: x\r\n\r\nGET /nope HTTP/1.1\r\nHost: x\r\n\r\n"),
+      b, sizeof(b), 0);
+    n = one(TEXT("HEAD /health HTTP/1.1\r\nHost: x\r\n\r\n"), b, sizeof(b), 0);
+    usleep(200000);
+    FILE* f = fopen(logf, "r");
+    char lg[8192];
+    size_t got = f != NULL ? fread(lg, 1, sizeof(lg) - 1, f) : 0;
+    if (f != NULL) fclose(f);
+    lg[got] = 0;
+    char* a = strstr(lg, "GET /health 200 106");
+    char* c = strstr(lg, "GET /nope 404 104");
+    char* d = strstr(lg, "HEAD /health 200 95");
+    check("the log has a line per request, in order",
+      a != NULL && c != NULL && d != NULL && a < c && c < d, lg, (int)got);
   }
 
   // The connection limit. With N connections held open and idle, one
