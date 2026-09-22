@@ -3350,6 +3350,9 @@ using namespace metal;
 #include <sys/mman.h>
 #include <time.h>
 #include <poll.h>
+#ifdef __linux__
+#include <sys/epoll.h>
+#endif
 #include <sys/select.h>
 #ifdef __APPLE__
 #include <mach-o/dyld.h>
@@ -5502,6 +5505,7 @@ typedef struct IoAct {
   Term          item;
   u64           time;
   short         evts;
+  u32           heap;
   struct IoAct* next;
 } IoAct;
 
@@ -5515,6 +5519,119 @@ typedef struct {
 static IoQue io_runs;
 static IoQue io_park;
 static IoQue io_jobs;
+
+// Where a parked activation waits. On Linux a descriptor waiter is
+// registered with epoll once and a deadline waiter sits in a binary
+// min-heap, so a pass costs what is ready rather than what is waiting.
+// An activation can be in both at once -- that is what TCP.poll is --
+// so it carries its heap slot (heap - 1, 0 when it is in no heap) and
+// whichever fires first takes it out of the other. Everywhere else
+// io_park holds them all and select reads the whole set every pass, as
+// it always has.
+#ifdef __linux__
+static int     io_ep = -1;
+static u32     io_fds;
+static u8*     io_reg;
+static u32     io_reg_cap;
+static IoAct** io_time;
+static u32     io_time_n;
+static u32     io_time_cap;
+
+// Whether the poller is believed to hold a descriptor. A waiter goes in
+// with EPOLLONESHOT and stays there: the kernel disarms it as it fires,
+// so a wake costs no syscall and the next park is one MOD rather than an
+// ADD and a DEL. The belief can be wrong in exactly one way -- a
+// descriptor closed and its number handed out again -- so every call
+// takes the other operation when the first is refused, which makes this
+// a hint that corrects itself rather than bookkeeping to keep exact.
+static bool io_reg_has(int fd) {
+  return fd >= 0 && (u32)fd < io_reg_cap && io_reg[fd] != 0;
+}
+
+static void io_reg_put(int fd, u8 v) {
+  if (fd < 0) {
+    return;
+  }
+  if ((u32)fd >= io_reg_cap) {
+    if (v == 0) {
+      return;
+    }
+    u32 was = io_reg_cap;
+    io_reg_cap = io_reg_cap != 0 ? io_reg_cap * 2 : 1024;
+    while ((u32)fd >= io_reg_cap) {
+      io_reg_cap *= 2;
+    }
+    io_reg = io_mem(realloc(io_reg, io_reg_cap));
+    memset(io_reg + was, 0, io_reg_cap - was);
+  }
+  io_reg[fd] = v;
+}
+
+static void io_time_put(IoAct* a, u32 i) {
+  io_time[i] = a;
+  a->heap    = i + 1;
+}
+
+static void io_time_up(u32 i) {
+  while (i != 0) {
+    u32 p = (i - 1) / 2;
+    if (io_time[p]->time <= io_time[i]->time) {
+      break;
+    }
+    IoAct* t = io_time[p];
+    io_time_put(io_time[i], p);
+    io_time_put(t, i);
+    i = p;
+  }
+}
+
+static void io_time_down(u32 i) {
+  for (;;) {
+    u32 l = 2 * i + 1;
+    u32 r = l + 1;
+    u32 m = i;
+    if (l < io_time_n && io_time[l]->time < io_time[m]->time) {
+      m = l;
+    }
+    if (r < io_time_n && io_time[r]->time < io_time[m]->time) {
+      m = r;
+    }
+    if (m == i) {
+      break;
+    }
+    IoAct* t = io_time[m];
+    io_time_put(io_time[i], m);
+    io_time_put(t, i);
+    i = m;
+  }
+}
+
+static void io_time_push(IoAct* a) {
+  if (io_time_n == io_time_cap) {
+    io_time_cap = io_time_cap != 0 ? io_time_cap * 2 : 64;
+    io_time = io_mem(realloc(io_time, io_time_cap * sizeof *io_time));
+  }
+  io_time_put(a, io_time_n);
+  io_time_n += 1;
+  io_time_up(io_time_n - 1);
+}
+
+// Takes it out of the heap wherever it sits, which is how the other
+// half of a descriptor-and-deadline park is cancelled.
+static void io_time_drop(IoAct* a) {
+  if (a->heap == 0) {
+    return;
+  }
+  u32 i = a->heap - 1;
+  a->heap = 0;
+  io_time_n -= 1;
+  if (i != io_time_n) {
+    io_time_put(io_time[io_time_n], i);
+    io_time_up(i);
+    io_time_down(i);
+  }
+}
+#endif
 
 static void io_push(IoQue* q, IoAct* a) {
   a->next = NULL;
@@ -5544,7 +5661,30 @@ static Term io_wait_on(IoWork* w, int fd, short evts, u64 time, IoPack more) {
   a->work.pack = more;
   a->time      = time;
   a->evts      = evts;
+#ifdef __linux__
+  if (evts != 0) {
+    struct epoll_event ev;
+    ev.events   = (evts == POLLOUT ? EPOLLOUT : EPOLLIN) | EPOLLONESHOT;
+    ev.data.ptr = a;
+    bool known  = io_reg_has(fd);
+    int  op     = known ? EPOLL_CTL_MOD : EPOLL_CTL_ADD;
+    if (epoll_ctl(io_ep, op, fd, &ev) != 0) {
+      if (epoll_ctl(io_ep, known ? EPOLL_CTL_ADD : EPOLL_CTL_MOD, fd, &ev) != 0) {
+        err_fail("the poller refused a descriptor");
+      }
+    }
+    io_reg_put(fd, 1);
+    io_fds += 1;
+  }
+  if (time != 0) {
+    io_time_push(a);
+  }
+  if (evts == 0 && time == 0) {
+    io_push(&io_park, a);
+  }
+#else
   io_push(&io_park, a);
+#endif
   return IO_PARK;
 }
 
@@ -5749,6 +5889,77 @@ static bool io_bit(u8* set, int fd, bool put) {
   return *at >> fd % 8 & 1;
 }
 
+// Whether nothing waits on a descriptor or a deadline. On Linux those
+// live in the epoll set and the heap rather than on io_park, so the
+// deadlock test has to ask.
+static bool io_idle(void) {
+#ifdef __linux__
+  return io_fds == 0 && io_time_n == 0;
+#else
+  return true;
+#endif
+}
+
+#ifdef __linux__
+
+// Takes the activation out of both sets and runs its continuation. A
+// re-park puts it back through io_wait_on, so nothing is left behind
+// when the effect changes what it waits for.
+// ready says the descriptor is what woke this activation, so the poller
+// has already disarmed it and the registration can stay for the next
+// park. A deadline that fires first leaves the descriptor armed and
+// pointing at an activation that has moved on, so that one is taken out.
+static void io_fire(Env e, IoAct* a, bool ready) {
+  io_time_drop(a);
+  if (a->evts != 0) {
+    if (!ready) {
+      epoll_ctl(io_ep, EPOLL_CTL_DEL, (int)a->work.word, NULL);
+      io_reg_put((int)a->work.word, 0);
+    }
+    io_fds -= 1;
+    a->evts = 0;
+  }
+  Term x = a->work.pack(e, &a->work);
+  if (x != IO_PARK) {
+    a->item = x;
+    io_push(&io_runs, a);
+  }
+}
+
+// One pass: wait for a descriptor to be ready or for the soonest
+// deadline, then fire what fired. Only what fired is touched.
+static void io_wait(Env e) {
+  struct epoll_event es[64];
+  int ms = -1;
+  if (io_time_n != 0) {
+    u64 soon = io_time[0]->time;
+    u64 tick = io_tick();
+    u64 gap  = soon > tick ? (soon - tick) / 1000000 + 1 : 0;
+    ms = gap > 0x7fffffff ? 0x7fffffff : (int)gap;
+  }
+  int m;
+  io_sync();
+  while ((m = epoll_wait(io_ep, es, 64, ms)) < 0) {
+    if (errno != EINTR) {
+      err_fail("the poller failed");
+    }
+  }
+  for (int i = 0; i < m; i += 1) {
+    IoAct* a = es[i].data.ptr;
+    if (a == NULL) {
+      io_take(e);
+      continue;
+    }
+    io_fire(e, a, true);
+  }
+  u64 now = io_tick();
+  while (io_time_n != 0 && io_time[0]->time <= now) {
+    io_fire(e, io_time[0], false);
+  }
+}
+
+#else
+
 static void io_wait(Env e) {
   int top  = io_wake_fd[0];
   u64 soon = 0;
@@ -5802,6 +6013,8 @@ static void io_wait(Env e) {
   }
   free(set[0]);
 }
+
+#endif
 
 ${NATIVE.IO}
 // Show
@@ -5984,9 +6197,21 @@ OUTLINE int io_loop(Corpus H) {
   Env e = { H, ALC[0] };
   io_stk = pool_stack();
   signal(SIGPIPE, SIG_IGN);
+#ifdef __linux__
+  io_ep = epoll_create1(0);
+  if (io_ep < 0) {
+    err_fail("the poller could not be opened");
+  }
+#endif
   if (pipe(io_wake_fd) | fcntl(io_wake_fd[0], F_SETFL, O_NONBLOCK)) {
     err_fail("the event loop failed to open");
   }
+#ifdef __linux__
+  struct epoll_event wake = { .events = EPOLLIN, .data.ptr = NULL };
+  if (epoll_ctl(io_ep, EPOLL_CTL_ADD, io_wake_fd[0], &wake)) {
+    err_fail("the event loop failed to open");
+  }
+#endif
   Term m = corpus_eval(H, term_tsk(MAIN_FID, task_node(e, MAIN_FID,
     TERM_HOLE, 0, 0)));
 #if MAIN_PURE
@@ -6000,7 +6225,7 @@ OUTLINE int io_loop(Corpus H) {
       if (io_live == 0) {
         return 0;
       }
-      if (io_park.head == NULL && io_busy == 0) {
+      if (io_park.head == NULL && io_idle() && io_busy == 0) {
         io_sync();
         fprintf(stderr, "bend: deadlock: every computation waits on a"
           " channel\n");
