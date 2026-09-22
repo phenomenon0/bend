@@ -691,3 +691,65 @@ def Laws.ws_len_two_bytes():
 
 def Laws.ws_close_code():
   {==}
+
+# batch_under: the comparison is generalised with its equation. Below
+# the cap what stays is k, and the equation says k is below it; at or
+# past it what stays is 0, which the checker compares with the cap.
+law batch_under.go:
+  for +k: U32
+  for +c: Cmp
+  for e: {c == U32.cmp(k, Eng.send.cap()) : Cmp}
+  {U32.is_lt(Eng.batch.keep(c, k), Eng.send.cap()) == True{} : Bool}
+
+def batch_under.go(k, c, e):
+  match c:
+    case LT{}:
+      %e : {Cmp.is_lt(_) == True{} : Bool}
+      {==}
+    case EQ{}:
+      {==}
+    case GT{}:
+      {==}
+
+def Laws.batch_under(k):
+  batch_under.go(k, U32.cmp(k, Eng.send.cap()), {==})
+
+# long_at and long_past: long walks the count and the list together, so
+# each step of the list is a step of the count
+def Laws.long_at(bs):
+  match bs:
+    case Nil{}:
+      {==}
+    case Con{h, t}:
+      Laws.long_at(t)
+
+def Laws.long_past(bs, c):
+  match bs:
+    case Nil{}:
+      {==}
+    case Con{h, t}:
+      Laws.long_past(t, h)
+
+def Laws.hw_rest(hw):
+  {==}
+
+def Laws.hw_keeps(t0, n):
+  {==}
+
+def Laws.key_rfc():
+  {==}
+
+def Laws.key_short():
+  {==}
+
+def Laws.key_alphabet():
+  {==}
+
+def Laws.key_padding():
+  {==}
+
+def Laws.parse_version_13():
+  {==}
+
+def Laws.parse_version_other():
+  {==}

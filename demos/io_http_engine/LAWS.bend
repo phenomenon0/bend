@@ -612,3 +612,63 @@ law ws_len_two_bytes:
 
 law ws_close_code:
   {Ws.close.frame(1002) == [136, 2, 3, 234] : List<&2, U32>}
+
+# LAW: the batch budget. After a reply of any size joins the batch of
+# pages being written, what stays waiting is below send.cap(): a batch
+# at or past the cap has gone out. So the most a pipelined read ever
+# holds unsent is the cap plus the one reply that crossed it.
+law batch_under:
+  for +k: U32
+  {U32.is_lt(Eng.batch.keep(U32.cmp(k, Eng.send.cap()), k), Eng.send.cap()) ==
+    True{} : Bool}
+
+# LAW: the target cap, at its edge: a target of exactly k bytes is not
+# past k, and one byte more is, whatever the bytes are.
+law long_at:
+  for +bs: List<&2, U32>
+  {Eng.long(List.length(&2, U32, bs), bs) == False{} : Bool}
+
+law long_past:
+  for +bs: List<&2, U32>
+  for +c: U32
+  {Eng.long(List.length(&2, U32, bs), Con{c, bs}) == True{} : Bool}
+
+# LAW: the head's clock. A read that leaves no head in progress (a body,
+# the next request, nothing) drops the watch, and one that leaves a head
+# in progress keeps the clock it started with, so reads that each arrive
+# inside the idle time never restart it.
+law hw_rest:
+  for +hw: Eng.Hw
+  {Eng.hw.next(False{}, hw) == Eng.NoHead{} : Eng.Hw}
+
+law hw_keeps:
+  for +t0: Nat
+  for +n: U32
+  {Eng.hw.next(True{}, Eng.Since{t0, n}) == Eng.Since{t0, n} : Eng.Hw}
+
+# LAW: RFC 6455's example key has the shape a key must have; one a
+# character short, one with a character outside base64, and one without
+# its padding do not.
+law key_rfc:
+  {Eng.key.ok(Eng.bytes("dGhlIHNhbXBsZSBub25jZQ=="), 0, True{}) == True{} : Bool}
+
+law key_short:
+  {Eng.key.ok(Eng.bytes("dGhlIHNhbXBsZSBub25jZQ="), 0, True{}) == False{} : Bool}
+
+law key_alphabet:
+  {Eng.key.ok(Eng.bytes("dGhlIHNhbXBsZSBub25jZ.=="), 0, True{}) == False{} : Bool}
+
+law key_padding:
+  {Eng.key.ok(Eng.bytes("dGhlIHNhbXBsZSBub25jZQAA"), 0, True{}) == False{} : Bool}
+
+# LAW: an upgrade that names version 13 asks to upgrade, and one that
+# names another does not, whatever else it carried
+law parse_version_13:
+  {Eng.parse(Eng.bytes("GET /ws HTTP/1.1\r\nHost: x\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: k\r\nSec-WebSocket-Version: 13\r\n\r\n")) ==
+    ([Eng.Req{Eng.MGet{}, Eng.bytes("/ws"), Nil{}, False{}, True{}, Eng.bytes("k")}], False{}) :
+    List<&2, Eng.Req> & Bool}
+
+law parse_version_other:
+  {Eng.parse(Eng.bytes("GET /ws HTTP/1.1\r\nHost: x\r\nSec-WebSocket-Version: 8\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: k\r\n\r\n")) ==
+    ([Eng.Req{Eng.MGet{}, Eng.bytes("/ws"), Nil{}, False{}, False{}, Eng.bytes("k")}], False{}) :
+    List<&2, Eng.Req> & Bool}
