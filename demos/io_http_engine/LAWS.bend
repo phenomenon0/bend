@@ -8,6 +8,7 @@ import ./sha1.bend as Sha1
 import ./b64.bend as B64
 import ./ws.bend as Ws
 import ./spec.bend as Spec
+import ./world.bend as W
 
 # LAW: chunking does not change the parse. Feeding a chunk and then
 # another one lands exactly where feeding the two joined would have.
@@ -947,3 +948,263 @@ law parse_version_other:
   {Eng.parse("GET /ws HTTP/1.1\r\nHost: x\r\nSec-WebSocket-Version: 8\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: k\r\n\r\n") ==
     ([Eng.Req{Eng.MGet{}, "/ws", "", False{}, False{}, "k"}], False{}) :
     List<&2, Eng.Req> & Bool}
+
+# The world
+# =========
+#
+# The connection loop and the accept loop, run in world.bend's pure
+# model of the socket world: the same defs the server runs, with the
+# identity monad and a scripted peer in place of IO and the effects.
+# These laws hold for every peer the script can describe and every
+# state the loop can be in. What they assume of each effect is its
+# contract (world.bend), which the last laws below show the model keeps
+# and conform.bend checks the real effects keep.
+
+# LAW: a plan that ends the connection is the last thing it does. After
+# End the loop writes its segments and answers the socket, to be
+# closed, with nothing read and nothing more written; after Stop it
+# does nothing at all.
+law end_is_last:
+  for +srv: Eng.Srv
+  for w: W.World
+  for out: List<&2, Eng.Seg>
+  for hw: Eng.Hw
+  for g: Nat
+  for v: Nat
+  {W.sim.conn(1n+g, srv, ((w, Eng.End{out}), hw), v) ==
+    Eng.put.s(W.World, W.sim.segs(w, out, Eng.srv.idle(srv))) : W.World}
+
+law stop_is_last:
+  for +srv: Eng.Srv
+  for w: W.World
+  for hw: Eng.Hw
+  for g: Nat
+  for v: Nat
+  {W.sim.conn(1n+g, srv, ((w, Eng.Stop{}), hw), v) == w : W.World}
+
+# LAW: a plan that reads on writes all its replies first. Go's segments
+# go out, the next read waits for them, and the head's watch starts
+# over.
+law go_order:
+  for +srv: Eng.Srv
+  for w: W.World
+  for out: List<&2, Eng.Seg>
+  for +p2: Eng.P
+  for hw: Eng.Hw
+  for g: Nat
+  for v: Nat
+  {W.sim.conn(1n+g, srv, ((w, Eng.Go{out, p2}), hw), v) ==
+    W.sim.conn(g, srv, W.sim.turn(srv, W.sim.segs(w, out, Eng.srv.idle(srv)), p2,
+      Eng.hw.next(Eng.p.head(p2), Eng.NoHead{})), Eng.conn.waits()) : W.World}
+
+# LAW: reply order. At a peer that takes what it is sent, the replies
+# go out byte for byte, in the order of their segments, after whatever
+# the peer already had, and the send succeeds. (For segments that are
+# not files; a file's bytes are the file's.)
+law segs_wire:
+  for +xs: List<&2, Eng.Seg>
+  for +ms: U32
+  for +rd: List<&2, W.Rd>
+  for +now: Nat
+  for +fs: List<&2, W.Fil>
+  for +out: Bytes()
+  for +e: {W.raws(xs) == True{} : Bool}
+  {W.sim.segs(W.eager(rd, now, fs, out), xs, ms) ==
+    W.sent(rd, now, fs, Bytes.append(out, W.wire(xs, False{}))) : Eng.Put(W.World)}
+
+# LAW: nothing is done after a send fails. Whether the send was a read's
+# replies, a WebSocket's frames or a stream's event, a send that failed
+# or stalled is the connection's last act on its socket: no read, no
+# write (the stream only finishes the sleep it was in).
+law fail_go:
+  for +srv: Eng.Srv
+  for g: Nat
+  for v: Nat
+  for m: Eng.Put(W.World)
+  for p: Eng.P
+  for hw: Eng.Hw
+  for e: {W.put.done(m) == False{} : Bool}
+  {W.sim.conn(g, srv, W.sim.turn(srv, m, p, hw), v) == Eng.put.s(W.World, m) : W.World}
+
+law fail_ws:
+  for +srv: Eng.Srv
+  for g: Nat
+  for v: Nat
+  for m: Eng.Put(W.World)
+  for wr: Ws.W
+  for e: {W.put.done(m) == False{} : Bool}
+  {W.sim.conn(g, srv, (W.sim.turn.ws(srv, m, wr), Eng.NoHead{}), v) ==
+    Eng.put.s(W.World, m) : W.World}
+
+law fail_feed:
+  for +srv: Eng.Srv
+  for g: Nat
+  for v: Nat
+  for m: Eng.Put(W.World)
+  for n: U32
+  for e: {W.put.done(m) == False{} : Bool}
+  {W.sim.conn(g, srv, (W.sim.tick(m, n), Eng.NoHead{}), v) ==
+    W.w.nap(Eng.put.s(W.World, m), Eng.sse.gap()) : W.World}
+
+# LAW: a refusal. When the requests a read completed all keep the
+# connection and the grammar then broke, the plan is to write every
+# reply those requests are owed, in their order, then the 400, and to
+# end; and the connection does exactly that: its last act is writing
+# them, and it reads nothing more, so no request after the refusal is
+# ever consumed. (send.segs takes no read effect, so it cannot read.)
+law refuse_plan:
+  for +srv: Eng.Srv
+  for +rs: List<&2, Eng.Req>
+  for +q: Eng.P
+  for +e: {W.all.keep(srv, rs) == True{} : Bool}
+  {Eng.plan.take(srv, (q, rs), True{}) == Eng.End{W.owed(srv, rs, W.bad.reply())} : Eng.Plan}
+
+law refuse_conn:
+  for +srv: Eng.Srv
+  for w: W.World
+  for +q: Eng.P
+  for +rs: List<&2, Eng.Req>
+  for hw: Eng.Hw
+  for g: Nat
+  for v: Nat
+  for +e: {W.all.keep(srv, rs) == True{} : Bool}
+  {W.sim.conn(1n+g, srv, ((w, Eng.plan.take(srv, (q, rs), True{})), hw), v) ==
+    Eng.put.s(W.World, W.sim.segs(w, W.owed(srv, rs, W.bad.reply()), Eng.srv.idle(srv))) :
+    W.World}
+
+# LAW: bounded buffering, the replies. Whatever a reply is -- a fixed
+# one, a missing file, a file of any size, streamed in blocks -- and
+# whatever the peer does, a writer that may still take replies leaves
+# it holding a batch below send.cap(): so the most ever held unsent is
+# the cap, plus the one reply (or a file's head and one page.chunk()
+# block) that crossed it.
+law hold_fine:
+  for +ms: U32
+  for s: W.World
+  for +acc: Bytes()
+  {W.em.fine(W.sim.hold(ms, s, acc)) == True{} : Bool}
+
+law raw_fine:
+  for +ms: U32
+  for may: Maybe<&2, Bytes()>
+  for bs: Bytes()
+  for st: Eng.Em<W.World>
+  {W.em.fine(W.sim.raw(ms, may, bs, st)) == True{} : Bool}
+
+law page_fine:
+  for +ms: U32
+  for root: List<&2, U32>
+  for path: List<&2, U32>
+  for ct: List<&2, U32>
+  for head: Bool
+  for may: Maybe<&2, Bytes()>
+  for sh: Bool
+  for st: Eng.Em<W.World>
+  {W.em.fine(W.sim.page(ms, root, path, ct, head, may, sh, st)) == True{} : Bool}
+
+# LAW: bounded buffering, the head. A read that leaves a head in
+# progress leaves it with at most head.cap() bytes since the read it
+# began in; one that would take it past is answered with a 431 and the
+# connection ends. With a read at most chunk() bytes, a head held is at
+# most chunk() + head.cap(); a body, body.cap() (the reader's).
+law head_capped:
+  for +srv: Eng.Srv
+  for w: W.World
+  for may: Maybe<&1, Bytes()>
+  for p: Eng.P
+  for t0: Nat
+  for +n: U32
+  {W.hw.fine(W.hw.of(Eng.plan.counted(W.World, srv, w, may, p, t0, n))) == True{} : Bool}
+
+# LAW: the head deadline. A head whose time (--head-ms) has run out is
+# not read again: the turn ends the connection there, whatever the peer
+# would have sent. (A head's time is kept across the reads that
+# continue it: hw_keeps.)
+law head_expires:
+  for +srv: Eng.Srv
+  for +w: W.World
+  for p: Eng.P
+  for +t0: Nat
+  for n: U32
+  for e: {Nat.is_lt(Nat.sub(W.w.now(w), t0), U32.to_nat(Eng.srv.head(srv))) == False{} : Bool}
+  {W.sim.turn.h(srv, w, p, Eng.Since{t0, n}) == ((w, Eng.Stop{}), Eng.NoHead{}) :
+    (W.World & Eng.Plan) & Eng.Hw}
+
+# LAW: liveness under stall. At a peer that has stopped -- every read
+# waits out its time (idle or head) and gets nothing, every send that
+# has bytes to move waits out its time and fails -- the connection ends
+# within three turns from any state the loop can be in: fuel past three
+# changes nothing.
+law stall_ends:
+  for +srv: Eng.Srv
+  for +w: W.World
+  for pl: Eng.Plan
+  for +hw: Eng.Hw
+  for +g: Nat
+  for +v: Nat
+  {W.mute.conn(1n+1n+1n+g, srv, ((w, pl), hw), v) ==
+    W.mute.conn(1n+1n+1n, srv, ((w, pl), hw), v) : W.World}
+
+# LAW: the accept loop stays up. With no stop request and every accept
+# failure one of the passing set (EMFILE, ECONNABORTED, ...), the loop
+# runs every turn it is given, however connections come and go.
+law accept_calm:
+  for k: Nat
+  for +evs: List<&2, W.Ac>
+  for +served: Nat
+  for +e: {W.calm(evs) == True{} : Bool}
+  {W.why.of(W.sim.accept(k, W.Lw{evs, False{}, served})) == Eng.Spent{} : Eng.Why}
+
+# LAW: ... and ends only as it may: its turns spent, a stop asked, or a
+# failure outside the passing set, a listener that is no longer one.
+# The model lets accept fail with any code at any time, so this assumes
+# nothing of accept_poll's own sorting of them.
+law accept_ends:
+  for +k: Nat
+  for sp: Bool
+  for +evs: List<&2, W.Ac>
+  for +served: Nat
+  {W.ok.end(W.why.of(W.sim.accept(k, W.Lw{evs, sp, served}))) == True{} : Bool}
+
+# LAW: the model keeps the contracts it assumes. A read answers nothing
+# only after its time, and bytes (no more than asked, when the peer's
+# fit) within it; a send to a peer that has stopped reading fails with
+# ETIMEDOUT after its time, and one to a peer that reads succeeds; a
+# file read takes no more than it asked for.
+law rx_model:
+  for +rd: List<&2, W.Rd>
+  for +wr: List<&2, W.Wr>
+  for +eager: Bool
+  for +now: Nat
+  for +fs: List<&2, W.Fil>
+  for +out: Bytes()
+  for +max: U32
+  for +ms: U32
+  for e: {W.fits(rd, max) == True{} : Bool}
+  {W.rx.seen(max, ms, now, W.w.rx(W.World{rd, wr, eager, now, fs, out}, max, ms)) ==
+    True{} : Bool}
+
+law tx_stalled:
+  for +rd: List<&2, W.Rd>
+  for +now: Nat
+  for +fs: List<&2, W.Fil>
+  for +out: Bytes()
+  for +h: Char
+  for +t: Bytes()
+  for +ms: U32
+  {W.tx.seen(ms, True{}, now, W.w.tx(W.World{rd, Nil{}, False{}, now, fs, out}, SCon{h, t}, ms)) ==
+    True{} : Bool}
+
+law tx_served:
+  for +rd: List<&2, W.Rd>
+  for +now: Nat
+  for +fs: List<&2, W.Fil>
+  for +out: Bytes()
+  for +a: Bytes()
+  for +ms: U32
+  {W.tx.seen(ms, False{}, now, W.w.tx(W.eager(rd, now, fs, out), a, ms)) == True{} : Bool}
+
+law fread_model:
+  for +f: Bytes()
+  for +n: Nat
+  {Nat.is_le(Bytes.len(String.take(f, n)), n) == True{} : Bool}

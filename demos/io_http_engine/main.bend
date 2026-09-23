@@ -2315,8 +2315,8 @@ def send.hold(
   ~bind: @-A: Type -> @-B: Type -> M(A) -> (A -> M(B)) -> M(B), ~S: Type,
   ~tx: S -> Bytes() -> U32 -> M(Put(S)), +ms: U32, s: S, +acc: Bytes()
 ) -> M(Em<S>):
-  send.held(~M, ~pure, ~bind, ~S, ~tx, ms, s, acc, U32.cmp(U32.from_nat(Bytes.len(acc)),
-      send.cap()))
+  send.held(~M, ~pure, ~bind, ~S, ~tx, ms, s, acc,
+    U32.cmp(U32.from_nat(Bytes.len(acc)), send.cap()))
 
 # a file whose bytes are all out leaves what waits in front of the next
 # block (its head, when it was empty) to the batch, under the batch's
@@ -3080,8 +3080,8 @@ def turn.at(
   ~rx: S -> U32 -> U32 -> M(Got(S)), +srv: Srv, s: S, p: P, +t0: Nat, n: U32, now: Nat
 ) -> M((S & Plan) & Hw):
   +el = Nat.sub(now, t0)
-  turn.left(~M, ~pure, ~bind, ~S, ~rx, srv, s, p, t0, n, el, Nat.is_lt(el,
-      U32.to_nat(srv.head(srv))))
+  turn.left(~M, ~pure, ~bind, ~S, ~rx, srv, s, p, t0, n, el,
+    Nat.is_lt(el, U32.to_nat(srv.head(srv))))
 
 # the clock read at a head's first read starts its time
 def turn.fresh.at(
