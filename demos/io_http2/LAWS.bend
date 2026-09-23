@@ -101,6 +101,66 @@ law tbl_resize_fits:
   for m: Nat
   {fits(K.tbl.resize(t, m)) == True{} : Bool}
 
+# HPACK: the decoder's bounds, for every input (RFC 7541 4, RFC 9113 6.5.2)
+# ==========================================================================
+
+# What a decoder keeps true: the size it counts is the size of the list
+# it has decoded (RFC 7541 4.1's sizes, summed), that size is within
+# SETTINGS_MAX_HEADER_LIST_SIZE, and its table fits its maximum.
+def J(-t: K.Tbl, -out: List<&2, K.Fld>, -sz: Nat, -lim: K.Lim) -> Type:
+  {sz == K.sizes(out) : Nat} & ({Nat.is_le(sz, K.lim.l(lim)) == True{} : Bool} & {fits(t) == True{} : Bool})
+
+def INV(d: K.Dec) -> Type:
+  match d:
+    case K.Dc{at, t, out, sz, any, lim}:
+      J(t, out, sz, lim)
+
+# LAW: a fresh decoder keeps it ...
+law dec_new:
+  for +tmax: Nat
+  for +lmax: Nat
+  INV(K.dec.new(tmax, lmax))
+
+# ... every byte keeps it, whatever the byte and wherever the decoder
+# is -- so no input, however long and however it is cut, decodes a
+# header list past the cap (an HPACK bomb among them) or grows the
+# table past its maximum ...
+law dec_step:
+  for +root: H.Ht
+  for +d: K.Dec
+  for +c: U32
+  for h: INV(d)
+  INV(K.step(root, d, c))
+
+law dec_feed:
+  for +root: H.Ht
+  for +bs: List<&2, U32>
+  for +d: K.Dec
+  for h: INV(d)
+  INV(K.feed(root, bs, d))
+
+# ... and so does starting a new header block
+law dec_begin:
+  for +d: K.Dec
+  for h: INV(d)
+  INV(K.dec.begin(d))
+
+def dout(d: K.Dec) -> List<&2, K.Fld>:
+  match d:
+    case K.Dc{at, t, out, sz, any, lim}:
+      out
+
+def dlmax(d: K.Dec) -> Nat:
+  match d:
+    case K.Dc{at, t, out, sz, any, lim}:
+      K.lim.l(lim)
+
+# LAW: what that means for the list: its sizes sum to at most the cap
+law list_capped:
+  for +d: K.Dec
+  for h: INV(d)
+  {Nat.is_le(K.sizes(dout(d)), dlmax(d)) == True{} : Bool}
+
 # HPACK: the decoder's refusals (RFC 7541 3.1, 5, 6)
 # ==================================================
 

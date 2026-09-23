@@ -335,6 +335,217 @@ def Laws.tbl_resize_fits(t, m):
     case K.Tbl{es, max}:
       Laws.fit_le(es, m)
 
+# HPACK: the decoder's bounds
+# ===========================
+#
+# Every function the step goes through, with the invariant of what it
+# is handed, hands back a decoder with it: only field.cap and got.size
+# change what the invariant speaks of, and each checks what it must.
+
+def dj.bad(-t: K.Tbl, -out: List<&2, K.Fld>, -sz: Nat, -any: Bool, -lim: K.Lim, -why: K.Err,
+  j: Laws.J(t, out, sz, lim)) -> Laws.INV(K.bad(t, out, sz, any, lim, why)):
+  j
+
+def dj.kind(k: K.Rep, +t: K.Tbl, +f: K.Fld, h: {Laws.fits(t) == True{} : Bool}) ->
+  {Laws.fits(K.field.kind(k, t, f)) == True{} : Bool}:
+  match k:
+    case K.KInc{}:
+      Laws.tbl_add_fits(t, f)
+    case K.KNot{}:
+      h
+    case K.KNever{}:
+      h
+
+def dj.sz(-sz: Nat, +out: List<&2, K.Fld>, +f: K.Fld, jz: {sz == K.sizes(out) : Nat}) ->
+  {Nat.add(sz, K.fld.size(f)) == K.sizes(Con{f, out}) : Nat}:
+  %Equal.sym(Nat, sz, K.sizes(out), jz) : {Nat.add(_, K.fld.size(f)) == Nat.add(K.fld.size(f), K.sizes(out)) : Nat}
+  N.add_comm(K.sizes(out), K.fld.size(f))
+
+def dj.cap(+k: K.Rep, +t: K.Tbl, +out: List<&2, K.Fld>, +sz: Nat, +lim: K.Lim, +f: K.Fld, ok: Bool,
+  e: {Nat.is_le(Nat.add(sz, K.fld.size(f)), K.lim.l(lim)) == ok : Bool}, j: Laws.J(t, out, sz, lim)) ->
+  Laws.INV(K.field.cap(k, t, out, sz, Nat.add(sz, K.fld.size(f)), lim, f, ok)):
+  match ok:
+    case False{}:
+      j
+    case True{}:
+      match j:
+        case (jz, jr):
+          match jr:
+            case (jl, jt):
+              (dj.sz(sz, out, f, jz), (e, dj.kind(k, t, f, jt)))
+
+def dj.field(+k: K.Rep, +t: K.Tbl, +out: List<&2, K.Fld>, +sz: Nat, +lim: K.Lim, +f: K.Fld,
+  j: Laws.J(t, out, sz, lim)) -> Laws.INV(K.field(k, t, out, sz, lim, f)):
+  dj.cap(k, t, out, sz, lim, f, Nat.is_le(Nat.add(sz, K.fld.size(f)), K.lim.l(lim)), {==}, j)
+
+def dj.idx(+t: K.Tbl, +out: List<&2, K.Fld>, +sz: Nat, +lim: K.Lim, m: Maybe<&2, K.Fld>,
+  j: Laws.J(t, out, sz, lim)) -> Laws.INV(K.got.idx(t, out, sz, lim, m)):
+  match m:
+    case None{}:
+      j
+    case Some{f}:
+      dj.field(K.KNot{}, t, out, sz, lim, f, j)
+
+def dj.name(-k: K.Rep, -t: K.Tbl, -out: List<&2, K.Fld>, -sz: Nat, -lim: K.Lim, m: Maybe<&2, K.Fld>,
+  j: Laws.J(t, out, sz, lim)) -> Laws.INV(K.got.name(k, t, out, sz, lim, m)):
+  match m:
+    case None{}:
+      j
+    case Some{f}:
+      match f:
+        case K.Fld{n, v}:
+          j
+
+def dj.size(+t: K.Tbl, -out: List<&2, K.Fld>, -sz: Nat, -any: Bool, -lim: K.Lim, +v: Nat, ok: Bool,
+  j: Laws.J(t, out, sz, lim)) -> Laws.INV(K.got.size(t, out, sz, any, lim, v, ok)):
+  match ok:
+    case False{}:
+      j
+    case True{}:
+      match j:
+        case (jz, jr):
+          match jr:
+            case (jl, jt):
+              (jz, (jl, Laws.tbl_resize_fits(t, v)))
+
+def dj.done(+fo: K.For, m: Maybe<&2, Bytes()>, +t: K.Tbl, +out: List<&2, K.Fld>, +sz: Nat, +lim: K.Lim,
+  j: Laws.J(t, out, sz, lim)) -> Laws.INV(K.str.done(fo, m, t, out, sz, lim)):
+  match fo m:
+    case K.FName{k} None{}:
+      j
+    case K.FVal{k, name} None{}:
+      j
+    case K.FName{k} Some{s}:
+      j
+    case K.FVal{k, name} Some{s}:
+      dj.field(k, t, out, sz, lim, K.Fld{name, s}, j)
+
+def dj.len(+root: H.Ht, +fo: K.For, +h: Bool, +t: K.Tbl, +out: List<&2, K.Fld>, +sz: Nat, +lim: K.Lim, n: Nat,
+  j: Laws.J(t, out, sz, lim)) -> Laws.INV(K.str.len(root, fo, h, t, out, sz, lim, n)):
+  match n:
+    case 0n:
+      dj.done(fo, K.str.fin(K.str.sb(root, h)), t, out, sz, lim, j)
+    case 1n+m:
+      j
+
+def dj.start(+root: H.Ht, +fo: K.For, +h: Bool, +t: K.Tbl, +out: List<&2, K.Fld>, +sz: Nat, +lim: K.Lim, +n: Nat,
+  ok: Bool, j: Laws.J(t, out, sz, lim)) -> Laws.INV(K.str.start(root, fo, h, t, out, sz, lim, n, ok)):
+  match ok:
+    case True{}:
+      dj.len(root, fo, h, t, out, sz, lim, n, j)
+    case False{}:
+      j
+
+def dj.int.done(+root: H.Ht, to: K.To, +v: Nat, +t: K.Tbl, +out: List<&2, K.Fld>, +sz: Nat, +any: Bool,
+  +lim: K.Lim, j: Laws.J(t, out, sz, lim)) -> Laws.INV(K.int.done(root, to, v, t, out, sz, any, lim)):
+  match to:
+    case K.TIdx{}:
+      dj.idx(t, out, sz, lim, K.at(v, t), j)
+    case K.TName{k}:
+      dj.name(k, t, out, sz, lim, K.at(v, t), j)
+    case K.TSize{}:
+      dj.size(t, out, sz, any, lim, v, Bool.not(any) && Nat.is_le(v, K.lim.t(lim)), j)
+    case K.TLen{fo, h}:
+      dj.start(root, fo, h, t, out, sz, lim, v, Nat.is_le(v, K.lim.l(lim)), j)
+
+def dj.int(+root: H.Ht, +to: K.To, i: K.Ist, +t: K.Tbl, +out: List<&2, K.Fld>, +sz: Nat, +any: Bool,
+  +lim: K.Lim, j: Laws.J(t, out, sz, lim)) -> Laws.INV(K.int.at(root, to, i, t, out, sz, any, lim)):
+  match i:
+    case K.IDone{v}:
+      dj.int.done(root, to, v, t, out, sz, any, lim, j)
+    case K.ICont{acc, mul, left}:
+      j
+    case K.IOver{}:
+      j
+
+def dj.lit(+root: H.Ht, +k: K.Rep, +p: K.Pfx, v: Nat, +t: K.Tbl, +out: List<&2, K.Fld>, +sz: Nat,
+  +lim: K.Lim, j: Laws.J(t, out, sz, lim)) -> Laws.INV(K.lit(root, k, p, v, t, out, sz, lim)):
+  match v:
+    case 0n:
+      j
+    case 1n+i:
+      dj.int(root, K.TName{k}, K.int.first(K.pfx.max(p), 1n+i), t, out, sz, True{}, lim, j)
+
+def dj.top(+root: H.Ht, +b: Nat, +t: K.Tbl, +out: List<&2, K.Fld>, +sz: Nat, +any: Bool, +lim: K.Lim,
+  ix: Bool, inc: Bool, up: Bool, nev: Bool, j: Laws.J(t, out, sz, lim)) ->
+  Laws.INV(K.top.go(root, b, t, out, sz, any, lim, ix, inc, up, nev)):
+  match ix inc up nev:
+    case True{} _ _ _:
+      dj.int(root, K.TIdx{}, K.int.first(127n, Nat.sub(b, 128n)), t, out, sz, True{}, lim, j)
+    case False{} True{} _ _:
+      dj.lit(root, K.KInc{}, K.P6{}, Nat.sub(b, 64n), t, out, sz, lim, j)
+    case False{} False{} True{} _:
+      dj.int(root, K.TSize{}, K.int.first(31n, Nat.sub(b, 32n)), t, out, sz, any, lim, j)
+    case False{} False{} False{} True{}:
+      dj.lit(root, K.KNever{}, K.P4{}, Nat.sub(b, 16n), t, out, sz, lim, j)
+    case False{} False{} False{} False{}:
+      dj.lit(root, K.KNot{}, K.P4{}, b, t, out, sz, lim, j)
+
+def dj.lengo(+root: H.Ht, +fo: K.For, +b: Nat, +t: K.Tbl, +out: List<&2, K.Fld>, +sz: Nat, +lim: K.Lim, h: Bool,
+  j: Laws.J(t, out, sz, lim)) -> Laws.INV(K.len.go(root, fo, b, t, out, sz, lim, h)):
+  match h:
+    case True{}:
+      dj.int(root, K.TLen{fo, True{}}, K.int.first(127n, Nat.sub(b, 128n)), t, out, sz, True{}, lim, j)
+    case False{}:
+      dj.int(root, K.TLen{fo, False{}}, K.int.first(127n, b), t, out, sz, True{}, lim, j)
+
+def dj.byte(+fo: K.For, left: Nat, +sb: K.Sb, +t: K.Tbl, +out: List<&2, K.Fld>, +sz: Nat, +lim: K.Lim,
+  j: Laws.J(t, out, sz, lim)) -> Laws.INV(K.str.byte(fo, left, sb, t, out, sz, lim)):
+  match left:
+    case 0n:
+      dj.done(fo, K.str.fin(sb), t, out, sz, lim, j)
+    case 1n+m:
+      j
+
+def dj.at(+root: H.Ht, at: K.At, +t: K.Tbl, +out: List<&2, K.Fld>, +sz: Nat, +any: Bool, +lim: K.Lim, +c: U32,
+  j: Laws.J(t, out, sz, lim)) -> Laws.INV(K.step.at(root, at, t, out, sz, any, lim, c)):
+  match at:
+    case K.ATop{}:
+      dj.top(root, U32.to_nat(c), t, out, sz, any, lim, Nat.is_le(128n, U32.to_nat(c)),
+        Nat.is_le(64n, U32.to_nat(c)), Nat.is_le(32n, U32.to_nat(c)), Nat.is_le(16n, U32.to_nat(c)), j)
+    case K.ALen{fo}:
+      dj.lengo(root, fo, U32.to_nat(c), t, out, sz, lim, Nat.is_le(128n, U32.to_nat(c)), j)
+    case K.AInt{to, i}:
+      dj.int(root, to, K.int.step(i, c), t, out, sz, any, lim, j)
+    case K.AStr{fo, left, sb}:
+      dj.byte(fo, left, K.sb.byte(root, sb, c), t, out, sz, lim, j)
+    case K.ABad{why}:
+      j
+
+def Laws.dec_step(root, d, c, h):
+  match d:
+    case K.Dc{at, +t, +out, +sz, +any, +lim}:
+      dj.at(root, at, t, out, sz, any, lim, c, h)
+
+def Laws.dec_feed(root, bs, d, h):
+  match bs:
+    case Nil{}:
+      h
+    case Con{+c, t}:
+      Laws.dec_feed(root, t, K.step(root, d, c), Laws.dec_step(root, d, c, h))
+
+def Laws.dec_begin(d, h):
+  match d:
+    case K.Dc{at, t, out, sz, any, +lim}:
+      match h:
+        case (jz, jr):
+          match jr:
+            case (jl, jt):
+              ({==}, (N.le0(K.lim.l(lim)), jt))
+
+def Laws.dec_new(tmax, lmax):
+  ({==}, (N.le0(lmax), N.le0(tmax)))
+
+def Laws.list_capped(d, h):
+  match d:
+    case K.Dc{at, t, out, sz, any, lim}:
+      match h:
+        case (jz, jr):
+          match jr:
+            case (jl, jt):
+              %jz : {Nat.is_le(_, K.lim.l(lim)) == True{} : Bool}
+              jl
+
 def Laws.refuse_idx0():
   {==}
 

@@ -503,16 +503,16 @@ def field.kind(k: Rep, t: Tbl, +f: Fld) -> Tbl:
     case KNever{}:
       t
 
-def field.cap(k: Rep, t: Tbl, out: List<&2, Fld>, +sz: Nat, lim: Lim, +f: Fld, ok: Bool) -> Dec:
+def field.cap(k: Rep, t: Tbl, out: List<&2, Fld>, sz: Nat, s2: Nat, lim: Lim, +f: Fld, ok: Bool) -> Dec:
   match ok:
     case True{}:
-      Dc{ATop{}, field.kind(k, t, f), Con{f, out}, sz, True{}, lim}
+      Dc{ATop{}, field.kind(k, t, f), Con{f, out}, s2, True{}, lim}
     case False{}:
       bad(t, out, sz, True{}, lim, EList{})
 
-def field(k: Rep, t: Tbl, out: List<&2, Fld>, sz: Nat, +lim: Lim, +f: Fld) -> Dec:
+def field(k: Rep, t: Tbl, out: List<&2, Fld>, +sz: Nat, +lim: Lim, +f: Fld) -> Dec:
   +s2 = Nat.add(sz, fld.size(f))
-  field.cap(k, t, out, s2, lim, f, Nat.is_le(s2, lim.l(lim)))
+  field.cap(k, t, out, sz, s2, lim, f, Nat.is_le(s2, lim.l(lim)))
 
 # an indexed field (RFC 7541 6.1)
 def got.idx(t: Tbl, out: List<&2, Fld>, sz: Nat, lim: Lim, m: Maybe<&2, Fld>) -> Dec:
