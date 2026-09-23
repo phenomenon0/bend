@@ -612,7 +612,7 @@ def lem.skip(+s: Bytes(), go: Bool, +c: U32, +pd: Eng.Pend, +out: List<&2, Eng.R
         lem.skip(t, Eng.run.stay(Eng.RX{}, Eng.cls(x)), x, pd, out),
         lem.skip.at(x, t, pd, out, Eng.run.stay(Eng.RX{}, Eng.cls(x)))({==}))
 
-# A value skipped span by span (skip.vis): every byte in [33, 127) is
+# A value skipped span by span (skip.vis): every byte in [32, 127) is
 # one a skipped value goes on past, so a span of them leaves the walk
 # where it was, and between spans the walk is skip's
 def lem.rx.sym(co: Bool, cm: Bool, tk: Bool) ->
@@ -666,10 +666,50 @@ def lem.rx.go(+c: U32, x: Bool, y: Bool) ->
     case False{} False{}:
       e => lem.rx.vis(c, Eng.alpha(c), Eng.digit(c))
 
+# a space, whatever else the byte is tested for below 33
+def lem.rx.sp(ht: Bool, cr: Bool, lf: Bool) ->
+  {Eng.run.stay(Eng.RX{}, Eng.cls.low(True{}, ht, cr, lf)) == True{} : Bool}:
+  match ht cr lf:
+    case True{} True{} True{}:
+      {==}
+    case True{} True{} False{}:
+      {==}
+    case True{} False{} True{}:
+      {==}
+    case True{} False{} False{}:
+      {==}
+    case False{} True{} True{}:
+      {==}
+    case False{} True{} False{}:
+      {==}
+    case False{} False{} True{}:
+      {==}
+    case False{} False{} False{}:
+      {==}
+
+# a byte in [32, 127) is one a skipped value goes on past: past 32 it is
+# the visible ASCII above, and below 33 it is 32, the space (lo <= c <
+# lo + 1 is c == lo, base's U32.eq_of_lt_succ)
+def lem.rx.in.at(+c: U32, x: Bool, +e: {Bytes.span.in(c, 32, 127) == True{} : Bool}) ->
+  {U32.is_lt(c, 33) == x : Bool} ->
+  {Eng.run.stay(Eng.RX{}, Eng.cls.go(c, x, U32.is_le(127, c))) == True{} : Bool}:
+  match x:
+    case True{}:
+      xe =>
+        %Equal.sym(Bool, U32.is_eq(c, 32), True{},
+          U32.eq_of_lt_succ(c, 32, 33,
+            Bool.and_l(Bool.not(U32.is_lt(c, 32)), Bool.not(U32.is_le(127, c)), e), xe, {==})) :
+          {Eng.run.stay(Eng.RX{}, Eng.cls.low(_, U32.is_eq(c, 9), U32.is_eq(c, 13), U32.is_eq(c, 10))) ==
+            True{} : Bool}
+        lem.rx.sp(U32.is_eq(c, 9), U32.is_eq(c, 13), U32.is_eq(c, 10))
+    case False{}:
+      xe => lem.rx.go(c, False{}, U32.is_le(127, c))(
+        Bool.and_r(Bool.not(U32.is_lt(c, 32)), Bool.not(U32.is_le(127, c)), e))
+
 def lem.rx.in(+c: U32) ->
-  {Bytes.span.in(c, 33, 127) == True{} : Bool} ->
+  {Bytes.span.in(c, 32, 127) == True{} : Bool} ->
   {Eng.run.stay(Eng.RX{}, Eng.cls(c)) == True{} : Bool}:
-  e => lem.rx.go(c, U32.is_lt(c, 33), U32.is_le(127, c))(e)
+  +e => lem.rx.in.at(c, U32.is_lt(c, 33), e)({==})
 
 # a byte a skipped value goes on past leaves the walk where it was
 def lem.rx.step(+c: U32, +pd: Eng.Pend, +out: List<&2, Eng.Req>) ->
@@ -678,10 +718,10 @@ def lem.rx.step(+c: U32, +pd: Eng.Pend, +out: List<&2, Eng.Req>) ->
   e => lem.stay(Eng.RX{}, Eng.cls(c), c, "", pd, out)(e)
 
 def lem.span.rx.at(+c: U32, +t: Bytes(), +pd: Eng.Pend, +out: List<&2, Eng.Req>, b: Bool,
-  ih: {Eng.feed_buf.slow(String.drop(t, Bytes.span.go(t, 33, 127)), Eng.P{Eng.InLx{}, pd, out}) ==
+  ih: {Eng.feed_buf.slow(String.drop(t, Bytes.span.go(t, 32, 127)), Eng.P{Eng.InLx{}, pd, out}) ==
     Eng.feed_buf.slow(t, Eng.P{Eng.InLx{}, pd, out}) : Eng.P}) ->
-  {Bytes.span.in(c, 33, 127) == b : Bool} ->
-  {Eng.feed_buf.slow(String.drop(SCon{Chr{c}, t}, Bytes.span.at(b, t, 33, 127)), Eng.P{Eng.InLx{}, pd, out}) ==
+  {Bytes.span.in(c, 32, 127) == b : Bool} ->
+  {Eng.feed_buf.slow(String.drop(SCon{Chr{c}, t}, Bytes.span.at(b, t, 32, 127)), Eng.P{Eng.InLx{}, pd, out}) ==
     Eng.feed_buf.slow(SCon{Chr{c}, t}, Eng.P{Eng.InLx{}, pd, out}) : Eng.P}:
   match b:
     case False{}:
@@ -689,22 +729,22 @@ def lem.span.rx.at(+c: U32, +t: Bytes(), +pd: Eng.Pend, +out: List<&2, Eng.Req>,
     case True{}:
       e =>
         %Equal.sym(Eng.P, Eng.step(Eng.P{Eng.InLx{}, pd, out}, c), Eng.P{Eng.InLx{}, pd, out}, lem.rx.step(c, pd, out)(lem.rx.in(c)(e))) :
-          {Eng.feed_buf.slow(String.drop(t, Bytes.span.go(t, 33, 127)), Eng.P{Eng.InLx{}, pd, out}) ==
+          {Eng.feed_buf.slow(String.drop(t, Bytes.span.go(t, 32, 127)), Eng.P{Eng.InLx{}, pd, out}) ==
             Eng.feed_buf.slow(t, _) : Eng.P}
         ih
 
 # the span a skipped value starts with, dropped, leaves its walk as it was
 def lem.span.rx(+s: Bytes(), +pd: Eng.Pend, +out: List<&2, Eng.Req>) ->
-  {Eng.feed_buf.slow(String.drop(s, Bytes.span.go(s, 33, 127)), Eng.P{Eng.InLx{}, pd, out}) ==
+  {Eng.feed_buf.slow(String.drop(s, Bytes.span.go(s, 32, 127)), Eng.P{Eng.InLx{}, pd, out}) ==
     Eng.feed_buf.slow(s, Eng.P{Eng.InLx{}, pd, out}) : Eng.P}:
   match s:
     case SNil{}:
       {==}
     case SCon{Chr{+c}, t}:
-      lem.span.rx.at(c, t, pd, out, Bytes.span.in(c, 33, 127), lem.span.rx(t, pd, out))({==})
+      lem.span.rx.at(c, t, pd, out, Bytes.span.in(c, 32, 127), lem.span.rx(t, pd, out))({==})
 
 def lem.span.rx0(+s: Bytes(), +pd: Eng.Pend, +out: List<&2, Eng.Req>) ->
-  {Eng.feed_buf.slow(String.drop(s, Bytes.span(s, 0n, 33, 127)), Eng.P{Eng.InLx{}, pd, out}) ==
+  {Eng.feed_buf.slow(String.drop(s, Bytes.span(s, 0n, 32, 127)), Eng.P{Eng.InLx{}, pd, out}) ==
     Eng.feed_buf.slow(s, Eng.P{Eng.InLx{}, pd, out}) : Eng.P}:
   match s:
     case SNil{}:
@@ -720,7 +760,7 @@ def lem.skip.jump(+x: U32, +t: Bytes(), +pd: Eng.Pend, +out: List<&2, Eng.Req>, 
     case True{}:
       e =>
         %Equal.sym(Eng.P, Eng.step(Eng.P{Eng.InLx{}, pd, out}, x), Eng.P{Eng.InLx{}, pd, out}, lem.rx.step(x, pd, out)(e)) :
-          {Eng.feed_buf.slow(String.drop(t, Bytes.span(t, 0n, 33, 127)), Eng.P{Eng.InLx{}, pd, out}) ==
+          {Eng.feed_buf.slow(String.drop(t, Bytes.span(t, 0n, 32, 127)), Eng.P{Eng.InLx{}, pd, out}) ==
             Eng.feed_buf.slow(t, _) : Eng.P}
         lem.span.rx0(t, pd, out)
     case False{}:
@@ -876,10 +916,261 @@ def lem.ent.cut(+e: Eng.Ent, +s: Bytes(), +pd: Eng.Pend, +out: List<&2, Eng.Req>
         lem.cut(Eng.ent.sel(e), "", s, pd, out, 1n+j)(eq),
         lem.ent.first(e, s, pd, out, j)(eq))
 
+# A run counted by spans of [lo, hi): when every byte in the range is one
+# the run stays on, the run is the span, then the run from past it
+def VRg(-sel: Eng.Run, -lo: U32, -hi: U32, -s: Bytes()) -> Type:
+  {Eng.run.len(s, True{}, sel, 0n) ==
+    Nat.add(Bytes.span.go(s, lo, hi),
+      Eng.run.len(String.drop(s, Bytes.span.go(s, lo, hi)), True{}, sel, 0n)) : Nat}
+
+def lem.span.at(+sel: Eng.Run, +lo: U32, +hi: U32, +c: U32, +t: Bytes(), b: Bool,
+  inok: {Bytes.span.in(c, lo, hi) == True{} : Bool} -> {Eng.run.stay(sel, Eng.cls(c)) == True{} : Bool},
+  ih: VRg(sel, lo, hi, t)) ->
+  {Bytes.span.in(c, lo, hi) == b : Bool} ->
+  {Eng.run.len(SCon{Chr{c}, t}, True{}, sel, 0n) ==
+    Nat.add(Bytes.span.at(b, t, lo, hi),
+      Eng.run.len(String.drop(SCon{Chr{c}, t}, Bytes.span.at(b, t, lo, hi)), True{}, sel, 0n)) : Nat}:
+  match b:
+    case False{}:
+      e => {==}
+    case True{}:
+      e =>
+        %Equal.sym(Bool, Eng.run.stay(sel, Eng.cls(c)), True{}, inok(e)) :
+          {Eng.run.len(t, _, sel, Eng.run.inc(_, 0n)) ==
+            1n+Nat.add(Bytes.span.go(t, lo, hi),
+              Eng.run.len(String.drop(t, Bytes.span.go(t, lo, hi)), True{}, sel, 0n)) : Nat}
+        Equal.trans(Nat, Eng.run.len(t, True{}, sel, 1n),
+          1n+Eng.run.len(t, True{}, sel, 0n),
+          1n+Nat.add(Bytes.span.go(t, lo, hi),
+            Eng.run.len(String.drop(t, Bytes.span.go(t, lo, hi)), True{}, sel, 0n)),
+          lem.shift(t, True{}, sel, 0n),
+          Equal.cong(Nat, Nat, y => 1n+y, Eng.run.len(t, True{}, sel, 0n),
+            Nat.add(Bytes.span.go(t, lo, hi),
+              Eng.run.len(String.drop(t, Bytes.span.go(t, lo, hi)), True{}, sel, 0n)), ih))
+
+# A name's lowercase letters: a byte in [97, 123) is a letter (base's
+# span-range lemmas: inside [33, 127), and 97 <= c <= 122), so a token
+def lem.nm.tk(+c: U32, dg: Bool) ->
+  {Eng.run.stay(Eng.RN{}, Eng.cls.vis(c, True{}, dg)) == True{} : Bool}:
+  match dg:
+    case True{}:
+      {==}
+    case False{}:
+      {==}
+
+def lem.nm.alpha(+c: U32, +e: {Bytes.span.in(c, 97, 123) == True{} : Bool}) ->
+  {Eng.alpha(c) == True{} : Bool}:
+  %Equal.sym(Bool, U32.is_le(97, c), True{}, Bytes.span.in_lo(c, 97, 123, e)) :
+    {Bool.or(Bool.and(U32.is_le(65, c), U32.is_le(c, 90)), Bool.and(_, U32.is_le(c, 122))) ==
+      True{} : Bool}
+  %Equal.sym(Bool, U32.is_le(c, 122), True{},
+    Equal.trans(Bool, U32.is_le(c, 122), U32.is_lt(c, 123), True{},
+      Equal.sym(Bool, U32.is_lt(c, 123), U32.is_le(c, 122), U32.lt_succ(c, 122, 123, {==})),
+      Bytes.span.in_hi(c, 97, 123, e))) :
+    {Bool.or(Bool.and(U32.is_le(65, c), U32.is_le(c, 90)), Bool.and(True{}, _)) == True{} : Bool}
+  Bool.or_true(Bool.and(U32.is_le(65, c), U32.is_le(c, 90)))
+
+def lem.nm.in(+c: U32) ->
+  {Bytes.span.in(c, 97, 123) == True{} : Bool} ->
+  {Eng.run.stay(Eng.RN{}, Eng.cls(c)) == True{} : Bool}:
+  +e =>
+    +w = Bytes.span.in_widen(c, 97, 123, 33, 127, e, {==}, {==})
+    %Equal.sym(Bool, U32.is_lt(c, 33), False{},
+      Bool.not_true(U32.is_lt(c, 33), Bool.and_l(Bool.not(U32.is_lt(c, 33)), Bool.not(U32.is_le(127, c)), w))) :
+      {Eng.run.stay(Eng.RN{}, Eng.cls.go(c, _, U32.is_le(127, c))) == True{} : Bool}
+    %Equal.sym(Bool, U32.is_le(127, c), False{},
+      Bool.not_true(U32.is_le(127, c), Bool.and_r(Bool.not(U32.is_lt(c, 33)), Bool.not(U32.is_le(127, c)), w))) :
+      {Eng.run.stay(Eng.RN{}, Eng.cls.go(c, False{}, _)) == True{} : Bool}
+    %Equal.sym(Bool, Eng.alpha(c), True{}, lem.nm.alpha(c, e)) :
+      {Eng.run.stay(Eng.RN{}, Eng.cls.vis(c, _, Eng.digit(c))) == True{} : Bool}
+    lem.nm.tk(c, Eng.digit(c))
+
+# a name's run is its first span of lowercase letters, then the rest
+def lem.nm.span(+s: Bytes()) -> VRg(Eng.RN{}, 97, 123, s):
+  match s:
+    case SNil{}:
+      {==}
+    case SCon{Chr{+c}, t}:
+      lem.span.at(Eng.RN{}, 97, 123, c, t, Bytes.span.in(c, 97, 123), lem.nm.in(c),
+        lem.nm.span(t))({==})
+
+# Positions in a read: the byte at i is the first of the read from i;
+# dropping i + 1 is dropping i, then one; dropping twice is dropping the sum
+def hd(u: Bytes()) -> U32:
+  match u:
+    case SNil{}:
+      256
+    case SCon{Chr{c}, t}:
+      c
+
+def get_hd(+s: Bytes(), +i: Nat) -> {Bytes.get(s, i) == hd(String.drop(s, i)) : U32}:
+  match s i:
+    case SNil{} _:
+      {==}
+    case SCon{Chr{c}, t} 0n:
+      {==}
+    case SCon{Chr{c}, t} 1n+p:
+      get_hd(t, p)
+
+def drop_one(+s: Bytes(), +i: Nat) -> {String.drop(s, 1n+i) == String.drop(String.drop(s, i), 1n) : Bytes()}:
+  match s i:
+    case SNil{} _:
+      {==}
+    case SCon{h, t} 0n:
+      {==}
+    case SCon{h, t} 1n+p:
+      drop_one(t, p)
+
+def drop_add(+s: Bytes(), +a: Nat, +b: Nat) ->
+  {String.drop(String.drop(s, a), b) == String.drop(s, Nat.add(a, b)) : Bytes()}:
+  match s a:
+    case SNil{} _:
+      {==}
+    case SCon{h, t} 0n:
+      {==}
+    case SCon{h, t} 1n+p:
+      drop_add(t, p, b)
+
+# the name's count from i, once the byte at i is known
+def lem.nm.more(j: Nat, +s: Bytes(), +i: Nat, +w: Bytes(),
+  eD1: {String.drop(s, 1n+i) == w : Bytes()},
+  ih: @+i2: Nat -> {Eng.nm.go(j, s, i2, Eng.nm.ok(s, i2)) ==
+    Eng.run.len(String.drop(s, i2), True{}, Eng.RN{}, 0n) : Nat}) ->
+  {1n+Nat.add(Bytes.span(s, 1n+i, 97, 123),
+    Eng.nm.go(j, s, Nat.add(1n+i, Bytes.span(s, 1n+i, 97, 123)),
+      Eng.nm.ok(s, Nat.add(1n+i, Bytes.span(s, 1n+i, 97, 123))))) ==
+    Eng.run.len(w, True{}, Eng.RN{}, 1n) : Nat}:
+  +D1 = String.drop(s, 1n+i)
+  +N = Bytes.span.go(D1, 97, 123)
+  Equal.trans(Nat,
+    1n+Nat.add(N, Eng.nm.go(j, s, Nat.add(1n+i, N), Eng.nm.ok(s, Nat.add(1n+i, N)))),
+    1n+Nat.add(N, Eng.run.len(String.drop(D1, N), True{}, Eng.RN{}, 0n)),
+    Eng.run.len(w, True{}, Eng.RN{}, 1n),
+    Equal.cong(Nat, Nat, y => 1n+Nat.add(N, y),
+      Eng.nm.go(j, s, Nat.add(1n+i, N), Eng.nm.ok(s, Nat.add(1n+i, N))),
+      Eng.run.len(String.drop(D1, N), True{}, Eng.RN{}, 0n),
+      Equal.trans(Nat, Eng.nm.go(j, s, Nat.add(1n+i, N), Eng.nm.ok(s, Nat.add(1n+i, N))),
+        Eng.run.len(String.drop(s, Nat.add(1n+i, N)), True{}, Eng.RN{}, 0n),
+        Eng.run.len(String.drop(D1, N), True{}, Eng.RN{}, 0n),
+        ih(Nat.add(1n+i, N)),
+        Equal.cong(Bytes(), Nat, u => Eng.run.len(u, True{}, Eng.RN{}, 0n),
+          String.drop(s, Nat.add(1n+i, N)), String.drop(D1, N),
+          Equal.sym(Bytes(), String.drop(D1, N), String.drop(s, Nat.add(1n+i, N)), drop_add(s, 1n+i, N))))),
+    Equal.trans(Nat, 1n+Nat.add(N, Eng.run.len(String.drop(D1, N), True{}, Eng.RN{}, 0n)),
+      1n+Eng.run.len(D1, True{}, Eng.RN{}, 0n),
+      Eng.run.len(w, True{}, Eng.RN{}, 1n),
+      Equal.cong(Nat, Nat, y => 1n+y,
+        Nat.add(N, Eng.run.len(String.drop(D1, N), True{}, Eng.RN{}, 0n)),
+        Eng.run.len(D1, True{}, Eng.RN{}, 0n),
+        Equal.sym(Nat, Eng.run.len(D1, True{}, Eng.RN{}, 0n),
+          Nat.add(N, Eng.run.len(String.drop(D1, N), True{}, Eng.RN{}, 0n)),
+          lem.nm.span(D1))),
+      %Equal.sym(Bytes(), String.drop(s, 1n+i), w, eD1) :
+        {1n+Eng.run.len(_, True{}, Eng.RN{}, 0n) == Eng.run.len(w, True{}, Eng.RN{}, 1n) : Nat}
+      Equal.sym(Nat, Eng.run.len(w, True{}, Eng.RN{}, 1n), 1n+Eng.run.len(w, True{}, Eng.RN{}, 0n),
+        lem.shift(w, True{}, Eng.RN{}, 0n))))
+
+def lem.nm.nil(k: Nat, -s: Bytes(), -i: Nat) -> {Eng.nm.go(k, s, i, False{}) == 0n : Nat}:
+  match k:
+    case 0n:
+      {==}
+    case 1n+j:
+      {==}
+
+# the count from i when the byte at i is c, and the read goes on with w
+def lem.nm.c0(+s: Bytes(), +i: Nat, +c: U32, +w: Bytes(), ok: Bool,
+  +eu: {String.drop(s, i) == SCon{Chr{c}, w} : Bytes()}) ->
+  {Eng.run.stay(Eng.RN{}, Eng.cls(c)) == ok : Bool} ->
+  {Eng.nm.go(0n, s, i, ok) == Eng.run.len(SCon{Chr{c}, w}, True{}, Eng.RN{}, 0n) : Nat}:
+  match ok:
+    case False{}:
+      oke =>
+        %Equal.sym(Bool, Eng.run.stay(Eng.RN{}, Eng.cls(c)), False{}, oke) :
+          {0n == Eng.run.len(w, _, Eng.RN{}, Eng.run.inc(_, 0n)) : Nat}
+        Equal.sym(Nat, Eng.run.len(w, False{}, Eng.RN{}, 0n), 0n, lem.len0(w, Eng.RN{}))
+    case True{}:
+      oke =>
+        %Equal.sym(Bytes(), String.drop(s, i), SCon{Chr{c}, w}, eu) :
+          {Eng.run.len(_, True{}, Eng.RN{}, 0n) == Eng.run.len(SCon{Chr{c}, w}, True{}, Eng.RN{}, 0n) : Nat}
+        {==}
+
+def lem.nm.cS(j: Nat, +s: Bytes(), +i: Nat, +c: U32, +w: Bytes(), ok: Bool,
+  +eu: {String.drop(s, i) == SCon{Chr{c}, w} : Bytes()},
+  ih: @+i2: Nat -> {Eng.nm.go(j, s, i2, Eng.nm.ok(s, i2)) ==
+    Eng.run.len(String.drop(s, i2), True{}, Eng.RN{}, 0n) : Nat}) ->
+  {Eng.run.stay(Eng.RN{}, Eng.cls(c)) == ok : Bool} ->
+  {Eng.nm.go(1n+j, s, i, ok) == Eng.run.len(SCon{Chr{c}, w}, True{}, Eng.RN{}, 0n) : Nat}:
+  match ok:
+    case False{}:
+      oke =>
+        %Equal.sym(Bool, Eng.run.stay(Eng.RN{}, Eng.cls(c)), False{}, oke) :
+          {0n == Eng.run.len(w, _, Eng.RN{}, Eng.run.inc(_, 0n)) : Nat}
+        Equal.sym(Nat, Eng.run.len(w, False{}, Eng.RN{}, 0n), 0n, lem.len0(w, Eng.RN{}))
+    case True{}:
+      oke =>
+        %Equal.sym(Bool, Eng.run.stay(Eng.RN{}, Eng.cls(c)), True{}, oke) :
+          {Eng.nm.go(1n+j, s, i, True{}) == Eng.run.len(w, _, Eng.RN{}, Eng.run.inc(_, 0n)) : Nat}
+        lem.nm.more(j, s, i, w,
+          Equal.trans(Bytes(), String.drop(s, 1n+i), String.drop(String.drop(s, i), 1n), w,
+            drop_one(s, i),
+            %Equal.sym(Bytes(), String.drop(s, i), SCon{Chr{c}, w}, eu) : {String.drop(_, 1n) == w : Bytes()}
+            drop0(w)),
+          ih)
+
+# the count from i, with the read from i named u
+def lem.nm.gen(+k: Nat, +s: Bytes(), +i: Nat, +u: Bytes()) ->
+  {String.drop(s, i) == u : Bytes()} ->
+  {Eng.nm.go(k, s, i, Eng.run.stay(Eng.RN{}, Eng.cls(hd(u)))) == Eng.run.len(u, True{}, Eng.RN{}, 0n) : Nat}:
+  match k u:
+    case _ SNil{}:
+      eu => lem.nm.nil(k, s, i)
+    case 0n SCon{Chr{+c}, +w}:
+      +eu => lem.nm.c0(s, i, c, w, Eng.run.stay(Eng.RN{}, Eng.cls(c)), eu)({==})
+    case 1n+j SCon{Chr{+c}, +w}:
+      +eu => lem.nm.cS(j, s, i, c, w, Eng.run.stay(Eng.RN{}, Eng.cls(c)), eu,
+        i2 => Equal.trans(Nat, Eng.nm.go(j, s, i2, Eng.nm.ok(s, i2)),
+          Eng.nm.go(j, s, i2, Eng.run.stay(Eng.RN{}, Eng.cls(hd(String.drop(s, i2))))),
+          Eng.run.len(String.drop(s, i2), True{}, Eng.RN{}, 0n),
+          Equal.cong(U32, Nat, x => Eng.nm.go(j, s, i2, Eng.run.stay(Eng.RN{}, Eng.cls(x))),
+            Bytes.get(s, i2), hd(String.drop(s, i2)), get_hd(s, i2)),
+          lem.nm.gen(j, s, i2, String.drop(s, i2))({==})))({==})
+
+def lem.nm.go(k: Nat, +s: Bytes(), +i: Nat) ->
+  {Eng.nm.go(k, s, i, Eng.nm.ok(s, i)) == Eng.run.len(String.drop(s, i), True{}, Eng.RN{}, 0n) : Nat}:
+  %Equal.sym(U32, Bytes.get(s, i), hd(String.drop(s, i)), get_hd(s, i)) :
+    {Eng.nm.go(k, s, i, Eng.run.stay(Eng.RN{}, Eng.cls(_))) ==
+      Eng.run.len(String.drop(s, i), True{}, Eng.RN{}, 0n) : Nat}
+  lem.nm.gen(k, s, i, String.drop(s, i))({==})
+
+# run.nm counts what run.len does
+def lem.nm(+s: Bytes()) -> {Eng.run.nm(s) == Eng.run.len(s, True{}, Eng.RN{}, 0n) : Nat}:
+  match s:
+    case SNil{}:
+      {==}
+    case SCon{h, t}:
+      +S: Bytes() = SCon{h, t}
+      +N = Bytes.span.go(S, 97, 123)
+      Equal.trans(Nat, Nat.add(N, Eng.nm.go(Bytes.len(S), S, N, Eng.nm.ok(S, N))),
+        Nat.add(N, Eng.run.len(String.drop(S, N), True{}, Eng.RN{}, 0n)),
+        Eng.run.len(S, True{}, Eng.RN{}, 0n),
+        Equal.cong(Nat, Nat, y => Nat.add(N, y), Eng.nm.go(Bytes.len(S), S, N, Eng.nm.ok(S, N)),
+          Eng.run.len(String.drop(S, N), True{}, Eng.RN{}, 0n), lem.nm.go(Bytes.len(S), S, N)),
+        Equal.sym(Nat, Eng.run.len(S, True{}, Eng.RN{}, 0n),
+          Nat.add(N, Eng.run.len(String.drop(S, N), True{}, Eng.RN{}, 0n)),
+          lem.nm.span(S)))
+
+def lem.ent.len(+e: Eng.Ent, +s: Bytes()) ->
+  {Eng.run.len(s, True{}, Eng.ent.sel(e), 0n) == Eng.ent.len(e, s) : Nat}:
+  match e:
+    case Eng.EMeth{}:
+      {==}
+    case Eng.EName{}:
+      Equal.sym(Nat, Eng.run.nm(s), Eng.run.len(s, True{}, Eng.RN{}, 0n), lem.nm(s))
+
 def lem.ent(+e: Eng.Ent, +s: Bytes(), +pd: Eng.Pend, +out: List<&2, Eng.Req>) ->
   {Eng.feed_buf.last(Eng.ent.go(e, s, pd, out)) ==
     Eng.feed_buf.slow(s, Eng.P{Eng.ent.st(e), pd, out}) : Eng.P}:
-  lem.ent.cut(e, s, pd, out, Eng.run.len(s, True{}, Eng.ent.sel(e), 0n))({==})
+  lem.ent.cut(e, s, pd, out, Eng.ent.len(e, s))(lem.ent.len(e, s))
 
 # A body
 def lem.bod.at(+q: Nat, +b: Bytes(), +c: U32, +t: Bytes(), +pd: Eng.Pend,
@@ -1082,11 +1373,28 @@ def lem.adv.at(st: Eng.St, +s: Bytes(), +pd: Eng.Pend, +out: List<&2, Eng.Req>) 
     case Eng.CrL{}:
       lem.one(Eng.P{Eng.CrL{}, pd, out}, s)
 
-def lem.adv(+s: Bytes(), p: Eng.P) ->
-  {Eng.feed_buf.last(Eng.adv(s, p)) == Eng.feed_buf.slow(s, p) : Eng.P}:
+def lem.adv.one(+s: Bytes(), p: Eng.P) ->
+  {Eng.feed_buf.last(Eng.adv.one(s, p)) == Eng.feed_buf.slow(s, p) : Eng.P}:
   match p:
     case Eng.P{st, pd, out}:
       lem.adv.at(st, s, pd, out)
+
+# a move from where the one before it landed lands where that one's
+# rest, stepped, does
+def lem.then(q: Eng.P & Bytes()) ->
+  {Eng.feed_buf.last(Eng.adv.then(q)) == Eng.feed_buf.last(q) : Eng.P}:
+  match q:
+    case (p, s):
+      lem.adv.one(s, p)
+
+def lem.adv(+s: Bytes(), +p: Eng.P) ->
+  {Eng.feed_buf.last(Eng.adv(s, p)) == Eng.feed_buf.slow(s, p) : Eng.P}:
+  Equal.trans(Eng.P, Eng.feed_buf.last(Eng.adv.then(Eng.adv.then(Eng.adv.then(Eng.adv.one(s, p))))), Eng.feed_buf.last(Eng.adv.then(Eng.adv.then(Eng.adv.one(s, p)))),
+    Eng.feed_buf.slow(s, p), lem.then(Eng.adv.then(Eng.adv.then(Eng.adv.one(s, p)))),
+    Equal.trans(Eng.P, Eng.feed_buf.last(Eng.adv.then(Eng.adv.then(Eng.adv.one(s, p)))), Eng.feed_buf.last(Eng.adv.then(Eng.adv.one(s, p))), Eng.feed_buf.slow(s, p),
+      lem.then(Eng.adv.then(Eng.adv.one(s, p))),
+      Equal.trans(Eng.P, Eng.feed_buf.last(Eng.adv.then(Eng.adv.one(s, p))), Eng.feed_buf.last(Eng.adv.one(s, p)), Eng.feed_buf.slow(s, p),
+        lem.then(Eng.adv.one(s, p)), lem.adv.one(s, p))))
 
 # the kit's obligation: every move lands where stepping its bytes does
 def adv_ok(+u: Unit, +s: Bytes(), p: Eng.P) ->
@@ -6127,6 +6435,108 @@ def MEMu(x: List<&2, U32>, +done: List<&2, List<&2, U32>>, +cur: List<&2, U32>, 
         MEMu(t, Spec.mem.done(Spec.mem.sep(Spec.cls(c)), done, cur),
           Spec.mem.cur(Spec.mem.sep(Spec.cls(c)), cur, c), pd, out))
 
+# A name looked up only when as long as a name in the table
+# (fld.name): a name of another length is spelled with none of the
+# table's bytes, so the lookup would have found no field
+def or_f_l(a: Bool, -b: Bool, e: {Bool.or(a, b) == False{} : Bool}) -> {a == False{} : Bool}:
+  match a:
+    case False{}:
+      {==}
+    case True{}:
+      Bool.no({True{} == False{} : Bool}, Equal.sym(Bool, True{}, False{}, e))
+
+def or_f_r(a: Bool, -b: Bool, e: {Bool.or(a, b) == False{} : Bool}) -> {b == False{} : Bool}:
+  match a:
+    case False{}:
+      e
+    case True{}:
+      Bool.no({b == False{} : Bool}, Equal.sym(Bool, True{}, False{}, e))
+
+def and_f(a: Bool) -> {Bool.and(a, False{}) == False{} : Bool}:
+  match a:
+    case False{}:
+      {==}
+    case True{}:
+      {==}
+
+def and3(a: Bool, x: Bool, -e: Bool, ih: {Bool.and(a, e) == e : Bool}) ->
+  {Bool.and(a, Bool.and(x, e)) == Bool.and(x, e) : Bool}:
+  match x:
+    case False{}:
+      and_f(a)
+    case True{}:
+      ih
+
+# two blocks of different lengths are not equal
+def eq_and(+a: Bytes(), +b: Bytes()) ->
+  {Bool.and(Nat.is_eq(Bytes.len(a), Bytes.len(b)), Spec.eq(a, b)) == Spec.eq(a, b) : Bool}:
+  match a b:
+    case SNil{} SNil{}:
+      {==}
+    case SNil{} SCon{Chr{y}, u}:
+      and_f(Nat.is_eq(0n, String.length.go(u, 1n)))
+    case SCon{Chr{x}, t} SNil{}:
+      and_f(Nat.is_eq(String.length.go(t, 1n), 0n))
+    case SCon{Chr{+x}, +t} SCon{Chr{+y}, +u}:
+      %Equal.sym(Nat, String.length.go(t, 1n), 1n+String.length.go(t, 0n), len_shift(t)) :
+        {Bool.and(Nat.is_eq(_, String.length.go(u, 1n)), Bool.and(U32.is_eq(x, y), Spec.eq(t, u))) ==
+          Bool.and(U32.is_eq(x, y), Spec.eq(t, u)) : Bool}
+      %Equal.sym(Nat, String.length.go(u, 1n), 1n+String.length.go(u, 0n), len_shift(u)) :
+        {Bool.and(Nat.is_eq(1n+String.length.go(t, 0n), _), Bool.and(U32.is_eq(x, y), Spec.eq(t, u))) ==
+          Bool.and(U32.is_eq(x, y), Spec.eq(t, u)) : Bool}
+      and3(Nat.is_eq(String.length.go(t, 0n), String.length.go(u, 0n)), U32.is_eq(x, y), Spec.eq(t, u),
+        eq_and(t, u))
+
+def eq_len(+a: Bytes(), +b: Bytes(), e: {Nat.is_eq(Bytes.len(a), Bytes.len(b)) == False{} : Bool}) ->
+  {Spec.eq(a, b) == False{} : Bool}:
+  Equal.trans(Bool, Spec.eq(a, b), Bool.and(Nat.is_eq(Bytes.len(a), Bytes.len(b)), Spec.eq(a, b)), False{},
+    Equal.sym(Bool, Bool.and(Nat.is_eq(Bytes.len(a), Bytes.len(b)), Spec.eq(a, b)), Spec.eq(a, b), eq_and(a, b)),
+    %Equal.sym(Bool, Nat.is_eq(Bytes.len(a), Bytes.len(b)), False{}, e) :
+      {Bool.and(_, Spec.eq(a, b)) == False{} : Bool}
+    {==})
+
+# a table none of whose names is as long as k finds no field for k
+def find_miss(+k: Bytes(), tbl: List<&2, Eng.Known>,
+  +e: {Eng.fld.len.any(Bytes.len(k), tbl) == False{} : Bool}) -> {Spec.find(k, tbl) == Eng.FOther{} : Eng.Fld}:
+  match tbl:
+    case Nil{}:
+      {==}
+    case Con{h, t}:
+      match h:
+        case Eng.Known{+n, f}:
+          %Equal.sym(Bool, Spec.eq(k, n), False{},
+            eq_len(k, n, or_f_l(Nat.is_eq(Bytes.len(k), Bytes.len(n)), Eng.fld.len.any(Bytes.len(k), t), e))) :
+            {Eng.fld.pick(_, f, Spec.find(k, t)) == Eng.FOther{} : Eng.Fld}
+          find_miss(k, t, or_f_r(Nat.is_eq(Bytes.len(k), Bytes.len(n)), Eng.fld.len.any(Bytes.len(k), t), e))
+
+# lowercasing keeps a name's length
+def lows_len(s: Bytes(), -m: Nat) -> {String.length.go(String.to_lower(s), m) == String.length.go(s, m) : Nat}:
+  match s:
+    case SNil{}:
+      {==}
+    case SCon{h, t}:
+      lows_len(t, 1n+m)
+
+def fld_miss(+n: Bytes(), e: {Eng.fld.len.ok(Bytes.len(n)) == False{} : Bool}) ->
+  {Eng.fld.of(Eng.lows(n)) == Eng.FOther{} : Eng.Fld}:
+  Equal.trans(Eng.Fld, Eng.fld.of(Eng.lows(n)), Spec.find(Eng.lows(n), Eng.fld.table()), Eng.FOther{},
+    scan_is(Eng.fld.table(), Eng.lows(n), None{}),
+    find_miss(Eng.lows(n), Eng.fld.table(),
+      %Equal.sym(Nat, Bytes.len(Eng.lows(n)), Bytes.len(n), lows_len(n, 0n)) :
+        {Eng.fld.len.any(_, Eng.fld.table()) == False{} : Bool}
+      e))
+
+def fld_gate(+n: Bytes(), b: Bool) -> {Eng.fld.len.ok(Bytes.len(n)) == b : Bool} ->
+  {Eng.fld.gate(b, n) == Eng.fld.of(Eng.lows(n)) : Eng.Fld}:
+  match b:
+    case True{}:
+      e => {==}
+    case False{}:
+      e => Equal.sym(Eng.Fld, Eng.fld.of(Eng.lows(n)), Eng.FOther{}, fld_miss(n, e))
+
+def fld_name(+n: Bytes()) -> {Eng.fld.name(n) == Eng.fld.of(Eng.lows(n)) : Eng.Fld}:
+  fld_gate(n, Eng.fld.len.ok(Bytes.len(n)))({==})
+
 # a field, by its name: the value read the way the name says
 def fbb(+k: Bytes()) -> {Spec.field(k) == Eng.fld.of(k) : Eng.Fld}:
   Equal.sym(Eng.Fld, Eng.fld.of(k), Spec.field(k), scan_is(Eng.fld.table(), k, None{}))
@@ -6188,6 +6598,10 @@ def K.name.at(+k: Eng.Cls, +d: U32, +v: List<&2, U32>, +c: U32, +r: List<&2, U32
   G.name(k, d, v, c, r, pd, out):
   match k:
     case Eng.KCo{}:
+      %Equal.sym(Eng.Fld, Eng.fld.name(Bytes.from_list(Con{c, r})), Eng.fld.of(Eng.lows(Bytes.from_list(Con{c, r}))),
+        fld_name(Bytes.from_list(Con{c, r}))) :
+        LR.field(Eng.feed(v, Eng.step.name(_, pd, out)),
+          Spec.field.of(Spec.field(Spec.lows(Bytes.from_list(Con{c, r}))), v), pd, out)
       K.name.colon(v, c, r, pd, out, pr)
     case Eng.KDg{}:
       no2(G.name(Eng.KDg{}, d, v, c, r, pd, out), mx)

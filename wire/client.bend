@@ -147,8 +147,7 @@ def rd.more(
 # a read's bytes: the empty read is the peer's close; any other goes
 # through the reader, and counts against the head's cap when it begins
 # while a head is in progress. (The read is passed on whole, never taken
-# apart and put back together: a buffer is cheaper whole, and the C
-# runtime mishandles a String rebuilt as SCon{h, t} over a shared view.)
+# apart and put back together: a buffer is cheaper whole.)
 def rd.bytes(
   ~M: Type -> Type, ~pure: @-A: Type -> A -> M(A), ~S: Type, +e: R.Ask, +b: Budget, s: S,
   +p: R.P, +hd: Nat, empty: Bool, +bs: Bytes(), again: S -> R.P -> Nat -> M(Out(S))

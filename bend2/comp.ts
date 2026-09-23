@@ -2931,7 +2931,9 @@ function emit_peek(fl: File, xs: HTerm[], peek: number[], sinks: Val[]): Val[] {
     const later = s.$ === "Var" && xs.slice(i + 1).some((y) =>
       term_use(term_uses(fl, y), probe_of(s)) > 0);
     if (s.$ !== "Var" || later) {
-      const v = emit_expr(fl, x, null, null);
+      // held: the call reads it and the sink drops it, one evaluation
+      // (a computed SCon twice would prepend twice onto one tail)
+      const v = val_hold(fl, emit_expr(fl, x, null, null), "p");
       sinks.push(v);
       return v;
     }
