@@ -635,12 +635,20 @@ def special(+d: Dialect, s: Bytes()) -> Bool:
     case SCon{Chr{+c}, t}:
       Bool.not(is_o(cls(d, c))) || special(d, t)
 
+def last(t: Bytes(), c: U32) -> U32:
+  match t:
+    case SNil{}:
+      c
+    case SCon{Chr{x}, u}:
+      last(u, x)
+
+# a field that starts or ends with a space
 def spaced(s: Bytes()) -> Bool:
   match s:
     case SNil{}:
       False{}
     case SCon{Chr{+c}, t}:
-      U32.is_eq(c, 32) || U32.is_eq(Bytes.byte(String.get_end(SCon{Chr{c}, t}, 0n)), 32)
+      U32.is_eq(c, 32) || U32.is_eq(last(t, c), 32)
 
 def needs(+d: Dialect, +s: Bytes()) -> Bool:
   special(d, s) || (pad(d) && spaced(s))
