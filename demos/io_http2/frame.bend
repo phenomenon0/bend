@@ -162,8 +162,17 @@ def put32(+n: U32) -> List<&2, U32>:
   [U32.and(U32.shrn(n, 24n), 255), U32.and(U32.shrn(n, 16n), 255), U32.and(U32.shrn(n, 8n), 255),
    U32.and(n, 255)]
 
+# the byte of n k bits up
+def byte.at(+n: U32, +k: Nat) -> U32:
+  U32.and(U32.shrn(n, k), 255)
+
+# n's four bytes pushed onto b, the high one first
+def push32(b: Bytes(), +n: U32) -> Bytes():
+  Bytes.push(Bytes.push(Bytes.push(Bytes.push(b, byte.at(n, 24n)), byte.at(n, 16n)), byte.at(n, 8n)), byte.at(n, 0n))
+
 def head(+len: U32, ty: U32, fl: U32, +sid: U32) -> Bytes():
-  Bytes.from_list(List.append(&2, U32, put24(len), Con{ty, Con{fl, put32(sid)}}))
+  push32(Bytes.push(Bytes.push(Bytes.push(Bytes.push(Bytes.push("", byte.at(len, 16n)), byte.at(len, 8n)),
+    byte.at(len, 0n)), ty), fl), sid)
 
 def frame(ty: U32, fl: U32, +sid: U32, +pay: Bytes()) -> Bytes():
   Bytes.append(head(U32.from_nat(Bytes.len(pay)), ty, fl, sid), pay)

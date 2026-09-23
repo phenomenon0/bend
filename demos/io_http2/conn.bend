@@ -267,19 +267,36 @@ def chk.ok(c: Chk) -> Bool:
       ok
 
 # a field name with an uppercase letter is malformed (8.2.1)
-def upper.any(s: Bytes()) -> Bool:
-  match s:
-    case SNil{}:
-      False{}
-    case SCon{Chr{+c}, t}:
-      (U32.is_le(65, c) && U32.is_le(c, 90)) || upper.any(t)
+def upper(+c: U32) -> Bool:
+  U32.is_le(65, c) && U32.is_le(c, 90)
 
-def digits.all(s: Bytes()) -> Bool:
-  match s:
-    case SNil{}:
+def digit(+c: U32) -> Bool:
+  U32.is_le(48, c) && U32.is_le(c, 57)
+
+# whether a byte of s from i on is uppercase (k bytes left)
+def upper.go(k: Nat, +s: Bytes(), +i: Nat, any: Bool) -> Bool:
+  match k any:
+    case _ True{}:
       True{}
-    case SCon{Chr{+c}, t}:
-      U32.is_le(48, c) && U32.is_le(c, 57) && digits.all(t)
+    case 0n False{}:
+      False{}
+    case 1n+j False{}:
+      upper.go(j, s, 1n+i, upper(Bytes.get(s, i)))
+
+def upper.any(+s: Bytes()) -> Bool:
+  upper.go(Bytes.len(s), s, 0n, False{})
+
+def digits.go(k: Nat, +s: Bytes(), +i: Nat, all: Bool) -> Bool:
+  match k all:
+    case _ False{}:
+      False{}
+    case 0n True{}:
+      True{}
+    case 1n+j True{}:
+      digits.go(j, s, 1n+i, digit(Bytes.get(s, i)))
+
+def digits.all(+s: Bytes()) -> Bool:
+  digits.go(Bytes.len(s), s, 0n, True{})
 
 def beq(+a: Bytes(), +b: Bytes()) -> Bool:
   K.beq(a, b)
@@ -393,7 +410,7 @@ def chk.name(c: Chk, +n: Bytes(), +v: Bytes(), trailer: Bool, up: Bool, ps: Bool
 def chk.one(c: Chk, f: K.Fld, +trailer: Bool) -> Chk:
   match f:
     case K.Fld{+n, +v}:
-      chk.name(c, n, v, trailer, upper.any(n), Bytes.starts_with(n, ":"))
+      chk.name(c, n, v, trailer, upper.any(n), U32.is_eq(Bytes.get(n, 0n), 58))
 
 def chk.all(fs: List<&2, K.Fld>, c: Chk, +trailer: Bool) -> Chk:
   match fs:
@@ -429,7 +446,7 @@ def trailers.ok(fs: List<&2, K.Fld>) -> Bool:
 # ===========================
 
 def put32(+n: U32) -> Bytes():
-  Bytes.from_list(Fm.put32(n))
+  Fm.push32("", n)
 
 def f.data(+sid: U32, end: Bool, +bs: Bytes()) -> Bytes():
   Fm.frame(0, Bool.to_u32(end), sid, bs)

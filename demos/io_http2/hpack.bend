@@ -118,12 +118,21 @@ def at.go(st: List<&2, Fld>, j: Nat, dy: List<&2, Fld>) -> Maybe<&2, Fld>:
     case Nil{} _:
       List.get(&2, Fld, dy, j)
 
+# (an index past the static table goes straight to the dynamic one)
+def at.in(small: Bool, +j: Nat, dy: List<&2, Fld>) -> Maybe<&2, Fld>:
+  match small:
+    case True{}:
+      at.go(static(), j, dy)
+    case False{}:
+      List.get(&2, Fld, dy, Nat.sub(j, 61n))
+
 def at(i: Nat, t: Tbl) -> Maybe<&2, Fld>:
   match i t:
     case 0n _:
       None{}
     case 1n+j Tbl{es, max}:
-      at.go(static(), j, es)
+      +k = j
+      at.in(Nat.is_lt(k, 61n), k, es)
 
 # Integers (RFC 7541 5.1)
 # =======================
@@ -724,7 +733,8 @@ def block(+root: H.Ht, d: Dec, bs: List<&2, U32>) -> Blk:
 # The encoder
 # ===========
 
-# two byte strings equal, read where they are
+# two byte strings equal, read where they are, four bytes at a time (k
+# words left)
 def beq.go(k: Nat, +a: Bytes(), +b: Bytes(), +i: Nat, same: Bool) -> Bool:
   match k same:
     case _ False{}:
@@ -732,10 +742,10 @@ def beq.go(k: Nat, +a: Bytes(), +b: Bytes(), +i: Nat, same: Bool) -> Bool:
     case 0n True{}:
       True{}
     case 1n+j True{}:
-      beq.go(j, a, b, 1n+i, U32.is_eq(Bytes.get(a, i), Bytes.get(b, i)))
+      beq.go(j, a, b, 4n+i, U32.is_eq(Bytes.word_le(a, i), Bytes.word_le(b, i)))
 
 def beq(+a: Bytes(), +b: Bytes()) -> Bool:
-  beq.go(Bytes.len(a), a, b, 0n, Nat.is_eq(Bytes.len(a), Bytes.len(b)))
+  beq.go(Nat.div(Nat.add(Bytes.len(a), 3n), 4n), a, b, 0n, Nat.is_eq(Bytes.len(a), Bytes.len(b)))
 
 # The static table by name, for the encoder: a search tree on a name's
 # length, first byte and last byte (which tell every name in the table
@@ -831,10 +841,19 @@ def hit.or(m: Maybe<&2, Nat>, +i: Nat, ok: Bool) -> Maybe<&2, Nat>:
         case False{}:
           None{}
 
+# (the values are compared only when the names are equal)
+def hit.same(named: Bool, +ev: Bytes(), +fv: Bytes()) -> Bool:
+  match named:
+    case True{}:
+      beq(ev, fv)
+    case False{}:
+      False{}
+
 def hit.one(h: Hit, +i: Nat, e: Fld, f: Fld) -> Hit:
   match h e f:
     case Hit{full, name} Fld{+en, ev} Fld{+fn, fv}:
-      Hit{hit.or(full, i, beq(en, fn) && beq(ev, fv)), hit.or(name, i, beq(en, fn))}
+      +named = beq(en, fn)
+      Hit{hit.or(full, i, hit.same(named, ev, fv)), hit.or(name, i, named)}
 
 # where a name's key sits against a node's
 def sx.cmp(+t: Sx, +k: U32) -> Cmp:
