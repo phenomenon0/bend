@@ -57,6 +57,31 @@ composes:
   uniform-hashing means at every load (at 95%: miss 178.5 against 200.5). U32
   totals hold up to about 95% load at 2^24.
 
+## Promoted to power/: real buffers
+
+Two of these are now library primitives over a real buffer, forked with
+`Array.fork` (2.0.22+: two handles to one block in O(1), reads only, no copy):
+
+- `power/exact.bend`: `Ex.sum(vec, d)` is the exact sum of a Vec of F32 bit
+  patterns, and `Ex.add` / `Ex.join` / `Ex.round` are there for streaming.
+  Tested by `tests/power/exact.bend`.
+- `power/utf8.bend`: `U.check(bytes, d)` gives the state map and scalar count,
+  and `U.first_bad(bytes, d)` finds the first bad byte by tree descent. Tested
+  by `tests/power/utf8.bend`, which uses CPython's decoder as its oracle.
+
+`real.sh` runs them on real files. It uses `slurp.bend`, which reads a file
+into Bytes so that a float32 file arrives one F32 per cell. The same box as
+above:
+
+| input | Bend 1 thread | Bend 4 threads | baseline | verdict |
+|---|---:|---:|---|---|
+| the deep dives' HTML x 8 (55.5 MB real UTF-8) | 249 ms | 67–82 ms | CPython `bytes.decode`: 145 ms | = CPython (valid, 54,403,536 scalars) |
+| same, one byte set to 0xFF | 260 ms (+239 first_bad) | 67 ms (+76) | | first bad byte 39,644,194 = CPython's |
+| 2^24 float32s (cancelling giants over a small sea) | 196 ms | 49 ms | naive C loop: ~22 ms, **wrong** | exact −1.3746 (`0xbfaff27f`) = Python's exact integer sum; naive float32 **and** float64 both say +0.0053 |
+
+Reading the file (64 KiB list chunks packed into cells) takes about 0.5 s and
+is not included above. It is now the slowest step.
+
 ## Oracles
 
 Every `#|` line is printed by `NAME_gen.py`, which rebuilds the same data
