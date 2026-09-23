@@ -594,6 +594,13 @@ def st.w.fin(r: St, v: Bool) -> St:
       St{id, ss, meth, path, clen, body, got, rw, sw, out, v}
 
 
+# The stream table: the streams at work, each id once. A stream is
+# taken out while a frame or an answer works on it, and put back after,
+# so each is held in one place; a look at a stream's state reads it
+# where it is.
+type Tk is Data:
+  Tk{m: Maybe<&2, St>, sts: List<&2, St>}
+
 # whether the list's first stream has id sid
 def st.at(+sts: List<&2, St>, +sid: U32) -> Bool:
   match sts:
@@ -603,60 +610,102 @@ def st.at(+sts: List<&2, St>, +sid: U32) -> Bool:
       U32.is_eq(st.id(s), sid)
 
 # The walks stop at the stream they look for (hit says the head is it):
-# a list holds each id once (st.put removes before it adds), so the
-# first is the only one, and what follows it is kept untouched.
-def st.find.go(sts: List<&2, St>, +sid: U32, hit: Bool) -> Maybe<&2, St>:
+# the first is the only one, and what follows it is kept untouched.
+def st.look.go(sts: List<&2, St>, +sid: U32, d: Ss, hit: Bool) -> Ss:
   match sts hit:
     case Nil{} _:
-      None{}
+      d
     case Con{s, t} True{}:
-      Some{s}
+      st.ss(s)
     case Con{s, +t} False{}:
-      st.find.go(t, sid, st.at(t, sid))
+      st.look.go(t, sid, d, st.at(t, sid))
 
-def st.find(+sts: List<&2, St>, +sid: U32) -> Maybe<&2, St>:
-  st.find.go(sts, sid, st.at(sts, sid))
+# the state of stream sid, or d when it is not at work
+def st.look(+sts: List<&2, St>, +sid: U32, d: Ss) -> Ss:
+  st.look.go(sts, sid, d, st.at(sts, sid))
 
-def st.del.go(sts: List<&2, St>, +sid: U32, hit: Bool) -> List<&2, St>:
+def tk.cons(s: St, k: Tk) -> Tk:
+  match k:
+    case Tk{m, r}:
+      Tk{m, Con{s, r}}
+
+def st.take.go(sts: List<&2, St>, +sid: U32, hit: Bool) -> Tk:
   match sts hit:
     case Nil{} _:
-      Nil{}
+      Tk{None{}, Nil{}}
     case Con{s, t} True{}:
-      t
+      Tk{Some{s}, t}
     case Con{s, +t} False{}:
-      Con{s, st.del.go(t, sid, st.at(t, sid))}
+      tk.cons(s, st.take.go(t, sid, st.at(t, sid)))
+
+# stream sid taken out, and the table without it
+def st.take(+sts: List<&2, St>, +sid: U32) -> Tk:
+  st.take.go(sts, sid, st.at(sts, sid))
+
+def st.del.of(k: Tk) -> List<&2, St>:
+  match k:
+    case Tk{m, r}:
+      r
 
 def st.del(+sts: List<&2, St>, +sid: U32) -> List<&2, St>:
-  st.del.go(sts, sid, st.at(sts, sid))
+  st.del.of(st.take(sts, sid))
 
-# the stream list with s in place of the stream of its id (or s added)
-def st.put(sts: List<&2, St>, +s: St) -> List<&2, St>:
-  Con{s, st.del(sts, st.id(s))}
+# a stream put in that the table does not hold (a new one, or one taken)
+def st.ins(sts: List<&2, St>, s: St) -> List<&2, St>:
+  Con{s, sts}
 
-def mem(xs: List<&2, U32>, +x: U32) -> Bool:
-  match xs:
+def st.count.go(sts: List<&2, St>, +n: Nat) -> Nat:
+  match sts:
     case Nil{}:
-      False{}
-    case Con{y, t}:
-      U32.is_eq(x, y) || mem(t, x)
+      n
+    case Con{s, t}:
+      st.count.go(t, 1n+n)
+
+def st.count(+sts: List<&2, St>) -> Nat:
+  st.count.go(sts, 0n)
+
+def st.empty() -> List<&2, St>:
+  Nil{}
+
+# stream ids, one list type of their own (a U32 is read in place)
+type Ids is Data:
+  INil{}
+  ICon{id: U32, t: Ids}
+
+def mem.go(xs: Ids, +x: U32, acc: Bool) -> Bool:
+  match xs:
+    case INil{}:
+      acc
+    case ICon{y, t}:
+      mem.go(t, x, acc || U32.is_eq(x, y))
+
+def mem(+xs: Ids, +x: U32) -> Bool:
+  mem.go(xs, x, False{})
+
+def ids.take(n: Nat, xs: Ids) -> Ids:
+  match n xs:
+    case 0n _:
+      INil{}
+    case 1n+k INil{}:
+      INil{}
+    case 1n+k ICon{x, t}:
+      ICon{x, ids.take(k, t)}
 
 # the streams we reset lately, whose late frames are ignored (5.1:
 # "closed"); the newest sixteen are kept
-def gone.add(xs: List<&2, U32>, sid: U32) -> List<&2, U32>:
-  List.take(&2, U32, Con{sid, xs}, 16n)
+def gone.add(xs: Ids, sid: U32) -> Ids:
+  ids.take(16n, ICon{sid, xs})
 
-# A stream's state as the server sees it (5.1): one it is working on
-# says; one it reset lately is reset; one above every id seen is idle;
-# any other is closed.
-def state.of(m: Maybe<&2, St>, reset: Bool, idle: Bool) -> Ss:
-  match m reset idle:
-    case Some{s} _ _:
-      st.ss(s)
-    case None{} True{} _:
+# A stream's state as the server sees it (5.1), when it is not at work:
+# one it reset lately is reset; one above every id seen is idle; any
+# other is closed.
+def state.none(reset: Bool, idle: Bool) -> Ss:
+  match reset idle:
+    case True{} _:
       SReset{}
-    case None{} False{} True{}:
+    case False{} True{}:
       SIdle{}
-    case None{} False{} False{}:
+    case False{} False{}:
       SClosed{}
 
 # The connection
@@ -723,11 +772,11 @@ type Blk is Data:
 # may send); the peer's SETTINGS_INITIAL_WINDOW_SIZE and
 # SETTINGS_MAX_FRAME_SIZE; the budgets; whether our SETTINGS went out.
 type Cn is Data:
-  Cn{rd: Fm.Rd, hd: K.Dec, he: K.Tbl, hup: Bool, sts: List<&2, St>, gone: List<&2, U32>,
+  Cn{rd: Fm.Rd, hd: K.Dec, he: K.Tbl, hup: Bool, sts: List<&2, St>, gone: Ids,
     last: U32, blk: Blk, csw: Sw, crw: Nat, init: Nat, fmax: Nat, bud: Bud, said: Bool}
 
 def cn.new() -> Cn:
-  Cn{Fm.new(16384n), K.dec.new(4096n, 65536n), K.tbl.new(4096n), False{}, Nil{}, Nil{}, 0, BNone{},
+  Cn{Fm.new(16384n), K.dec.new(4096n, 65536n), K.tbl.new(4096n), False{}, st.empty(), INil{}, 0, BNone{},
     sw.new(65535n), win.ours(), 65535n, 16384n, bud.new(), False{}}
 
 def cn.rd(r: Cn) -> Fm.Rd:
@@ -755,7 +804,7 @@ def cn.sts(r: Cn) -> List<&2, St>:
     case Cn{rd, hd, he, hup, sts, gone, last, blk, csw, crw, init, fmax, bud, said}:
       sts
 
-def cn.gone(r: Cn) -> List<&2, U32>:
+def cn.gone(r: Cn) -> Ids:
   match r:
     case Cn{rd, hd, he, hup, sts, gone, last, blk, csw, crw, init, fmax, bud, said}:
       gone
@@ -825,7 +874,7 @@ def cn.w.sts(r: Cn, v: List<&2, St>) -> Cn:
     case Cn{rd, hd, he, hup, _sts, gone, last, blk, csw, crw, init, fmax, bud, said}:
       Cn{rd, hd, he, hup, v, gone, last, blk, csw, crw, init, fmax, bud, said}
 
-def cn.w.gone(r: Cn, v: List<&2, U32>) -> Cn:
+def cn.w.gone(r: Cn, v: Ids) -> Cn:
   match r:
     case Cn{rd, hd, he, hup, sts, _gone, last, blk, csw, crw, init, fmax, bud, said}:
       Cn{rd, hd, he, hup, sts, v, last, blk, csw, crw, init, fmax, bud, said}
@@ -870,6 +919,36 @@ def cn.w.said(r: Cn, v: Bool) -> Cn:
     case Cn{rd, hd, he, hup, sts, gone, last, blk, csw, crw, init, fmax, bud, _said}:
       Cn{rd, hd, he, hup, sts, gone, last, blk, csw, crw, init, fmax, bud, v}
 
+# The connection is held once: what a frame changes is changed in one
+# match, and what it only reads (a stream's state, the stream count,
+# the header block in progress) is read where it is.
+
+# a stream taken out of the connection's table
+type Ct is Data:
+  Ct{m: Maybe<&2, St>, c: Cn}
+
+def cn.take.go(rd: Fm.Rd, hd: K.Dec, he: K.Tbl, hup: Bool, gone: Ids, last: U32, blk: Blk, csw: Sw,
+  crw: Nat, init: Nat, fmax: Nat, bud: Bud, said: Bool, k: Tk) -> Ct:
+  match k:
+    case Tk{m, sts}:
+      Ct{m, Cn{rd, hd, he, hup, sts, gone, last, blk, csw, crw, init, fmax, bud, said}}
+
+def cn.take(c: Cn, +sid: U32) -> Ct:
+  match c:
+    case Cn{rd, hd, he, hup, sts, gone, last, blk, csw, crw, init, fmax, bud, said}:
+      cn.take.go(rd, hd, he, hup, gone, last, blk, csw, crw, init, fmax, bud, said, st.take(sts, sid))
+
+# a stream the table does not hold put in
+def cn.ins(c: Cn, s: St) -> Cn:
+  match c:
+    case Cn{rd, hd, he, hup, sts, gone, last, blk, csw, crw, init, fmax, bud, said}:
+      Cn{rd, hd, he, hup, st.ins(sts, s), gone, last, blk, csw, crw, init, fmax, bud, said}
+
+def cn.count(c: Cn) -> Nat:
+  match c:
+    case Cn{rd, hd, he, hup, sts, gone, last, blk, csw, crw, init, fmax, bud, said}:
+      st.count(sts)
+
 
 
 # What reading frames produces: the connection, the bytes to write, the
@@ -884,16 +963,20 @@ def die(+c: Cn, w: Bytes(), rq: List<&2, Req>, +code: U32) -> Out:
 
 # A stream error (5.4.2): RST_STREAM, the stream dropped and remembered
 # as reset, so what the peer sent before it saw the reset is ignored.
-def rst(+c: Cn, w: Bytes(), rq: List<&2, Req>, +sid: U32, +code: U32) -> Out:
-  Out{cn.w.gone(cn.w.sts(c, st.del(cn.sts(c), sid)), gone.add(cn.gone(c), sid)),
-    Bytes.append(w, f.rst(sid, code)), rq, False{}}
+def rst(c: Cn, w: Bytes(), rq: List<&2, Req>, +sid: U32, +code: U32) -> Out:
+  match c:
+    case Cn{rd, hd, he, hup, sts, gone, last, blk, csw, crw, init, fmax, bud, said}:
+      Out{Cn{rd, hd, he, hup, st.del(sts, sid), gone.add(gone, sid), last, blk, csw, crw, init, fmax, bud, said},
+        Bytes.append(w, f.rst(sid, code)), rq, False{}}
 
 def ok(c: Cn, w: Bytes(), rq: List<&2, Req>) -> Out:
   Out{c, w, rq, False{}}
 
 # a stream's state (5.1), from the connection
 def state(+c: Cn, +sid: U32) -> Ss:
-  state.of(st.find(cn.sts(c), sid), mem(cn.gone(c), sid), U32.is_lt(cn.last(c), sid))
+  match c:
+    case Cn{rd, hd, he, hup, sts, gone, +last, blk, csw, crw, init, fmax, bud, said}:
+      st.look(sts, sid, state.none(mem(gone, sid), U32.is_lt(last, sid)))
 
 def on(b: Bool, +n: Nat, +m: Nat) -> Nat:
   match b:
@@ -914,18 +997,21 @@ def give(+sid: U32, +n: Nat) -> Bytes():
 # END_STREAM on a request: its content-length, if it gave one, must be
 # what its DATA came to (8.1.1); then it is half-closed (remote) and
 # goes to be answered.
-def ended.go(+c: Cn, w: Bytes(), rq: List<&2, Req>, s: St, fine: Bool) -> Out:
-  match s:
-    case St{+id, ss, +meth, +path, cl, body, got, rw, sw, o, fin}:
-      match fine:
-        case True{}:
-          ok(cn.w.sts(c, st.put(cn.sts(c), St{id, SHalf{}, meth, path, cl, "", got, rw, sw, o, fin})), w,
-            Con{Req{id, meth, path, body}, rq})
-        case False{}:
-          rst(c, w, rq, id, e.proto())
+# (the stream is not in the table: a new one, or one taken out; what it
+# asked goes with the request, and the stream keeps what its response
+# needs)
+def ended.go(c: Cn, w: Bytes(), rq: List<&2, Req>, +id: U32, meth: Bytes(), path: Bytes(), cl: Maybe<&2, Nat>,
+  body: Bytes(), got: Nat, rw: Nat, sw: Sw, o: Bytes(), fin: Bool, fine: Bool) -> Out:
+  match fine:
+    case True{}:
+      ok(cn.ins(c, St{id, SHalf{}, "", "", cl, "", got, rw, sw, o, fin}), w, Con{Req{id, meth, path, body}, rq})
+    case False{}:
+      rst(c, w, rq, id, e.proto())
 
-def ended(+c: Cn, w: Bytes(), rq: List<&2, Req>, +s: St) -> Out:
-  ended.go(c, w, rq, s, clen.fine(st.clen(s), st.got(s)))
+def ended(c: Cn, w: Bytes(), rq: List<&2, Req>, s: St) -> Out:
+  match s:
+    case St{id, ss, meth, path, +cl, body, +got, rw, sw, o, fin}:
+      ended.go(c, w, rq, id, meth, path, cl, body, got, rw, sw, o, fin, clen.fine(cl, got))
 
 # a content-length is never passed
 def clen.fine.le(m: Maybe<&2, Nat>, +n: Nat) -> Bool:
@@ -935,16 +1021,16 @@ def clen.fine.le(m: Maybe<&2, Nat>, +n: Nat) -> Bool:
     case Some{x}:
       Nat.is_le(n, x)
 
-def data.st.end(+c: Cn, w: Bytes(), rq: List<&2, Req>, +s: St, end: Bool) -> Out:
+def data.st.end(c: Cn, w: Bytes(), rq: List<&2, Req>, s: St, end: Bool) -> Out:
   match end:
     case True{}:
       ended(c, w, rq, s)
     case False{}:
-      ok(cn.w.sts(c, st.put(cn.sts(c), s)), w, rq)
+      ok(cn.ins(c, s), w, rq)
 
 # DATA (6.1) on a stream that is open: under both windows, under the
 # body's cap and under its content-length; the windows given back.
-def data.st.go(+c: Cn, w: Bytes(), rq: List<&2, Req>, win: Bool, cap: Bool, cl: Bool, +s: St, +fl: U32,
+def data.st.go(c: Cn, w: Bytes(), rq: List<&2, Req>, win: Bool, cap: Bool, cl: Bool, s: St, +fl: U32,
   +len: Nat, +data: Bytes()) -> Out:
   match win cap cl:
     case False{} _ _:
@@ -955,16 +1041,17 @@ def data.st.go(+c: Cn, w: Bytes(), rq: List<&2, Req>, win: Bool, cap: Bool, cl: 
       rst(c, w, rq, st.id(s), e.proto())
     case True{} True{} True{}:
       match s:
-        case St{+id, ss, meth, path, cl2, body, +got, rw, sw, o, fin}:
+        case St{+id, ss, meth, path, cl2, body, got, rw, sw, o, fin}:
+          +n = Bytes.len(data)
           data.st.end(c, Bytes.append(w, give(id, on(flag(fl, 1), 0n, len))), rq,
-            St{id, ss, meth, path, cl2, Bytes.append(body, data), Nat.add(got, Bytes.len(data)), rw, sw, o, fin},
+            St{id, ss, meth, path, cl2, Bytes.append(body, data), Nat.add(got, n), rw, sw, o, fin},
             flag(fl, 1))
 
-def data.st(+c: Cn, w: Bytes(), rq: List<&2, Req>, m: Maybe<&2, St>, +fl: U32, +len: Nat, +data: Bytes()) -> Out:
-  match m:
-    case None{}:
+def data.st(ct: Ct, w: Bytes(), rq: List<&2, Req>, +fl: U32, +len: Nat, +data: Bytes()) -> Out:
+  match ct:
+    case Ct{None{}, c}:
       ok(c, w, rq)
-    case Some{+s}:
+    case Ct{Some{+s}, c}:
       +got = Nat.add(st.got(s), Bytes.len(data))
       data.st.go(c, w, rq, Nat.is_le(len, st.rw(s)), Nat.is_le(got, body.cap()),
         clen.fine.le(st.clen(s), got), s, fl, len, data)
@@ -975,7 +1062,7 @@ def data.conn(+c: Cn, w: Bytes(), rq: List<&2, Req>, +fl: U32, +sid: U32, +len: 
     case False{}:
       die(c, w, rq, e.flow())
     case True{}:
-      data.st(c, Bytes.append(w, give(0, len)), rq, st.find(cn.sts(c), sid), fl, len, data)
+      data.st(cn.take(c, sid), Bytes.append(w, give(0, len)), rq, fl, len, data)
 
 def data.vd(+c: Cn, w: Bytes(), rq: List<&2, Req>, +fl: U32, +sid: U32, +len: Nat, +data: Bytes(), v: Vd) -> Out:
   match v:
@@ -1018,12 +1105,12 @@ def h.data(+c: Cn, w: Bytes(), rq: List<&2, Req>, +fl: U32, +sid: U32, +pay: Byt
 # Header blocks
 # =============
 
-def open.st(+c: Cn, w: Bytes(), rq: List<&2, Req>, +s: St, end: Bool) -> Out:
+def open.st(c: Cn, w: Bytes(), rq: List<&2, Req>, s: St, end: Bool) -> Out:
   match end:
     case True{}:
       ended(c, w, rq, s)
     case False{}:
-      ok(cn.w.sts(c, st.put(cn.sts(c), s)), w, rq)
+      ok(cn.ins(c, s), w, rq)
 
 # a new stream, its request's head whole: open, or half-closed (remote)
 # at once when the HEADERS ended it
@@ -1032,16 +1119,17 @@ def open.head(+c: Cn, w: Bytes(), rq: List<&2, Req>, +sid: U32, +end: Bool, h: H
     case HBad{}:
       rst(c, w, rq, sid, e.proto())
     case HOk{meth, path, cl}:
-      open.st(c, w, rq, St{sid, SOpen{}, meth, path, cl, "", 0n, win.ours(), sw.new(cn.init(c)), "", False{}}, end)
+      +init = cn.init(c)
+      open.st(c, w, rq, St{sid, SOpen{}, meth, path, cl, "", 0n, win.ours(), sw.new(init), "", False{}}, end)
 
 # trailers: only with END_STREAM (8.1), and no pseudo-header in them
-def trail(+c: Cn, w: Bytes(), rq: List<&2, Req>, +sid: U32, m: Maybe<&2, St>, fine: Bool) -> Out:
-  match m fine:
-    case None{} _:
+def trail(ct: Ct, w: Bytes(), rq: List<&2, Req>, +sid: U32, fine: Bool) -> Out:
+  match ct fine:
+    case Ct{None{}, c} _:
       ok(c, w, rq)
-    case Some{s} True{}:
+    case Ct{Some{s}, c} True{}:
       ended(c, w, rq, s)
-    case Some{s} False{}:
+    case Ct{Some{s}, c} False{}:
       rst(c, w, rq, sid, e.proto())
 
 def drop.blk(+c: Cn, w: Bytes(), rq: List<&2, Req>, +sid: U32, +code: U32, none: Bool) -> Out:
@@ -1058,7 +1146,7 @@ def blk.kind(+c: Cn, w: Bytes(), rq: List<&2, Req>, +sid: U32, +end: Bool, k: Bk
     case BkReq{}:
       open.head(c, w, rq, sid, end, req.check(fs))
     case BkTrail{}:
-      trail(c, w, rq, sid, st.find(cn.sts(c), sid), end && trailers.ok(fs))
+      trail(cn.take(c, sid), w, rq, sid, end && trailers.ok(fs))
     case BkDrop{+code}:
       drop.blk(c, w, rq, sid, code, U32.is_zero(code))
 
@@ -1067,7 +1155,21 @@ def blk.done(+c: Cn, w: Bytes(), rq: List<&2, Req>, +sid: U32, +end: Bool, k: Bk
     case K.BBad{why}:
       die(c, w, rq, e.compress())
     case K.BOk{d, fs}:
-      blk.kind(cn.w.blk(cn.w.hd(c, d), BNone{}), w, rq, sid, end, k, fs)
+      blk.kind(cn.w.hd(c, d), w, rq, sid, end, k, fs)
+
+# the decoder fed a fragment: the block's last, which ends the block
+# (the connection's decoder a placeholder until the block is whole), or
+# one more, whose CONTINUATION is awaited
+def blk.last(+root: H.Ht, c: Cn, w: Bytes(), rq: List<&2, Req>, +sid: U32, +end: Bool, k: Bk, +frag: Bytes()) -> Out:
+  match c:
+    case Cn{rd, hd, he, hup, sts, gone, last, blk, csw, crw, init, fmax, bud, said}:
+      blk.done(Cn{rd, K.dec.new(0n, 0n), he, hup, sts, gone, last, BNone{}, csw, crw, init, fmax, bud, said}, w, rq,
+        sid, end, k, K.dec.end(K.feed_buf(root, frag, hd)))
+
+def blk.next(+root: H.Ht, c: Cn, +frag: Bytes(), b: Blk) -> Cn:
+  match c:
+    case Cn{rd, hd, he, hup, sts, gone, last, blk, csw, crw, init, fmax, bud, said}:
+      Cn{rd, K.feed_buf(root, frag, hd), he, hup, sts, gone, last, b, csw, crw, init, fmax, bud, said}
 
 # a fragment fed to the decoder: past the block's cap the connection
 # ends; with END_HEADERS the block is done, else it waits for its
@@ -1078,18 +1180,23 @@ def blk.more(+root: H.Ht, +c: Cn, w: Bytes(), rq: List<&2, Req>, +sid: U32, +end
     case True{} _:
       die(c, w, rq, e.calm())
     case False{} True{}:
-      blk.done(c, w, rq, sid, end, k, K.dec.end(K.feed_buf(root, frag, cn.hd(c))))
+      blk.last(root, c, w, rq, sid, end, k, frag)
     case False{} False{}:
-      ok(cn.w.blk(cn.w.hd(c, K.feed_buf(root, frag, cn.hd(c))), BIn{sid, end, k, size}), w, rq)
+      ok(blk.next(root, c, frag, BIn{sid, end, k, size}), w, rq)
 
 def blk.feed(+root: H.Ht, +c: Cn, w: Bytes(), rq: List<&2, Req>, +sid: U32, +end: Bool, k: Bk, +size: Nat,
   +frag: Bytes(), eoh: Bool) -> Out:
   blk.more(root, c, w, rq, sid, end, k, size, frag, Nat.is_lt(blk.cap(), size), eoh)
 
+def cn.begin(c: Cn) -> Cn:
+  match c:
+    case Cn{rd, hd, he, hup, sts, gone, last, blk, csw, crw, init, fmax, bud, said}:
+      Cn{rd, K.dec.begin(hd), he, hup, sts, gone, last, blk, csw, crw, init, fmax, bud, said}
+
 # a block's first fragment: the decoder begins a block
 def blk.start(+root: H.Ht, +c: Cn, w: Bytes(), rq: List<&2, Req>, +sid: U32, +end: Bool, k: Bk, +frag: Bytes(),
   eoh: Bool) -> Out:
-  blk.feed(root, cn.w.hd(c, K.dec.begin(cn.hd(c))), w, rq, sid, end, k, Bytes.len(frag), frag, eoh)
+  blk.feed(root, cn.begin(c), w, rq, sid, end, k, Bytes.len(frag), frag, eoh)
 
 # CONTINUATION (6.10): only on the block's stream, straight after its
 # HEADERS or CONTINUATION; anything else is a PROTOCOL_ERROR
@@ -1119,7 +1226,7 @@ def hdr.kind(+c: Cn, +sid: U32, s: Ss, self: Bool) -> Bk:
     case _ True{}:
       BkDrop{e.proto()}
     case SIdle{} False{}:
-      hdr.new(Nat.is_lt(List.length(&2, St, cn.sts(c)), streams.max()))
+      hdr.new(Nat.is_lt(cn.count(c), streams.max()))
     case SOpen{} False{}:
       BkTrail{}
     case _ False{}:
@@ -1139,14 +1246,20 @@ def is.idle(s: Ss) -> Bool:
     case _:
       False{}
 
+# the highest stream id opened, moved to sid when that is above it
+def cn.opened(c: Cn, +sid: U32) -> Cn:
+  match c:
+    case Cn{rd, hd, he, hup, sts, gone, +last, blk, csw, crw, init, fmax, bud, said}:
+      Cn{rd, hd, he, hup, sts, gone, last.max(last, sid, U32.is_lt(last, sid)), blk, csw, crw, init, fmax, bud, said}
+
 def hdr.open(+root: H.Ht, +c: Cn, w: Bytes(), rq: List<&2, Req>, +fl: U32, +sid: U32, +frag: Bytes(), +self: Bool,
   +s: Ss, even: Bool) -> Out:
   match even:
     case True{}:
       die(c, w, rq, e.proto())
     case False{}:
-      blk.start(root, cn.w.last(c, last.max(cn.last(c), sid, U32.is_lt(cn.last(c), sid))), w, rq, sid, flag(fl, 1),
-        hdr.kind(c, sid, s, self), frag, flag(fl, 4))
+      +k = hdr.kind(c, sid, s, self)
+      blk.start(root, cn.opened(c, sid), w, rq, sid, flag(fl, 1), k, frag, flag(fl, 4))
 
 def hdr.go(+root: H.Ht, +c: Cn, w: Bytes(), rq: List<&2, Req>, +fl: U32, +sid: U32, +frag: Bytes(), +self: Bool,
   +s: Ss, v: Vd) -> Out:
@@ -1168,9 +1281,9 @@ def hdr.pay(+root: H.Ht, +c: Cn, w: Bytes(), rq: List<&2, Req>, +fl: U32, +sid: 
       die(c, w, rq, e.proto())
     case False{}:
       +s = state(c, sid)
-      hdr.go(root, c, w, rq, fl, sid,
-        Bytes.slice(pay, off, Nat.sub(Nat.sub(Bytes.len(pay), off), pl)),
-        prio && U32.is_eq(u31(be32(pay, on(flag(fl, 8), 1n, 0n))), sid), s, verdict(s, THeaders{}))
+      +self = prio && U32.is_eq(u31(be32(pay, on(flag(fl, 8), 1n, 0n))), sid)
+      +n = Nat.sub(Nat.sub(Bytes.len(pay), off), pl)
+      hdr.go(root, c, w, rq, fl, sid, Bytes.slice(pay, off, n), self, s, verdict(s, THeaders{}))
 
 def h.headers.go(+root: H.Ht, +c: Cn, w: Bytes(), rq: List<&2, Req>, +fl: U32, +sid: U32, +pay: Bytes(), z: Bool) -> Out:
   match z:
@@ -1217,12 +1330,12 @@ def h.prio(+c: Cn, w: Bytes(), rq: List<&2, Req>, +sid: U32, +pay: Bytes(), z: B
 # reset of a stream it opened is paid from its budget (a rapid reset
 # meets it); the stream is then closed, and what the peer sends on it
 # after is a STREAM_CLOSED.
-def h.rst.st(+c: Cn, w: Bytes(), rq: List<&2, Req>, +sid: U32, m: Maybe<&2, St>) -> Out:
-  match m:
-    case None{}:
+def h.rst.st(ct: Ct, w: Bytes(), rq: List<&2, Req>) -> Out:
+  match ct:
+    case Ct{None{}, c}:
       ok(c, w, rq)
-    case Some{s}:
-      h.rst.pay(cn.w.sts(c, st.del(cn.sts(c), sid)), w, rq, cn.bud(c))
+    case Ct{Some{s}, +c}:
+      h.rst.pay(c, w, rq, cn.bud(c))
 
 def h.rst.vd(+c: Cn, w: Bytes(), rq: List<&2, Req>, +sid: U32, v: Vd) -> Out:
   match v:
@@ -1231,7 +1344,7 @@ def h.rst.vd(+c: Cn, w: Bytes(), rq: List<&2, Req>, +sid: U32, v: Vd) -> Out:
     case VStream{code}:
       rst(c, w, rq, sid, code)
     case VOk{}:
-      h.rst.st(c, w, rq, sid, st.find(cn.sts(c), sid))
+      h.rst.st(cn.take(c, sid), w, rq)
 
 def h.rst(+c: Cn, w: Bytes(), rq: List<&2, Req>, +sid: U32, z: Bool, four: Bool) -> Out:
   match z four:
@@ -1447,20 +1560,20 @@ def win.conn(+c: Cn, w: Bytes(), rq: List<&2, Req>, m: Maybe<&2, Sw>) -> Out:
     case Some{sw}:
       ok(cn.w.csw(c, sw), w, rq)
 
-def win.st.add(+c: Cn, w: Bytes(), rq: List<&2, Req>, +s: St, m: Maybe<&2, Sw>) -> Out:
+def win.st.add(c: Cn, w: Bytes(), rq: List<&2, Req>, s: St, m: Maybe<&2, Sw>) -> Out:
   match m:
     case None{}:
       rst(c, w, rq, st.id(s), e.flow())
     case Some{sw}:
-      ok(cn.w.sts(c, st.put(cn.sts(c), st.w.sw(s, sw))), w, rq)
+      ok(cn.ins(c, st.w.sw(s, sw)), w, rq)
 
-def win.st(+c: Cn, w: Bytes(), rq: List<&2, Req>, +sid: U32, inc: Nat, m: Maybe<&2, St>) -> Out:
-  match inc m:
-    case _ None{}:
+def win.st(inc: Nat, ct: Ct, w: Bytes(), rq: List<&2, Req>, +sid: U32) -> Out:
+  match inc ct:
+    case _ Ct{None{}, c}:
       ok(c, w, rq)
-    case 0n Some{s}:
+    case 0n Ct{Some{s}, c}:
       rst(c, w, rq, sid, e.proto())
-    case 1n+i Some{+s}:
+    case 1n+i Ct{Some{+s}, c}:
       win.st.add(c, w, rq, s, sw.add(st.sw(s), 1n+i))
 
 def win.vd(+c: Cn, w: Bytes(), rq: List<&2, Req>, +sid: U32, +inc: Nat, v: Vd) -> Out:
@@ -1470,7 +1583,7 @@ def win.vd(+c: Cn, w: Bytes(), rq: List<&2, Req>, +sid: U32, +inc: Nat, v: Vd) -
     case VStream{code}:
       rst(c, w, rq, sid, code)
     case VOk{}:
-      win.st(c, w, rq, sid, inc, st.find(cn.sts(c), sid))
+      win.st(inc, cn.take(c, sid), w, rq, sid)
 
 def win.zero(+c: Cn, w: Bytes(), rq: List<&2, Req>, +inc: Nat) -> Out:
   match inc:
@@ -1557,10 +1670,10 @@ def refusal(+c: Cn, w: Bytes(), rq: List<&2, Req>, dead: Bool, m: Maybe<&2, Fm.W
     case False{} Some{Fm.WSize{}}:
       die(c, w, rq, e.size())
 
-def read.end(o: Out, +rd: Fm.Rd) -> Out:
+def read.end(o: Out, m: Maybe<&2, Fm.Why>) -> Out:
   match o:
     case Out{c, w, rq, dead}:
-      refusal(cn.w.rd(c, rd), w, rq, dead, Fm.refused(rd))
+      refusal(c, w, rq, dead, m)
 
 def hello.pre(rd: Fm.Rd) -> Bool & Bytes():
   match rd:
@@ -1581,19 +1694,29 @@ def hello(+said: Bool, +rd: Fm.Rd) -> Bool & Bytes():
     case False{}:
       hello.pre(rd)
 
-def read.hi(+root: H.Ht, c: Cn, +rd: Fm.Rd, fs: List<&2, Fm.Frm>, h: Bool & Bytes()) -> Out:
+# the reader goes back into the connection before the frames are
+# stepped (they never touch it), with whether it refused
+def read.hi(+root: H.Ht, +rd: Fm.Rd, hd: K.Dec, he: K.Tbl, hup: Bool, sts: List<&2, St>, gone: Ids,
+  last: U32, blk: Blk, csw: Sw, crw: Nat, init: Nat, fmax: Nat, bud: Bud, fs: List<&2, Fm.Frm>,
+  h: Bool & Bytes()) -> Out:
   match h:
     case (said, hi):
-      read.end(steps(root, fs, Out{cn.w.said(c, said), hi, Nil{}, False{}}), rd)
+      +m = Fm.refused(rd)
+      read.end(steps(root, fs, Out{Cn{rd, hd, he, hup, sts, gone, last, blk, csw, crw, init, fmax, bud, said}, hi,
+        Nil{}, False{}}), m)
 
-def read.go(+root: H.Ht, +c: Cn, fsr: Fm.Rd & List<&2, Fm.Frm>) -> Out:
+def read.go(+root: H.Ht, hd: K.Dec, he: K.Tbl, hup: Bool, sts: List<&2, St>, gone: Ids, last: U32,
+  blk: Blk, csw: Sw, crw: Nat, init: Nat, fmax: Nat, bud: Bud, +said: Bool, fsr: Fm.Rd & List<&2, Fm.Frm>) -> Out:
   match fsr:
     case (+rd, fs):
-      read.hi(root, c, rd, fs, hello(cn.said(c), rd))
+      read.hi(root, rd, hd, he, hup, sts, gone, last, blk, csw, crw, init, fmax, bud, fs, hello(said, rd))
 
 # one read's bytes: framed, each frame stepped in turn
-def read(+root: H.Ht, +c: Cn, buf: Bytes()) -> Out:
-  read.go(root, c, Fm.take(Fm.feed_buf(buf, cn.rd(c))))
+def read(+root: H.Ht, c: Cn, buf: Bytes()) -> Out:
+  match c:
+    case Cn{rd, hd, he, hup, sts, gone, last, blk, csw, crw, init, fmax, bud, said}:
+      read.go(root, hd, he, hup, sts, gone, last, blk, csw, crw, init, fmax, bud, said,
+        Fm.take(Fm.feed_buf(buf, rd)))
 
 # Answering
 # =========
@@ -1602,10 +1725,96 @@ def read(+root: H.Ht, +c: Cn, buf: Bytes()) -> Out:
 type CW is Data:
   CW{c: Cn, w: Bytes()}
 
+# Sending what waits (6.9): a stream's body in DATA frames, each at
+# most the peer's SETTINGS_MAX_FRAME_SIZE and within both windows,
+# END_STREAM on the last; a stream whose body is all out is done.
+def avail(+s: St, +csw: Sw, +fmax: Nat) -> Nat:
+  Nat.min(Bytes.len(st.out(s)), Nat.min(sw.up(st.sw(s)), Nat.min(sw.up(csw), fmax)))
+
+# a stream's turn as it goes: what may go next (avail), the stream,
+# the connection's window, what is written
+type Pn is Data:
+  Pn{n: Nat, s: St, csw: Sw, w: Bytes()}
+
+# n bytes of a body go in one DATA frame: all that is left (with
+# END_STREAM when the response ends there), or a part
+def pump.cut(+fmax: Nat, +n: Nat, +csw: Sw, w: Bytes(), +id: U32, ss: Ss, meth: Bytes(), path: Bytes(),
+  cl: Maybe<&2, Nat>, body: Bytes(), got: Nat, rw: Nat, +sw: Sw, +fin: Bool, whole: Bool, +out: Bytes()) -> Pn:
+  match whole:
+    case True{}:
+      +csw2 = sw.take(csw, n)
+      +s2 = {St{id, ss, meth, path, cl, body, got, rw, sw.take(sw, n), "", fin} : St}
+      Pn{avail(s2, csw2, fmax), s2, csw2, Bytes.append(w, f.data(id, fin, out))}
+    case False{}:
+      +csw2 = sw.take(csw, n)
+      +s2 = {St{id, ss, meth, path, cl, body, got, rw, sw.take(sw, n), Bytes.drop(out, n), fin} : St}
+      Pn{avail(s2, csw2, fmax), s2, csw2, Bytes.append(w, f.data(id, False{}, Bytes.slice(out, 0n, n)))}
+
+def pump.step(+fmax: Nat, +n: Nat, +csw: Sw, w: Bytes(), s: St) -> Pn:
+  match s:
+    case St{id, ss, meth, path, cl, body, got, rw, sw, +out, fin}:
+      pump.cut(fmax, n, csw, w, id, ss, meth, path, cl, body, got, rw, sw, fin, Nat.is_eq(n, Bytes.len(out)), out)
+
+# the frames go while the windows let them (k bounds the turns: each
+# sends a byte or more)
+def pump.st(k: Nat, +fmax: Nat, q: Pn) -> Pn:
+  match k:
+    case 0n:
+      q
+    case 1n+j:
+      match q:
+        case Pn{n, s, csw, w}:
+          match n:
+            case 0n:
+              Pn{0n, s, csw, w}
+            case 1n+m:
+              pump.st(j, fmax, pump.step(fmax, 1n+m, csw, w, s))
+
+def pump.go(+fmax: Nat, +s: St, +csw: Sw, w: Bytes()) -> Pn:
+  pump.st(1n+Bytes.len(st.out(s)), fmax, Pn{avail(s, csw, fmax), s, csw, w})
+
+# A stream after its turn: done when its body is all out and END_STREAM
+# went with it (the budgets given back one of each); else it waits in
+# the table for the windows.
+def st.done(+s: St) -> Bool:
+  String.is_empty(st.out(s)) && st.fin(s)
+
+def bud.on(b: Bool, x: Bud) -> Bud:
+  match b:
+    case True{}:
+      bud.refill(x)
+    case False{}:
+      x
+
+def cn.refill(c: Cn) -> Cn:
+  match c:
+    case Cn{rd, hd, he, hup, sts, gone, last, blk, csw, crw, init, fmax, bud, said}:
+      Cn{rd, hd, he, hup, sts, gone, last, blk, csw, crw, init, fmax, bud.refill(bud), said}
+
+def pump.done(c: Cn, w: Bytes(), s: St, done: Bool) -> CW:
+  match done:
+    case True{}:
+      CW{c, w}
+    case False{}:
+      CW{cn.ins(c, s), w}
+
+def pump.one.fin(rd: Fm.Rd, hd: K.Dec, he: K.Tbl, hup: Bool, sts: List<&2, St>, gone: Ids, last: U32,
+  blk: Blk, crw: Nat, init: Nat, fmax: Nat, bud: Bud, said: Bool, p: Pn) -> CW:
+  match p:
+    case Pn{n, +s, csw, w}:
+      +done = st.done(s)
+      pump.done(Cn{rd, hd, he, hup, sts, gone, last, blk, csw, crw, init, fmax, bud.on(done, bud), said}, w, s, done)
+
+# a stream's body sent as far as the windows let it
+def pump.one(c: Cn, w: Bytes(), +s: St) -> CW:
+  match c:
+    case Cn{rd, hd, he, hup, sts, gone, last, blk, +csw, crw, init, +fmax, bud, said}:
+      pump.one.fin(rd, hd, he, hup, sts, gone, last, blk, crw, init, fmax, bud, said, pump.go(fmax, s, csw, w))
+
 # A response to a request: its status, type and body. Its head goes out
 # at once as one HEADERS frame (a size update first when the peer's
-# SETTINGS_HEADER_TABLE_SIZE moved the encoder's table); its body waits
-# on the stream for the windows (pump).
+# SETTINGS_HEADER_TABLE_SIZE moved the encoder's table), and its body
+# after it, as far as the windows let it.
 def resp.fields(+status: Bytes(), +ct: Bytes(), +n: Nat) -> List<&2, K.Fld>:
   [K.Fld{":status", status}, K.Fld{"content-type", ct}, K.Fld{"content-length", Nat.show(n)}]
 
@@ -1616,71 +1825,55 @@ def resp.block(hup: Bool, +max: Nat, blk: List<&2, U32>) -> Bytes():
     case False{}:
       Bytes.from_list(blk)
 
-def resp.put(+c: Cn, w: Bytes(), +s: St, +body: Bytes(), empty: Bool) -> CW:
+def resp.put(c: Cn, w: Bytes(), s: St, body: Bytes(), empty: Bool) -> CW:
   match empty:
     case True{}:
-      CW{cn.w.bud(cn.w.sts(c, st.del(cn.sts(c), st.id(s))), bud.refill(cn.bud(c))), w}
+      CW{cn.refill(c), w}
     case False{}:
-      CW{cn.w.sts(c, st.put(cn.sts(c), st.w.fin(st.w.out(s, body), True{}))), w}
+      pump.one(c, w, st.w.fin(st.w.out(s, body), True{}))
 
-def resp.enc(+c: Cn, w: Bytes(), +s: St, +body: Bytes(), +empty: Bool, e: K.Enc) -> CW:
+def resp.enc(rd: Fm.Rd, hd: K.Dec, +hup: Bool, sts: List<&2, St>, gone: Ids, last: U32, blk: Blk, csw: Sw,
+  crw: Nat, init: Nat, fmax: Nat, bud: Bud, said: Bool, w: Bytes(), +s: St, body: Bytes(), +empty: Bool,
+  e: K.Enc) -> CW:
   match e:
-    case K.Enc{+he, blk}:
-      resp.put(cn.w.hup(cn.w.he(c, he), False{}),
-        Bytes.append(w, f.headers(st.id(s), empty, resp.block(cn.hup(c), K.tbl.max(he), blk))), s, body, empty)
+    case K.Enc{+he, hb}:
+      resp.put(Cn{rd, hd, he, False{}, sts, gone, last, blk, csw, crw, init, fmax, bud, said},
+        Bytes.append(w, f.headers(st.id(s), empty, resp.block(hup, K.tbl.max(he), hb))), s, body, empty)
 
-def answer.st(+c: Cn, w: Bytes(), m: Maybe<&2, St>, +status: Bytes(), +ct: Bytes(), +body: Bytes(), +head: Bool) -> CW:
-  match m:
-    case None{}:
+def answer.enc(c: Cn, w: Bytes(), +s: St, +status: Bytes(), +ct: Bytes(), +body: Bytes(), +empty: Bool) -> CW:
+  match c:
+    case Cn{rd, hd, he, hup, sts, gone, last, blk, csw, crw, init, fmax, bud, said}:
+      resp.enc(rd, hd, hup, sts, gone, last, blk, csw, crw, init, fmax, bud, said, w, s, body, empty,
+        K.encode(he, resp.fields(status, ct, Bytes.len(body)), True{}))
+
+def answer.st(ct: Ct, w: Bytes(), +status: Bytes(), +ctype: Bytes(), +body: Bytes(), +head: Bool) -> CW:
+  match ct:
+    case Ct{None{}, c}:
       CW{c, w}
-    case Some{+s}:
-      +empty = head || String.is_empty(body)
-      resp.enc(c, w, s, body, empty,
-        K.encode(cn.he(c), resp.fields(status, ct, Bytes.len(body)), True{}))
+    case Ct{Some{s}, c}:
+      answer.enc(c, w, s, status, ctype, body, head || String.is_empty(body))
 
 # the answer to the request on stream sid (a HEAD's without its body)
-def answer(+c: Cn, w: Bytes(), +sid: U32, status: Bytes(), ct: Bytes(), body: Bytes(), head: Bool) -> CW:
-  answer.st(c, w, st.find(cn.sts(c), sid), status, ct, body, head)
+def answer(c: Cn, w: Bytes(), +sid: U32, status: Bytes(), ct: Bytes(), body: Bytes(), head: Bool) -> CW:
+  answer.st(cn.take(c, sid), w, status, ct, body, head)
 
-# Sending what waits (6.9): each stream's body in DATA frames, each at
-# most the peer's SETTINGS_MAX_FRAME_SIZE and within both windows,
-# END_STREAM on the last; a stream whose body is all out is done.
-def avail(+s: St, +csw: Sw, +fmax: Nat) -> Nat:
-  Nat.min(Bytes.len(st.out(s)), Nat.min(sw.up(st.sw(s)), Nat.min(sw.up(csw), fmax)))
-
-type Pst is Data:
-  Pst{s: St, csw: Sw, w: Bytes()}
-
-def pump.st(k: Nat, +n: Nat, +s: St, +csw: Sw, +fmax: Nat, w: Bytes()) -> Pst:
-  match k n:
-    case 0n _:
-      Pst{s, csw, w}
-    case 1n+j 0n:
-      Pst{s, csw, w}
-    case 1n+j 1n+m:
-      +out = st.out(s)
-      +rest = Bytes.drop(out, 1n+m)
-      +s2 = st.w.sw(st.w.out(s, rest), sw.take(st.sw(s), 1n+m))
-      +csw2 = sw.take(csw, 1n+m)
-      pump.st(j, avail(s2, csw2, fmax), s2, csw2, fmax,
-        Bytes.append(w, f.data(st.id(s), String.is_empty(rest) && st.fin(s), Bytes.slice(out, 0n, 1n+m))))
-
-# a stream after its turn: done when its body is all out and END_STREAM
-# went with it
+# What waits on the windows goes when they open: every stream in the
+# table pumped in turn; those done leave it, each giving the budgets
+# back one of each.
 type Pp is Data:
   Pp{csw: Sw, w: Bytes(), sts: List<&2, St>, n: Nat}
 
-def pump.done(csw: Sw, w: Bytes(), s: St, sts: List<&2, St>, +n: Nat, done: Bool) -> Pp:
+def pump.keep.go(csw: Sw, w: Bytes(), s: St, sts: List<&2, St>, +n: Nat, done: Bool) -> Pp:
   match done:
     case True{}:
       Pp{csw, w, sts, 1n+n}
     case False{}:
-      Pp{csw, w, Con{s, sts}, n}
+      Pp{csw, w, st.ins(sts, s), n}
 
-def pump.keep(p: Pst, sts: List<&2, St>, +n: Nat) -> Pp:
+def pump.keep(sts: List<&2, St>, +n: Nat, p: Pn) -> Pp:
   match p:
-    case Pst{+s, csw, w}:
-      pump.done(csw, w, s, sts, n, String.is_empty(st.out(s)) && st.fin(s))
+    case Pn{k, +s, csw, w}:
+      pump.keep.go(csw, w, s, sts, n, st.done(s))
 
 def pump.all(xs: List<&2, St>, +fmax: Nat, p: Pp) -> Pp:
   match xs:
@@ -1689,7 +1882,7 @@ def pump.all(xs: List<&2, St>, +fmax: Nat, p: Pp) -> Pp:
     case Con{+s, t}:
       match p:
         case Pp{+csw, w, sts, n}:
-          pump.all(t, fmax, pump.keep(pump.st(1n+Bytes.len(st.out(s)), avail(s, csw, fmax), s, csw, fmax, w), sts, n))
+          pump.all(t, fmax, pump.keep(sts, n, pump.go(fmax, s, csw, w)))
 
 def bud.times(k: Nat, b: Bud) -> Bud:
   match k:
@@ -1698,10 +1891,14 @@ def bud.times(k: Nat, b: Bud) -> Bud:
     case 1n+j:
       bud.times(j, bud.refill(b))
 
-def pump.fin(+c: Cn, p: Pp) -> CW:
+def pump.fin(rd: Fm.Rd, hd: K.Dec, he: K.Tbl, hup: Bool, gone: Ids, last: U32, blk: Blk, crw: Nat,
+  init: Nat, fmax: Nat, bud: Bud, said: Bool, p: Pp) -> CW:
   match p:
     case Pp{csw, w, sts, n}:
-      CW{cn.w.bud(cn.w.sts(cn.w.csw(c, csw), sts), bud.times(n, cn.bud(c))), w}
+      CW{Cn{rd, hd, he, hup, sts, gone, last, blk, csw, crw, init, fmax, bud.times(n, bud), said}, w}
 
-def flush(+c: Cn, w: Bytes()) -> CW:
-  pump.fin(c, pump.all(cn.sts(c), cn.fmax(c), Pp{cn.csw(c), w, Nil{}, 0n}))
+def flush(c: Cn, w: Bytes()) -> CW:
+  match c:
+    case Cn{rd, hd, he, hup, sts, gone, last, blk, csw, crw, init, +fmax, bud, said}:
+      pump.fin(rd, hd, he, hup, gone, last, blk, crw, init, fmax, bud, said,
+        pump.all(sts, fmax, Pp{csw, w, st.empty(), 0n}))
