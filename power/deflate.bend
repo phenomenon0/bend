@@ -1126,22 +1126,17 @@ type Tok is Data:
   Ref{len: Nat, dist: Nat}
 
 # The bit writer: out, the whole bytes; pend, the bits of the byte being
-# filled (newest first), np of them
+# filled, newest first. The eighth bit fills the byte: out it goes.
 type W is Data:
-  W{out: Bytes(), pend: List<&2, Bool>, np: Nat}
-
-def put.at(out: Bytes(), pend: List<&2, Bool>, np: Nat, full: Bool) -> W:
-  match full:
-    case True{}:
-      W{Bytes.push(out, byte_of(pend)), Nil{}, 0n}
-    case False{}:
-      W{out, pend, 1n+np}
+  W{out: Bytes(), pend: List<&2, Bool>}
 
 # one bit
 def put(w: W, b: Bool) -> W:
   match w:
-    case W{out, pend, +np}:
-      put.at(out, Con{b, pend}, np, Nat.is_eq(np, 7n))
+    case W{out, Con{p6, Con{p5, Con{p4, Con{p3, Con{p2, Con{p1, Con{p0, Nil{}}}}}}}}}:
+      W{Bytes.push(out, byte_of([b, p6, p5, p4, p3, p2, p1, p0])), Nil{}}
+    case W{out, pend}:
+      W{out, Con{b, pend}}
 
 # the low n bits of v, low first: a field, an extra
 def putx(n: Nat, w: W, +v: Nat) -> W:
@@ -1162,22 +1157,22 @@ def putm(+n: Nat, w: W, +c: U32) -> W:
 # zeros to the next byte
 def align(w: W) -> W:
   match w:
-    case W{out, pend, +np}:
-      putx(Nat.mod(Nat.sub(8n, np), 8n), W{out, pend, np}, 0n)
+    case W{out, +pend}:
+      putx(Nat.mod(Nat.sub(8n, List.length(&2, Bool, pend)), 8n), W{out, pend}, 0n)
 
 # bytes as they are, the writer being at a byte
 def put_raw(w: W, +b: Bytes()) -> W:
   match w:
-    case W{out, pend, np}:
-      W{Bytes.append(out, b), pend, np}
+    case W{out, pend}:
+      W{Bytes.append(out, b), pend}
 
 def w_out(w: W) -> Bytes():
   match w:
-    case W{out, pend, np}:
+    case W{out, pend}:
       out
 
 def w_new() -> W:
-  W{"", Nil{}, 0n}
+  W{"", Nil{}}
 
 # The code tables
 # ---------------
@@ -1633,27 +1628,41 @@ def put_dyn_head(w: W, last: Bool, p: Dp) -> W:
 # ------
 
 # one stored block of the k bytes of x from at
-def stored_one(w: W, +x: Bytes(), +at: Nat, +k: Nat, last: Bool) -> W:
+def stored_one(w: W, cur: Bytes(), +k: Nat, last: Bool) -> W:
   put_raw(putx(16n, putx(16n, align(put(put(put(w, last), False{}), False{})), k),
-    Nat.sub(K64(), k)), Bytes.slice(x, at, k))
+    Nat.sub(K64(), k)), cur)
 
-# the len bytes of x from at as stored blocks, the last one last if last
-def stored(n: Nat, +x: Bytes(), +at: Nat, +len: Nat, +last: Bool, w: W, go: Bool) -> W:
-  match n:
-    case 0n:
-      w
-    case 1n+p:
-      match go:
-        case False{}:
-          w
-        case True{}:
-          +k = Nat.min(len, K64())
-          +fin = Nat.is_le(len, K64())
-          stored(p, x, Nat.add(at, k), Nat.sub(len, k), last,
-            stored_one(w, x, at, k, fin && last), Bool.not(fin))
+# stored blocks as they fill: the bytes of the block so far, how many,
+# the writer
+type SS is Data:
+  SS{cur: Bytes(), k: Nat, w: W}
+
+def stored.add.at(full: Bool, cur: Bytes(), +k: Nat, w: W, c: U32) -> SS:
+  match full:
+    case True{}:
+      SS{Bytes.push("", c), 1n, stored_one(w, cur, k, False{})}
+    case False{}:
+      SS{Bytes.push(cur, c), 1n+k, w}
+
+# a byte: into the block, or a full block out and the byte into a new one
+def stored.add(s: SS, c: U32) -> SS:
+  match s:
+    case SS{cur, +k, w}:
+      stored.add.at(Nat.is_eq(k, K64()), cur, k, w, c)
+
+# the bytes of x as stored blocks of 65535 bytes and one of the rest,
+# that one the last if last
+def stored.go(x: Bytes(), last: Bool, s: SS) -> W:
+  match x:
+    case SNil{}:
+      match s:
+        case SS{cur, k, w}:
+          stored_one(w, cur, k, last)
+    case SCon{Chr{c}, t}:
+      stored.go(t, last, stored.add(s, c))
 
 def stored_all(+x: Bytes(), +at: Nat, +len: Nat, last: Bool, w: W) -> W:
-  stored(1n+Nat.div(len, K64()), x, at, len, last, w, True{})
+  stored.go(Bytes.slice(x, at, len), last, SS{"", 0n, w})
 
 def ec_with(ll: Hc, d: Hc, t: EC) -> EC:
   match t:
@@ -2044,7 +2053,7 @@ def lz_end(z: Z) -> W:
 def deflate.at(lz_level: Bool, +x: Bytes(), +lvl: Nat, fx: Bool) -> Bytes():
   match lz_level:
     case False{}:
-      w_out(stored_all(x, 0n, Bytes.len(x), True{}, w_new()))
+      w_out(stored.go(x, True{}, SS{"", 0n, w_new()}))
     case True{}:
       +n = Bytes.len(x)
       w_out(lz_end(lz(1n+n, Z{x, n, level(lvl), ec_fixed(fx), 0n, h_new(), Nil{}, 0n, 0n, 0n,
