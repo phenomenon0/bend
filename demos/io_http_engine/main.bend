@@ -2373,11 +2373,11 @@ def args.done(st: Args) -> IO(Cfg):
 # A reply head for a body of n bytes, and the reply around a body whose
 # size is already known, as a file's is. reply() measures its body;
 # these do not. The type is a byte list from the mime table.
-def reply.n.head(status: Bytes(), ct: List<&2, U32>, n: U32) -> Bytes():
-  Bytes.concat(["HTTP/1.1 ", status, "\r\ncontent-type: ", Bytes.from_list(ct),
+def reply.n.head(status: Bytes(), ct: Bytes(), n: U32) -> Bytes():
+  Bytes.concat(["HTTP/1.1 ", status, "\r\ncontent-type: ", ct,
     "\r\ncontent-length: ", U32.show(n), "\r\nconnection: keep-alive\r\n\r\n"])
 
-def reply.n(status: Bytes(), ct: List<&2, U32>, n: U32, body: Bytes()) -> Bytes():
+def reply.n(status: Bytes(), ct: Bytes(), n: U32, body: Bytes()) -> Bytes():
   Bytes.append(reply.n.head(status, ct, n), body)
 
 # the 405 names the methods that would have worked
@@ -2513,44 +2513,44 @@ def distinct(rs: List<&2, Route>) -> Bool:
 
 # what every connection shares: the configuration and its table
 type Srv is Data:
-  Srv{cfg: Cfg, table: List<&2, Route>}
+  Srv{cfg: Cfg, table: List<&2, Route>, root: Bytes()}
 
 def srv.new(+c: Cfg) -> Srv:
-  Srv{c, routes(c)}
+  Srv{c, routes(c), Bytes.from_list(cfg.root(c))}
 
 def srv.table(s: Srv) -> List<&2, Route>:
   match s:
-    case Srv{c, table}:
+    case Srv{c, table, root}:
       table
 
-def srv.root(s: Srv) -> List<&2, U32>:
+def srv.root(s: Srv) -> Bytes():
   match s:
-    case Srv{c, table}:
-      cfg.root(c)
+    case Srv{c, table, root}:
+      root
 
 def srv.log(s: Srv) -> Bool:
   match s:
-    case Srv{c, table}:
+    case Srv{c, table, root}:
       cfg.log(c)
 
 def srv.idle(s: Srv) -> U32:
   match s:
-    case Srv{c, table}:
+    case Srv{c, table, root}:
       cfg.idle(c)
 
 def srv.conns(s: Srv) -> U32:
   match s:
-    case Srv{c, table}:
+    case Srv{c, table, root}:
       cfg.conns(c)
 
 def srv.grace(s: Srv) -> U32:
   match s:
-    case Srv{c, table}:
+    case Srv{c, table, root}:
       cfg.grace(c)
 
 def srv.head(s: Srv) -> U32:
   match s:
-    case Srv{c, table}:
+    case Srv{c, table, root}:
       cfg.head(c)
 
 # Static files
@@ -2808,9 +2808,6 @@ def mime.name(+e: Bytes()) -> Bytes():
   mime.pick(bytes.eq(e, "pdf"), "application/pdf",
     "application/octet-stream"))))))))))))
 
-def ctype(e: List<&2, U32>) -> List<&2, U32>:
-  Bytes.to_list(mime.name(Bytes.from_list(e)))
-
 # One piece of a reply is bend-wire's L.Seg: bytes as they are, or a
 # file to write when the reply is written (the root, the path under it,
 # the type, and whether only the head is wanted). Fixed routes stay
@@ -2824,17 +2821,18 @@ def miss(head: Bool) -> Bytes():
     case False{}:
       resp.missing()
 
-def page.name(root: List<&2, U32>, +ss: List<&2, List<&2, U32>>, head: Bool) -> L.Seg:
-  L.Page{root, join(ss), ctype(ext.go(last(ss, Nil{}), Nil{})), head}
+def page.name(root: Bytes(), +ss: List<&2, List<&2, U32>>, head: Bool) -> L.Seg:
+  L.Page{root, Bytes.from_list(join(ss)), mime.name(Bytes.from_list(ext.go(last(ss, Nil{}), Nil{}))),
+    head}
 
-def page.of(root: List<&2, U32>, ss: List<&2, List<&2, U32>>, head: Bool) -> L.Seg:
+def page.of(root: Bytes(), ss: List<&2, List<&2, U32>>, head: Bool) -> L.Seg:
   match ss:
     case Nil{}:
-      L.Page{root, bytes("index.html"), bytes("text/html; charset=utf-8"), head}
+      L.Page{root, "index.html", "text/html; charset=utf-8", head}
     case Con{s, t}:
       page.name(root, Con{s, t}, head)
 
-def page.pick(root: List<&2, U32>, may: Maybe<&2, List<&2, List<&2, U32>>>, head: Bool) -> L.Seg:
+def page.pick(root: Bytes(), may: Maybe<&2, List<&2, List<&2, U32>>>, head: Bool) -> L.Seg:
   match may:
     case None{}:
       L.Raw{miss(head)}
@@ -2846,7 +2844,7 @@ def page.pick(root: List<&2, U32>, may: Maybe<&2, List<&2, List<&2, U32>>>, head
 # escapes are not decoded, so an escaped ".." is a name no file has
 # rather than a climb. The name is opened by File.open_under, which
 # follows no symbolic link and opens nothing but a regular file.
-def page(root: List<&2, U32>, +path: List<&2, U32>, head: Bool) -> L.Seg:
+def page(root: Bytes(), +path: List<&2, U32>, head: Bool) -> L.Seg:
   page.pick(root, fnames.of(False{}, path), head)
 
 # The access log: one line per request, what was asked, the status it
@@ -3266,7 +3264,7 @@ def h.mid(p: P) -> Bool:
 def h.shut(sh: Bool, bs: Bytes()) -> Bytes():
   flat.shut(sh, bs)
 
-def h.fhead(ct: List<&2, U32>, n: U32) -> Bytes():
+def h.fhead(ct: Bytes(), n: U32) -> Bytes():
   reply.n.head("200 OK", ct, n)
 
 def h.lnote(note: Bytes(), out: Bytes()) -> String:

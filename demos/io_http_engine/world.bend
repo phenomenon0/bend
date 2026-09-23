@@ -30,7 +30,7 @@ def sim.raw(+ms: U32, may: Maybe<&2, Bytes()>, bs: Bytes(), st: L.Em<WW.World>) 
   WW.sim.raw(~Eng.h.lnote, ms, may, bs, st)
 
 def sim.page(
-  +ms: U32, root: List<&2, U32>, path: List<&2, U32>, ct: List<&2, U32>, head: Bool,
+  +ms: U32, root: Bytes(), path: Bytes(), ct: Bytes(), head: Bool,
   may: Maybe<&2, Bytes()>, sh: Bool, st: L.Em<WW.World>
 ) -> L.Em<WW.World>:
   WW.sim.page(~Eng.h.shut, ~Eng.h.fhead, ~Eng.miss, ~Eng.h.lnote, ~Eng.h.lsize, ms, root, path,

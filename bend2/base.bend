@@ -335,6 +335,15 @@ def File.open_under(root: String, path: String) ->
   import "./effs/file_open_under.c"
   import "./effs/file_open_under.js"
 
+# File.open_under with its fstat, and a file under small bytes read and
+# closed: (size, (mtime in s, (None, its bytes))), or a larger one left
+# open at 0 (Some, ""). Contract (wire/world.bend, fget.ok): opens what
+# open_under opens; a body, when there is one, is at most size bytes.
+def File.get_under(root: String, path: String, small: U32) ->
+  IO(Result<&1, &1, U32 & String, U32 & U32 & Maybe<&1, File> & Bytes()>):
+  import "./effs/file_open_under.c"
+  import "./effs/file_open_under.js"
+
 def File.read(file: File, max: U32) ->
   IO(File & Result<&1, &1, U32 & String, String>):
   import "./effs/file_read.c"

@@ -26,10 +26,105 @@ def net.now(s: Socket) -> IO(Socket & Nat):
 def net.nap(s: Socket, ms: U32) -> IO(Socket):
   IO.bind(Unit, Socket, IO.sleep(ms), u => IO.pure(Socket, s))
 
+# A file as the loop holds it: its size and mtime, and either its whole
+# body (a file under L.page.small(), read and closed by File.get_under,
+# so a small file costs one effect) or the open file. Its size, its read
+# and its close cost no effect when the body is held.
+type Fh is Type:
+  Fh{n: U32, mt: U32, f: Maybe<&1, File>, bs: Bytes()}
+
+def net.got(s: Socket, r: Result<&1, &1, U32 & String, U32 & U32 & Maybe<&1, File> & Bytes()>) ->
+  Socket & Result<&1, &1, U32 & String, Fh>:
+  match r:
+    case Fail{e}:
+      (s, Fail{e})
+    case Done{g}:
+      (n, (mt, (f, bs))) = g
+      (s, Done{Fh{n, mt, f, bs}})
+
 def net.open(s: Socket, root: String, path: String) ->
-  IO(Socket & Result<&1, &1, U32 & String, File>):
-  IO.bind(Result<&1, &1, U32 & String, File>, Socket & Result<&1, &1, U32 & String, File>,
-    File.open_under(root, path), r => IO.pure(Socket & Result<&1, &1, U32 & String, File>, (s, r)))
+  IO(Socket & Result<&1, &1, U32 & String, Fh>):
+  IO.bind(Result<&1, &1, U32 & String, U32 & U32 & Maybe<&1, File> & Bytes()>,
+    Socket & Result<&1, &1, U32 & String, Fh>, File.get_under(root, path, L.page.small()),
+    r => IO.pure(Socket & Result<&1, &1, U32 & String, Fh>, net.got(s, r)))
+
+def fh.size(h: Fh) -> IO(Fh & Result<&1, &1, U32 & String, U32>):
+  match h:
+    case Fh{+n, mt, f, bs}:
+      IO.pure(Fh & Result<&1, &1, U32 & String, U32>, (Fh{n, mt, f, bs}, Done{n}))
+
+def fh.back(n: U32, mt: U32, g: File & Result<&1, &1, U32 & String, Bytes()>) ->
+  Fh & Result<&1, &1, U32 & String, Bytes()>:
+  (f, r) = g
+  (Fh{n, mt, Some{f}, ""}, r)
+
+# a held body is read from where it lies, at most max of it
+def fh.read.go(h: Fh, +max: U32) -> IO(Fh & Result<&1, &1, U32 & String, Bytes()>):
+  match h:
+    case Fh{n, mt, f, +bs}:
+      match f:
+        case None{}:
+          IO.pure(Fh & Result<&1, &1, U32 & String, Bytes()>,
+            (Fh{n, mt, None{}, Bytes.drop(bs, U32.to_nat(max))},
+              Done{Bytes.slice(bs, 0n, U32.to_nat(max))}))
+        case Some{file}:
+          IO.bind(File & Result<&1, &1, U32 & String, Bytes()>,
+            Fh & Result<&1, &1, U32 & String, Bytes()>, File.read_buf(file, max),
+            g => IO.pure(Fh & Result<&1, &1, U32 & String, Bytes()>, fh.back(n, mt, g)))
+
+def fh.sent(n: U32, mt: U32, g: Socket & File & Result<&1, &1, U32 & String, Unit>) ->
+  Socket & Fh & Result<&1, &1, U32 & String, Unit>:
+  (s, fr) = g
+  (f, r) = fr
+  (s, (Fh{n, mt, Some{f}, ""}, r))
+
+# a held body is sent as File.sendfile would send it: len bytes from
+# off, and ENODATA once what it had is out when it has fewer
+def fh.cut(whole: Bool, r: Result<&1, &1, U32 & String, Unit>) -> Result<&1, &1, U32 & String, Unit>:
+  match whole r:
+    case True{} _:
+      r
+    case False{} Done{u}:
+      Fail{(61, "the file ended first")}
+    case False{} Fail{e}:
+      Fail{e}
+
+def fh.put(n: U32, mt: U32, bs: Bytes(), whole: Bool, m: Socket & Result<&1, &1, U32 & String, Unit>) ->
+  Socket & Fh & Result<&1, &1, U32 & String, Unit>:
+  (s, r) = m
+  (s, (Fh{n, mt, None{}, bs}, fh.cut(whole, r)))
+
+def fh.send.go(s: Socket, h: Fh, off: U32, +len: U32, ms: U32) ->
+  IO(Socket & Fh & Result<&1, &1, U32 & String, Unit>):
+  match h:
+    case Fh{n, mt, f, +bs}:
+      match f:
+        case Some{file}:
+          IO.bind(Socket & File & Result<&1, &1, U32 & String, Unit>,
+            Socket & Fh & Result<&1, &1, U32 & String, Unit>, File.sendfile(s, file, off, len, ms),
+            g => IO.pure(Socket & Fh & Result<&1, &1, U32 & String, Unit>, fh.sent(n, mt, g)))
+        case None{}:
+          +part = Bytes.slice(bs, U32.to_nat(off), U32.to_nat(len))
+          IO.bind(Socket & Result<&1, &1, U32 & String, Unit>,
+            Socket & Fh & Result<&1, &1, U32 & String, Unit>, TCP.send_buf_poll(s, part, ms),
+            m => IO.pure(Socket & Fh & Result<&1, &1, U32 & String, Unit>,
+              fh.put(n, mt, bs, Nat.is_eq(Bytes.len(part), U32.to_nat(len)), m)))
+
+def fh.read(h: Fh, max: U32) -> IO(Fh & Result<&1, &1, U32 & String, Bytes()>):
+  fh.read.go(h, max)
+
+def fh.send(s: Socket, h: Fh, off: U32, len: U32, ms: U32) ->
+  IO(Socket & Fh & Result<&1, &1, U32 & String, Unit>):
+  fh.send.go(s, h, off, len, ms)
+
+def fh.close(h: Fh) -> IO(Unit):
+  match h:
+    case Fh{n, mt, f, bs}:
+      match f:
+        case None{}:
+          IO.pure(Unit, Unit{})
+        case Some{file}:
+          File.close(file)
 
 def net.sig(l: Listener) -> IO(Listener & Bool):
   IO.bind(Bool, Listener & Bool, IO.signal_pending(15), b => IO.pure(Listener & Bool, (l, b)))
@@ -43,13 +138,13 @@ def serve(
   ~E: Data, ~P: Data, ~U: Data, ~idle: E -> U32, ~hdms: E -> U32,
   ~plan: E -> Bytes() -> P -> L.Plan<P, U>, ~mid: P -> Bool, ~big: Bytes(),
   ~uplan: U -> Bytes() -> L.Plan<P, U>, ~gap: U32, ~event: U32 -> Bytes(),
-  ~shut: Bool -> Bytes() -> Bytes(), ~fhead: List<&2, U32> -> U32 -> Bytes(),
+  ~shut: Bool -> Bytes() -> Bytes(), ~fhead: Bytes() -> U32 -> Bytes(),
   ~miss: Bool -> Bytes(), ~lnote: Bytes() -> Bytes() -> String,
   ~lsize: Bytes() -> Bytes() -> U32 -> String, +srv: E, p0: P, s: Socket
 ) -> IO(Socket):
-  L.conn.start(~(A => IO(A)), ~IO.pure, ~IO.bind, ~Socket, ~File, ~TCP.poll_buf,
-    ~TCP.send_buf_poll, ~net.now, ~net.nap, ~IO.print_err, ~net.open, ~File.size, ~File.read_buf,
-    ~File.sendfile, ~File.close, ~E, ~P, ~U, ~idle, ~hdms, ~plan, ~mid, ~big, ~uplan, ~gap, ~event,
+  L.conn.start(~(A => IO(A)), ~IO.pure, ~IO.bind, ~Socket, ~Fh, ~TCP.poll_buf,
+    ~TCP.send_buf_poll, ~net.now, ~net.nap, ~IO.print_err, ~net.open, ~fh.size, ~fh.read,
+    ~fh.send, ~fh.close, ~E, ~P, ~U, ~idle, ~hdms, ~plan, ~mid, ~big, ~uplan, ~gap, ~event,
     ~shut, ~fhead, ~miss, ~lnote, ~lsize, srv, p0, s)
 
 # The accept loop
