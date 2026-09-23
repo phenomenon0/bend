@@ -626,6 +626,39 @@ def fopen.ok(k: Name, r: Result<&1, &1, U32 & String, Unit>) -> Bool:
     case Climbs{}:
       Result.is_fail(&1, &1, U32 & String, Unit, r)
 
+# What File.get_under answered of a file, as data: the size it gave,
+# whether it held the body (and closed the file) or left the file open,
+# and how many bytes the body had.
+type Got is Data:
+  Got{n: U32, held: Bool, len: Nat}
+
+def fget.body(+small: U32, +size: U32, g: Got) -> Bool:
+  match g:
+    case Got{+n, held, +len}:
+      match held:
+        case True{}:
+          U32.is_eq(n, size) && U32.is_lt(size, small) && Nat.is_eq(len, U32.to_nat(size))
+        case False{}:
+          U32.is_eq(n, size) && Nat.is_eq(len, 0n)
+
+# File.get_under(root, path, small), with the file size bytes long: it
+# opens what open_under opens (fopen.ok), and answers a regular file's
+# size, with its body whole when it is under small bytes, or no body and
+# the file open (at or past small, or a small file whose bytes the page
+# cache does not hold, which the loop then reads as a large one). Its
+# answer may be one it read up to a second before (the memo, below):
+# conform.bend's fget.memo checks a changed file is seen after that.
+def fget.ok(k: Name, +small: U32, +size: U32, r: Result<&1, &1, U32 & String, Got>) -> Bool:
+  match k r:
+    case Plain{} Done{g}:
+      fget.body(small, size, g)
+    case Plain{} Fail{e}:
+      False{}
+    case _ Done{g}:
+      False{}
+    case _ Fail{e}:
+      True{}
+
 # File.read_buf(f, max) with left bytes left in the file: at most max
 # bytes and at most what is left, and none only at the end
 def fread.ok(max: U32, +left: Nat, r: Result<&1, &1, U32 & String, Bytes()>) -> Bool:

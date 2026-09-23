@@ -100,6 +100,30 @@ MUTANTS = [
       bind(S & F & Result<&1, &1, U32 & String, Unit>, Em<S>, fsend(s, f, 0, n, ms), g =>
         page.fsent(~M, ~pure, ~bind, ~S, ~F, ~fclose, g))
     case Done{u}:'''),
+  # the file a path names: page_is_spec holds the fast path to
+  # fnames.of, and file_head_is_built the heads kept ready to the built
+  ('the fast path serves a dotfile', MAIN,
+    '''      fname.byte(c) && Bool.not(U32.is_eq(c, 46))''',
+    '''      fname.byte(c)'''),
+  ('the fast path takes an empty segment ("//")', MAIN,
+    '''      fname.byte(c) && Bool.not(U32.is_eq(c, 46))''',
+    '''      (U32.is_eq(c, 47) || fname.byte(c)) && Bool.not(U32.is_eq(c, 46))'''),
+  ('the fast path takes a trailing "/"', MAIN,
+    '''    case SNil{}:
+      Bool.not(st)''',
+    '''    case SNil{}:
+      True{}'''),
+  ('the fast path keeps the path\'s "/"', MAIN,
+    '''L.Page{root, Bytes.drop(path, 1n),''',
+    '''L.Page{root, path,'''),
+  ('the fast path reads a type across a "/"', MAIN,
+    '''ext.buf(r, ext.step(cur, c, U32.is_eq(c, 46) || U32.is_eq(c, 47)))''',
+    '''ext.buf(r, ext.step(cur, c, U32.is_eq(c, 46)))'''),
+  ('a head kept ready names another type', MAIN,
+    '''    Mime{"png", "image/png",
+      "HTTP/1.1 200 OK\\r\\ncontent-type: image/png\\r\\ncontent-length: "},''',
+    '''    Mime{"png", "image/png",
+      "HTTP/1.1 200 OK\\r\\ncontent-type: image/jpeg\\r\\ncontent-length: "},'''),
 ]
 
 # the framing's mutants: (what, file, before, after)

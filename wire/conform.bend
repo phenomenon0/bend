@@ -571,6 +571,74 @@ def read.file(r: Result<&1, &1, U32 & String, File>) -> IO(U32):
         c : File & U32 <- read.more("fread.end", 0n, b)
         read.close(c)
 
+# File.get_under: what it answered, as W.Got, with a file it left open
+# closed
+def get.close(may: Maybe<&1, File>) -> IO(Bool):
+  match may:
+    case None{}:
+      IO.pure(Bool, True{})
+    case Some{f}:
+      do IO<Bool>:
+        File.close(f)
+        return False{}
+
+def get.seen.go(g: U32 & U32 & Maybe<&1, File> & Bytes()) -> IO(Result<&1, &1, U32 & String, W.Got>):
+  (n, rest) = g
+  (mt, fb) = rest
+  (may, bs) = fb
+  do IO<Result<&1, &1, U32 & String, W.Got>>:
+    held : Bool <- get.close(may)
+    return Done{W.Got{n, held, Bytes.len(bs)}}
+
+def get.seen(r:Result<&1, &1, U32 & String, U32 & U32 & Maybe<&1, File> & Bytes()>) ->
+  IO(Result<&1, &1, U32 & String, W.Got>):
+  match r:
+    case Fail{e}:
+      IO.pure(Result<&1, &1, U32 & String, W.Got>, Fail{e})
+    case Done{g}:
+      get.seen.go(g)
+
+def get.judge(name: String, k: W.Name, +small: U32, +size: U32, r: Result<&1, &1, U32 & String, W.Got>) ->
+  IO(U32):
+  match r:
+    case Fail{e}:
+      (+code, msg) = e
+      verdict(name, W.fget.ok(k, small, size, Fail{(code, msg)}), "fail " ++ U32.show(code))
+    case Done{g}:
+      match g:
+        case W.Got{+n, +held, +len}:
+          verdict(name, W.fget.ok(k, small, size, Done{W.Got{n, held, len}}),
+            U32.show(n) ++ " bytes, " ++ Bool.pick(String, held, "held", "open") ++ ", a body of "
+              ++ Nat.show(len))
+
+def get.case(root: String, name: String, path: String, k: W.Name, +small: U32, +size: U32, f: U32) ->
+  IO(U32):
+  do IO<U32>:
+    r  : Result<&1, &1, U32 & String, U32 & U32 & Maybe<&1, File> & Bytes()> <- File.get_under(root, path, small)
+    o  : Result<&1, &1, U32 & String, W.Got> <- get.seen(r)
+    x  : U32 <- get.judge(name, k, small, size, o)
+    return (f + x : U32)
+
+# a file rewritten to another size is seen once the memo's second is up
+def get.put.done(w: File & Result<&1, &1, U32 & String, Unit>) -> IO(Unit):
+  (f, u) = w
+  File.close(f)
+
+def get.put(r: Result<&1, &1, U32 & String, File>, data: String) -> IO(Unit):
+  match r:
+    case Fail{e}:
+      IO.pure(Unit, Unit{})
+    case Done{f}:
+      IO.bind(File & Result<&1, &1, U32 & String, Unit>, Unit, File.write(f, data), get.put.done)
+
+def get.memo(+root: String, f: U32) -> IO(U32):
+  do IO<U32>:
+    a : U32 <- get.case(root, "fget.memo.read", "m.txt", W.Plain{}, 16384, 3, f)
+    o : Result<&1, &1, U32 & String, File> <- File.open(root ++ "/m.txt", "w")
+    get.put(o, "grown")
+    IO.sleep(1100)
+    get.case(root, "fget.memo.seen", "m.txt", W.Plain{}, 16384, 5, a)
+
 def files(+root: String, f: U32) -> IO(U32):
   do IO<U32>:
     f1 : U32 <- open.case(root, "fopen.plain", "a.txt", W.Plain{}, f)
@@ -578,9 +646,19 @@ def files(+root: String, f: U32) -> IO(U32):
     f3 : U32 <- open.case(root, "fopen.link", "link", W.Linked{}, f2)
     f4 : U32 <- open.case(root, "fopen.dir", "sub", W.Dir{}, f3)
     f5 : U32 <- open.case(root, "fopen.climb", "../conform-outside.txt", W.Climbs{}, f4)
+    f6 : U32 <- open.case(root, "fopen.dirlink", "dlink/x.txt", W.Linked{}, f5)
     r  : Result<&1, &1, U32 & String, File> <- File.open_under(root, "a.txt")
     x  : U32 <- read.file(r)
-    return (f5 + x : U32)
+    g1 : U32 <- get.case(root, "fget.plain", "a.txt", W.Plain{}, 16384, 6, (f6 + x : U32))
+    g2 : U32 <- get.case(root, "fget.large", "big.bin", W.Plain{}, 16384, 16777216, g1)
+    g3 : U32 <- get.case(root, "fget.absent", "missing.txt", W.Absent{}, 16384, 0, g2)
+    g4 : U32 <- get.case(root, "fget.link", "link", W.Linked{}, 16384, 0, g3)
+    g5 : U32 <- get.case(root, "fget.dirlink", "dlink/x.txt", W.Linked{}, 16384, 0, g4)
+    g6 : U32 <- get.case(root, "fget.dir", "sub", W.Dir{}, 16384, 0, g5)
+    g7 : U32 <- get.case(root, "fget.climb", "../conform-outside.txt", W.Climbs{}, 16384, 0, g6)
+    g8 : U32 <- get.case(root, "fget.inner.climb", "sub/../a.txt", W.Climbs{}, 16384, 0, g7)
+    g9 : U32 <- get.case(root, "fget.dotfile", ".hidden", W.Plain{}, 16384, 4, g8)
+    get.memo(root, g9)
 
 # Connects
 # ========

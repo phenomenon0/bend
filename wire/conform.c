@@ -152,6 +152,17 @@ static void files(const char* root) {
   if (symlink("a.txt", p) != 0) perror("symlink");
   snprintf(p, sizeof(p), "%s/sub", root);
   mkdir(p, 0755);
+  // a link to a directory, a file under it, a dotfile, and the file the
+  // memo case rewrites (3 bytes, then 5)
+  snprintf(p, sizeof(p), "%s/sub/x.txt", root);
+  f = fopen(p, "w"); fputs("x\n", f); fclose(f);
+  snprintf(p, sizeof(p), "%s/dlink", root);
+  unlink(p);
+  if (symlink("sub", p) != 0) perror("symlink");
+  snprintf(p, sizeof(p), "%s/.hidden", root);
+  f = fopen(p, "w"); fputs("dot\n", f); fclose(f);
+  snprintf(p, sizeof(p), "%s/m.txt", root);
+  f = fopen(p, "w"); fputs("abc", f); fclose(f);
   snprintf(q, sizeof(q), "%s/../conform-outside.txt", root);
   f = fopen(q, "w"); fputs("out\n", f); fclose(f);
   snprintf(p, sizeof(p), "%s/big.bin", root);
