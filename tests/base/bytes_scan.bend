@@ -1,6 +1,7 @@
-# The scanner's four: Bytes.get (256 past the end), Bytes.push, Bytes.span
-# (how many bytes from i lie in [lo, hi)) and Bytes.find_byte (the first
-# offset of a byte at or after i, the end when absent). Natively C and JS
+# The scanner's reads: Bytes.get (256 past the end), Bytes.push, Bytes.span
+# (how many bytes from i lie in [lo, hi)), Bytes.find_byte (the first
+# offset of a byte at or after i, the end when absent) and Bytes.find_any
+# (the same for any of four bytes). Natively C and JS
 # read the packed cells in place and push writes into spare room; the
 # interpreter runs their Bend bodies, so the four lanes agreeing is the
 # natives equal to the spec. The edges: the empty buffer, i at and past
@@ -79,6 +80,11 @@ def main() -> IO(Unit):
     IO.print(n(Bytes.find_byte(w, 0n, 128512)) ++ " " ++ n(Bytes.find_byte(w, 0n, 98)) ++ " "
       ++ n(Bytes.find_byte(v, 0n, 44)) ++ " " ++ n(Bytes.find_byte(v, 2n, 120)) ++ " "
       ++ n(Bytes.find_byte(f, 0n, 5)) ++ " " ++ n(Bytes.find_byte(f, 250n, 250)))
+    IO.print(n(Bytes.find_any(r, 0n, 44, 34, 13, 10)) ++ " " ++ n(Bytes.find_any(r, 0n, 120, 57, 99, 98))
+      ++ " " ++ n(Bytes.find_any(r, 11n, 120, 57, 99, 98)) ++ " " ++ n(Bytes.find_any(r, 3n, 0, 0, 0, 0))
+      ++ " " ++ n(Bytes.find_any(r, 99n, 44, 44, 44, 44)) ++ " " ++ n(Bytes.find_any(e, 0n, 1, 2, 3, 4))
+      ++ " " ++ n(Bytes.find_any(w, 0n, 300, 128512, 99, 99)) ++ " " ++ n(Bytes.find_any(v, 1n, 120, 44, 0, 0))
+      ++ " " ++ n(Bytes.find_any(f, 0n, 5, 1000, 4, 6)))
     IO.print(Bytes.append(r, "!") ++ " " ++ n(Bytes.len(r)) ++ " " ++ v)
 
 #|256 256 | 99 100 256 256 | 256
@@ -93,4 +99,5 @@ def main() -> IO(Unit):
 #|2,2,4 3,0,8 0,0,9 0,1,12 0,2,15
 #|4 4 8 15 20 15 0
 #|1 2 3 5 221 256
+#|4 3 11 15 99 0 1 3 38
 #|12ab,345,,x9,cd! 15 345,,x

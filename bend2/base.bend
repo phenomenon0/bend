@@ -3419,7 +3419,7 @@ def Bytes.get_slice(b, i, k, m):
       String.get(String.drop(b, i), k), String.get(b, Nat.add(i, k)),
       Bytes.get.take(String.drop(b, i), k, m), Bytes.get.drop(b, i, k)))
 
-# The scanner's four. Natively get, span and find_byte borrow the buffer:
+# The scanner's reads. Natively get, span and the finds borrow the buffer:
 # the call reads the packed cells where they lie, and neither shares nor
 # drops the buffer, builds a view or a Maybe; push writes into an unshared
 # buffer's spare room. The bodies below are what the laws are about.
@@ -3541,6 +3541,38 @@ def Bytes.find_byte.go(s, x):
 # (Bytes.len(b), from any i up to it)
 def Bytes.find_byte(b: Bytes(), +i: Nat, x: U32) -> Nat:
   Nat.add(i, Bytes.find_byte.go(String.drop(b, i), x))
+
+# w, x, y or z: the test a byte class of four names is written with
+def Bytes.find_any.in(+c: U32, w: U32, x: U32, y: U32, z: U32) -> Bool:
+  Bool.or(U32.is_eq(c, w), Bool.or(U32.is_eq(c, x), Bool.or(U32.is_eq(c, y), U32.is_eq(c, z))))
+
+law Bytes.find_any.go:
+  for s: String
+  for +w: U32
+  for +x: U32
+  for +y: U32
+  for +z: U32
+  Nat
+
+def Bytes.find_any.at(hit: Bool, t: String, +w: U32, +x: U32, +y: U32, +z: U32) -> Nat:
+  match hit:
+    case True{}:
+      0n
+    case False{}:
+      1n+Bytes.find_any.go(t, w, x, y, z)
+
+def Bytes.find_any.go(s, w, x, y, z):
+  match s:
+    case SNil{}:
+      0n
+    case SCon{Chr{c}, t}:
+      Bytes.find_any.at(Bytes.find_any.in(c, w, x, y, z), t, w, x, y, z)
+
+# the first offset at or after i of any of the four bytes w, x, y, z (name
+# one twice for fewer), as a delimiter, a quote or a line end ends a
+# field; absent, the end
+def Bytes.find_any(b: Bytes(), +i: Nat, w: U32, x: U32, y: U32, z: U32) -> Nat:
+  Nat.add(i, Bytes.find_any.go(String.drop(b, i), w, x, y, z))
 
 # Regex
 # -----

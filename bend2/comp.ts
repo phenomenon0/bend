@@ -414,7 +414,7 @@ const OPERATIONS: Record<string, Intr> = Object.setPrototypeOf({
   // Map.bit borrows the key and returns it: the tree order and the 33-bit key
   // protocol of the reference definition, O(1) on C, an endpoint scan on JS.
   map_bit: { C: ["$0", "str_bit_peek(e, $0, $1)"], JS: "map_bit($0, $1)" },
-  // Bytes: get, span and find_byte borrow the buffer (peek): the call site
+  // Bytes: get, span and the finds borrow the buffer (peek): the call site
   // neither shares nor drops it, so a scan loop over one buffer touches no
   // count; push appends in place into an unshared buffer's spare room.
   bytes_get: { C: "str_byte_peek(e, $0, $1)", peek: [0], JS: "bytes_get($0, $1)" },
@@ -423,6 +423,8 @@ const OPERATIONS: Record<string, Intr> = Object.setPrototypeOf({
     JS: "bytes_span($0, $1, $2, $3)" },
   bytes_find_byte: { C: "str_find_byte_peek(e, $0, $1, $2)", peek: [0],
     JS: "bytes_find_byte($0, $1, $2)" },
+  bytes_find_any: { C: "str_find_any_peek(e, $0, $1, $2, $3, $4, $5)", peek: [0],
+    JS: "bytes_find_any($0, $1, $2, $3, $4, $5)" },
   array_new: {
     call: true,
     JS:   "array_new($0, $1)",
@@ -898,6 +900,15 @@ function bytes_span(s, i, lo, hi) {
     j += c > 0xffff ? 2 : 1; n++;
   }
   return BigInt(n);
+}
+function bytes_find_any(s, i, w, x, y, z) {
+  let j = str_offset(s, i), n = 0;
+  while (j < s.length) {
+    const c = s.codePointAt(j);
+    if (c === w || c === x || c === y || c === z) { break; }
+    j += c > 0xffff ? 2 : 1; n++;
+  }
+  return i + BigInt(n);
 }
 function bytes_find_byte(s, i, x) {
   let j = str_offset(s, i), n = 0;
@@ -5382,6 +5393,24 @@ INLINE Nat str_find_byte_peek(Env e, Term s, Nat i, u32 x) {
 #endif
   } else {
     while (j < end && str_cell(e.mem, l, nar, j) != x) { j++; }
+  }
+  return j - p.off;
+}
+
+// i plus how many cells from i come before the first of w, x, y, z
+INLINE Nat str_find_any_peek(Env e, Term s, Nat i, u32 w, u32 x, u32 y, u32 z) {
+  StrParts p = str_peek(e, s);
+  if (i >= p.len) { return i; }
+  Loc l = term_peek(e, p.data);
+  u32 nar = str_nar(p), j = p.off + (u32)i, end = p.off + p.len;
+  if (nar == 2) {
+    DEV u8* b = (DEV u8*)(e.mem + l);
+    while (j < end && b[j] != w && b[j] != x && b[j] != y && b[j] != z) { j++; }
+  } else {
+    for (; j < end; j++) {
+      u32 c = str_cell(e.mem, l, nar, j);
+      if (c == w || c == x || c == y || c == z) { break; }
+    }
   }
   return j - p.off;
 }
