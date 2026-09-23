@@ -77,6 +77,7 @@ allow(/^tests\/[a-z]+\/[a-z0-9_]+\.bend$/, 16000);
 allow(/^tests\/[a-z]+\/[a-z0-9_]+\.(c|js)$/, 8500);
 allow(/^tests\/(f64|strings|codex|kernels)\/[a-zA-Z0-9_.-]+$/, 16000);
 allow(/^tests\/(regex|parser|lint|translate|translator|power|kernels|decode)\/[A-Za-z0-9_\/.-]+$/, 16000);
+allow("power/csv_proof.bend", 96000);
 allow(/^power\/[a-z0-9_]+\.bend$/, 64000);
 allow(/^docs\/omen\/[A-Za-z0-9_\/.-]+$/, 16000);
 allow(/^kernel\/(Cargo\.toml|Cargo\.lock|\.gitignore|corpus\.sh)$/, 2000);

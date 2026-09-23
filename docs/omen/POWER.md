@@ -63,6 +63,7 @@ Parsing and text:
 |---|---|---|
 | `json.bend` | JSON as an event stream: one token per `next()`, a span into the caller's own Bytes, never a tree and never a copy | CPython `json`, `py_scanstring` and `NUMBER_RE` **†** |
 | `grammar.bend` | a parser state that is a *value*, plus the set of next bytes it will accept — lane 5's machine with the document taken out, so it forks | XGrammar's mask; CPython `json` as the acceptance authority **†** |
+| `csv.bend` | RFC 4180 and its dialect knobs as a streaming reader over Base's `Bytes()` -- a field that lies in one read is a view of it -- and a minimal-quoting writer; budgets make hostile input a refusal at a byte offset. `csv_spec.bend` is RFC 4180's ABNF read over a whole input; `csv_laws.bend` states, and `csv_proof.bend` proves, chunking, the Bytes bridge, the reader is the grammar for every dialect, input and split into reads, and the writer's round trip (`tests/power/csv_mutants.py`: ten mutants, each fails the proof) | CPython `csv` **†** |
 | `text.bend` | identity over bytes: UTF-8 with every code point's offset, grapheme cluster boundaries, and a normalizer that hands back the map from normalized text to the original's byte ranges | UAX #29, CPython `unicodedata` **†** |
 
 Content addressing:
