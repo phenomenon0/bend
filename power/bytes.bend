@@ -63,7 +63,10 @@ def set.if(b: Bytes(), i: U32, x: U32, ok: Bool) -> Bytes() & Bool:
 def set(+b: Bytes(), +i: U32, x: U32) -> Bytes() & Bool:
   set.if(b, i, x, Nat.is_lt(U32.to_nat(i), Bytes.len(b)))
 
-# push: in place while the buffer has one owner and room, else it doubles
+# push: in place while the buffer has one owner and room, else it doubles.
+# (String.pad_end to one past the length writes into the room without the
+# one-byte buffer and is 1.6x faster on C, but its JS twin measures the length
+# every call, which makes a filling loop quadratic there.)
 def push(b: Bytes(), x: U32) -> Bytes():
   Bytes.append(b, one(x))
 
@@ -77,6 +80,10 @@ def pop.if(+b: Bytes(), +n: Nat, empty: Bool) -> Bytes() & Maybe<&2, U32>:
 def pop(+b: Bytes()) -> Bytes() & Maybe<&2, U32>:
   +n = Bytes.len(b)
   pop.if(b, n, Nat.is_eq(n, 0n))
+
+# slice: a view of n bytes from at, clamped to the end; nothing is copied
+def slice(b: Bytes(), +at: U32, +n: U32) -> Bytes():
+  Bytes.slice(b, U32.to_nat(at), U32.to_nat(n))
 
 # truncate: a view of the first k bytes; nothing moves
 def truncate(b: Bytes(), +k: U32) -> Bytes():
