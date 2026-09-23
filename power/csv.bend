@@ -55,6 +55,7 @@
 # its delimiter, reads by that order; the writer's round trip is only
 # promised for a sane dialect (see fits).
 import Base
+import ../wire/reader.bend as Wr
 
 type Dialect is Data:
   Dialect{delim: U32, quote: U32, crlf: Bool, lf: Bool, cr: Bool, header: Bool,
@@ -374,23 +375,21 @@ def step(+d: Dialect, p: P, +c: U32) -> P:
     case P{m, fl, cur, out, w, pos}:
       step.at(d, m, cls(d, c), c, fl, cur, out, w, pos)
 
-# feed: the machine over a byte list, one byte at a time. The state that
-# comes out is the state to feed the next read, so a document split
-# anywhere reads as the document whole.
+# The walk is the reader kit's (wire/reader.bend): the step as the kit
+# takes it, the dialect beside the state, and feed over it. The state
+# that comes out is the state to feed the next read, so a document
+# split anywhere reads as the document whole; the kit proves it once
+# for every reader.
+def wstep(d: Dialect, p: P, c: U32) -> P:
+  step(d, p, c)
+
+# feed: the machine over a byte list, one byte at a time.
 def feed(+d: Dialect, bs: List<&2, U32>, p: P) -> P:
-  match bs:
-    case Nil{}:
-      p
-    case Con{c, t}:
-      feed(d, t, step(d, p, c))
+  Wr.feed(~Dialect, ~P, ~wstep, d, bs, p)
 
 # The same walk over Bytes, a byte at a time.
 def feed_buf.slow(+d: Dialect, s: Bytes(), p: P) -> P:
-  match s:
-    case SNil{}:
-      p
-    case SCon{Chr{c}, t}:
-      feed_buf.slow(d, t, step(d, p, c))
+  Wr.feed_buf.slow(~Dialect, ~P, ~wstep, d, s, p)
 
 # The walk feed_buf runs. In an unquoted field (q False) a run is the
 # bytes that are neither quote, delimiter, CR nor LF; between quotes (q
@@ -499,25 +498,17 @@ def adv(+d: Dialect, +s: Bytes(), p: P) -> P & Bytes():
 
 # the rest of a walk the fuel ran out on, a byte at a time
 def feed_buf.last(+d: Dialect, q: P & Bytes()) -> P:
-  (p, s) = q
-  feed_buf.slow(d, s, p)
+  Wr.feed_buf.last(~Dialect, ~P, ~wstep, d, q)
 
-# n bounds the moves; every move takes at least one byte, so a walk
-# over n bytes never runs out
-def feed_buf.go(+d: Dialect, n: Nat, q: P & Bytes()) -> P:
-  match n:
-    case 0n:
-      feed_buf.last(d, q)
-    case 1n+m:
-      (p, s) = q
-      match s:
-        case SNil{}:
-          p
-        case SCon{h, t}:
-          feed_buf.go(d, m, adv(d, SCon{h, t}, p))
+# The block walk is the kit's, moving by adv: the kit bounds the moves
+# by the read's length (every move takes at least one byte), and proves
+# the walk is feed given that adv lands where stepping its bytes does
+# (csv_proof.bend's lem.adv).
+def wadv(d: Dialect, s: Bytes(), p: P) -> P & Bytes():
+  adv(d, s, p)
 
 def feed_buf(+d: Dialect, +s: Bytes(), p: P) -> P:
-  feed_buf.go(d, Bytes.len(s), (p, s))
+  Wr.feed_buf(~Dialect, ~P, ~wstep, ~wadv, d, s, p)
 
 # The end of input
 # ================

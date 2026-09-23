@@ -7,7 +7,8 @@
 #   the reads    -- however the input is cut into reads, the parse is
 #                   the same (feed_split, feed_buf_split), and the walk
 #                   that cuts runs from a read is the byte machine
-#                   (feed_buf_is_feed);
+#                   (feed_buf_is_feed); these, and bad_feeds, are the
+#                   reader kit's laws (wire/reader.bend) at Csv.step;
 #   the grammar  -- for every dialect and every input the reader agrees
 #                   with csv_spec.bend, the whole-input reading of RFC
 #                   4180's ABNF (csv_sim), over one read and over any
@@ -18,6 +19,7 @@
 #                   carry (round_trip), and the reference accepts it
 #                   (show_valid).
 import Base
+import ../wire/reader.bend as Wr
 import ./csv.bend as Csv
 import ./csv_spec.bend as Spec
 
@@ -90,12 +92,9 @@ law csv_sim_buf:
 
 # ... and for a document however its reads were cut: the reader fed
 # each read in turn reads what the grammar reads of them all, joined.
+# (the reader kit's walk over a list of reads, wire/reader.bend)
 def reads(+d: Csv.Dialect, rs: List<&2, Bytes()>, p: Csv.P) -> Csv.P:
-  match rs:
-    case Nil{}:
-      p
-    case Con{r, t}:
-      reads(d, t, Csv.feed_buf(d, r, p))
+  Wr.reads(~Csv.Dialect, ~Csv.P, ~Csv.wstep, ~Csv.wadv, d, rs, p)
 
 law csv_sim_reads:
   for +d: Csv.Dialect

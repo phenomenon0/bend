@@ -2,7 +2,7 @@
 # The csv laws are not vacuous: each mutant below breaks power/csv.bend the
 # way a real reader or writer goes wrong, and power/csv_proof.bend must then
 # fail to check. Every mutant is applied to a copy of power/ in a temporary
-# directory (the checked-in files never change), its snippet must occur exactly
+# directory, beside a copy of wire/ (the checked-in files never change), its snippet must occur exactly
 # once, and the mutated csv.bend must still check on its own -- a mutant that
 # does not type is a broken test, not a killed one. The csv fixture is run on
 # the copy too, to show which mutants the oracle alone would also catch.
@@ -23,7 +23,7 @@ CRFLUSH = '''def crflush(+d: Dialect, p: P) -> P:
           P{m, fl, cur, out, w, pos}
 
 def feed_buf(+d: Dialect, +s: Bytes(), p: P) -> P:
-  crflush(d, feed_buf.go(d, Bytes.len(s), (p, s)))'''
+  crflush(d, Wr.feed_buf(~Dialect, ~P, ~wstep, ~wadv, d, s, p))'''
 
 MUTANTS = [
   ('a quote inside an unquoted field is kept as data', [(
@@ -38,7 +38,7 @@ MUTANTS = [
       P{Quo{acc, left}, fl, cur, out, w, 1n+pos}''')]),
   ('a CRLF cut between reads: the CR ending a read is taken as a whole line end', [(
     '''def feed_buf(+d: Dialect, +s: Bytes(), p: P) -> P:
-  feed_buf.go(d, Bytes.len(s), (p, s))''', CRFLUSH)]),
+  Wr.feed_buf(~Dialect, ~P, ~wstep, ~wadv, d, s, p)''', CRFLUSH)]),
   ('the writer does not quote a field holding the delimiter', [(
     '''def is_o(k: K) -> Bool:
   match k:
@@ -111,6 +111,7 @@ def main():
       for f in FILES:
         shutil.copy(os.path.join(ROOT, 'power', f), os.path.join(tmp, 'power', f))
       shutil.copy(fixture, os.path.join(tmp, 'tests', 'power', 'csv.bend'))
+      shutil.copytree(os.path.join(ROOT, 'wire'), os.path.join(tmp, 'wire'))
       src_path = os.path.join(tmp, 'power', 'csv.bend')
       src = open(src_path).read()
       missing = [a for a, b in edits if src.count(a) != 1]
