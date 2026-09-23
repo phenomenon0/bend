@@ -183,6 +183,19 @@ law dist_codes:
   {D.DEXT() == ref.exts(30n, True{}, 0n) : List<&2, Nat>} &
   {u32s(D.DBASE()) == ref.bases(30n, True{}, 0n, 1) : List<&2, U32>}
 
+# LAW: the tables deflate.bend writes out are what they stand for: the
+# fixed codes' tables and codes built from their lengths, and the length
+# and distance tables above.
+law tables_written:
+  {D.some_or(D.table(D.fixed_ll_lens(), False{})) == D.FLL() : String} &
+  {D.some_or(D.table(D.fixed_d_lens(), False{})) == D.FD() : String} &
+  {D.hc(D.fixed_ll_lens()) == D.Hc{D.HLLC(), D.HLLL()} : D.Hc} &
+  {D.hc(D.fixed_d_lens()) == D.Hc{D.HDC(), D.HDL()} : D.Hc} &
+  {D.str_of(D.LBASE(), "") == D.LBS() : String} &
+  {D.str_of(D.LEXT(), "") == D.LXS() : String} &
+  {D.str_of(D.DBASE(), "") == D.DBS() : String} &
+  {D.str_of(D.DEXT(), "") == D.DXS() : String}
+
 # Huffman codes
 # =============
 #

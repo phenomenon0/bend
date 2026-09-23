@@ -2992,6 +2992,9 @@ def Laws.length_codes():
 def Laws.dist_codes():
   ({==}, {==})
 
+def Laws.tables_written():
+  ({==}, {==}, {==}, {==}, {==}, {==}, {==}, {==})
+
 # The codes and the fixed tables, closed
 def Laws.canonical():
   ({==}, {==}, {==})
