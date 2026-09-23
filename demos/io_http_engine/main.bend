@@ -2678,54 +2678,33 @@ def ext.go(bs: List<&2, U32>, cur: List<&2, U32>) -> List<&2, U32>:
     case Con{+c, t}:
       ext.go(t, ext.step(cur, c, U32.is_eq(c, 46)))
 
-type Mime is Data:
-  Mime{ext: List<&2, U32>, name: List<&2, U32>}
-
-def mimes() -> List<&2, Mime>:
-  [Mime{bytes("html"), bytes("text/html; charset=utf-8")},
-   Mime{bytes("htm"), bytes("text/html; charset=utf-8")},
-   Mime{bytes("css"), bytes("text/css; charset=utf-8")},
-   Mime{bytes("js"), bytes("application/javascript; charset=utf-8")},
-   Mime{bytes("json"), bytes("application/json")},
-   Mime{bytes("txt"), bytes("text/plain; charset=utf-8")},
-   Mime{bytes("svg"), bytes("image/svg+xml")},
-   Mime{bytes("png"), bytes("image/png")},
-   Mime{bytes("jpg"), bytes("image/jpeg")},
-   Mime{bytes("jpeg"), bytes("image/jpeg")},
-   Mime{bytes("gif"), bytes("image/gif")},
-   Mime{bytes("ico"), bytes("image/x-icon")},
-   Mime{bytes("wasm"), bytes("application/wasm")},
-   Mime{bytes("pdf"), bytes("application/pdf")}]
-
-def mime.one.go(name: List<&2, U32>, ok: Bool) -> Maybe<&2, List<&2, U32>>:
+# A file's type, by the bytes after its last '.'. The names are literals,
+# static blocks: finding one allocates nothing, and only the one found is
+# made the byte list a page's head is built from.
+def mime.pick(ok: Bool, a: Bytes(), b: Bytes()) -> Bytes():
   match ok:
     case True{}:
-      Some{name}
+      a
     case False{}:
-      None{}
+      b
 
-def mime.one(mi: Mime, e: List<&2, U32>) -> Maybe<&2, List<&2, U32>>:
-  match mi:
-    case Mime{x, name}:
-      mime.one.go(name, beq(x, e, True{}))
-
-def mime.keep(acc: Maybe<&2, List<&2, U32>>, mi: Mime, e: List<&2, U32>) -> Maybe<&2, List<&2, U32>>:
-  match acc:
-    case Some{n}:
-      Some{n}
-    case None{}:
-      mime.one(mi, e)
-
-def mime.go(ms: List<&2, Mime>, +e: List<&2, U32>, acc: Maybe<&2, List<&2, U32>>) -> Maybe<&2, List<&2, U32>>:
-  match ms:
-    case Nil{}:
-      acc
-    case Con{mi, t}:
-      mime.go(t, e, mime.keep(acc, mi, e))
+def mime.name(+e: Bytes()) -> Bytes():
+  mime.pick(bytes.eq(e, "html") || bytes.eq(e, "htm"), "text/html; charset=utf-8",
+  mime.pick(bytes.eq(e, "css"), "text/css; charset=utf-8",
+  mime.pick(bytes.eq(e, "js"), "application/javascript; charset=utf-8",
+  mime.pick(bytes.eq(e, "json"), "application/json",
+  mime.pick(bytes.eq(e, "txt"), "text/plain; charset=utf-8",
+  mime.pick(bytes.eq(e, "svg"), "image/svg+xml",
+  mime.pick(bytes.eq(e, "png"), "image/png",
+  mime.pick(bytes.eq(e, "jpg") || bytes.eq(e, "jpeg"), "image/jpeg",
+  mime.pick(bytes.eq(e, "gif"), "image/gif",
+  mime.pick(bytes.eq(e, "ico"), "image/x-icon",
+  mime.pick(bytes.eq(e, "wasm"), "application/wasm",
+  mime.pick(bytes.eq(e, "pdf"), "application/pdf",
+    "application/octet-stream"))))))))))))
 
 def ctype(e: List<&2, U32>) -> List<&2, U32>:
-  Maybe.default(&2, List<&2, U32>, mime.go(mimes(), e, None{}),
-    bytes("application/octet-stream"))
+  Bytes.to_list(mime.name(Bytes.from_list(e)))
 
 # One piece of a reply is bend-wire's L.Seg: bytes as they are, or a
 # file to write when the reply is written (the root, the path under it,
