@@ -35,7 +35,6 @@ import ../../wire/client.bend as C
 import ../../wire/pool.bend as P
 import ../../wire/http1/resp.bend as R
 import ../io_http_engine/main.bend as Eng
-import ../io_http_engine/spec.bend as Spec
 import ./core.bend as X
 
 # The peer's address, for X-Forwarded-For
@@ -369,8 +368,8 @@ def upstream(+srv: Srv, +head: Bool, idem: Bool, +req: Bytes()) -> IO(Ans):
 
 # RFC 9110 9.2.2
 def idempotent(+m: Bytes()) -> Bool:
-  Spec.eq(m, "GET") || Spec.eq(m, "HEAD") || Spec.eq(m, "PUT") || Spec.eq(m, "DELETE")
-    || Spec.eq(m, "OPTIONS") || Spec.eq(m, "TRACE")
+  Eng.bytes.eq(m, "GET") || Eng.bytes.eq(m, "HEAD") || Eng.bytes.eq(m, "PUT") || Eng.bytes.eq(m, "DELETE")
+    || Eng.bytes.eq(m, "OPTIONS") || Eng.bytes.eq(m, "TRACE")
 
 # The client
 # ==========
@@ -420,16 +419,30 @@ def answer(+srv: Srv, +closing: Bool, v10: Bool, a: Ans, cs: Socket, more: Socke
     case AStale{}:
       refuse(srv, cs, "502 Bad Gateway")
 
-def serve.head(+srv: Srv, +ip: Bytes(), m: Maybe<&2, X.Head>, r: Eng.Req, cs: Socket,
-  more: Socket -> IO(Socket)) -> IO(Socket):
-  match m r:
-    case Some{X.Head{+hm, target, +v10, fs}} Eng.Req{meth, path, body, +close, +ws, key}:
-      IO.bind(Ans, Socket,
-        upstream(srv, Spec.eq(hm, "HEAD"), idempotent(hm),
-          X.ser(X.msg.of(srv.fwd(srv, ip), X.Head{hm, target, v10, fs}, body))),
-        a => answer(srv, close || ws, v10, a, cs, more))
-    case None{} _:
+def head.v10(m: Maybe<&2, X.Head>) -> Bool:
+  match m:
+    case Some{h}:
+      match h:
+        case X.Head{meth, target, v10, fs}:
+          v10
+    case None{}:
+      False{}
+
+def serve.msg(+srv: Srv, mm: Maybe<&2, X.Msg>, +v10: Bool, +closing: Bool, cs: Socket, more: Socket -> IO(Socket)) ->
+  IO(Socket):
+  match mm:
+    case Some{+msg}:
+      match msg:
+        case X.Msg{+hm, target, fs, body, framed}:
+          IO.bind(Ans, Socket, upstream(srv, Eng.bytes.eq(hm, "HEAD"), idempotent(hm), X.ser(msg)),
+            a => answer(srv, closing, v10, a, cs, more))
+    case None{}:
       refuse(srv, cs, "400 Bad Request")
+
+# the request forwarded is core.bend's fwd.at of the head read again
+def serve.head(+srv: Srv, +ip: Bytes(), +m: Maybe<&2, X.Head>, +r: Eng.Req, cs: Socket,
+  more: Socket -> IO(Socket)) -> IO(Socket):
+  serve.msg(srv, X.fwd.at(srv.fwd(srv, ip), m, r), head.v10(m), Eng.req.close(r) || Eng.req.ws(r), cs, more)
 
 # one request: forwarded, answered, and then more
 def serve(+srv: Srv, +ip: Bytes(), t: X.Took, cs: Socket, more: Socket -> IO(Socket)) -> IO(Socket):
@@ -444,7 +457,7 @@ def expects.low(xs: List<&2, Bytes()>) -> List<&2, Bytes()>:
     case Nil{}:
       Nil{}
     case Con{x, t}:
-      Con{Spec.lows(x), expects.low(t)}
+      Con{Eng.lows(x), expects.low(t)}
 
 def expects.of(m: Maybe<&2, X.Head>) -> List<&2, Bytes()>:
   match m:

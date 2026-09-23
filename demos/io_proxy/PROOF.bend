@@ -1873,3 +1873,220 @@ def fa.go(bs: List<&2, U32>, st: Laws.PStp, +acc: List<&2, Laws.PTook>, +pre: Li
 
 def Laws.frames_agree(bs):
   fa.go(bs, Laws.PGo{Laws.w0(), Nil{}}, Nil{}, Nil{}, ({==}, {==}))
+
+# Forwarding
+# ==========
+
+def bytes.rt(b: Bytes()) -> {Bytes.from_list(Bytes.to_list(b)) == b : Bytes()}:
+  match b:
+    case SNil{}:
+      {==}
+    case SCon{Chr{c}, t}:
+      Equal.cong(Bytes(), Bytes(), x => SCon{Chr{c}, x}, Bytes.from_list(Bytes.to_list(t)), t, bytes.rt(t))
+
+def wire.ref(+w: X.Fwd, ts: List<&2, X.Took>) -> {X.wire(w, ts) == Laws.ref.wire(w, Laws.tooks.of(ts)) : Bytes()}:
+  match ts:
+    case Nil{}:
+      {==}
+    case Con{t, r}:
+      match t:
+        case X.Took{+raw, q}:
+          %Equal.sym(Bytes(), Bytes.from_list(Bytes.to_list(raw)), raw, bytes.rt(raw)) :
+            {X.wire(w, Con{X.Took{raw, q}, r}) ==
+              X.wire.at(X.fwd.at(w, X.head.of(_), q), Laws.ref.wire(w, Laws.tooks.of(r))) : Bytes()}
+          %wire.ref(w, r) :
+            {X.wire(w, Con{X.Took{raw, q}, r}) == X.wire.at(X.fwd.at(w, X.head.of(raw), q), _) : Bytes()}
+          {==}
+
+def conns.took(c: Laws.Conn, f: Laws.PScanned, h: Laws.Conns(c, f)) ->
+  {Laws.tooks.of(Laws.conn.took(c)) == Laws.scanned.took(f) : List<&2, Laws.PTook>}:
+  match c f:
+    case Laws.Conn{ts, t} Laws.PScanned{us, u}:
+      (h1, h2) = h
+      h1
+
+def Laws.forward_canonical(w, rs):
+  Equal.trans(Bytes(), X.wire(w, Laws.conn.took(Laws.reads(rs))),
+    Laws.ref.wire(w, Laws.tooks.of(Laws.conn.took(Laws.reads(rs)))),
+    Laws.ref.wire(w, Laws.scanned.took(Laws.frame(Bytes.to_list(Bytes.concat(rs))))),
+    wire.ref(w, Laws.conn.took(Laws.reads(rs))),
+    Equal.cong(List<&2, Laws.PTook>, Bytes(), us => Laws.ref.wire(w, us), Laws.tooks.of(Laws.conn.took(Laws.reads(rs))),
+      Laws.scanned.took(Laws.frame(Bytes.to_list(Bytes.concat(rs)))),
+      conns.took(Laws.reads(rs), Laws.frame(Bytes.to_list(Bytes.concat(rs))), Laws.scan_is_spec(rs))))
+
+# A refusal forwards nothing
+# --------------------------
+
+def is.nil.q(xs: List<&2, Eng.Req>) -> Bool:
+  match xs:
+    case Nil{}:
+      True{}
+    case Con{h, t}:
+      False{}
+
+def treqs.nil(us: List<&2, Laws.PTook>, h: {Laws.took.reqs(us) == Nil{} : List<&2, Eng.Req>}) ->
+  {us == Nil{} : List<&2, Laws.PTook>}:
+  match us:
+    case Nil{}:
+      {==}
+    case Con{t, r}:
+      match t:
+        case Laws.PTook{raw, q}:
+          no({Con{Laws.PTook{raw, q}, r} == Nil{} : List<&2, Laws.PTook>},
+            Equal.cong(List<&2, Eng.Req>, Bool, is.nil.q, Con{q, Laws.took.reqs(r)}, Nil{}, h))
+
+def is.nil.p(xs: List<&2, Laws.PTook>) -> Bool:
+  match xs:
+    case Nil{}:
+      True{}
+    case Con{h, t}:
+      False{}
+
+def tooks.nil(ts: List<&2, X.Took>, h: {Laws.tooks.of(ts) == Nil{} : List<&2, Laws.PTook>}) ->
+  {ts == Nil{} : List<&2, X.Took>}:
+  match ts:
+    case Nil{}:
+      {==}
+    case Con{t, r}:
+      no({Con{t, r} == Nil{} : List<&2, X.Took>},
+        Equal.cong(List<&2, Laws.PTook>, Bool, is.nil.p, Con{Laws.took.of(t), Laws.tooks.of(r)}, Nil{}, h))
+
+def agrees.nil(f: Laws.PScanned, ag: Laws.Agrees(f, Spec.Frames{Nil{}, Spec.Refused{}})) ->
+  {Laws.scanned.took(f) == Nil{} : List<&2, Laws.PTook>}:
+  match f:
+    case Laws.PScanned{us, u}:
+      (h1, h2) = ag
+      treqs.nil(us, h1)
+
+def Laws.refused_not_forwarded(rs, r):
+  tooks.nil(Laws.conn.took(Laws.reads(rs)),
+    Equal.trans(List<&2, Laws.PTook>, Laws.tooks.of(Laws.conn.took(Laws.reads(rs))),
+      Laws.scanned.took(Laws.frame(Bytes.to_list(Bytes.concat(rs)))), Nil{},
+      conns.took(Laws.reads(rs), Laws.frame(Bytes.to_list(Bytes.concat(rs))), Laws.scan_is_spec(rs)),
+      agrees.nil(Laws.frame(Bytes.to_list(Bytes.concat(rs))),
+        %r : Laws.Agrees(Laws.frame(Bytes.to_list(Bytes.concat(rs))), _)
+        Laws.frames_agree(Bytes.to_list(Bytes.concat(rs))))))
+
+# The hop's fields
+# ----------------
+
+def clean.app.at(x: Bool, -c1: Bool, -c2: Bool, -c12: Bool, e: {c12 == (c1 && c2) : Bool}) ->
+  {(x && c12) == (x && c1 && c2) : Bool}:
+  match x:
+    case True{}:
+      e
+    case False{}:
+      {==}
+
+def clean.app(~m: @+n: Bytes() -> Bool, +ns: List<&2, Bytes()>, a: List<&2, X.Field>, -b: List<&2, X.Field>) ->
+  {Laws.clean(~m, ns, List.append(&2, X.Field, a, b)) == (Laws.clean(~m, ns, a) && Laws.clean(~m, ns, b)) : Bool}:
+  match a:
+    case Nil{}:
+      {==}
+    case Con{f, t}:
+      match f:
+        case X.Field{+n, v}:
+          clean.app.at(m(n) || Bool.not(X.hop(ns, n)), Laws.clean(~m, ns, t), Laws.clean(~m, ns, b),
+            Laws.clean(~m, ns, List.append(&2, X.Field, t, b)), clean.app(~m, ns, t, b))
+
+# a field kept is not a hop's
+def and3.mid(a: Bool, b: Bool, -c: Bool, h: {(a && Bool.not(b) && c) == True{} : Bool}) -> {b == False{} : Bool}:
+  match a b:
+    case True{} True{}:
+      no({True{} == False{} : Bool}, h)
+    case True{} False{}:
+      {==}
+    case False{} True{}:
+      no({True{} == False{} : Bool}, h)
+    case False{} False{}:
+      {==}
+
+def and2.fst(a: Bool, -c: Bool, h: {(Bool.not(a) && c) == True{} : Bool}) -> {a == False{} : Bool}:
+  match a:
+    case True{}:
+      no({True{} == False{} : Bool}, h)
+    case False{}:
+      {==}
+
+def or.true(a: Bool) -> {(a || True{}) == True{} : Bool}:
+  match a:
+    case True{}:
+      {==}
+    case False{}:
+      {==}
+
+# a field kept, then the rest clean
+def kept.clean(~m: @+n: Bytes() -> Bool, +ns: List<&2, Bytes()>, +n: Bytes(), hb: {X.hop(ns, n) == False{} : Bool},
+  -rest: List<&2, X.Field>, ih: {Laws.clean(~m, ns, rest) == True{} : Bool}) ->
+  {((m(n) || Bool.not(X.hop(ns, n))) && Laws.clean(~m, ns, rest)) == True{} : Bool}:
+  %Equal.sym(Bool, X.hop(ns, n), False{}, hb) :
+    {((m(n) || Bool.not(_)) && Laws.clean(~m, ns, rest)) == True{} : Bool}
+  %Equal.sym(Bool, (m(n) || True{}), True{}, or.true(m(n))) :
+    {(_ && Laws.clean(~m, ns, rest)) == True{} : Bool}
+  ih
+
+def ends.at(~m: @+n: Bytes() -> Bool, +ns: List<&2, Bytes()>, k: Bool, +n: Bytes(), v: Bytes(), -t: List<&2, X.Field>,
+  hk: {X.keeps(ns, n) == k : Bool}, ih: {Laws.clean(~m, ns, X.ends(ns, t)) == True{} : Bool}) ->
+  {Laws.clean(~m, ns, X.ends.put(k, X.Field{n, v}, X.ends(ns, t))) == True{} : Bool}:
+  match k:
+    case True{}:
+      kept.clean(~m, ns, n,
+        and3.mid(X.is.other(Eng.fld.of(n)), X.hop(ns, n), Bool.not(X.own(n)), hk), X.ends(ns, t), ih)
+    case False{}:
+      ih
+
+# LEMMA: what ends keeps is clean
+def ends.clean(~m: @+n: Bytes() -> Bool, +ns: List<&2, Bytes()>, fs: List<&2, X.Field>) ->
+  {Laws.clean(~m, ns, X.ends(ns, fs)) == True{} : Bool}:
+  match fs:
+    case Nil{}:
+      {==}
+    case Con{f, t}:
+      match f:
+        case X.Field{+n, v}:
+          ends.at(~m, ns, X.keeps(ns, n), n, v, t, {==}, ends.clean(~m, ns, t))
+
+def rends.at(~m: @+n: Bytes() -> Bool, +ns: List<&2, Bytes()>, +len: Bool, k: Bool, +n: Bytes(), v: Bytes(),
+  -t: List<&2, X.Field>, hk: {X.rkeeps(ns, len, n) == k : Bool},
+  ih: {Laws.clean(~m, ns, X.rends(ns, len, t)) == True{} : Bool}) ->
+  {Laws.clean(~m, ns, X.ends.put(k, X.Field{n, v}, X.rends(ns, len, t))) == True{} : Bool}:
+  match k:
+    case True{}:
+      kept.clean(~m, ns, n,
+        and2.fst(X.hop(ns, n), len || Bool.not(Eng.bytes.eq(n, "content-length")), hk), X.rends(ns, len, t), ih)
+    case False{}:
+      ih
+
+def rends.clean(~m: @+n: Bytes() -> Bool, +ns: List<&2, Bytes()>, +len: Bool, fs: List<&2, X.Field>) ->
+  {Laws.clean(~m, ns, X.rends(ns, len, fs)) == True{} : Bool}:
+  match fs:
+    case Nil{}:
+      {==}
+    case Con{f, t}:
+      match f:
+        case X.Field{+n, v}:
+          rends.at(~m, ns, len, X.rkeeps(ns, len, n), n, v, t, {==}, rends.clean(~m, ns, len, t))
+
+def and.true(a: Bool, -b: Bool, ha: {a == True{} : Bool}, hb: {b == True{} : Bool}) -> {(a && b) == True{} : Bool}:
+  %Equal.sym(Bool, a, True{}, ha) : {(_ && b) == True{} : Bool}
+  hb
+
+def Laws.hop_by_hop_removed(w, h, body):
+  match w h:
+    case X.Fwd{host, proto, +ip, via} X.Head{meth, target, v10, +fs}:
+      +t4 : List<&2, X.Field> = [X.Field{"x-forwarded-for", X.join(List.append(&2, Bytes(), X.values("x-forwarded-for", fs), [ip]))},
+        X.Field{"x-forwarded-proto", proto}, X.Field{"x-forwarded-host", X.first(X.values("host", fs), "")},
+        X.Field{"via", via}]
+      %Equal.sym(Bool, Laws.clean(~Laws.own5, X.conn.names(fs), List.append(&2, X.Field, X.ends(X.conn.names(fs), fs), t4)),
+        (Laws.clean(~Laws.own5, X.conn.names(fs), X.ends(X.conn.names(fs), fs)) && Laws.clean(~Laws.own5, X.conn.names(fs), t4)),
+        clean.app(~Laws.own5, X.conn.names(fs), X.ends(X.conn.names(fs), fs), t4)) :
+        {_ == True{} : Bool}
+      and.true(Laws.clean(~Laws.own5, X.conn.names(fs), X.ends(X.conn.names(fs), fs)),
+        Laws.clean(~Laws.own5, X.conn.names(fs), t4), ends.clean(~Laws.own5, X.conn.names(fs), fs), {==})
+
+def Laws.hop_by_hop_removed_rsp(via, ns, len, fs):
+  %Equal.sym(Bool, Laws.clean(~Laws.is.via, ns, List.append(&2, X.Field, X.rends(ns, len, fs), [X.Field{"via", via}])),
+    (Laws.clean(~Laws.is.via, ns, X.rends(ns, len, fs)) && Laws.clean(~Laws.is.via, ns, [X.Field{"via", via}])),
+    clean.app(~Laws.is.via, ns, X.rends(ns, len, fs), [X.Field{"via", via}])) : {_ == True{} : Bool}
+  and.true(Laws.clean(~Laws.is.via, ns, X.rends(ns, len, fs)), Laws.clean(~Laws.is.via, ns, [X.Field{"via", via}]),
+    rends.clean(~Laws.is.via, ns, len, fs), {==})

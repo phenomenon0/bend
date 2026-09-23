@@ -253,3 +253,101 @@ law frames_agree:
 law scan_is_spec:
   for +rs: List<&2, Bytes()>
   Conns(reads(rs), frame(Bytes.to_list(Bytes.concat(rs))))
+
+# Forwarding
+# ==========
+#
+# What goes upstream for the reference framing's requests: each one's
+# head read again from its bytes, the request rebuilt (core.bend's
+# fwd.at and ser, the very functions the proxy runs).
+
+def ref.fwd(+w: X.Fwd, t: PTook) -> Maybe<&2, X.Msg>:
+  match t:
+    case PTook{raw, r}:
+      X.fwd.at(w, X.head.of(Bytes.from_list(raw)), r)
+
+def ref.wire(+w: X.Fwd, us: List<&2, PTook>) -> Bytes():
+  match us:
+    case Nil{}:
+      ""
+    case Con{t, r}:
+      X.wire.at(ref.fwd(w, t), ref.wire(w, r))
+
+def conn.took(c: Conn) -> List<&2, X.Took>:
+  match c:
+    case Conn{ts, t}:
+      ts
+
+def scanned.took(f: PScanned) -> List<&2, PTook>:
+  match f:
+    case PScanned{us, u}:
+      us
+
+# LAW: the upstream reads frame()'s requests, rebuilt. For every stream,
+# however cut, the bytes the proxy sends upstream are exactly the
+# serialization of the requests the reference framing takes from the
+# stream whole -- which frames_agree says are frame()'s -- each rebuilt
+# from its own head and framed body, in order: no byte the client sent
+# reaches the upstream but through what the spec read.
+law forward_canonical:
+  for +w: X.Fwd
+  for +rs: List<&2, Bytes()>
+  {X.wire(w, conn.took(reads(rs))) == ref.wire(w, scanned.took(frame(Bytes.to_list(Bytes.concat(rs))))) : Bytes()}
+
+# LAW: a stream refused before its first request is whole sends nothing
+# upstream: the refusal comes before any byte goes out.
+law refused_not_forwarded:
+  for +rs: List<&2, Bytes()>
+  for r: {Spec.frame(Bytes.to_list(Bytes.concat(rs))) == Spec.Frames{Nil{}, Spec.Refused{}} : Spec.Frames}
+  {conn.took(reads(rs)) == Nil{} : List<&2, X.Took>}
+
+# The hop's fields
+# ================
+
+def own5(+n: Bytes()) -> Bool:
+  Eng.bytes.eq(n, "host") || Eng.bytes.eq(n, "x-forwarded-for") || Eng.bytes.eq(n, "x-forwarded-proto")
+    || Eng.bytes.eq(n, "x-forwarded-host") || Eng.bytes.eq(n, "via")
+
+def is.via(+n: Bytes()) -> Bool:
+  Eng.bytes.eq(n, "via")
+
+# no field is a hop's, save the ones this proxy writes for its own hop
+def clean(~mine: @+n: Bytes() -> Bool, +ns: List<&2, Bytes()>, fs: List<&2, X.Field>) -> Bool:
+  match fs:
+    case Nil{}:
+      True{}
+    case Con{f, t}:
+      match f:
+        case X.Field{+n, v}:
+          (mine(n) || Bool.not(X.hop(ns, n))) && clean(~mine, ns, t)
+
+def msg.fields(m: X.Msg) -> List<&2, X.Field>:
+  match m:
+    case X.Msg{meth, target, fs, body, framed}:
+      fs
+
+def head.fields(h: X.Head) -> List<&2, X.Field>:
+  match h:
+    case X.Head{meth, target, v10, fs}:
+      fs
+
+# LAW: no hop-by-hop field is forwarded. Whatever the client sent, the
+# request that goes upstream carries none of Connection, Keep-Alive,
+# Proxy-Connection, TE, Transfer-Encoding, Upgrade, Trailer, nor any
+# field the client's Connection named -- but for the five this proxy
+# writes itself (Host, X-Forwarded-For, -Proto, -Host, Via), whatever a
+# Connection said of them.
+law hop_by_hop_removed:
+  for +w: X.Fwd
+  for +h: X.Head
+  for body: Bytes()
+  {clean(~own5, X.conn.names(head.fields(h)), msg.fields(X.msg.of(w, h, body))) == True{} : Bool}
+
+# LAW: and none is sent back: a response carries none of the upstream's
+# hop-by-hop fields, nor any its Connection named, but the Via it adds.
+law hop_by_hop_removed_rsp:
+  for +via: Bytes()
+  for +ns: List<&2, Bytes()>
+  for +len: Bool
+  for +fs: List<&2, X.Field>
+  {clean(~is.via, ns, List.append(&2, X.Field, X.rends(ns, len, fs), [X.Field{"via", via}])) == True{} : Bool}

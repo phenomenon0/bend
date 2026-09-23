@@ -507,6 +507,36 @@ def ser(m: Msg) -> Bytes():
       Bytes.concat([meth, " ", target, " HTTP/1.1\r\n", fields.ser(fs), clen.ser(framed, body), "\r\n",
         body])
 
+# What goes upstream for the requests taken: each one's head read again
+# from its bytes and the request rebuilt from it and the framed body; a
+# request whose head does not read again (never, for bytes the reader
+# took) goes nowhere, and neither does any after it.
+def fwd.at(+w: Fwd, m: Maybe<&2, Head>, r: Eng.Req) -> Maybe<&2, Msg>:
+  match m r:
+    case Some{h} Eng.Req{meth, path, body, close, ws, key}:
+      Some{msg.of(w, h, body)}
+    case None{} _:
+      None{}
+
+def fwd(+w: Fwd, t: Took) -> Maybe<&2, Msg>:
+  match t:
+    case Took{+raw, r}:
+      fwd.at(w, head.of(raw), r)
+
+def wire.at(m: Maybe<&2, Msg>, rest: Bytes()) -> Bytes():
+  match m:
+    case Some{x}:
+      Bytes.append(ser(x), rest)
+    case None{}:
+      ""
+
+def wire(+w: Fwd, ts: List<&2, Took>) -> Bytes():
+  match ts:
+    case Nil{}:
+      ""
+    case Con{t, r}:
+      wire.at(fwd(w, t), wire(w, r))
+
 # The response sent back
 # ======================
 #
