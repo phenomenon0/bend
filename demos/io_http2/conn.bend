@@ -281,8 +281,8 @@ def digits.all(s: Bytes()) -> Bool:
     case SCon{Chr{+c}, t}:
       U32.is_le(48, c) && U32.is_le(c, 57) && digits.all(t)
 
-def beq(+a: Bytes(), b: Bytes()) -> Bool:
-  String.eq(a, b)
+def beq(+a: Bytes(), +b: Bytes()) -> Bool:
+  K.beq(a, b)
 
 # the pseudo-headers a request may carry (8.3.1)
 type Ps is Data:

@@ -53,6 +53,8 @@ MUTANTS = [
   ('a string past the cap is kept', HP,
     'str.start(root, fo, h, t, out, sz, lim, v, Nat.is_le(v, lim.l(lim)))',
     'str.start(root, fo, h, t, out, sz, lim, v, True{})', 'refuse_str_big'),
+  ('the encoder\'s static index names the wrong entry', HP,
+    '"user-agent", 58n', '"user-agent", 57n', 'static_index'),
   # frames
   ('a frame one byte past the maximum is taken', FM,
     'step.len(Nat.is_lt(max, n), n,', 'step.len(Nat.is_lt(1n+max, n), n,', 'frame_sim'),

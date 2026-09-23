@@ -361,6 +361,37 @@ law c6_enc:
   {encs([rsp1(), rsp2(), rsp3()], K.tbl.new(256n), True{}) ==
     ([V.c61(), V.c62(), V.c63()], K.Tbl{rsp.tbl(), 256n}) : List<&2, List<&2, U32>> & K.Tbl}
 
+# The encoder finds a field in the static table through an index by
+# name (hpack.bend's static.names), not a scan: for every entry, for
+# every name with a value the table does not hold, for names that the
+# index's key cannot tell from one of the table's, and for names not in
+# it, the index finds what the scan of the table finds.
+def probes(fs: List<&2, K.Fld>) -> List<&2, K.Fld>:
+  match fs:
+    case Nil{}:
+      [K.Fld{"", ""}, K.Fld{"dxte", ""}, K.Fld{":pxth", "/"}, K.Fld{"x-bend", "1"}]
+    case Con{f, t}:
+      match f:
+        case K.Fld{+n, v}:
+          Con{K.Fld{n, v}, Con{K.Fld{n, "?"}, probes(t)}}
+
+def by.index(fs: List<&2, K.Fld>) -> List<&2, K.Hit>:
+  match fs:
+    case Nil{}:
+      Nil{}
+    case Con{f, t}:
+      Con{K.static.find(f), by.index(t)}
+
+def by.scan(fs: List<&2, K.Fld>) -> List<&2, K.Hit>:
+  match fs:
+    case Nil{}:
+      Nil{}
+    case Con{f, t}:
+      Con{K.find(K.static(), 1n, f, K.Hit{None{}, None{}}), by.scan(t)}
+
+law static_index:
+  {by.index(probes(K.static())) == by.scan(probes(K.static())) : List<&2, K.Hit>}
+
 # Frames (RFC 9113 3.4, 4.1, 4.2)
 # ===============================
 

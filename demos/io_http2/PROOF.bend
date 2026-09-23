@@ -621,6 +621,9 @@ def Laws.c5_enc():
 def Laws.c6_enc():
   {==}
 
+def Laws.static_index():
+  {==}
+
 # Frames
 # ======
 

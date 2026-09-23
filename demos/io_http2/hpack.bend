@@ -724,8 +724,96 @@ def block(+root: H.Ht, d: Dec, bs: List<&2, U32>) -> Blk:
 # The encoder
 # ===========
 
-def beq(a: Bytes(), b: Bytes()) -> Bool:
-  String.eq(a, b)
+# two byte strings equal, read where they are
+def beq.go(k: Nat, +a: Bytes(), +b: Bytes(), +i: Nat, same: Bool) -> Bool:
+  match k same:
+    case _ False{}:
+      False{}
+    case 0n True{}:
+      True{}
+    case 1n+j True{}:
+      beq.go(j, a, b, 1n+i, U32.is_eq(Bytes.get(a, i), Bytes.get(b, i)))
+
+def beq(+a: Bytes(), +b: Bytes()) -> Bool:
+  beq.go(Bytes.len(a), a, b, 0n, Nat.is_eq(Bytes.len(a), Bytes.len(b)))
+
+# The static table by name, for the encoder: a search tree on a name's
+# length, first byte and last byte (which tell every name in the table
+# apart), each node the name, the index of its first entry and the
+# values of its entries in order. LAWS.bend (static_index) checks it
+# against the table, entry by entry.
+type Sx is Data:
+  SxNil{}
+  SxAt{key: U32, name: Bytes(), at: Nat, vals: List<&2, Bytes()>, lo: Sx, hi: Sx}
+
+def static.names() -> Sx:
+  SxAt{685428, "user-agent", 58n, [""],
+    SxAt{419188, "expect", 35n, [""],
+      SxAt{289899, "link", 45n, [""],
+        SxAt{288103, "etag", 34n, [""],
+          SxAt{226913, "via", 60n, [""],
+            SxAt{221541, "age", 21n, [""], SxNil{}, SxNil{}},
+            SxAt{287845, "date", 33n, [""], SxNil{}, SxNil{}}},
+          SxAt{288884, "host", 38n, [""],
+            SxAt{288365, "from", 37n, [""], SxNil{}, SxNil{}},
+            SxNil{}}},
+        SxAt{356965, "range", 50n, [""],
+          SxAt{342632, ":path", 4n, ["/", "/index.html"],
+            SxAt{292473, "vary", 59n, [""], SxNil{}, SxNil{}},
+            SxAt{352631, "allow", 22n, [""], SxNil{}, SxNil{}}},
+          SxAt{418661, "cookie", 32n, [""],
+            SxAt{418164, "accept", 19n, [""], SxNil{}, SxNil{}},
+            SxNil{}}}},
+      SxAt{488050, "referer", 51n, [""],
+        SxAt{473715, ":status", 8n, ["200", "204", "206", "304", "400", "404", "500"],
+          SxAt{473700, ":method", 2n, ["GET", "POST"],
+            SxAt{422770, "server", 54n, [""], SxNil{}, SxNil{}},
+            SxAt{473701, ":scheme", 6n, ["http", "https"], SxNil{}, SxNil{}}},
+          SxAt{488040, "refresh", 52n, [""],
+            SxAt{484723, "expires", 36n, [""], SxNil{}, SxNil{}},
+            SxNil{}}},
+        SxAt{552046, "location", 46n, [""],
+          SxAt{551272, "if-match", 39n, [""],
+            SxAt{551269, "if-range", 42n, [""], SxNil{}, SxNil{}},
+            SxNil{}},
+          SxAt{684901, "set-cookie", 55n, [""],
+            SxAt{670329, ":authority", 1n, [""], SxNil{}, SxNil{}},
+            SxNil{}}}}},
+    SxAt{1007975, "accept-encoding", 16n, ["gzip, deflate"],
+      SxAt{877420, "cache-control", 24n, [""],
+        SxAt{876910, "authorization", 23n, [""],
+          SxAt{811877, "content-type", 31n, [""],
+            SxAt{750194, "retry-after", 53n, [""], SxNil{}, SxNil{}},
+            SxAt{814451, "max-forwards", 47n, [""], SxNil{}, SxNil{}}},
+          SxAt{877413, "content-range", 30n, [""],
+            SxAt{876915, "accept-ranges", 18n, [""], SxNil{}, SxNil{}},
+            SxNil{}}},
+        SxAt{942452, "accept-charset", 15n, [""],
+          SxAt{879716, "last-modified", 44n, [""],
+            SxAt{878952, "if-none-match", 41n, [""], SxNil{}, SxNil{}},
+            SxNil{}},
+          SxAt{1007973, "accept-language", 17n, [""],
+            SxAt{942952, "content-length", 28n, [""], SxNil{}, SxNil{}},
+            SxNil{}}}},
+      SxAt{1208421, "proxy-authenticate", 48n, [""],
+        SxAt{1079141, "www-authenticate", 61n, [""],
+          SxAt{1074023, "content-encoding", 26n, [""],
+            SxAt{1074021, "content-language", 27n, [""], SxNil{}, SxNil{}},
+            SxAt{1074030, "content-location", 29n, [""], SxNil{}, SxNil{}}},
+          SxAt{1143911, "transfer-encoding", 57n, [""],
+            SxAt{1141093, "if-modified-since", 40n, [""], SxNil{}, SxNil{}},
+            SxNil{}}},
+        SxAt{1273966, "proxy-authorization", 49n, [""],
+          SxAt{1272165, "if-unmodified-since", 43n, [""],
+            SxAt{1270638, "content-disposition", 25n, [""], SxNil{}, SxNil{}},
+            SxNil{}},
+          SxAt{1794414, "access-control-allow-origin", 20n, [""],
+            SxAt{1667961, "strict-transport-security", 56n, [""], SxNil{}, SxNil{}},
+            SxNil{}}}}}}
+
+def name.key(+n: Bytes()) -> U32:
+  U32.add(U32.shln(U32.from_nat(Bytes.len(n)), 16n),
+    U32.add(U32.shln(Bytes.get(n, 0n), 8n), Bytes.get(n, Nat.sub(Bytes.len(n), 1n))))
 
 # the first index (from i on) whose entry is exactly f, and the first
 # whose name is f's
@@ -747,6 +835,58 @@ def hit.one(h: Hit, +i: Nat, e: Fld, f: Fld) -> Hit:
   match h e f:
     case Hit{full, name} Fld{+en, ev} Fld{+fn, fv}:
       Hit{hit.or(full, i, beq(en, fn) && beq(ev, fv)), hit.or(name, i, beq(en, fn))}
+
+# where a name's key sits against a node's
+def sx.cmp(+t: Sx, +k: U32) -> Cmp:
+  match t:
+    case SxNil{}:
+      EQ{}
+    case SxAt{key, name, at, vals, lo, hi}:
+      U32.cmp(k, key)
+
+def sx.head(+vs: List<&2, Bytes()>, +v: Bytes()) -> Bool:
+  match vs:
+    case Nil{}:
+      False{}
+    case Con{+x, t}:
+      beq(x, v)
+
+# the index of the first of a name's values that is v (hit: the head is)
+def sx.vals(vs: List<&2, Bytes()>, +i: Nat, +v: Bytes(), hit: Bool) -> Maybe<&2, Nat>:
+  match vs hit:
+    case Nil{} _:
+      None{}
+    case Con{x, t} True{}:
+      Some{i}
+    case Con{x, +t} False{}:
+      sx.vals(t, 1n+i, v, sx.head(t, v))
+
+def sx.hit(ok: Bool, +at: Nat, +vals: List<&2, Bytes()>, +v: Bytes()) -> Hit:
+  match ok:
+    case False{}:
+      Hit{None{}, None{}}
+    case True{}:
+      Hit{sx.vals(vals, at, v, sx.head(vals, v)), Some{at}}
+
+def sx.find(t: Sx, +k: U32, +n: Bytes(), +v: Bytes(), c: Cmp) -> Hit:
+  match t c:
+    case SxNil{} _:
+      Hit{None{}, None{}}
+    case SxAt{key, name, at, vals, +lo, hi} LT{}:
+      sx.find(lo, k, n, v, sx.cmp(lo, k))
+    case SxAt{key, name, at, vals, lo, +hi} GT{}:
+      sx.find(hi, k, n, v, sx.cmp(hi, k))
+    case SxAt{key, +name, +at, +vals, lo, hi} EQ{}:
+      sx.hit(beq(name, n), at, vals, v)
+
+# what a scan of the static table would find for f: the first entry
+# exactly f, and the first with f's name (a name's entries are next to
+# each other there)
+def static.find(+f: Fld) -> Hit:
+  match f:
+    case Fld{+n, +v}:
+      +k = name.key(n)
+      sx.find(static.names(), k, n, v, sx.cmp(static.names(), k))
 
 # The scan stops at the first entry exactly equal: by then the first
 # entry with f's name is already found (it is that one, or earlier), so
@@ -797,8 +937,7 @@ def enc.field(e: Enc, +f: Fld, huff: Bool) -> Enc:
     case Enc{t, out}:
       match t:
         case Tbl{+es, max}:
-          enc.hit(Tbl{es, max}, out, f, find(es, 62n, f,
-            find(static(), 1n, f, Hit{None{}, None{}})), huff)
+          enc.hit(Tbl{es, max}, out, f, find(es, 62n, f, static.find(f)), huff)
 
 def enc.fields(fs: List<&2, Fld>, e: Enc, +huff: Bool) -> Enc:
   match fs:
