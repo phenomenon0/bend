@@ -3377,9 +3377,7 @@ const runtime_c = (tabs: string, spins: string, segs: string,
 #include <metal_stdlib>
 using namespace metal;
 #elif !defined(BEND_RTC)
-#ifdef __APPLE__
-#define _DARWIN_UNLIMITED_SELECT
-#else
+#ifndef __APPLE__
 #define _GNU_SOURCE
 #endif
 #include <stdint.h>
@@ -3396,7 +3394,11 @@ using namespace metal;
 #include <sys/mman.h>
 #include <time.h>
 #include <poll.h>
-#include <sys/select.h>
+#ifdef __linux__
+#include <sys/epoll.h>
+#else
+#include <sys/event.h>
+#endif
 #ifdef __APPLE__
 #include <mach-o/dyld.h>
 #endif
@@ -5523,15 +5525,52 @@ static void io_spawn(Term m) {
   io_live += 1;
 }
 
+// The kernel's poller (epoll, else kqueue) holds each fd waiter, armed
+// one-shot, so a pass costs what fired, not what waits; io_fds counts them.
+// A descriptor has one waiter at a time, as Base's handles are affine.
+static int io_kq;
+static u32 io_fds;
+
+#ifdef __linux__
+typedef struct epoll_event IoEvt;
+#define io_evt_act(v) ((IoAct*)(v).data.ptr)
+#else
+typedef struct kevent IoEvt;
+#define io_evt_act(v) ((IoAct*)(v).udata)
+#endif
+
+// Arms (on) or disarms a's wait on fd; nonzero if the poller refuses it.
+static int io_arm(void* a, int fd, short evts, bool on) {
+#ifdef __linux__
+  IoEvt v = { (evts == POLLOUT ? EPOLLOUT : EPOLLIN) | EPOLLONESHOT, { a } };
+  return !on ? epoll_ctl(io_kq, EPOLL_CTL_DEL, fd, &v)
+    : epoll_ctl(io_kq, EPOLL_CTL_MOD, fd, &v)
+    && epoll_ctl(io_kq, EPOLL_CTL_ADD, fd, &v);
+#else
+  IoEvt v;
+  EV_SET(&v, fd, evts == POLLOUT ? EVFILT_WRITE : EVFILT_READ,
+    on ? EV_ADD | EV_ONESHOT : EV_DELETE, 0, 0, a);
+  return kevent(io_kq, &v, 1, NULL, 0, NULL);
+#endif
+}
+
 // Park until evts (POLLIN/POLLOUT; 0 ignores fd) or time (0: none); the
-// loop then calls more: a value resumes, IO_PARK re-parks.
+// loop then calls more: a value resumes, IO_PARK re-parks. io_park holds
+// the waiters with a deadline, and those the poller refuses (a regular
+// file, always ready): evts -1 marks one due.
 static Term io_wait_on(IoWork* w, int fd, short evts, u64 time, IoPack more) {
   IoAct* a     = (IoAct*)w;
   a->work.word = (u32)fd;
   a->work.pack = more;
   a->time      = time;
   a->evts      = evts;
-  io_push(&io_park, a);
+  if (evts != 0 && io_arm(a, fd, evts, true) != 0) {
+    a->evts = -1;
+  }
+  io_fds += a->evts > 0;
+  if (time != 0 || a->evts <= 0) {
+    io_push(&io_park, a);
+  }
   return IO_PARK;
 }
 
@@ -5727,66 +5766,66 @@ static Term io_exec(Env e, IoWork* w) {
   return io_eff_rows[c].run(e, fs, w);
 }
 
-// macOS poll misses FIFO EOF, so select, sets sized to the highest fd
-// (_DARWIN_UNLIMITED_SELECT allows fds past FD_SETSIZE).
-static bool io_bit(u8* set, int fd, bool put) {
-  u8* at = set + fd / 8;
-  *at |= put << fd % 8;
-  return *at >> fd % 8 & 1;
+static void io_fire(Env e, IoAct* a) {
+  Term x = a->work.pack(e, &a->work);
+  if (x != IO_PARK) {
+    a->item = x;
+    io_push(&io_runs, a);
+  }
 }
 
+// A fired fd waiter with a deadline is marked due and runs from io_park;
+// a deadline that fires first disarms its fd.
 static void io_wait(Env e) {
-  int top  = io_wake_fd[0];
   u64 soon = 0;
   for (IoAct* a = io_park.head; a != NULL; a = a->next) {
-    if (a->time != 0 && (soon == 0 || a->time < soon)) {
-      soon = a->time;
-    }
-    if (a->evts != 0 && (int)a->work.word > top) {
-      top = (int)a->work.word;
-    }
+    u64 t = a->evts < 0 ? 1 : a->time;
+    soon  = t != 0 && (soon == 0 || t < soon) ? t : soon;
   }
-  u64 len = (u64)top / 64 * 8 + 8;
-  u8* set[2] = { io_mem(calloc(2, len)), NULL };
-  set[1] = set[0] + len;
-  io_bit(set[0], io_wake_fd[0], true);
-  for (IoAct* a = io_park.head; a != NULL; a = a->next) {
-    if (a->evts != 0) {
-      io_bit(set[a->evts == POLLOUT], (int)a->work.word, true);
-    }
-  }
-  u64 tick = io_tick();
-  u64 ms = soon > tick ? (soon - tick) / 1000000 + 1 : 0;
-  struct timeval tv = { ms / 1000, ms % 1000 * 1000 };
+  u64   tick = io_tick();
+  u64   ms   = soon > tick ? (soon - tick) / 1000000 + 1 : 0;
+  IoEvt es[64];
+  int   n;
   io_sync();
-  while (select(top + 1, (fd_set*)set[0], (fd_set*)set[1], NULL,
-    soon == 0 ? NULL : &tv) < 0) {
+#ifdef __linux__
+  while ((n = epoll_wait(io_kq, es, 64, soon == 0 ? -1
+    : (int)(ms < INT32_MAX ? ms : INT32_MAX))) < 0) {
+#else
+  struct timespec ts = { ms / 1000, ms % 1000 * 1000000 };
+  while ((n = kevent(io_kq, NULL, 0, es, 64, soon == 0 ? NULL : &ts)) < 0) {
+#endif
     if (errno != EINTR) {
       err_fail("the poller failed");
     }
   }
-  if (io_bit(set[0], io_wake_fd[0], false)) {
-    io_take(e);
-  }
-  u64   now  = io_tick();
   IoQue todo = io_park;
   io_park = (IoQue){0};
+  for (int i = 0; i < n; i += 1) {
+    IoAct* a = io_evt_act(es[i]);
+    if (a == NULL) {
+      io_take(e);
+      io_arm(NULL, io_wake_fd[0], POLLIN, true);
+      continue;
+    }
+    io_fds -= 1;
+    a->evts = -1;
+    if (a->time == 0) {
+      io_fire(e, a);
+    }
+  }
+  u64 now = io_tick();
   while (todo.head != NULL) {
-    IoAct* a   = io_pop(&todo);
-    bool   due = (a->evts != 0
-        && io_bit(set[a->evts == POLLOUT], (int)a->work.word, false))
-      || (a->time != 0 && a->time <= now);
-    if (!due) {
+    IoAct* a = io_pop(&todo);
+    if (a->evts >= 0 && (a->time == 0 || a->time > now)) {
       io_push(&io_park, a);
       continue;
     }
-    Term x = a->work.pack(e, &a->work);
-    if (x != IO_PARK) {
-      a->item = x;
-      io_push(&io_runs, a);
+    if (a->evts > 0) {
+      io_arm(a, (int)a->work.word, a->evts, false);
+      io_fds -= 1;
     }
+    io_fire(e, a);
   }
-  free(set[0]);
 }
 
 ${NATIVE.IO}
@@ -5953,7 +5992,13 @@ OUTLINE int io_loop(Corpus H) {
   Env e = { H, ALC[0] };
   io_stk = pool_stack();
   signal(SIGPIPE, SIG_IGN);
-  if (pipe(io_wake_fd) | fcntl(io_wake_fd[0], F_SETFL, O_NONBLOCK)) {
+#ifdef __linux__
+  io_kq = epoll_create1(EPOLL_CLOEXEC);
+#else
+  io_kq = kqueue();
+#endif
+  if (io_kq < 0 || pipe(io_wake_fd) | fcntl(io_wake_fd[0], F_SETFL, O_NONBLOCK)
+    || io_arm(NULL, io_wake_fd[0], POLLIN, true)) {
     err_fail("the event loop failed to open");
   }
   Term m = corpus_eval(H, term_tsk(MAIN_FID, task_node(e, MAIN_FID,
@@ -5969,7 +6014,7 @@ OUTLINE int io_loop(Corpus H) {
       if (io_live == 0) {
         return 0;
       }
-      if (io_park.head == NULL && io_busy == 0) {
+      if (io_park.head == NULL && io_busy == 0 && io_fds == 0) {
         io_sync();
         fprintf(stderr, "bend: deadlock: every computation waits on a"
           " channel\n");
@@ -6242,8 +6287,6 @@ function io_sys() {
     const ffi = require("bun:ffi");
     const mac = process.platform === "darwin";
     const err = mac ? "__error" : "__errno_location";
-    // Darwin's extended select supports high fds.
-    const sel = mac ? "select$DARWIN_EXTSN" : "select";
     const T = { i: "i32", u: "u32", U: "u64", I: "i64", p: "ptr",
       c: "cstring" };
     // Apple arm64 passes variadic fcntl flags on the stack: use the ninth
@@ -6253,7 +6296,8 @@ function io_sys() {
       Object.fromEntries(("socket:iii>i bind:ipu>i listen:ii>i connect:ipu>i"
         + " accept:ipp>i send:ipUi>I recv:ipUi>I read:ipU>I pread:ipUI>I"
         + " sendto:ipUipu>I recvfrom:ipUipp>I close:i>i setsockopt:iiipu>i"
-        + " " + sel + ":ipppp>i"
+        + (mac ? " kqueue:>i kevent:ipipip>i"
+          : " epoll_create1:i>i epoll_ctl:iiip>i epoll_wait:ipii>i")
         + (vari ? " fcntl:iiiiiiiii>i" : " fcntl:iii>i") + " getsockopt:iiipp>i"
         + " strerror:i>c " + err + ":>p").split(" ").map((s) => {
         const [name, args, ret] = s.split(/[:>]/);
@@ -6262,8 +6306,10 @@ function io_sys() {
     const fcntl = (fd, cmd, arg) => vari
       ? lib.fcntl(fd, cmd, 0, 0, 0, 0, 0, 0, arg)
       : lib.fcntl(fd, cmd, arg);
-    globalThis.BEND_SYS = { ...lib, fcntl, select: lib[sel],
-      ptr: ffi.ptr, mac,
+    // the poller; an epoll_event is 12 bytes on x64, 16 on arm64
+    globalThis.BEND_SYS = { ...lib, fcntl, ptr: ffi.ptr, mac,
+      q: mac ? lib.kqueue() : lib.epoll_create1(0x80000),
+      ev: mac ? 32 : process.arch === "x64" ? 12 : 16,
       errno: () => ffi.read.i32(lib[err](), 0) };
   }
   return globalThis.BEND_SYS;
@@ -6308,27 +6354,53 @@ function io_push(fun, arg, fresh) {
   io.live += fresh ? 1 : 0;
 }
 
-function io_wait(io) {
-  const soon = io.waits.reduce((m, w) => Math.min(m, w.at ?? m), Infinity);
-  const ms = soon === Infinity ? -1
-    : Math.max(0, Math.ceil(soon - performance.now()));
-  const fds = io.waits.filter((w) => w.fd !== undefined);
-  const top = fds.reduce((m, w) => Math.max(m, w.fd), 0);
-  const len = (top >> 6 << 3) + 8;
-  const set = new Uint8Array(2 * len);
-  const at = (w) => (w.out ? len : 0) + (w.fd >> 3);
-  for (const w of fds) {
-    set[at(w)] |= 1 << (w.fd & 7);
-  }
-  const tv = new BigInt64Array([BigInt(ms / 1000 | 0),
-    BigInt(ms % 1000 * 1000)]);
+// The kernel's poller holds each fd waiter (io.fds), armed one-shot and
+// keyed by its fd, so a pass costs what fired; io.waits holds those with a
+// deadline and those the poller refuses (a regular file, always ready).
+function io_arm(fd, out, on) {
   const sys = io_sys();
-  sys.select(top + 1, sys.ptr(set), sys.ptr(set, len), null,
-    ms < 0 ? null : sys.ptr(tv));
+  const v = new DataView(new ArrayBuffer(32));
+  if (sys.mac) {
+    v.setBigUint64(0, BigInt(fd), true);
+    v.setInt16(8, out ? -2 : -1, true);
+    v.setUint16(10, on ? 0x11 : 2, true);
+    return sys.kevent(sys.q, sys.ptr(v), 1, null, 0, null);
+  }
+  v.setUint32(0, (out ? 4 : 1) | 1 << 30, true);
+  v.setUint32(sys.ev - 8, fd, true);
+  const p = sys.ptr(v);
+  return on ? sys.epoll_ctl(sys.q, 3, fd, p) && sys.epoll_ctl(sys.q, 1, fd, p)
+    : sys.epoll_ctl(sys.q, 2, fd, p);
+}
+
+function io_wait(io) {
+  const sys = io_sys();
+  const soon = io.waits.reduce((m, w) => Math.min(m, w.due ? 0 : w.at ?? m),
+    Infinity);
+  const ms = soon === Infinity ? -1
+    : Math.min(2147483647, Math.max(0, Math.ceil(soon - performance.now())));
+  const v = new DataView(new ArrayBuffer(64 * sys.ev));
+  const tv = new BigInt64Array([BigInt(ms / 1000 | 0),
+    BigInt(ms % 1000 * 1000000)]);
+  const n = sys.mac ? sys.kevent(sys.q, null, 0, sys.ptr(v), 64,
+    ms < 0 ? null : sys.ptr(tv)) : sys.epoll_wait(sys.q, sys.ptr(v), 64, ms);
+  for (let i = 0; i < n; i += 1) {
+    const fd = sys.mac ? Number(v.getBigUint64(i * 32, true))
+      : v.getUint32(i * sys.ev + sys.ev - 8, true);
+    const w = io.fds.get(fd);
+    io.fds.delete(fd);
+    w.due = true;
+    if (w.at === undefined) {
+      io_push(io_wake, w, false);
+    }
+  }
   const now = performance.now();
   io.waits = io.waits.filter((w) => {
-    const ready = w.at <= now || w.fd !== undefined
-      && set[at(w)] & 1 << (w.fd & 7);
+    const ready = w.due || w.at <= now;
+    if (ready && io.fds.get(w.fd) === w) {
+      io_arm(w.fd, w.out, false);
+      io.fds.delete(w.fd);
+    }
     if (ready) {
       io_push(io_wake, w, false);
     }
@@ -6345,11 +6417,20 @@ function io_wake(w) {
 // Park for read/write (out) or until at (performance.now()); an undefined
 // fd or at disables that source.
 function io_park_on(fd, out, k, more, at) {
-  globalThis.BEND_IO.waits.push({ fd, out, k, more, at });
+  const io = globalThis.BEND_IO;
+  const w = { fd, out, k, more, at, due: false };
+  if (fd !== undefined && io_arm(fd, out, true) === 0) {
+    io.fds.set(fd, w);
+  } else {
+    w.due = fd !== undefined;
+  }
+  if (at !== undefined || !io.fds.has(fd)) {
+    io.waits.push(w);
+  }
 }
 
 function io_run(m) {
-  const io = { runs: [], live: 0, waits: [] };
+  const io = { runs: [], live: 0, waits: [], fds: new Map() };
   globalThis.BEND_IO = io;
   try {
     io_push(run_loop(m()), (x) => ({ $: "Emit", value: x }), true);
@@ -6358,7 +6439,7 @@ function io_run(m) {
         if (io.live === 0) {
           return 0;
         }
-        if (io.waits.length === 0) {
+        if (io.waits.length === 0 && io.fds.size === 0) {
           io_errs("bend: deadlock: every computation waits on a channel");
           return 1;
         }
