@@ -2368,11 +2368,19 @@ law F64.read:
   for s: String
   Maybe<&2, F64>
 
+# Bool.pick at F64, monomorphic: a double never rides a boxed parameter
+def F64.pick(c: Bool, a: F64, b: F64) -> F64:
+  match c:
+    case False{}:
+      b
+    case True{}:
+      a
+
 def F64.min(+a: F64, +b: F64) -> F64:
-  Bool.pick(F64, F64.is_lt(a, b), a, b)
+  F64.pick(F64.is_lt(a, b), a, b)
 
 def F64.max(+a: F64, +b: F64) -> F64:
-  Bool.pick(F64, F64.is_lt(a, b), b, a)
+  F64.pick(F64.is_lt(a, b), b, a)
 
 def F64.clamp(x: F64, lo: F64, hi: F64) -> F64:
   F64.min(F64.max(x, lo), hi)

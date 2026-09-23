@@ -284,48 +284,46 @@ compiled index loop over a flat block.
 exhausted fuel is a refusal with a price attached, never a partial answer and
 never a hang.
 
-## Known hazard: dropping an F64 on the C backend
+## Known hazard: a U64, I64 or F64 in an Array on the C backend
 
-Three lanes hit this independently in three shapes. An `F64` is stored
-**unboxed**, so a raw IEEE-754 double rides in a slot the runtime reads as a
-`Term`: the exponent becomes a heap tag and the low 40 mantissa bits a heap
-address. Sinking such a slot frees a block that was never allocated — a silent
-wrong answer, a blank run, `bend: out of memory`, or a memory fault, depending
-on what the bogus address lands on. It is deterministic per binary, reproduces
-at `--threads 1`, and `--gpu 8GB` does not help.
+A `U64`, `I64` or `F64` is stored **unboxed**: its 64 raw bits ride in a word,
+and any bit pattern is legal. The runtime reads a word it drops or shares as a
+`Term`, whose top byte is a tag, whose bit 63 is the count bit and whose low 40
+bits are a heap address. A `Nat` is safe there by construction (`nat_chk` keeps
+it below `2^48`, tag 0); the full-width words are not: `2^63-1`, `-1`, `0.1d` and
+`pi` all read as references, and sinking one frees a block that was never
+allocated — a silent wrong answer, a blank run, `out of memory` or a memory
+fault, deterministic per binary.
 
-Exactly two surfaces put a double in that position:
+**Fixed: polymorphic parameters, generic fields and shared slots.** Three
+surfaces put such a word where a `Term` is dropped, and all three now box it
+(`comp.ts`: the `X64` layout, `x64_box` / `x64_take` in the runtime):
 
-1. **`Array<F64>` cells.** `lay_arr` routes any element wider than `w32` into a
-   block whose cells `term_drop` / `blk_copy` / `blk_keep` walk as `Term`s.
-   (`Array<Nat>` is walked too and is safe only by accident — `nat_chk` caps a
-   `Nat` below `2^48` so its tag is always 0.)
-2. **Polymorphic parameters.** A def's signature is memoized by name, so the one
-   compiled `Bool.pick` emits `term_sink` on whatever word arrives.
+1. a polymorphic parameter — `Bool.pick(I64, …)`, `Bool.pick(F64, …)`, a
+   generic swap, a closure applied through `A -> A`;
+2. a generic constructor's field — a `Maybe<I64>` or a `List<F64>` built under
+   a pick, a `Some` a native returns (`F64.read`);
+3. a union slot another arm holds a box in — `Result<String, I64>`'s `Done`
+   shares its word with `Fail`'s `String`; `lay_pack` now boxes that field
+   instead of sharing the slot.
 
-Generic *containers* are fine: `List<F64>`, `Maybe<F64>`, `Pair<F64,F64>` get
-real `w64` fields. Whether a given double is a landmine is exact and computable
-— safe iff no mantissa bit is set below position 40 — which is why every earlier
-magnitude sweep looked random. The earlier "only a *computed* F64" reading is
-withdrawn; literals fail too.
+A boxed word that would read as a trivial `Term` (tag 0 or 1 below the heap,
+no count bit) rides as it is, so a small non-negative `I64` costs nothing; the
+rest ride in a one-word block (`TAG_BUF`, never walked). A native that takes
+a full word reads it back out of the box; a monomorphic path never boxes.
+`Bool.pick(Maybe<&2, I64>, False{}, Some{2^63-1}, None{})`, which crashed,
+and the reproducers of `docs/omen/f64-drop-c-backend.md` for this surface are
+held on four lanes by `tests/base/x64_boxed.bend`. `F64.min`/`F64.max` pick
+through the monomorphic `F64.pick`, so they never box.
 
-Root cause, the measured tables, the bit predicate and what a real fix costs (a
-third block mode across four backends, not a one-line flip) are in
-`docs/omen/f64-drop-c-backend.md`. The workaround is to prefer F32 or
-fixed-point U32 in arrays, and `match` rather than `Bool.pick` at F64.
-
-The F32 workaround is a layout guarantee rather than a lucky sample: `F32` gives
-cells of kind `w32`, which take the packed block and are never walked as `Term`s.
-Lane 14's earlier hedge — F32 is "correct in every shape run, and it was not run
-much" — was the honest thing to say while the cause was unknown, and the
-derivation supersedes it.
-
-The same derivation reclassifies the doubles that *passed*. `pi`, `8193` and
-`10007` are not safe values; by the bit predicate they are landmines that did not
-detonate, the bogus free having landed somewhere the run never read back. Safe is
-exactly: no mantissa bit set below position 40, or zero, inf, NaN. This is why
-every attempt to find a magnitude threshold failed — there is no threshold, only
-the predicate.
+**Still open: `Array<U64>`, `Array<I64>`, `Array<F64>` cells.** `lay_arr` puts
+any element wider than `w32` in a `TAG_ARR` block whose cells `term_drop`,
+`blk_copy` and `blk_keep` walk as `Term`s; the packed `TAG_BUF` block is 32-bit
+cells only. A fix is a 64-bit packed block mode (or two cells an element)
+across the block operations of all four backends. Until then prefer `F32` or a
+fixed-point `U32` in arrays; the bit predicate (safe iff no mantissa bit below
+position 40, or zero, inf, NaN) says exactly which doubles survive. Root cause
+and measurements: `docs/omen/f64-drop-c-backend.md`.
 
 ## Not built
 

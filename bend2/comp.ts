@@ -163,8 +163,14 @@ const BOX: Lay = { ks: ["box"], arms: null };
 
 const W64: Lay = { ks: ["w64"], arms: null };
 
+// A U64, I64 or F64: a w64 like Nat's (lay_eq), but any bit pattern, where a
+// Nat stays below 2^48 and so always reads as a trivial Term. It is told
+// apart by identity: val_box boxes it (x64_box), lay_pack keeps it out of a
+// slot another arm drops as a Term.
+const X64: Lay = { ks: ["w64"], arms: null };
+
 const WORDS: Record<string, Lay> = Object.setPrototypeOf(
-  { U32: W32, F32: W32, F64: W64, Nat: W64, U64: W64, I64: W64 }, null);
+  { U32: W32, F32: W32, F64: X64, Nat: W64, U64: X64, I64: X64 }, null);
 
 // The widest flat layouts (the u8 arity tables): the shader's Tri is 24 words.
 const WIDE = 255;
@@ -724,7 +730,7 @@ static Term f64_show(Env e, Term x) {
 static Term f64_read(Env e, Term s) {
   u64 n = 0;
   char* text = io_cstr(e, s, &n);
-  Term out = io_num(text, n) ? io_box(e, CID_SOME, f64_rewrap(strtod(text, NULL)))
+  Term out = io_num(text, n) ? io_box(e, CID_SOME, x64_box(e, f64_rewrap(strtod(text, NULL))))
     : term_pak(CID_NONE, 0);
   free(text);
   return out;
@@ -1506,8 +1512,34 @@ function lay_wide(lays: Lay[]): Lay[] {
     ? lays.map((l) => l.ks.length > 1 ? BOX : l) : lays;
 }
 
-// Fields start after the tag; the packer owns their final offsets.
+// Fields start after the tag; the packer owns their final offsets. A
+// full word (X64) sharing a slot with another arm's box would be dropped as
+// a Term when that slot is: its field is boxed instead, until none does.
 function lay_pack(arms: [Bend.Name, Lay[]][]): Lay {
+  for (;;) {
+    const lay = lay_pack_at(arms);
+    const full = lay_full(lay);
+    const bad = full.map((f, j) => f && lay.ks[j] === "box");
+    if (!bad.includes(true)) {
+      return lay;
+    }
+    arms = lay.arms!.map((a) => [a.k, a.fs.map((f) => lay_full(f.lay)
+      .some((b, j) => b && bad[f.at + j]) ? BOX : f.lay)]);
+  }
+}
+
+// The words of a layout that may hold a full 64-bit word.
+function lay_full(lay: Lay): boolean[] {
+  if (lay === X64) {
+    return [true];
+  }
+  const out = lay.ks.map(() => false);
+  lay.arms?.forEach((a) => a.fs.forEach((f) => lay_full(f.lay)
+    .forEach((b, j) => b && (out[f.at + j] = true))));
+  return out;
+}
+
+function lay_pack_at(arms: [Bend.Name, Lay[]][]): Lay {
   const tag = arms.length > 1 ? 1 : 0;
   const ks: Kind[] = tag === 1 ? ["w32"] : [];
   return { ks, arms: arms.map(([k, lays]) => {
@@ -2412,7 +2444,8 @@ function val_arms(fl: File, lay: Lay, sel: string,
 
 function val_box(fl: File, v: Val): string {
   if (v.lay.arms === null) {
-    return val_own(fl, v)[0];
+    const w = val_own(fl, v)[0];
+    return v.lay === X64 ? emit_alias(fl, `x64_box(e, ${w})`, "b") : w;
   }
   const arms = v.lay.arms!;
   const build = (arm: Arm): string => {
@@ -2433,7 +2466,9 @@ function val_box(fl: File, v: Val): string {
 
 function val_unbox(fl: File, v: Val, lay: Lay): Val {
   if (lay.arms === null) {
-    return val_new(v.ws, lay);
+    const w = v.ws[0];
+    return lay !== X64 ? val_new(v.ws, lay) : val_new([emit_alias(fl,
+      `x64_${fl.brwl.has(w) ? "peek" : "take"}(e, ${w})`, "u", "w64")], lay);
   }
   const t = emit_alias(fl, v.ws[0], "u");
   return val_arms(fl, lay, t, (_, i) =>
@@ -2753,7 +2788,10 @@ function emit_intr(fl: File, it: Intr, x: HTerm,
   ty: HTerm | null): Val {
   const m = term_spine(fl, x);
   const k = (m.t as Of<"Ref">).k;
-  const args = emit_each(fl, m.args, null);
+  // A full word a polymorphic call handed back boxed is read out of its box.
+  const lays = sig_def(fl, k).lays;
+  const args = emit_each(fl, m.args, null).map((v, i) =>
+    lays[i] === X64 && lay_box(v.lay) ? val_to(fl, v, X64) : v);
   const op = eff_name(k);
   // Native aggregate builders publish sealed fields. Teach field extraction and
   // the transitive borrow analysis about those counts on every pass.
@@ -2786,7 +2824,9 @@ function emit_intr(fl: File, it: Intr, x: HTerm,
   const dup = typeof it.C === "string" && /\$(\d)[^]*\$\1/.test(it.C);
   const out = tpl(it.C as Gen, dup ? ws.map((a) => emit_alias(fl, a, "a")) : ws);
   const lay = lay_of(fl.book, ty);
-  return val_new([out], lay.ks.length === 1 ? lay : BOX);
+  // a full word is raw, whatever the site knows of its type
+  return val_new([out], sig_def(fl, k).ret === X64 ? X64
+    : lay.ks.length === 1 ? lay : BOX);
 }
 
 // A closure: its captures move into a node (a capture is one use of the
@@ -4774,6 +4814,39 @@ INLINE void term_sink(Env e, Term t) {
   if (!term_triv(t)) {
     term_drop(e, t);
   }
+}
+
+// A U64, I64 or F64 in a slot the runtime drops or shares as a Term (a
+// polymorphic parameter, a generic constructor's field): a word that would
+// read as a reference (a heap location, or the count bit) rides in a
+// one-word block, the rest ride as they are. A boxed one is never trivial.
+INLINE bool x64_raw(u64 w) {
+  return term_triv(w) && !term_rfc(w);
+}
+
+INLINE Term x64_box(Env e, u64 w) {
+  if (x64_raw(w)) {
+    return w;
+  }
+  Loc l = heap_alloc(e, 0);
+  if (err_seen(e.mem)) {
+    return 0;
+  }
+  e.mem[l] = w;
+  return term_buf(0, l);
+}
+
+INLINE u64 x64_peek(Env e, Term t) {
+  return x64_raw(t) ? t : e.mem[term_peek(e, t)];
+}
+
+INLINE u64 x64_take(Env e, Term t) {
+  if (x64_raw(t)) {
+    return t;
+  }
+  u64 w = e.mem[term_peek(e, t)];
+  term_drop(e, t);
+  return w;
 }
 
 OUTLINE void span_fade(Env e, Term t, Loc src, u32 n) {
