@@ -19,6 +19,8 @@ import Base
 import ../../wire/reader.bend as Wr
 import ../io_http_engine/main.bend as Eng
 import ../io_http_engine/spec.bend as Spec
+import ../../wire/http1/resp.bend as R
+import ../../wire/http1/spec.bend as RS
 
 # Scanning requests
 # =================
@@ -647,12 +649,6 @@ def rl.walk(+s: Bytes(), r: RL) -> List<&2, List<&2, U32>>:
 def rlines(k: Nat, +s: Bytes()) -> List<&2, List<&2, U32>>:
   rl.walk(s, RL{k, HL{False{}, Nil{}, Nil{}}})
 
-# A response, as the proxy sends it: the status's three digits and its
-# reason, the end-to-end fields, the body, and whether it has none by
-# its framing (a response to HEAD, 1xx, 204, 304: RFC 9112 6.3).
-type Rsp is Data:
-  Rsp{code: Bytes(), why: Bytes(), fields: List<&2, Field>, body: Bytes(), bodyless: Bool}
-
 # a status line's code and reason
 type Stat is Data:
   Stat{code: Bytes(), why: Bytes()}
@@ -683,9 +679,9 @@ def status.of(line: List<&2, U32>) -> Maybe<&2, Stat>:
   status.code(List.drop(&2, U32, line, 9n))
 
 # the fields a response carries on: not a hop's, not its framing (the
-# proxy frames it again), not Content-Length unless the response has no
-# body by its framing and answers HEAD (where it says what GET would
-# have sent, and nothing follows it)
+# proxy frames it again), not Content-Length unless len (the laws of
+# hop_by_hop_removed_rsp hold either way; the proxy passes False and
+# sends a length of its own)
 def rkeeps(+ns: List<&2, Bytes()>, +len: Bool, +n: Bytes()) -> Bool:
   Bool.not(hop(ns, n)) && (len || Bool.not(Eng.bytes.eq(n, "content-length")))
 
@@ -698,68 +694,191 @@ def rends(+ns: List<&2, Bytes()>, +len: Bool, fs: List<&2, Field>) -> List<&2, F
         case Field{+n, v}:
           ends.put(rkeeps(ns, len, n), Field{n, v}, rends(ns, len, t))
 
-def rsp.mk(+via: Bytes(), +head: Bool, +bodyless: Bool, cw: Stat, +xs: List<&2, Field>,
-  body: Bytes()) -> Rsp:
+# What the final response's head said: the status's three digits and
+# its reason, the end-to-end fields (the Via added), and the upstream's
+# Content-Length ("" for none), which a response to HEAD carries on.
+type RHead is Data:
+  RHead{code: Bytes(), why: Bytes(), fields: List<&2, Field>, hlen: Bytes()}
+
+def rhead.mk(+via: Bytes(), cw: Stat, +xs: List<&2, Field>) -> RHead:
   match cw:
     case Stat{code, why}:
-      Rsp{code, why, List.append(&2, Field, rends(conn.names(xs), head && bodyless, xs), [Field{"via", via}]),
-        body, bodyless}
+      RHead{code, why, List.append(&2, Field, rends(conn.names(xs), False{}, xs), [Field{"via", via}]),
+        first(values("content-length", xs), "")}
 
-def rsp.at(+via: Bytes(), +head: Bool, +bodyless: Bool, st: Maybe<&2, Stat>,
-  fs: Maybe<&2, List<&2, Field>>, body: Bytes()) -> Maybe<&2, Rsp>:
+def rhead.at(+via: Bytes(), st: Maybe<&2, Stat>, fs: Maybe<&2, List<&2, Field>>) -> Maybe<&2, RHead>:
   match st fs:
     case Some{cw} Some{xs}:
-      Some{rsp.mk(via, head, bodyless, cw, xs, body)}
+      Some{rhead.mk(via, cw, xs)}
     case _ _:
       None{}
 
-def rsp.lines(+via: Bytes(), +head: Bool, +bodyless: Bool, ls: List<&2, List<&2, U32>>, body: Bytes()) ->
-  Maybe<&2, Rsp>:
+def rhead.lines(+via: Bytes(), ls: List<&2, List<&2, U32>>) -> Maybe<&2, RHead>:
   match ls:
     case Nil{}:
       None{}
     case Con{l, t}:
-      rsp.at(via, head, bodyless, status.of(l), fields.of(t), body)
+      rhead.at(via, status.of(l), fields.of(t))
 
-# the response to send back, from the bytes the exchange read: k interim
-# heads, then the final one; head says the request was HEAD and code is
-# the status the reader read
-def rsp.of(+via: Bytes(), +head: Bool, +k: Nat, +code: U32, +got: Bytes(), body: Bytes()) -> Maybe<&2, Rsp>:
-  rsp.lines(via, head, head || U32.is_lt(code, 200) || U32.is_eq(code, 204) || U32.is_eq(code, 304),
-    rlines(k, got), body)
+# A response, as the proxy sends it: the code and reason, the fields,
+# the Content-Length it sends ("" for none), the body, and whether it
+# has none by its framing: an answer to HEAD, a 204, a 304 (RFC 9112
+# 6.3; a 1xx is never final here, and a 101 is refused).
+type Rsp is Data:
+  Rsp{code: Bytes(), why: Bytes(), fields: List<&2, Field>, clen: Bytes(), body: Bytes(), bodyless: Bool}
+
+def rbodyless(+head: Bool, +code: U32) -> Bool:
+  head || U32.is_eq(code, 204) || U32.is_eq(code, 304)
+
+# the length sent: the body's; for HEAD the upstream's, what a GET
+# would have sent; for 204 and 304 none
+def rclen(+head: Bool, bodyless: Bool, hlen: Bytes(), +body: Bytes()) -> Bytes():
+  match bodyless:
+    case False{}:
+      Nat.show(Bytes.len(body))
+    case True{}:
+      Bool.pick(Bytes(), head, hlen, "")
+
+def rsp.fin(+head: Bool, +code: U32, h: RHead, +body: Bytes()) -> Rsp:
+  match h:
+    case RHead{cd, why, fs, hlen}:
+      +bl = rbodyless(head, code)
+      Rsp{cd, why, fs, rclen(head, bl, hlen, body), body, bl}
+
+# What the client's reading (wire/http1/spec.bend's response(), with
+# the reader's largest body cap) needs of a response to read back
+# exactly it (LAWS.bend's rsp_reframed): a code of three digits, 200 to
+# 599, the one the reader read; a reason and values with no line end or
+# control; field names of token bytes that its framing never reads (so
+# none is a length, a coding or a Connection); and a Content-Length it
+# reads as the body's length, under the cap. A response that fails goes
+# back as a 502, never as bytes a client could frame otherwise.
+def rask(head: Bool) -> R.Ask:
+  R.Ask{head, 268435455}
+
+def rok.all(+t: RS.Tok, s: Bytes()) -> Bool:
+  match s:
+    case SNil{}:
+      True{}
+    case SCon{Chr{+c}, r}:
+      RS.allows(t, R.cls(c)) && rok.all(t, r)
+
+def ris.other(f: RS.Fld) -> Bool:
+  match f:
+    case RS.FOther{}:
+      True{}
+    case _:
+      False{}
+
+def rok.field(f: Field) -> Bool:
+  match f:
+    case Field{+n, +v}:
+      full(n) && rok.all(RS.TName{}, n) && ris.other(RS.field(RS.lows(Bytes.to_list(n)))) && rok.all(RS.TVal{}, v)
+
+def rok.fields(fs: List<&2, Field>) -> Bool:
+  match fs:
+    case Nil{}:
+      True{}
+    case Con{f, t}:
+      rok.field(f) && rok.fields(t)
+
+def rok.code(+cd: Bytes(), +code: U32) -> Bool:
+  rok.all(RS.TDig{}, cd) && RS.code.whole(Bytes.to_list(cd)) && U32.is_eq(RS.num(Bytes.to_list(cd)), code)
+    && Bool.not(U32.is_lt(code, 200)) && Bool.not(U32.is_eq(code, 101))
+
+def rok.len.at(v: RS.FLine, +bodyless: Bool, +body: Bytes()) -> Bool:
+  match v:
+    case RS.FVal{val}:
+      match val:
+        case RS.VLen{+n, ws}:
+          Bool.not(U32.is_lt(268435455, n)) && (bodyless ||
+            (same(U32.is_zero(n), String.is_empty(body)) && Nat.is_eq(U32.to_nat(n), Bytes.len(body))))
+        case _:
+          False{}
+    case _:
+      False{}
+
+def rok.len(+head: Bool, +bodyless: Bool, clen: Bytes(), +body: Bytes()) -> Bool:
+  match clen:
+    case SNil{}:
+      bodyless
+    case SCon{c, t}:
+      +d : Bytes() = SCon{c, t}
+      rok.all(RS.TVal{}, d) && rok.len.at(RS.len.view(rask(head), RS.span(RS.TOws{}, Con{32, Bytes.to_list(d)})), bodyless, body)
+
+def rvalid(+head: Bool, +code: U32, r: Rsp) -> Bool:
+  match r:
+    case Rsp{+cd, +why, fs, +clen, +body, +bodyless}:
+      rok.code(cd, code) && rok.all(RS.TVal{}, why) && rok.fields(fs) && rok.len(head, bodyless, clen, body)
+
+def rcheck(+head: Bool, +code: U32, +r: Rsp) -> Maybe<&2, Rsp>:
+  Bool.pick(Maybe<&2, Rsp>, rvalid(head, code, r), Some{r}, None{})
+
+def rsp.at(+head: Bool, +code: U32, mh: Maybe<&2, RHead>, +body: Bytes()) -> Maybe<&2, Rsp>:
+  match mh:
+    case Some{h}:
+      rcheck(head, code, rsp.fin(head, code, h, body))
+    case None{}:
+      None{}
+
+# the response to send back, from what the exchange read: the bytes of
+# k interim heads and the final one's (got), the status and body the
+# reader read; head says the request was HEAD
+def rsp.of(+via: Bytes(), +head: Bool, +k: Nat, +code: U32, +got: Bytes(), +body: Bytes()) -> Maybe<&2, Rsp>:
+  rsp.at(head, code, rhead.lines(via, rlines(k, got)), body)
 
 # the bytes that go back: the status line rebuilt, a field a line, the
-# length counted from the body unless the framing says there is none,
-# and the connection's fate (conn: a Connection value, or "" for none)
-def rclf(bodyless: Bool, +body: Bytes()) -> List<&2, Field>:
-  match bodyless:
-    case True{}:
+# length, the connection's fate (conn: a Connection value, or "" for
+# none), the blank line, and the body unless the framing says none
+def rclf(clen: Bytes()) -> List<&2, Field>:
+  match clen:
+    case SNil{}:
       Nil{}
-    case False{}:
-      [Field{"content-length", Nat.show(Bytes.len(body))}]
+    case SCon{c, t}:
+      [Field{"content-length", SCon{c, t}}]
 
 def rconf(+conn: Bytes()) -> List<&2, Field>:
   Bool.pick(List<&2, Field>, String.is_empty(conn), Nil{}, [Field{"connection", conn}])
 
-# the fields that go back: the upstream's end-to-end ones, the length,
-# the connection's fate
-def rall(fs: List<&2, Field>, +bodyless: Bool, +body: Bytes(), +conn: Bytes()) -> List<&2, Field>:
-  List.append(&2, Field, fs, List.append(&2, Field, rclf(bodyless, body), rconf(conn)))
+def rall(fs: List<&2, Field>, clen: Bytes(), +conn: Bytes()) -> List<&2, Field>:
+  List.append(&2, Field, fs, List.append(&2, Field, rclf(clen), rconf(conn)))
 
 def sl.ser(code: Bytes(), why: Bytes()) -> Bytes():
   Bytes.append("HTTP/1.1 ", Bytes.append(code, Bytes.append(" ", why)))
 
 def rser(r: Rsp, +conn: Bytes()) -> Bytes():
   match r:
-    case Rsp{code, why, fs, +body, +bodyless}:
+    case Rsp{code, why, fs, clen, +body, +bodyless}:
       Bytes.append(sl.ser(code, why),
-        Bytes.append("\r\n", Bytes.append(fls.ser(rall(fs, bodyless, body, conn)),
+        Bytes.append("\r\n", Bytes.append(fls.ser(rall(fs, clen, conn)),
           Bytes.append("\r\n", Bool.pick(Bytes(), bodyless, "", body)))))
+
+# the Connection a response goes back with: close when the connection
+# ends after it; keep-alive to an HTTP/1.0 client that stays
+def conn.val(closing: Bool, v10: Bool) -> Bytes():
+  match closing:
+    case True{}:
+      "close"
+    case False{}:
+      Bool.pick(Bytes(), v10, "keep-alive", "")
 
 # A reply of the proxy's own, when there is no response to send back:
 # 400 for a request it refused, 431 for a head past its cap, 502 when
 # the upstream could not be reached or answered with nothing it could
 # frame, 504 when the upstream ran out its deadline. It closes.
-def own.reply(status: Bytes(), +body: Bytes()) -> Bytes():
+# (to HEAD, the length said and no body)
+def own.reply.at(+head: Bool, status: Bytes(), +body: Bytes()) -> Bytes():
   Bytes.concat(["HTTP/1.1 ", status, "\r\ncontent-type: text/plain\r\ncontent-length: ",
-    Nat.show(Bytes.len(body)), "\r\nconnection: close\r\n\r\n", body])
+    Nat.show(Bytes.len(body)), "\r\nconnection: close\r\n\r\n", Bool.pick(Bytes(), head, "", body)])
+
+def own.reply(status: Bytes(), +body: Bytes()) -> Bytes():
+  own.reply.at(False{}, status, body)
+
+# what goes back for a request forwarded: the response rebuilt, or, when
+# there is none the proxy can send, its own 502
+def reply(m: Maybe<&2, Rsp>, +head: Bool, +closing: Bool, +v10: Bool) -> Bytes():
+  match m:
+    case Some{r}:
+      rser(r, conn.val(closing, v10))
+    case None{}:
+      own.reply.at(head, "502 Bad Gateway", "502 Bad Gateway\n")

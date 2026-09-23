@@ -386,8 +386,8 @@ def send(cs: Socket, bs: Bytes(), +ms: U32) -> IO(Socket & Bool):
   IO.bind(L.Put(Socket), Socket & Bool, TCP.send_buf_poll(cs, bs, ms), m => IO.pure(Socket & Bool, send.ok(m)))
 
 # a reply of the proxy's own, and the connection closes
-def refuse(+srv: Srv, cs: Socket, +status: Bytes()) -> IO(Socket):
-  IO.bind(Socket & Bool, Socket, send(cs, X.own.reply(status, Bytes.append(status, "\n")), srv.idle(srv)),
+def refuse(+srv: Srv, +head: Bool, cs: Socket, +status: Bytes()) -> IO(Socket):
+  IO.bind(Socket & Bool, Socket, send(cs, X.own.reply.at(head, status, Bytes.append(status, "\n")), srv.idle(srv)),
     sb => IO.pure(Socket, Pair.fst(Socket, Bool, sb)))
 
 # after a response went back: on to the next request, unless the
@@ -400,24 +400,16 @@ def sent(sb: Socket & Bool, closing: Bool, more: Socket -> IO(Socket)) -> IO(Soc
     case _ _:
       IO.pure(Socket, s)
 
-# the Connection a response goes back with: close when the connection
-# ends after it; keep-alive to an HTTP/1.0 client that stays
-def conn.val(closing: Bool, v10: Bool) -> Bytes():
-  match closing:
-    case True{}:
-      "close"
-    case False{}:
-      Bool.pick(Bytes(), v10, "keep-alive", "")
-
-def answer(+srv: Srv, +closing: Bool, v10: Bool, a: Ans, cs: Socket, more: Socket -> IO(Socket)) -> IO(Socket):
+def answer(+srv: Srv, +head: Bool, +closing: Bool, v10: Bool, a: Ans, cs: Socket, more: Socket -> IO(Socket)) ->
+  IO(Socket):
   match a:
     case AOk{r}:
-      IO.bind(Socket & Bool, Socket, send(cs, X.rser(r, conn.val(closing, v10)), srv.idle(srv)),
+      IO.bind(Socket & Bool, Socket, send(cs, X.reply(Some{r}, head, closing, v10), srv.idle(srv)),
         sb => sent(sb, closing, more))
     case AErr{st}:
-      refuse(srv, cs, st)
+      refuse(srv, head, cs, st)
     case AStale{}:
-      refuse(srv, cs, "502 Bad Gateway")
+      refuse(srv, head, cs, "502 Bad Gateway")
 
 def head.v10(m: Maybe<&2, X.Head>) -> Bool:
   match m:
@@ -434,10 +426,11 @@ def serve.msg(+srv: Srv, mm: Maybe<&2, X.Msg>, +v10: Bool, +closing: Bool, cs: S
     case Some{+msg}:
       match msg:
         case X.Msg{+hm, target, host, fs, body, framed}:
-          IO.bind(Ans, Socket, upstream(srv, Eng.bytes.eq(hm, "HEAD"), idempotent(hm), X.ser(msg)),
-            a => answer(srv, closing, v10, a, cs, more))
+          +hd = Eng.bytes.eq(hm, "HEAD")
+          IO.bind(Ans, Socket, upstream(srv, hd, idempotent(hm), X.ser(msg)),
+            a => answer(srv, hd, closing, v10, a, cs, more))
     case None{}:
-      refuse(srv, cs, "400 Bad Request")
+      refuse(srv, False{}, cs, "400 Bad Request")
 
 # the request forwarded is core.bend's fwd.at of the head read again
 def serve.head(+srv: Srv, +ip: Bytes(), +m: Maybe<&2, X.Head>, +r: Eng.Req, cs: Socket,
@@ -483,7 +476,7 @@ def wait.at(+srv: Srv, big: Bool, body: Bool, cont: Bool, p: Eng.P, +raw: Bytes(
   again: Socket -> X.Scan -> Bool -> IO(Socket)) -> IO(Socket):
   match big body cont:
     case True{} _ _:
-      refuse(srv, cs, "431 Request Header Fields Too Large")
+      refuse(srv, False{}, cs, "431 Request Header Fields Too Large")
     case False{} True{} False{}:
       IO.bind(Socket, Socket, cont.send(expects(raw), cs, srv.idle(srv)), s2 => again(s2, X.Scan{p, raw}, True{}))
     case False{} _ _:
@@ -502,7 +495,7 @@ def tail(+srv: Srv, t: X.Tail, cont: Bool, cs: Socket, again: Socket -> X.Scan -
     case X.TWait{sc}:
       wait(srv, sc, cont, cs, again)
     case X.TBad{}:
-      refuse(srv, cs, "400 Bad Request")
+      refuse(srv, False{}, cs, "400 Bad Request")
     case X.TUp{}:
       IO.pure(Socket, cs)
 

@@ -16,6 +16,8 @@ import ../io_http_engine/main.bend as Eng
 import ../io_http_engine/spec.bend as Spec
 import ../io_http_engine/LAWS.bend as EL
 import ../io_http_engine/PROOF.bend as EP
+import ../../wire/http1/resp.bend as R
+import ../../wire/http1/spec.bend as RS
 import ./core.bend as X
 import ./LAWS.bend as Laws
 
@@ -3221,3 +3223,1041 @@ def Laws.no_smuggle(w, ts):
       WR(List.reverse(&2, Eng.Req, xs)), ns.go(w, ts, Nil{})),
     Equal.cong(List<&2, Eng.Req>, Spec.Frames, ys => Spec.Frames{ys, Spec.Open{Nil{}}},
       List.reverse(&2, Eng.Req, List.reverse(&2, Eng.Req, xs)), xs, rev.rev(Eng.Req, xs)))
+
+# The response read back
+# ======================
+#
+# rsp_reframed: what the proxy sends a client, read by wire/http1's
+# spec.bend, is one final response -- the upstream's status and body,
+# the connection's fate the proxy chose -- and nothing after it. As for
+# a request, the proof walks the spec over the bytes the proxy writes:
+# the status line, the fields that change nothing, the length, the
+# Connection, the blank line, the body.
+
+# U32 equality is equality
+def beq(ab: Bool, bb: Bool, h: {Cmp.is_eq(Bool.cmp(ab, bb)) == True{} : Bool}) -> {ab == bb : Bool}:
+  match ab bb:
+    case True{} True{}:
+      {==}
+    case False{} False{}:
+      {==}
+    case True{} False{}:
+      no({True{} == False{} : Bool}, h)
+    case False{} True{}:
+      no({False{} == True{} : Bool}, h)
+
+def fin.eq(+ab: Bool, +bb: Bool, t: Cmp, h: {Cmp.is_eq(Word.cmp.fin(ab, bb, t)) == True{} : Bool}) ->
+  {Cmp.is_eq(t) == True{} : Bool} & {ab == bb : Bool}:
+  match t:
+    case LT{}:
+      no({Cmp.is_eq(LT{}) == True{} : Bool} & {ab == bb : Bool}, h)
+    case GT{}:
+      no({Cmp.is_eq(GT{}) == True{} : Bool} & {ab == bb : Bool}, h)
+    case EQ{}:
+      ({==}, beq(ab, bb, h))
+
+def word.at(p: Nat, +ab: Bool, +at: Word(p), +bb: Bool, +bt: Word(p),
+  hh: {Cmp.is_eq(Word.cmp(p, at, bt)) == True{} : Bool} & {ab == bb : Bool},
+  ih: {Cmp.is_eq(Word.cmp(p, at, bt)) == True{} : Bool} -> {at == bt : Word(p)}) ->
+  {WCon{ab, at} == WCon{bb, bt} : Word(1n+p)}:
+  (e1, e2) = hh
+  %e2 : {WCon{ab, at} == WCon{_, bt} : Word(1n+p)}
+  Equal.cong(Word(p), Word(1n+p), w => WCon{ab, w}, at, bt, ih(e1))
+
+def word.eq(n: Nat, a: Word(n), b: Word(n), h: {Cmp.is_eq(Word.cmp(n, a, b)) == True{} : Bool}) -> {a == b : Word(n)}:
+  match n:
+    case 0n:
+      match a b:
+        case WNil{} WNil{}:
+          {==}
+    case 1n+(+p):
+      match a b:
+        case WCon{+ab, +at} WCon{+bb, +bt}:
+          word.at(p, ab, at, bb, bt, fin.eq(ab, bb, Word.cmp(p, at, bt), h), e => word.eq(p, at, bt, e))
+
+def u32.eq(a: U32, b: U32, h: {U32.is_eq(a, b) == True{} : Bool}) -> {a == b : U32}:
+  match a b:
+    case U32{x} U32{y}:
+      Equal.cong(Word(32n), U32, w => U32{w}, x, y, word.eq(32n, x, y, h))
+
+def not.true(b: Bool, h: {Bool.not(b) == True{} : Bool}) -> {b == False{} : Bool}:
+  match b:
+    case True{}:
+      no({True{} == False{} : Bool}, h)
+    case False{}:
+      {==}
+
+# the proxy's own 502, read back
+def r502(head: Bool, +closing: Bool, +v10: Bool, +code: U32, +body: Bytes()) ->
+  {RS.response(X.rask(head), Bytes.to_list(X.reply(None{}, head, closing, v10))) ==
+    Laws.rlook(None{}, head, code, body, closing) : R.Look}:
+  match head:
+    case True{}:
+      {==}
+    case False{}:
+      {==}
+
+# no token of the response's lines holds a CR or an LF
+def rncl(k: R.Cls) -> Bool:
+  match k:
+    case R.KCr{}:
+      False{}
+    case R.KLf{}:
+      False{}
+    case _:
+      True{}
+
+def RPL(xs: List<&2, U32>) -> Type:
+  match xs:
+    case Nil{}:
+      Unit
+    case Con{x, t}:
+      {rncl(R.cls(x)) == True{} : Bool} & RPL(t)
+
+def RAA(t: RS.Tok, xs: List<&2, U32>) -> Type:
+  match xs:
+    case Nil{}:
+      Unit
+    case Con{x, r}:
+      {RS.allows(t, R.cls(x)) == True{} : Bool} & RAA(t, r)
+
+def rallows.ncl(t: RS.Tok, k: R.Cls, h: {RS.allows(t, k) == True{} : Bool}) -> {rncl(k) == True{} : Bool}:
+  match t k:
+    case RS.TVer{} R.KCr{}:
+      no({rncl(R.KCr{}) == True{} : Bool}, h)
+    case RS.TVer{} R.KLf{}:
+      no({rncl(R.KLf{}) == True{} : Bool}, h)
+    case RS.TDig{} R.KCr{}:
+      no({rncl(R.KCr{}) == True{} : Bool}, h)
+    case RS.TDig{} R.KLf{}:
+      no({rncl(R.KLf{}) == True{} : Bool}, h)
+    case RS.TName{} R.KCr{}:
+      no({rncl(R.KCr{}) == True{} : Bool}, h)
+    case RS.TName{} R.KLf{}:
+      no({rncl(R.KLf{}) == True{} : Bool}, h)
+    case RS.TOws{} R.KCr{}:
+      no({rncl(R.KCr{}) == True{} : Bool}, h)
+    case RS.TOws{} R.KLf{}:
+      no({rncl(R.KLf{}) == True{} : Bool}, h)
+    case RS.TVal{} R.KCr{}:
+      no({rncl(R.KCr{}) == True{} : Bool}, h)
+    case RS.TVal{} R.KLf{}:
+      no({rncl(R.KLf{}) == True{} : Bool}, h)
+    case _ R.KSp{}:
+      {==}
+    case _ R.KHt{}:
+      {==}
+    case _ R.KCo{}:
+      {==}
+    case _ R.KCm{}:
+      {==}
+    case _ R.KDg{}:
+      {==}
+    case _ R.KTk{}:
+      {==}
+    case _ R.KVc{}:
+      {==}
+    case _ R.KCt{}:
+      {==}
+
+def raa.pl(+t: RS.Tok, xs: List<&2, U32>, h: RAA(t, xs)) -> RPL(xs):
+  match xs:
+    case Nil{}:
+      Unit{}
+    case Con{+x, r}:
+      (h1, h2) = h
+      (rallows.ncl(t, R.cls(x), h1), raa.pl(t, r, h2))
+
+def rpl.app(a: List<&2, U32>, -b: List<&2, U32>, pa: RPL(a), pb: RPL(b)) -> RPL(List.append(&2, U32, a, b)):
+  match a:
+    case Nil{}:
+      pb
+    case Con{x, t}:
+      (h1, h2) = pa
+      (h1, rpl.app(t, b, h2, pb))
+
+def raa.of.at(+t: RS.Tok, +c: U32, -r: Bytes(),
+  h: {RS.allows(t, R.cls(c)) == True{} : Bool} & {X.rok.all(t, r) == True{} : Bool},
+  ih: {X.rok.all(t, r) == True{} : Bool} -> RAA(t, Bytes.to_list(r))) ->
+  RAA(t, Con{c, Bytes.to_list(r)}):
+  (h1, h2) = h
+  (h1, ih(h2))
+
+def raa.of(+t: RS.Tok, s: Bytes(), h: {X.rok.all(t, s) == True{} : Bool}) -> RAA(t, Bytes.to_list(s)):
+  match s:
+    case SNil{}:
+      Unit{}
+    case SCon{Chr{+c}, r}:
+      raa.of.at(t, c, r, and.split(RS.allows(t, R.cls(c)), X.rok.all(t, r), h), h2 => raa.of(t, r, h2))
+
+def rspan.to(+t: RS.Tok, xs: List<&2, U32>, +c: U32, +rest: List<&2, U32>, h: RAA(t, xs),
+  hc: {RS.allows(t, R.cls(c)) == False{} : Bool}) ->
+  {RS.span(t, List.append(&2, U32, xs, Con{c, rest})) == RS.Span{xs, RS.SAt{R.cls(c), c, rest}} : RS.Span}:
+  match xs:
+    case Nil{}:
+      %Equal.sym(Bool, RS.allows(t, R.cls(c)), False{}, hc) :
+        {RS.span.pick(_, R.cls(c), c, rest, RS.span(t, rest)) == RS.Span{Nil{}, RS.SAt{R.cls(c), c, rest}} : RS.Span}
+      {==}
+    case Con{+x, +r}:
+      (h1, h2) = h
+      %Equal.sym(Bool, RS.allows(t, R.cls(x)), True{}, h1) :
+        {RS.span.pick(_, R.cls(x), x, List.append(&2, U32, r, Con{c, rest}),
+          RS.span(t, List.append(&2, U32, r, Con{c, rest}))) ==
+          RS.Span{Con{x, r}, RS.SAt{R.cls(c), c, rest}} : RS.Span}
+      %Equal.sym(RS.Span, RS.span(t, List.append(&2, U32, r, Con{c, rest})), RS.Span{r, RS.SAt{R.cls(c), c, rest}},
+        rspan.to(t, r, c, rest, h2, hc)) : {RS.span.push(x, _) == RS.Span{Con{x, r}, RS.SAt{R.cls(c), c, rest}} : RS.Span}
+      {==}
+
+def rspan.all(+t: RS.Tok, xs: List<&2, U32>, h: RAA(t, xs)) -> {RS.span(t, xs) == RS.Span{xs, RS.SEnd{}} : RS.Span}:
+  match xs:
+    case Nil{}:
+      {==}
+    case Con{+x, +r}:
+      (h1, h2) = h
+      %Equal.sym(Bool, RS.allows(t, R.cls(x)), True{}, h1) :
+        {RS.span.pick(_, R.cls(x), x, r, RS.span(t, r)) == RS.Span{Con{x, r}, RS.SEnd{}} : RS.Span}
+      %Equal.sym(RS.Span, RS.span(t, r), RS.Span{r, RS.SEnd{}}, rspan.all(t, r, h2)) :
+        {RS.span.push(x, _) == RS.Span{Con{x, r}, RS.SEnd{}} : RS.Span}
+      {==}
+
+# a line's byte is gathered
+def rline.plain(k: R.Cls, -c: U32, -cur: List<&2, U32>, -cr: RS.Mode, -more: List<&2, U32> -> RS.Mode,
+  h: {rncl(k) == True{} : Bool}) -> {RS.line.byte(k, c, cur, cr, more) == more(RS.snoc(cur, c)) : RS.Mode}:
+  match k:
+    case R.KSp{}:
+      {==}
+    case R.KHt{}:
+      {==}
+    case R.KCr{}:
+      no({RS.line.byte(R.KCr{}, c, cur, cr, more) == more(RS.snoc(cur, c)) : RS.Mode}, h)
+    case R.KLf{}:
+      no({RS.line.byte(R.KLf{}, c, cur, cr, more) == more(RS.snoc(cur, c)) : RS.Mode}, h)
+    case R.KCo{}:
+      {==}
+    case R.KCm{}:
+      {==}
+    case R.KDg{}:
+      {==}
+    case R.KTk{}:
+      {==}
+    case R.KVc{}:
+      {==}
+    case R.KCt{}:
+      {==}
+
+def rsnoc.app(+a: List<&2, U32>, +x: U32, +t: List<&2, U32>) ->
+  {List.append(&2, U32, RS.snoc(a, x), t) == List.append(&2, U32, a, Con{x, t}) : List<&2, U32>}:
+  app.assoc(U32, a, Con{x, Nil{}}, t)
+
+
+def rgather.st(xs: List<&2, U32>, +rest: List<&2, U32>, +cur: List<&2, U32>, +e: R.Ask, +o: List<&2, U32>,
+  pl: RPL(xs)) ->
+  {RS.walk(e, List.append(&2, U32, xs, rest), RS.W{RS.MStatus{cur}, o}) ==
+    RS.walk(e, rest, RS.W{RS.MStatus{List.append(&2, U32, cur, xs)}, o}) : RS.W}:
+  match xs:
+    case Nil{}:
+      Equal.cong(List<&2, U32>, RS.W, l => RS.walk(e, rest, RS.W{RS.MStatus{l}, o}), cur, List.append(&2, U32, cur, Nil{}),
+        Equal.sym(List<&2, U32>, List.append(&2, U32, cur, Nil{}), cur, app.nil(U32, cur)))
+    case Con{+x, +t}:
+      (h1, h2) = pl
+      Equal.trans(RS.W, RS.walk(e, List.append(&2, U32, Con{x, t}, rest), RS.W{RS.MStatus{cur}, o}),
+        RS.walk(e, List.append(&2, U32, t, rest), RS.W{RS.MStatus{RS.snoc(cur, x)}, o}),
+        RS.walk(e, rest, RS.W{RS.MStatus{List.append(&2, U32, cur, Con{x, t})}, o}),
+        Equal.cong(RS.Mode, RS.W, m => RS.walk(e, List.append(&2, U32, t, rest), RS.W{m, o}),
+          RS.line.byte(R.cls(x), x, cur, RS.status.cr(RS.status.view(cur)), y => RS.MStatus{y}), RS.MStatus{RS.snoc(cur, x)},
+          rline.plain(R.cls(x), x, cur, RS.status.cr(RS.status.view(cur)), y => RS.MStatus{y}, h1)),
+        Equal.trans(RS.W, RS.walk(e, List.append(&2, U32, t, rest), RS.W{RS.MStatus{RS.snoc(cur, x)}, o}),
+          RS.walk(e, rest, RS.W{RS.MStatus{List.append(&2, U32, RS.snoc(cur, x), t)}, o}),
+          RS.walk(e, rest, RS.W{RS.MStatus{List.append(&2, U32, cur, Con{x, t})}, o}),
+          rgather.st(t, rest, RS.snoc(cur, x), e, o, h2),
+          Equal.cong(List<&2, U32>, RS.W, l => RS.walk(e, rest, RS.W{RS.MStatus{l}, o}),
+            List.append(&2, U32, RS.snoc(cur, x), t), List.append(&2, U32, cur, Con{x, t}), rsnoc.app(cur, x, t))))
+
+def rgather.fl(xs: List<&2, U32>, +rest: List<&2, U32>, +hd: R.Head, +cur: List<&2, U32>, +e: R.Ask, +o: List<&2, U32>,
+  pl: RPL(xs)) ->
+  {RS.walk(e, List.append(&2, U32, xs, rest), RS.W{RS.MField{hd, cur}, o}) ==
+    RS.walk(e, rest, RS.W{RS.MField{hd, List.append(&2, U32, cur, xs)}, o}) : RS.W}:
+  match xs:
+    case Nil{}:
+      Equal.cong(List<&2, U32>, RS.W, l => RS.walk(e, rest, RS.W{RS.MField{hd, l}, o}), cur, List.append(&2, U32, cur, Nil{}),
+        Equal.sym(List<&2, U32>, List.append(&2, U32, cur, Nil{}), cur, app.nil(U32, cur)))
+    case Con{+x, +t}:
+      (h1, h2) = pl
+      Equal.trans(RS.W, RS.walk(e, List.append(&2, U32, Con{x, t}, rest), RS.W{RS.MField{hd, cur}, o}),
+        RS.walk(e, List.append(&2, U32, t, rest), RS.W{RS.MField{hd, RS.snoc(cur, x)}, o}),
+        RS.walk(e, rest, RS.W{RS.MField{hd, List.append(&2, U32, cur, Con{x, t})}, o}),
+        Equal.cong(RS.Mode, RS.W, m => RS.walk(e, List.append(&2, U32, t, rest), RS.W{m, o}),
+          RS.line.byte(R.cls(x), x, cur, RS.field.cr(e, hd, RS.field.view(e, cur)), y => RS.MField{hd, y}), RS.MField{hd, RS.snoc(cur, x)},
+          rline.plain(R.cls(x), x, cur, RS.field.cr(e, hd, RS.field.view(e, cur)), y => RS.MField{hd, y}, h1)),
+        Equal.trans(RS.W, RS.walk(e, List.append(&2, U32, t, rest), RS.W{RS.MField{hd, RS.snoc(cur, x)}, o}),
+          RS.walk(e, rest, RS.W{RS.MField{hd, List.append(&2, U32, RS.snoc(cur, x), t)}, o}),
+          RS.walk(e, rest, RS.W{RS.MField{hd, List.append(&2, U32, cur, Con{x, t})}, o}),
+          rgather.fl(t, rest, hd, RS.snoc(cur, x), e, o, h2),
+          Equal.cong(List<&2, U32>, RS.W, l => RS.walk(e, rest, RS.W{RS.MField{hd, l}, o}),
+            List.append(&2, U32, RS.snoc(cur, x), t), List.append(&2, U32, cur, Con{x, t}), rsnoc.app(cur, x, t))))
+
+# The status line
+# ---------------
+
+def SLl(+cd: Bytes(), +why: Bytes()) -> List<&2, U32>:
+  List.append(&2, U32, Bytes.to_list("HTTP/1.1 "), List.append(&2, U32, Bytes.to_list(cd), Con{32, Bytes.to_list(why)}))
+
+def sl.list(+cd: Bytes(), +why: Bytes()) -> {Bytes.to_list(X.sl.ser(cd, why)) == SLl(cd, why) : List<&2, U32>}:
+  Equal.trans(List<&2, U32>, Bytes.to_list(X.sl.ser(cd, why)),
+    List.append(&2, U32, Bytes.to_list("HTTP/1.1 "), Bytes.to_list(Bytes.append(cd, Bytes.append(" ", why)))),
+    SLl(cd, why),
+    tl.app("HTTP/1.1 ", Bytes.append(cd, Bytes.append(" ", why))),
+    Equal.cong(List<&2, U32>, List<&2, U32>, l => List.append(&2, U32, Bytes.to_list("HTTP/1.1 "), l),
+      Bytes.to_list(Bytes.append(cd, Bytes.append(" ", why))),
+      List.append(&2, U32, Bytes.to_list(cd), Con{32, Bytes.to_list(why)}),
+      tl.app(cd, Bytes.append(" ", why))))
+
+def rpl.st(+cd: Bytes(), +why: Bytes(), +ad: {X.rok.all(RS.TDig{}, cd) == True{} : Bool}, +aw: {X.rok.all(RS.TVal{}, why) == True{} : Bool}) ->
+  RPL(SLl(cd, why)):
+  rpl.app(Bytes.to_list("HTTP/1.1 "), List.append(&2, U32, Bytes.to_list(cd), Con{32, Bytes.to_list(why)}),
+    ({==}, ({==}, ({==}, ({==}, ({==}, ({==}, ({==}, ({==}, ({==}, Unit{}))))))))),
+    rpl.app(Bytes.to_list(cd), Con{32, Bytes.to_list(why)}, raa.pl(RS.TDig{}, Bytes.to_list(cd), raa.of(RS.TDig{}, cd, ad)),
+      ({==}, raa.pl(RS.TVal{}, Bytes.to_list(why), raa.of(RS.TVal{}, why, aw)))))
+
+# LEMMA: the status line reads as HTTP/1.1, the code, a reason
+def rview.st(+cd: Bytes(), +why: Bytes(), +ad: {X.rok.all(RS.TDig{}, cd) == True{} : Bool},
+  cw: {RS.code.whole(Bytes.to_list(cd)) == True{} : Bool}, +aw: {X.rok.all(RS.TVal{}, why) == True{} : Bool}) ->
+  {RS.status.view(SLl(cd, why)) == RS.VWhy{False{}, RS.num(Bytes.to_list(cd))} : RS.SView}:
+  %Equal.sym(RS.Span, RS.span(RS.TDig{}, List.append(&2, U32, Bytes.to_list(cd), Con{32, Bytes.to_list(why)})),
+    RS.Span{Bytes.to_list(cd), RS.SAt{R.cls(32), 32, Bytes.to_list(why)}},
+    rspan.to(RS.TDig{}, Bytes.to_list(cd), 32, Bytes.to_list(why), raa.of(RS.TDig{}, cd, ad), {==})) :
+    {RS.sv.code(False{}, _) == RS.VWhy{False{}, RS.num(Bytes.to_list(cd))} : RS.SView}
+  %Equal.sym(Bool, RS.code.whole(Bytes.to_list(cd)), True{}, cw) :
+    {RS.sv.code.sp(_, False{}, Bytes.to_list(cd), Bytes.to_list(why)) == RS.VWhy{False{}, RS.num(Bytes.to_list(cd))} : RS.SView}
+  %Equal.sym(RS.Span, RS.span(RS.TVal{}, Bytes.to_list(why)), RS.Span{Bytes.to_list(why), RS.SEnd{}},
+    rspan.all(RS.TVal{}, Bytes.to_list(why), raa.of(RS.TVal{}, why, aw))) :
+    {RS.sv.why(False{}, RS.num(Bytes.to_list(cd)), _) == RS.VWhy{False{}, RS.num(Bytes.to_list(cd))} : RS.SView}
+  {==}
+
+# LEMMA: the status line is read, and the fields begin
+def rline.st(+cd: Bytes(), +why: Bytes(), +rest: List<&2, U32>, +e: R.Ask, +o: List<&2, U32>,
+  +ad: {X.rok.all(RS.TDig{}, cd) == True{} : Bool}, cw: {RS.code.whole(Bytes.to_list(cd)) == True{} : Bool},
+  +aw: {X.rok.all(RS.TVal{}, why) == True{} : Bool}) ->
+  {RS.walk(e, List.append(&2, U32, SLl(cd, why), Con{13, Con{10, rest}}), RS.W{RS.MStatus{Nil{}}, o}) ==
+    RS.walk(e, rest, RS.W{RS.MField{R.head.new(False{}, RS.num(Bytes.to_list(cd))), Nil{}}, o}) : RS.W}:
+  Equal.trans(RS.W, RS.walk(e, List.append(&2, U32, SLl(cd, why), Con{13, Con{10, rest}}), RS.W{RS.MStatus{Nil{}}, o}),
+    RS.walk(e, Con{13, Con{10, rest}}, RS.W{RS.MStatus{List.append(&2, U32, Nil{}, SLl(cd, why))}, o}),
+    RS.walk(e, rest, RS.W{RS.MField{R.head.new(False{}, RS.num(Bytes.to_list(cd))), Nil{}}, o}),
+    rgather.st(SLl(cd, why), Con{13, Con{10, rest}}, Nil{}, e, o, rpl.st(cd, why, ad, aw)),
+    Equal.cong(RS.SView, RS.W, v => RS.walk(e, rest, RS.next(e, RS.W{RS.status.cr(v), o}, 10)),
+      RS.status.view(SLl(cd, why)), RS.VWhy{False{}, RS.num(Bytes.to_list(cd))}, rview.st(cd, why, ad, cw, aw)))
+
+# The field lines
+# ---------------
+
+def rother(f: RS.Fld, h: {X.ris.other(f) == True{} : Bool}) -> {f == RS.FOther{} : RS.Fld}:
+  match f:
+    case RS.FOther{}:
+      {==}
+    case RS.FCl{}:
+      no({RS.FCl{} == RS.FOther{} : RS.Fld}, h)
+    case RS.FTe{}:
+      no({RS.FTe{} == RS.FOther{} : RS.Fld}, h)
+    case RS.FConn{}:
+      no({RS.FConn{} == RS.FOther{} : RS.Fld}, h)
+
+# LEMMA: a field the check passed reads as one that changes nothing
+def rview.other(+e: R.Ask, n: Bytes(), +v: Bytes(), hn: {X.full(n) == True{} : Bool}, +ht: {X.rok.all(RS.TName{}, n) == True{} : Bool},
+  hc: {X.ris.other(RS.field(RS.lows(Bytes.to_list(n)))) == True{} : Bool}, +hv: {X.rok.all(RS.TVal{}, v) == True{} : Bool}) ->
+  {RS.field.view(e, FLl(X.Field{n, v})) == RS.FVal{RS.VSkip{}} : RS.FLine}:
+  match n:
+    case SNil{}:
+      no({RS.field.view(e, FLl(X.Field{SNil{}, v})) == RS.FVal{RS.VSkip{}} : RS.FLine}, hn)
+    case SCon{Chr{+c}, +r}:
+      %Equal.sym(RS.Span, RS.span(RS.TName{}, List.append(&2, U32, Con{c, Bytes.to_list(r)}, Con{58, Con{32, Bytes.to_list(v)}})),
+        RS.Span{Con{c, Bytes.to_list(r)}, RS.SAt{R.cls(58), 58, Con{32, Bytes.to_list(v)}}},
+        rspan.to(RS.TName{}, Con{c, Bytes.to_list(r)}, 58, Con{32, Bytes.to_list(v)}, raa.of(RS.TName{}, SCon{Chr{c}, r}, ht), {==})) :
+        {RS.field.name(e, _) == RS.FVal{RS.VSkip{}} : RS.FLine}
+      %Equal.sym(RS.Fld, RS.field(RS.lows(Con{c, Bytes.to_list(r)})), RS.FOther{},
+        rother(RS.field(RS.lows(Con{c, Bytes.to_list(r)})), hc)) :
+        {RS.field.of(e, _, Con{32, Bytes.to_list(v)}) == RS.FVal{RS.VSkip{}} : RS.FLine}
+      %Equal.sym(RS.Span, RS.span(RS.TVal{}, Bytes.to_list(v)), RS.Span{Bytes.to_list(v), RS.SEnd{}},
+        rspan.all(RS.TVal{}, Bytes.to_list(v), raa.of(RS.TVal{}, v, hv))) :
+        {RS.skip.view(RS.span.push(32, _)) == RS.FVal{RS.VSkip{}} : RS.FLine}
+      {==}
+
+def rpl.fl(+n: Bytes(), +v: Bytes(), +ht: {X.rok.all(RS.TName{}, n) == True{} : Bool}, +hv: {X.rok.all(RS.TVal{}, v) == True{} : Bool}) ->
+  RPL(FLl(X.Field{n, v})):
+  rpl.app(Bytes.to_list(n), Con{58, Con{32, Bytes.to_list(v)}}, raa.pl(RS.TName{}, Bytes.to_list(n), raa.of(RS.TName{}, n, ht)),
+    ({==}, ({==}, raa.pl(RS.TVal{}, Bytes.to_list(v), raa.of(RS.TVal{}, v, hv)))))
+
+# LEMMA: a field line is read, what it says taken into the head
+def rline.fl(f: X.Field, +rest: List<&2, U32>, +h: R.Head, h2: R.Head, +e: R.Ask, +o: List<&2, U32>, val: RS.Val,
+  pl: RPL(FLl(f)), hv: {RS.field.view(e, FLl(f)) == RS.FVal{val} : RS.FLine},
+  hd: {RS.field.done(e, h, val) == Some{h2} : Maybe<&2, R.Head>}) ->
+  {RS.walk(e, List.append(&2, U32, FLl(f), Con{13, Con{10, rest}}), RS.W{RS.MField{h, Nil{}}, o}) ==
+    RS.walk(e, rest, RS.W{RS.MField{h2, Nil{}}, o}) : RS.W}:
+  Equal.trans(RS.W, RS.walk(e, List.append(&2, U32, FLl(f), Con{13, Con{10, rest}}), RS.W{RS.MField{h, Nil{}}, o}),
+    RS.walk(e, Con{13, Con{10, rest}}, RS.W{RS.MField{h, List.append(&2, U32, Nil{}, FLl(f))}, o}),
+    RS.walk(e, rest, RS.W{RS.MField{h2, Nil{}}, o}),
+    rgather.fl(FLl(f), Con{13, Con{10, rest}}, h, Nil{}, e, o, pl),
+    Equal.trans(RS.W, RS.walk(e, rest, RS.next(e, RS.W{RS.field.cr(e, h, RS.field.view(e, FLl(f))), o}, 10)),
+      RS.walk(e, rest, RS.next(e, RS.W{RS.field.cr(e, h, RS.FVal{val}), o}, 10)),
+      RS.walk(e, rest, RS.W{RS.MField{h2, Nil{}}, o}),
+      Equal.cong(RS.FLine, RS.W, x => RS.walk(e, rest, RS.next(e, RS.W{RS.field.cr(e, h, x), o}, 10)),
+        RS.field.view(e, FLl(f)), RS.FVal{val}, hv),
+      Equal.cong(Maybe<&2, R.Head>, RS.W, m => RS.walk(e, rest, RS.next(e, RS.W{RS.field.next(m), o}, 10)),
+        RS.field.done(e, h, val), Some{h2}, hd)))
+
+def rok.field.split(+n: Bytes(), +v: Bytes(), h: {X.rok.field(X.Field{n, v}) == True{} : Bool}) ->
+  {X.full(n) == True{} : Bool} & {X.rok.all(RS.TName{}, n) == True{} : Bool} &
+    {X.ris.other(RS.field(RS.lows(Bytes.to_list(n)))) == True{} : Bool} & {X.rok.all(RS.TVal{}, v) == True{} : Bool}:
+  split4(X.full(n), X.rok.all(RS.TName{}, n), X.ris.other(RS.field(RS.lows(Bytes.to_list(n)))), X.rok.all(RS.TVal{}, v), h)
+
+def rpl.fl.at(+n: Bytes(), +v: Bytes(), fk: {X.full(n) == True{} : Bool} & {X.rok.all(RS.TName{}, n) == True{} : Bool} &
+    {X.ris.other(RS.field(RS.lows(Bytes.to_list(n)))) == True{} : Bool} & {X.rok.all(RS.TVal{}, v) == True{} : Bool}) -> RPL(FLl(X.Field{n, v})):
+  (hn, r1) = fk
+  (ht, r2) = r1
+  (hc, hv) = r2
+  rpl.fl(n, v, ht, hv)
+
+def rview.other.at(+e: R.Ask, +n: Bytes(), +v: Bytes(), fk: {X.full(n) == True{} : Bool} & {X.rok.all(RS.TName{}, n) == True{} : Bool} &
+    {X.ris.other(RS.field(RS.lows(Bytes.to_list(n)))) == True{} : Bool} & {X.rok.all(RS.TVal{}, v) == True{} : Bool}) ->
+  {RS.field.view(e, FLl(X.Field{n, v})) == RS.FVal{RS.VSkip{}} : RS.FLine}:
+  (hn, r1) = fk
+  (ht, r2) = r1
+  (hc, hv) = r2
+  rview.other(e, n, v, hn, ht, hc, hv)
+
+def rline.other4(+n: Bytes(), +v: Bytes(), +rest: List<&2, U32>, +h: R.Head, +e: R.Ask, +o: List<&2, U32>,
+  +hk: {X.rok.field(X.Field{n, v}) == True{} : Bool}) ->
+  {RS.walk(e, List.append(&2, U32, FLl(X.Field{n, v}), Con{13, Con{10, rest}}), RS.W{RS.MField{h, Nil{}}, o}) ==
+    RS.walk(e, rest, RS.W{RS.MField{h, Nil{}}, o}) : RS.W}:
+  rline.fl(X.Field{n, v}, rest, h, h, e, o, RS.VSkip{}, rpl.fl.at(n, v, rok.field.split(n, v, hk)),
+    rview.other.at(e, n, v, rok.field.split(n, v, hk)), {==})
+
+def rfields.con(+n: Bytes(), +v: Bytes(), +t: List<&2, X.Field>, +rest: List<&2, U32>, +h: R.Head, +e: R.Ask,
+  +o: List<&2, U32>, hh: {X.rok.field(X.Field{n, v}) == True{} : Bool} & {X.rok.fields(t) == True{} : Bool},
+  ih: {X.rok.fields(t) == True{} : Bool} ->
+    {RS.walk(e, List.append(&2, U32, FLSl(t), rest), RS.W{RS.MField{h, Nil{}}, o}) ==
+      RS.walk(e, rest, RS.W{RS.MField{h, Nil{}}, o}) : RS.W}) ->
+  {RS.walk(e, List.append(&2, U32, FLSl(Con{X.Field{n, v}, t}), rest), RS.W{RS.MField{h, Nil{}}, o}) ==
+    RS.walk(e, rest, RS.W{RS.MField{h, Nil{}}, o}) : RS.W}:
+  (h1, h2) = hh
+  Equal.trans(RS.W, RS.walk(e, List.append(&2, U32, FLSl(Con{X.Field{n, v}, t}), rest), RS.W{RS.MField{h, Nil{}}, o}),
+    RS.walk(e, List.append(&2, U32, FLl(X.Field{n, v}), Con{13, Con{10, List.append(&2, U32, FLSl(t), rest)}}),
+      RS.W{RS.MField{h, Nil{}}, o}),
+    RS.walk(e, rest, RS.W{RS.MField{h, Nil{}}, o}),
+    Equal.cong(List<&2, U32>, RS.W, l => RS.walk(e, l, RS.W{RS.MField{h, Nil{}}, o}),
+      List.append(&2, U32, List.append(&2, U32, FLl(X.Field{n, v}), Con{13, Con{10, FLSl(t)}}), rest),
+      List.append(&2, U32, FLl(X.Field{n, v}), Con{13, Con{10, List.append(&2, U32, FLSl(t), rest)}}),
+      app.assoc(U32, FLl(X.Field{n, v}), Con{13, Con{10, FLSl(t)}}, rest)),
+    Equal.trans(RS.W,
+      RS.walk(e, List.append(&2, U32, FLl(X.Field{n, v}), Con{13, Con{10, List.append(&2, U32, FLSl(t), rest)}}),
+        RS.W{RS.MField{h, Nil{}}, o}),
+      RS.walk(e, List.append(&2, U32, FLSl(t), rest), RS.W{RS.MField{h, Nil{}}, o}),
+      RS.walk(e, rest, RS.W{RS.MField{h, Nil{}}, o}),
+      rline.other4(n, v, List.append(&2, U32, FLSl(t), rest), h, e, o, h1),
+      ih(h2)))
+
+# LEMMA: the fields the proxy carries on leave the head as it was
+def rfields.walk(fs: List<&2, X.Field>, +rest: List<&2, U32>, +h: R.Head, +e: R.Ask, +o: List<&2, U32>,
+  hok: {X.rok.fields(fs) == True{} : Bool}) ->
+  {RS.walk(e, List.append(&2, U32, FLSl(fs), rest), RS.W{RS.MField{h, Nil{}}, o}) ==
+    RS.walk(e, rest, RS.W{RS.MField{h, Nil{}}, o}) : RS.W}:
+  match fs:
+    case Nil{}:
+      {==}
+    case Con{f, +t}:
+      match f:
+        case X.Field{+n, +v}:
+          rfields.con(n, v, t, rest, h, e, o, and.split(X.rok.field(X.Field{n, v}), X.rok.fields(t), hok),
+            h2 => rfields.walk(t, rest, h, e, o, h2))
+
+# The body
+# --------
+
+# LEMMA: a body of known length is counted off to its last byte, and the
+# response is final
+def rbody.walk(t: Bytes(), +c: U32, +h: R.Head, +got: List<&2, U32>, +e: R.Ask, +o: List<&2, U32>) ->
+  {RS.walk(e, Con{c, Bytes.to_list(t)}, RS.W{RS.MBody{h, Bytes.len(t), got}, o}) ==
+    RS.W{RS.MDone{RS.resp(h, List.append(&2, U32, got, Con{c, Bytes.to_list(t)}), False{}), Nil{}}, o} : RS.W}:
+  match t:
+    case SNil{}:
+      {==}
+    case SCon{Chr{+c2}, +t2}:
+      %Equal.sym(Nat, Bytes.len(SCon{Chr{c2}, t2}), 1n+Bytes.len(t2), Bytes.len.shift(t2, 0n)) :
+        {RS.walk(e, Con{c, Con{c2, Bytes.to_list(t2)}}, RS.W{RS.MBody{h, _, got}, o}) ==
+          RS.W{RS.MDone{RS.resp(h, List.append(&2, U32, got, Con{c, Con{c2, Bytes.to_list(t2)}}), False{}), Nil{}}, o} : RS.W}
+      %rsnoc.app(got, c, Con{c2, Bytes.to_list(t2)}) :
+        {RS.walk(e, Con{c2, Bytes.to_list(t2)}, RS.W{RS.MBody{h, Bytes.len(t2), RS.snoc(got, c)}, o}) ==
+          RS.W{RS.MDone{RS.resp(h, _, False{}), Nil{}}, o} : RS.W}
+      rbody.walk(t2, c2, h, RS.snoc(got, c), e, o)
+
+def rtail.z(z: Bool, +h: R.Head, body: Bytes(), +n: U32, +e: R.Ask, +o: List<&2, U32>,
+  hz: {X.same(z, String.is_empty(body)) == True{} : Bool}, hn: {Nat.is_eq(U32.to_nat(n), Bytes.len(body)) == True{} : Bool}) ->
+  {RS.walk(e, Bytes.to_list(body), RS.W{RS.head.body(z, h, n), o}) ==
+    RS.W{RS.MDone{RS.resp(h, Bytes.to_list(body), False{}), Nil{}}, o} : RS.W}:
+  match z body:
+    case True{} SNil{}:
+      {==}
+    case True{} SCon{c, t}:
+      no({RS.walk(e, Bytes.to_list(SCon{c, t}), RS.W{RS.head.body(True{}, h, n), o}) ==
+        RS.W{RS.MDone{RS.resp(h, Bytes.to_list(SCon{c, t}), False{}), Nil{}}, o} : RS.W}, hz)
+    case False{} SNil{}:
+      no({RS.walk(e, Nil{}, RS.W{RS.head.body(False{}, h, n), o}) ==
+        RS.W{RS.MDone{RS.resp(h, Nil{}, False{}), Nil{}}, o} : RS.W}, hz)
+    case False{} SCon{Chr{+c}, +t}:
+      %Equal.sym(Nat, U32.to_nat(n), Bytes.len(SCon{Chr{c}, t}), nat.eq(U32.to_nat(n), Bytes.len(SCon{Chr{c}, t}), hn)) :
+        {RS.walk(e, Con{c, Bytes.to_list(t)}, RS.W{RS.MBody{h, Nat.sub(_, 1n), Nil{}}, o}) ==
+          RS.W{RS.MDone{RS.resp(h, Con{c, Bytes.to_list(t)}, False{}), Nil{}}, o} : RS.W}
+      %Equal.sym(Nat, Bytes.len(SCon{Chr{c}, t}), 1n+Bytes.len(t), Bytes.len.shift(t, 0n)) :
+        {RS.walk(e, Con{c, Bytes.to_list(t)}, RS.W{RS.MBody{h, Nat.sub(_, 1n), Nil{}}, o}) ==
+          RS.W{RS.MDone{RS.resp(h, Con{c, Bytes.to_list(t)}, False{}), Nil{}}, o} : RS.W}
+      %Equal.sym(Nat, Nat.sub(Bytes.len(t), 0n), Bytes.len(t), sub0(Bytes.len(t))) :
+        {RS.walk(e, Con{c, Bytes.to_list(t)}, RS.W{RS.MBody{h, _, Nil{}}, o}) ==
+          RS.W{RS.MDone{RS.resp(h, Con{c, Bytes.to_list(t)}, False{}), Nil{}}, o} : RS.W}
+      rbody.walk(t, c, h, Nil{}, e, o)
+
+# The blank line, and the framing
+# -------------------------------
+
+# the head the proxy's fields leave: HTTP/1.1, the code, a length or
+# none, no coding, closing as the proxy closes
+def HC(+code: U32, +l: Maybe<&2, U32>, +closing: Bool, +v10: Bool) -> R.Head:
+  R.Head{False{}, code, l, False{}, closing, v10 && Bool.not(closing)}
+
+# LEMMA: with a code of 200 or more, the framing is none (HEAD, 204,
+# 304) or the length
+def rfr(head: Bool, +code: U32, +l: Maybe<&2, U32>, +cl: Bool, +ka: Bool, hlt: {U32.is_lt(code, 200) == False{} : Bool}) ->
+  {RS.framing(X.rask(head), R.Head{False{}, code, l, False{}, cl, ka}) ==
+    RS.frame.pick(X.rbodyless(head, code), R.FNone{}, RS.frame.len(l)) : R.Frame}:
+  match head:
+    case True{}:
+      Equal.cong(Bool, R.Frame, b => RS.frame.pick(False{}, R.FBad{}, RS.frame.pick(b && Bool.not(U32.is_eq(code, 101)), R.FNext{},
+        RS.frame.pick(True{} || b || U32.is_eq(code, 204) || U32.is_eq(code, 304), R.FNone{},
+          RS.frame.pick(False{}, R.FChunked{}, RS.frame.len(l))))), U32.is_lt(code, 200), False{}, hlt)
+    case False{}:
+      Equal.cong(Bool, R.Frame, b => RS.frame.pick(False{}, R.FBad{}, RS.frame.pick(b && Bool.not(U32.is_eq(code, 101)), R.FNext{},
+        RS.frame.pick(False{} || b || U32.is_eq(code, 204) || U32.is_eq(code, 304), R.FNone{},
+          RS.frame.pick(False{}, R.FChunked{}, RS.frame.len(l))))), U32.is_lt(code, 200), False{}, hlt)
+
+def rend.none(+head: Bool, +code: U32, +l: Maybe<&2, U32>, +cl: Bool, +ka: Bool,
+  hlt: {U32.is_lt(code, 200) == False{} : Bool}, hb: {X.rbodyless(head, code) == True{} : Bool}) ->
+  {RS.walk(X.rask(head), Con{13, Con{10, Nil{}}}, RS.W{RS.MField{R.Head{False{}, code, l, False{}, cl, ka}, Nil{}}, Nil{}}) ==
+    RS.W{RS.MDone{RS.resp(R.Head{False{}, code, l, False{}, cl, ka}, Nil{}, False{}), Nil{}}, Nil{}} : RS.W}:
+  +h : R.Head = R.Head{False{}, code, l, False{}, cl, ka}
+  Equal.trans(RS.W, RS.head.at(X.rask(head), RS.framing(X.rask(head), h), h, Nil{}),
+    RS.head.at(X.rask(head), RS.frame.pick(X.rbodyless(head, code), R.FNone{}, RS.frame.len(l)), h, Nil{}),
+    RS.W{RS.MDone{RS.resp(h, Nil{}, False{}), Nil{}}, Nil{}},
+    Equal.cong(R.Frame, RS.W, f => RS.head.at(X.rask(head), f, h, Nil{}), RS.framing(X.rask(head), h),
+      RS.frame.pick(X.rbodyless(head, code), R.FNone{}, RS.frame.len(l)), rfr(head, code, l, cl, ka, hlt)),
+    Equal.cong(Bool, RS.W, b => RS.head.at(X.rask(head), RS.frame.pick(b, R.FNone{}, RS.frame.len(l)), h, Nil{}),
+      X.rbodyless(head, code), True{}, hb))
+
+def rend.len(+head: Bool, +code: U32, +n: U32, +cl: Bool, +ka: Bool, +body: Bytes(),
+  hlt: {U32.is_lt(code, 200) == False{} : Bool}, hb: {X.rbodyless(head, code) == False{} : Bool},
+  hz: {X.same(U32.is_zero(n), String.is_empty(body)) == True{} : Bool},
+  hn: {Nat.is_eq(U32.to_nat(n), Bytes.len(body)) == True{} : Bool}) ->
+  {RS.walk(X.rask(head), Con{13, Con{10, Bytes.to_list(body)}},
+    RS.W{RS.MField{R.Head{False{}, code, Some{n}, False{}, cl, ka}, Nil{}}, Nil{}}) ==
+    RS.W{RS.MDone{RS.resp(R.Head{False{}, code, Some{n}, False{}, cl, ka}, Bytes.to_list(body), False{}), Nil{}}, Nil{}} : RS.W}:
+  +h : R.Head = R.Head{False{}, code, Some{n}, False{}, cl, ka}
+  Equal.trans(RS.W, RS.walk(X.rask(head), Bytes.to_list(body), RS.head.at(X.rask(head), RS.framing(X.rask(head), h), h, Nil{})),
+    RS.walk(X.rask(head), Bytes.to_list(body),
+      RS.head.at(X.rask(head), RS.frame.pick(X.rbodyless(head, code), R.FNone{}, R.FLen{n}), h, Nil{})),
+    RS.W{RS.MDone{RS.resp(h, Bytes.to_list(body), False{}), Nil{}}, Nil{}},
+    Equal.cong(R.Frame, RS.W, f => RS.walk(X.rask(head), Bytes.to_list(body), RS.head.at(X.rask(head), f, h, Nil{})),
+      RS.framing(X.rask(head), h), RS.frame.pick(X.rbodyless(head, code), R.FNone{}, R.FLen{n}),
+      rfr(head, code, Some{n}, cl, ka, hlt)),
+    Equal.trans(RS.W, RS.walk(X.rask(head), Bytes.to_list(body),
+        RS.head.at(X.rask(head), RS.frame.pick(X.rbodyless(head, code), R.FNone{}, R.FLen{n}), h, Nil{})),
+      RS.walk(X.rask(head), Bytes.to_list(body), RS.head.at(X.rask(head), R.FLen{n}, h, Nil{})),
+      RS.W{RS.MDone{RS.resp(h, Bytes.to_list(body), False{}), Nil{}}, Nil{}},
+      Equal.cong(Bool, RS.W, b => RS.walk(X.rask(head), Bytes.to_list(body),
+          RS.head.at(X.rask(head), RS.frame.pick(b, R.FNone{}, R.FLen{n}), h, Nil{})),
+        X.rbodyless(head, code), False{}, hb),
+      rtail.z(U32.is_zero(n), h, body, n, X.rask(head), Nil{}, hz, hn)))
+
+# the response the client reads: the code, HTTP/1.1, closing as the
+# proxy closes
+def rresp.eq(+code: U32, +l: Maybe<&2, U32>, closing: Bool, +v10: Bool, +got: List<&2, U32>,
+  h101: {U32.is_eq(code, 101) == False{} : Bool}) ->
+  {RS.resp(HC(code, l, closing, v10), got, False{}) == R.Resp{code, False{}, closing, Bytes.from_list(got)} : R.Resp}:
+  match closing:
+    case True{}:
+      {==}
+    case False{}:
+      Equal.cong(Bool, R.Resp, b => R.Resp{code, False{}, False{} || (False{} && Bool.not(v10 && Bool.not(False{}))) || b || False{},
+        Bytes.from_list(got)}, U32.is_eq(code, 101), False{}, h101)
+
+def rafter.none(+head: Bool, +code: U32, +l: Maybe<&2, U32>, +closing: Bool, +v10: Bool,
+  hlt: {U32.is_lt(code, 200) == False{} : Bool}, h101: {U32.is_eq(code, 101) == False{} : Bool},
+  hb: {X.rbodyless(head, code) == True{} : Bool}) ->
+  {RS.walk(X.rask(head), Con{13, Con{10, Nil{}}}, RS.W{RS.MField{HC(code, l, closing, v10), Nil{}}, Nil{}}) ==
+    RS.W{RS.MDone{R.Resp{code, False{}, closing, ""}, Nil{}}, Nil{}} : RS.W}:
+  Equal.trans(RS.W, RS.walk(X.rask(head), Con{13, Con{10, Nil{}}}, RS.W{RS.MField{HC(code, l, closing, v10), Nil{}}, Nil{}}),
+    RS.W{RS.MDone{RS.resp(HC(code, l, closing, v10), Nil{}, False{}), Nil{}}, Nil{}},
+    RS.W{RS.MDone{R.Resp{code, False{}, closing, ""}, Nil{}}, Nil{}},
+    rend.none(head, code, l, closing, v10 && Bool.not(closing), hlt, hb),
+    Equal.cong(R.Resp, RS.W, r => RS.W{RS.MDone{r, Nil{}}, Nil{}}, RS.resp(HC(code, l, closing, v10), Nil{}, False{}),
+      R.Resp{code, False{}, closing, ""}, rresp.eq(code, l, closing, v10, Nil{}, h101)))
+
+def rafter.len(+head: Bool, +code: U32, +n: U32, +closing: Bool, +v10: Bool, +body: Bytes(),
+  hlt: {U32.is_lt(code, 200) == False{} : Bool}, h101: {U32.is_eq(code, 101) == False{} : Bool},
+  hb: {X.rbodyless(head, code) == False{} : Bool},
+  hz: {X.same(U32.is_zero(n), String.is_empty(body)) == True{} : Bool},
+  hn: {Nat.is_eq(U32.to_nat(n), Bytes.len(body)) == True{} : Bool}) ->
+  {RS.walk(X.rask(head), Con{13, Con{10, Bytes.to_list(body)}}, RS.W{RS.MField{HC(code, Some{n}, closing, v10), Nil{}}, Nil{}}) ==
+    RS.W{RS.MDone{R.Resp{code, False{}, closing, body}, Nil{}}, Nil{}} : RS.W}:
+  Equal.trans(RS.W,
+    RS.walk(X.rask(head), Con{13, Con{10, Bytes.to_list(body)}}, RS.W{RS.MField{HC(code, Some{n}, closing, v10), Nil{}}, Nil{}}),
+    RS.W{RS.MDone{RS.resp(HC(code, Some{n}, closing, v10), Bytes.to_list(body), False{}), Nil{}}, Nil{}},
+    RS.W{RS.MDone{R.Resp{code, False{}, closing, body}, Nil{}}, Nil{}},
+    rend.len(head, code, n, closing, v10 && Bool.not(closing), body, hlt, hb, hz, hn),
+    Equal.trans(RS.W, RS.W{RS.MDone{RS.resp(HC(code, Some{n}, closing, v10), Bytes.to_list(body), False{}), Nil{}}, Nil{}},
+      RS.W{RS.MDone{R.Resp{code, False{}, closing, Bytes.from_list(Bytes.to_list(body))}, Nil{}}, Nil{}},
+      RS.W{RS.MDone{R.Resp{code, False{}, closing, body}, Nil{}}, Nil{}},
+      Equal.cong(R.Resp, RS.W, r => RS.W{RS.MDone{r, Nil{}}, Nil{}}, RS.resp(HC(code, Some{n}, closing, v10), Bytes.to_list(body), False{}),
+        R.Resp{code, False{}, closing, Bytes.from_list(Bytes.to_list(body))},
+        rresp.eq(code, Some{n}, closing, v10, Bytes.to_list(body), h101)),
+      Equal.cong(Bytes(), RS.W, b => RS.W{RS.MDone{R.Resp{code, False{}, closing, b}, Nil{}}, Nil{}},
+        Bytes.from_list(Bytes.to_list(body)), body, bytes.rt(body))))
+
+# The Connection
+# --------------
+
+def rhc(h: R.Head, closing: Bool, v10: Bool) -> R.Head:
+  match closing:
+    case True{}:
+      RS.head.conn(h, True{}, False{})
+    case False{}:
+      match v10:
+        case True{}:
+          RS.head.conn(h, False{}, True{})
+        case False{}:
+          h
+
+# LEMMA: the Connection sent says what the proxy does
+def rconn(closing: Bool, v10: Bool, +h: R.Head, +rest: List<&2, U32>, +e: R.Ask, +o: List<&2, U32>) ->
+  {RS.walk(e, List.append(&2, U32, FLSl(X.rconf(X.conn.val(closing, v10))), rest), RS.W{RS.MField{h, Nil{}}, o}) ==
+    RS.walk(e, rest, RS.W{RS.MField{rhc(h, closing, v10), Nil{}}, o}) : RS.W}:
+  match closing:
+    case True{}:
+      {==}
+    case False{}:
+      match v10:
+        case True{}:
+          {==}
+        case False{}:
+          {==}
+
+def rhc.form(closing: Bool, v10: Bool, +code: U32, +l: Maybe<&2, U32>) ->
+  {rhc(R.Head{False{}, code, l, False{}, False{}, False{}}, closing, v10) == HC(code, l, closing, v10) : R.Head}:
+  match closing v10:
+    case True{} True{}:
+      {==}
+    case True{} False{}:
+      {==}
+    case False{} True{}:
+      {==}
+    case False{} False{}:
+      {==}
+
+def rconn.to(+code: U32, +l: Maybe<&2, U32>, +closing: Bool, +v10: Bool, +rest: List<&2, U32>, +e: R.Ask) ->
+  {RS.walk(e, List.append(&2, U32, FLSl(X.rconf(X.conn.val(closing, v10))), rest),
+    RS.W{RS.MField{R.Head{False{}, code, l, False{}, False{}, False{}}, Nil{}}, Nil{}}) ==
+    RS.walk(e, rest, RS.W{RS.MField{HC(code, l, closing, v10), Nil{}}, Nil{}}) : RS.W}:
+  Equal.trans(RS.W, RS.walk(e, List.append(&2, U32, FLSl(X.rconf(X.conn.val(closing, v10))), rest),
+      RS.W{RS.MField{R.Head{False{}, code, l, False{}, False{}, False{}}, Nil{}}, Nil{}}),
+    RS.walk(e, rest, RS.W{RS.MField{rhc(R.Head{False{}, code, l, False{}, False{}, False{}}, closing, v10), Nil{}}, Nil{}}),
+    RS.walk(e, rest, RS.W{RS.MField{HC(code, l, closing, v10), Nil{}}, Nil{}}),
+    rconn(closing, v10, R.Head{False{}, code, l, False{}, False{}, False{}}, rest, e, Nil{}),
+    Equal.cong(R.Head, RS.W, h => RS.walk(e, rest, RS.W{RS.MField{h, Nil{}}, Nil{}}),
+      rhc(R.Head{False{}, code, l, False{}, False{}, False{}}, closing, v10), HC(code, l, closing, v10),
+      rhc.form(closing, v10, code, l)))
+
+# The length, the Connection, the end
+# -----------------------------------
+
+def TAIL(clen: Bytes(), +conn: Bytes(), +b: Bytes()) -> List<&2, U32>:
+  List.append(&2, U32, FLSl(List.append(&2, X.Field, X.rclf(clen), X.rconf(conn))), Con{13, Con{10, Bytes.to_list(b)}})
+
+# no length: a response with no body by its framing
+def rtail.nil(bl: Bool, +head: Bool, +code: U32, +closing: Bool, +v10: Bool, +body: Bytes(),
+  hbl: {X.rbodyless(head, code) == bl : Bool}, hlt: {U32.is_lt(code, 200) == False{} : Bool},
+  h101: {U32.is_eq(code, 101) == False{} : Bool}, ak: {bl == True{} : Bool}) ->
+  {RS.walk(X.rask(head), TAIL("", X.conn.val(closing, v10), Bool.pick(Bytes(), bl, "", body)),
+    RS.W{RS.MField{R.head.new(False{}, code), Nil{}}, Nil{}}) ==
+    RS.W{RS.MDone{R.Resp{code, False{}, closing, Bool.pick(Bytes(), bl, "", body)}, Nil{}}, Nil{}} : RS.W}:
+  match bl:
+    case False{}:
+      no({RS.walk(X.rask(head), TAIL("", X.conn.val(closing, v10), body),
+        RS.W{RS.MField{R.head.new(False{}, code), Nil{}}, Nil{}}) ==
+        RS.W{RS.MDone{R.Resp{code, False{}, closing, body}, Nil{}}, Nil{}} : RS.W}, ak)
+    case True{}:
+      Equal.trans(RS.W, RS.walk(X.rask(head), TAIL("", X.conn.val(closing, v10), ""),
+          RS.W{RS.MField{R.head.new(False{}, code), Nil{}}, Nil{}}),
+        RS.walk(X.rask(head), Con{13, Con{10, Nil{}}}, RS.W{RS.MField{HC(code, None{}, closing, v10), Nil{}}, Nil{}}),
+        RS.W{RS.MDone{R.Resp{code, False{}, closing, ""}, Nil{}}, Nil{}},
+        rconn.to(code, None{}, closing, v10, Con{13, Con{10, Nil{}}}, X.rask(head)),
+        rafter.none(head, code, None{}, closing, v10, hlt, h101, hbl))
+
+def rafter.len.pr(+head: Bool, +code: U32, +n: U32, +closing: Bool, +v10: Bool, +body: Bytes(),
+  hlt: {U32.is_lt(code, 200) == False{} : Bool}, h101: {U32.is_eq(code, 101) == False{} : Bool},
+  hb: {X.rbodyless(head, code) == False{} : Bool},
+  hh: {X.same(U32.is_zero(n), String.is_empty(body)) == True{} : Bool} &
+    {Nat.is_eq(U32.to_nat(n), Bytes.len(body)) == True{} : Bool}) ->
+  {RS.walk(X.rask(head), Con{13, Con{10, Bytes.to_list(body)}}, RS.W{RS.MField{HC(code, Some{n}, closing, v10), Nil{}}, Nil{}}) ==
+    RS.W{RS.MDone{R.Resp{code, False{}, closing, body}, Nil{}}, Nil{}} : RS.W}:
+  (hz, hn) = hh
+  rafter.len(head, code, n, closing, v10, body, hlt, h101, hb, hz, hn)
+
+def rtail.fin(bl: Bool, +head: Bool, +code: U32, +n: U32, +closing: Bool, +v10: Bool, +body: Bytes(),
+  hbl: {X.rbodyless(head, code) == bl : Bool}, hlt: {U32.is_lt(code, 200) == False{} : Bool},
+  h101: {U32.is_eq(code, 101) == False{} : Bool},
+  hrest: {(bl || (X.same(U32.is_zero(n), String.is_empty(body)) && Nat.is_eq(U32.to_nat(n), Bytes.len(body)))) == True{} : Bool}) ->
+  {RS.walk(X.rask(head), Con{13, Con{10, Bytes.to_list(Bool.pick(Bytes(), bl, "", body))}},
+    RS.W{RS.MField{HC(code, Some{n}, closing, v10), Nil{}}, Nil{}}) ==
+    RS.W{RS.MDone{R.Resp{code, False{}, closing, Bool.pick(Bytes(), bl, "", body)}, Nil{}}, Nil{}} : RS.W}:
+  match bl:
+    case True{}:
+      rafter.none(head, code, Some{n}, closing, v10, hlt, h101, hbl)
+    case False{}:
+      rafter.len.pr(head, code, n, closing, v10, body, hlt, h101, hbl,
+        and.split(X.same(U32.is_zero(n), String.is_empty(body)), Nat.is_eq(U32.to_nat(n), Bytes.len(body)), hrest))
+
+def rpl.cl(+d: Bytes(), +ad: {X.rok.all(RS.TVal{}, d) == True{} : Bool}) -> RPL(FLl(X.Field{"content-length", d})):
+  rpl.app(Bytes.to_list("content-length"), Con{58, Con{32, Bytes.to_list(d)}},
+    ({==}, ({==}, ({==}, ({==}, ({==}, ({==}, ({==}, ({==}, ({==}, ({==}, ({==}, ({==}, ({==}, ({==}, Unit{})))))))))))))),
+    ({==}, ({==}, raa.pl(RS.TVal{}, Bytes.to_list(d), raa.of(RS.TVal{}, d, ad)))))
+
+# a length the client reads as the check did
+def rtail.n(+n: U32, +ws: Bool, +head: Bool, +code: U32, +d: Bytes(), +closing: Bool, +v10: Bool, +bl: Bool, +body: Bytes(),
+  hbl: {X.rbodyless(head, code) == bl : Bool}, hlt: {U32.is_lt(code, 200) == False{} : Bool},
+  h101: {U32.is_eq(code, 101) == False{} : Bool}, +ad: {X.rok.all(RS.TVal{}, d) == True{} : Bool},
+  hlv: {RS.len.view(X.rask(head), RS.span(RS.TOws{}, Con{32, Bytes.to_list(d)})) == RS.FVal{RS.VLen{n, ws}} : RS.FLine},
+  al: {Bool.not(U32.is_lt(268435455, n)) == True{} : Bool} & {(bl || (X.same(U32.is_zero(n), String.is_empty(body)) &&
+    Nat.is_eq(U32.to_nat(n), Bytes.len(body)))) == True{} : Bool}) ->
+  {RS.walk(X.rask(head), List.append(&2, U32, FLl(X.Field{"content-length", d}),
+      Con{13, Con{10, List.append(&2, U32, FLSl(X.rconf(X.conn.val(closing, v10))),
+        Con{13, Con{10, Bytes.to_list(Bool.pick(Bytes(), bl, "", body))}})}}),
+    RS.W{RS.MField{R.head.new(False{}, code), Nil{}}, Nil{}}) ==
+    RS.W{RS.MDone{R.Resp{code, False{}, closing, Bool.pick(Bytes(), bl, "", body)}, Nil{}}, Nil{}} : RS.W}:
+  (hcap, hrest) = al
+  +e2 : List<&2, U32> = Con{13, Con{10, Bytes.to_list(Bool.pick(Bytes(), bl, "", body))}}
+  +h1 : R.Head = R.Head{False{}, code, Some{n}, False{}, False{}, False{}}
+  Equal.trans(RS.W,
+    RS.walk(X.rask(head), List.append(&2, U32, FLl(X.Field{"content-length", d}),
+      Con{13, Con{10, List.append(&2, U32, FLSl(X.rconf(X.conn.val(closing, v10))), e2)}}),
+      RS.W{RS.MField{R.head.new(False{}, code), Nil{}}, Nil{}}),
+    RS.walk(X.rask(head), List.append(&2, U32, FLSl(X.rconf(X.conn.val(closing, v10))), e2), RS.W{RS.MField{h1, Nil{}}, Nil{}}),
+    RS.W{RS.MDone{R.Resp{code, False{}, closing, Bool.pick(Bytes(), bl, "", body)}, Nil{}}, Nil{}},
+    rline.fl(X.Field{"content-length", d}, List.append(&2, U32, FLSl(X.rconf(X.conn.val(closing, v10))), e2),
+      R.head.new(False{}, code), h1, X.rask(head), Nil{}, RS.VLen{n, ws}, rpl.cl(d, ad), hlv,
+      Equal.cong(Bool, Maybe<&2, R.Head>, b => RS.head.big(b, R.head.new(False{}, code), n), U32.is_lt(268435455, n), False{},
+        not.true(U32.is_lt(268435455, n), hcap))),
+    Equal.trans(RS.W,
+      RS.walk(X.rask(head), List.append(&2, U32, FLSl(X.rconf(X.conn.val(closing, v10))), e2), RS.W{RS.MField{h1, Nil{}}, Nil{}}),
+      RS.walk(X.rask(head), e2, RS.W{RS.MField{HC(code, Some{n}, closing, v10), Nil{}}, Nil{}}),
+      RS.W{RS.MDone{R.Resp{code, False{}, closing, Bool.pick(Bytes(), bl, "", body)}, Nil{}}, Nil{}},
+      rconn.to(code, Some{n}, closing, v10, e2, X.rask(head)),
+      rtail.fin(bl, head, code, n, closing, v10, body, hbl, hlt, h101, hrest)))
+
+def rtail.val(val: RS.Val, +head: Bool, +code: U32, +d: Bytes(), +closing: Bool, +v10: Bool, +bl: Bool, +body: Bytes(),
+  hbl: {X.rbodyless(head, code) == bl : Bool}, hlt: {U32.is_lt(code, 200) == False{} : Bool},
+  h101: {U32.is_eq(code, 101) == False{} : Bool}, +ad: {X.rok.all(RS.TVal{}, d) == True{} : Bool},
+  hlv: {RS.len.view(X.rask(head), RS.span(RS.TOws{}, Con{32, Bytes.to_list(d)})) == RS.FVal{val} : RS.FLine},
+  al: {X.rok.len.at(RS.FVal{val}, bl, body) == True{} : Bool}) ->
+  {RS.walk(X.rask(head), List.append(&2, U32, FLl(X.Field{"content-length", d}),
+      Con{13, Con{10, List.append(&2, U32, FLSl(X.rconf(X.conn.val(closing, v10))),
+        Con{13, Con{10, Bytes.to_list(Bool.pick(Bytes(), bl, "", body))}})}}),
+    RS.W{RS.MField{R.head.new(False{}, code), Nil{}}, Nil{}}) ==
+    RS.W{RS.MDone{R.Resp{code, False{}, closing, Bool.pick(Bytes(), bl, "", body)}, Nil{}}, Nil{}} : RS.W}:
+  match val:
+    case RS.VLen{+n, +ws}:
+      rtail.n(n, ws, head, code, d, closing, v10, bl, body, hbl, hlt, h101, ad, hlv,
+        and.split(Bool.not(U32.is_lt(268435455, n)), bl || (X.same(U32.is_zero(n), String.is_empty(body)) &&
+          Nat.is_eq(U32.to_nat(n), Bytes.len(body))), al))
+    case RS.VLen0{}:
+      no({RS.walk(X.rask(head), List.append(&2, U32, FLl(X.Field{"content-length", d}),
+      Con{13, Con{10, List.append(&2, U32, FLSl(X.rconf(X.conn.val(closing, v10))),
+        Con{13, Con{10, Bytes.to_list(Bool.pick(Bytes(), bl, "", body))}})}}),
+    RS.W{RS.MField{R.head.new(False{}, code), Nil{}}, Nil{}}) ==
+    RS.W{RS.MDone{R.Resp{code, False{}, closing, Bool.pick(Bytes(), bl, "", body)}, Nil{}}, Nil{}} : RS.W}, al)
+    case RS.VTe0{}:
+      no({RS.walk(X.rask(head), List.append(&2, U32, FLl(X.Field{"content-length", d}),
+      Con{13, Con{10, List.append(&2, U32, FLSl(X.rconf(X.conn.val(closing, v10))),
+        Con{13, Con{10, Bytes.to_list(Bool.pick(Bytes(), bl, "", body))}})}}),
+    RS.W{RS.MField{R.head.new(False{}, code), Nil{}}, Nil{}}) ==
+    RS.W{RS.MDone{R.Resp{code, False{}, closing, Bool.pick(Bytes(), bl, "", body)}, Nil{}}, Nil{}} : RS.W}, al)
+    case RS.VTe{t}:
+      no({RS.walk(X.rask(head), List.append(&2, U32, FLl(X.Field{"content-length", d}),
+      Con{13, Con{10, List.append(&2, U32, FLSl(X.rconf(X.conn.val(closing, v10))),
+        Con{13, Con{10, Bytes.to_list(Bool.pick(Bytes(), bl, "", body))}})}}),
+    RS.W{RS.MField{R.head.new(False{}, code), Nil{}}, Nil{}}) ==
+    RS.W{RS.MDone{R.Resp{code, False{}, closing, Bool.pick(Bytes(), bl, "", body)}, Nil{}}, Nil{}} : RS.W}, al)
+    case RS.VConn{dn, cu}:
+      no({RS.walk(X.rask(head), List.append(&2, U32, FLl(X.Field{"content-length", d}),
+      Con{13, Con{10, List.append(&2, U32, FLSl(X.rconf(X.conn.val(closing, v10))),
+        Con{13, Con{10, Bytes.to_list(Bool.pick(Bytes(), bl, "", body))}})}}),
+    RS.W{RS.MField{R.head.new(False{}, code), Nil{}}, Nil{}}) ==
+    RS.W{RS.MDone{R.Resp{code, False{}, closing, Bool.pick(Bytes(), bl, "", body)}, Nil{}}, Nil{}} : RS.W}, al)
+    case RS.VSkip{}:
+      no({RS.walk(X.rask(head), List.append(&2, U32, FLl(X.Field{"content-length", d}),
+      Con{13, Con{10, List.append(&2, U32, FLSl(X.rconf(X.conn.val(closing, v10))),
+        Con{13, Con{10, Bytes.to_list(Bool.pick(Bytes(), bl, "", body))}})}}),
+    RS.W{RS.MField{R.head.new(False{}, code), Nil{}}, Nil{}}) ==
+    RS.W{RS.MDone{R.Resp{code, False{}, closing, Bool.pick(Bytes(), bl, "", body)}, Nil{}}, Nil{}} : RS.W}, al)
+
+def rtail.lv(lv: RS.FLine, +head: Bool, +code: U32, +d: Bytes(), +closing: Bool, +v10: Bool, +bl: Bool, +body: Bytes(),
+  hbl: {X.rbodyless(head, code) == bl : Bool}, hlt: {U32.is_lt(code, 200) == False{} : Bool},
+  h101: {U32.is_eq(code, 101) == False{} : Bool}, +ad: {X.rok.all(RS.TVal{}, d) == True{} : Bool},
+  hlv: {RS.len.view(X.rask(head), RS.span(RS.TOws{}, Con{32, Bytes.to_list(d)})) == lv : RS.FLine},
+  al: {X.rok.len.at(lv, bl, body) == True{} : Bool}) ->
+  {RS.walk(X.rask(head), List.append(&2, U32, FLl(X.Field{"content-length", d}),
+      Con{13, Con{10, List.append(&2, U32, FLSl(X.rconf(X.conn.val(closing, v10))),
+        Con{13, Con{10, Bytes.to_list(Bool.pick(Bytes(), bl, "", body))}})}}),
+    RS.W{RS.MField{R.head.new(False{}, code), Nil{}}, Nil{}}) ==
+    RS.W{RS.MDone{R.Resp{code, False{}, closing, Bool.pick(Bytes(), bl, "", body)}, Nil{}}, Nil{}} : RS.W}:
+  match lv:
+    case RS.FVal{val}:
+      rtail.val(val, head, code, d, closing, v10, bl, body, hbl, hlt, h101, ad, hlv, al)
+    case RS.FEmpty{}:
+      no({RS.walk(X.rask(head), List.append(&2, U32, FLl(X.Field{"content-length", d}),
+      Con{13, Con{10, List.append(&2, U32, FLSl(X.rconf(X.conn.val(closing, v10))),
+        Con{13, Con{10, Bytes.to_list(Bool.pick(Bytes(), bl, "", body))}})}}),
+    RS.W{RS.MField{R.head.new(False{}, code), Nil{}}, Nil{}}) ==
+    RS.W{RS.MDone{R.Resp{code, False{}, closing, Bool.pick(Bytes(), bl, "", body)}, Nil{}}, Nil{}} : RS.W}, al)
+    case RS.FName{nm}:
+      no({RS.walk(X.rask(head), List.append(&2, U32, FLl(X.Field{"content-length", d}),
+      Con{13, Con{10, List.append(&2, U32, FLSl(X.rconf(X.conn.val(closing, v10))),
+        Con{13, Con{10, Bytes.to_list(Bool.pick(Bytes(), bl, "", body))}})}}),
+    RS.W{RS.MField{R.head.new(False{}, code), Nil{}}, Nil{}}) ==
+    RS.W{RS.MDone{R.Resp{code, False{}, closing, Bool.pick(Bytes(), bl, "", body)}, Nil{}}, Nil{}} : RS.W}, al)
+    case RS.FBad{}:
+      no({RS.walk(X.rask(head), List.append(&2, U32, FLl(X.Field{"content-length", d}),
+      Con{13, Con{10, List.append(&2, U32, FLSl(X.rconf(X.conn.val(closing, v10))),
+        Con{13, Con{10, Bytes.to_list(Bool.pick(Bytes(), bl, "", body))}})}}),
+    RS.W{RS.MField{R.head.new(False{}, code), Nil{}}, Nil{}}) ==
+    RS.W{RS.MDone{R.Resp{code, False{}, closing, Bool.pick(Bytes(), bl, "", body)}, Nil{}}, Nil{}} : RS.W}, al)
+
+def rtail.cl2(+c: Char, +t: Bytes(), +head: Bool, +code: U32, +closing: Bool, +v10: Bool, +bl: Bool, +body: Bytes(),
+  hbl: {X.rbodyless(head, code) == bl : Bool}, hlt: {U32.is_lt(code, 200) == False{} : Bool},
+  h101: {U32.is_eq(code, 101) == False{} : Bool},
+  hh: {X.rok.all(RS.TVal{}, SCon{c, t}) == True{} : Bool} &
+    {X.rok.len.at(RS.len.view(X.rask(head), RS.span(RS.TOws{}, Con{32, Bytes.to_list(SCon{c, t})})), bl, body) == True{} : Bool}) ->
+  {RS.walk(X.rask(head), TAIL(SCon{c, t}, X.conn.val(closing, v10), Bool.pick(Bytes(), bl, "", body)),
+    RS.W{RS.MField{R.head.new(False{}, code), Nil{}}, Nil{}}) ==
+    RS.W{RS.MDone{R.Resp{code, False{}, closing, Bool.pick(Bytes(), bl, "", body)}, Nil{}}, Nil{}} : RS.W}:
+  (ad, al) = hh
+  +d : Bytes() = SCon{c, t}
+  +e2 : List<&2, U32> = Con{13, Con{10, Bytes.to_list(Bool.pick(Bytes(), bl, "", body))}}
+  +cf : List<&2, U32> = FLSl(X.rconf(X.conn.val(closing, v10)))
+  Equal.trans(RS.W, RS.walk(X.rask(head), TAIL(d, X.conn.val(closing, v10), Bool.pick(Bytes(), bl, "", body)),
+      RS.W{RS.MField{R.head.new(False{}, code), Nil{}}, Nil{}}),
+    RS.walk(X.rask(head), List.append(&2, U32, FLl(X.Field{"content-length", d}), Con{13, Con{10, List.append(&2, U32, cf, e2)}}),
+      RS.W{RS.MField{R.head.new(False{}, code), Nil{}}, Nil{}}),
+    RS.W{RS.MDone{R.Resp{code, False{}, closing, Bool.pick(Bytes(), bl, "", body)}, Nil{}}, Nil{}},
+    Equal.cong(List<&2, U32>, RS.W, l => RS.walk(X.rask(head), l, RS.W{RS.MField{R.head.new(False{}, code), Nil{}}, Nil{}}),
+      List.append(&2, U32, List.append(&2, U32, FLl(X.Field{"content-length", d}), Con{13, Con{10, cf}}), e2),
+      List.append(&2, U32, FLl(X.Field{"content-length", d}), Con{13, Con{10, List.append(&2, U32, cf, e2)}}),
+      app.assoc(U32, FLl(X.Field{"content-length", d}), Con{13, Con{10, cf}}, e2)),
+    rtail.lv(RS.len.view(X.rask(head), RS.span(RS.TOws{}, Con{32, Bytes.to_list(d)})), head, code, d, closing, v10, bl, body, hbl, hlt, h101, ad, {==}, al))
+
+def rtail.cl(+c: Char, +t: Bytes(), +head: Bool, +code: U32, +closing: Bool, +v10: Bool, +bl: Bool, +body: Bytes(),
+  hbl: {X.rbodyless(head, code) == bl : Bool}, hlt: {U32.is_lt(code, 200) == False{} : Bool},
+  h101: {U32.is_eq(code, 101) == False{} : Bool}, ak: {X.rok.len(head, bl, SCon{c, t}, body) == True{} : Bool}) ->
+  {RS.walk(X.rask(head), TAIL(SCon{c, t}, X.conn.val(closing, v10), Bool.pick(Bytes(), bl, "", body)),
+    RS.W{RS.MField{R.head.new(False{}, code), Nil{}}, Nil{}}) ==
+    RS.W{RS.MDone{R.Resp{code, False{}, closing, Bool.pick(Bytes(), bl, "", body)}, Nil{}}, Nil{}} : RS.W}:
+  +d : Bytes() = SCon{c, t}
+  rtail.cl2(c, t, head, code, closing, v10, bl, body, hbl, hlt, h101, and.split(X.rok.all(RS.TVal{}, d), X.rok.len.at(RS.len.view(X.rask(head), RS.span(RS.TOws{}, Con{32, Bytes.to_list(d)})), bl, body), ak))
+
+def rtail(clen: Bytes(), +head: Bool, +code: U32, +closing: Bool, +v10: Bool, +bl: Bool, +body: Bytes(),
+  hbl: {X.rbodyless(head, code) == bl : Bool}, hlt: {U32.is_lt(code, 200) == False{} : Bool},
+  h101: {U32.is_eq(code, 101) == False{} : Bool}, ak: {X.rok.len(head, bl, clen, body) == True{} : Bool}) ->
+  {RS.walk(X.rask(head), TAIL(clen, X.conn.val(closing, v10), Bool.pick(Bytes(), bl, "", body)),
+    RS.W{RS.MField{R.head.new(False{}, code), Nil{}}, Nil{}}) ==
+    RS.W{RS.MDone{R.Resp{code, False{}, closing, Bool.pick(Bytes(), bl, "", body)}, Nil{}}, Nil{}} : RS.W}:
+  match clen:
+    case SNil{}:
+      rtail.nil(bl, head, code, closing, v10, body, hbl, hlt, h101, ak)
+    case SCon{+c, +t}:
+      rtail.cl(c, t, head, code, closing, v10, bl, body, hbl, hlt, h101, ak)
+
+
+# The whole response
+# ------------------
+
+def RSERl(+cd: Bytes(), +why: Bytes(), fs: List<&2, X.Field>, clen: Bytes(), +conn: Bytes(), +b: Bytes()) -> List<&2, U32>:
+  List.append(&2, U32, SLl(cd, why),
+    Con{13, Con{10, List.append(&2, U32, FLSl(X.rall(fs, clen, conn)), Con{13, Con{10, Bytes.to_list(b)}})}})
+
+def rser.list(+cd: Bytes(), +why: Bytes(), +fs: List<&2, X.Field>, +clen: Bytes(), +conn: Bytes(), +body: Bytes(), +bl: Bool) ->
+  {Bytes.to_list(X.rser(X.Rsp{cd, why, fs, clen, body, bl}, conn)) ==
+    RSERl(cd, why, fs, clen, conn, Bool.pick(Bytes(), bl, "", body)) : List<&2, U32>}:
+  +f = X.fls.ser(X.rall(fs, clen, conn))
+  +b = Bool.pick(Bytes(), bl, "", body)
+  Equal.trans(List<&2, U32>, Bytes.to_list(X.rser(X.Rsp{cd, why, fs, clen, body, bl}, conn)),
+    List.append(&2, U32, Bytes.to_list(X.sl.ser(cd, why)), Bytes.to_list(Bytes.append("\r\n", Bytes.append(f, Bytes.append("\r\n", b))))),
+    RSERl(cd, why, fs, clen, conn, b),
+    tl.app(X.sl.ser(cd, why), Bytes.append("\r\n", Bytes.append(f, Bytes.append("\r\n", b)))),
+    Equal.trans(List<&2, U32>,
+      List.append(&2, U32, Bytes.to_list(X.sl.ser(cd, why)), Con{13, Con{10, Bytes.to_list(Bytes.append(f, Bytes.append("\r\n", b)))}}),
+      List.append(&2, U32, SLl(cd, why), Con{13, Con{10, Bytes.to_list(Bytes.append(f, Bytes.append("\r\n", b)))}}),
+      RSERl(cd, why, fs, clen, conn, b),
+      Equal.cong(List<&2, U32>, List<&2, U32>,
+        l => List.append(&2, U32, l, Con{13, Con{10, Bytes.to_list(Bytes.append(f, Bytes.append("\r\n", b)))}}),
+        Bytes.to_list(X.sl.ser(cd, why)), SLl(cd, why), sl.list(cd, why)),
+      Equal.cong(List<&2, U32>, List<&2, U32>, l => List.append(&2, U32, SLl(cd, why), Con{13, Con{10, l}}),
+        Bytes.to_list(Bytes.append(f, Bytes.append("\r\n", b))),
+        List.append(&2, U32, FLSl(X.rall(fs, clen, conn)), Con{13, Con{10, Bytes.to_list(b)}}),
+        Equal.trans(List<&2, U32>, Bytes.to_list(Bytes.append(f, Bytes.append("\r\n", b))),
+          List.append(&2, U32, Bytes.to_list(f), Bytes.to_list(Bytes.append("\r\n", b))),
+          List.append(&2, U32, FLSl(X.rall(fs, clen, conn)), Con{13, Con{10, Bytes.to_list(b)}}),
+          tl.app(f, Bytes.append("\r\n", b)),
+          Equal.cong(List<&2, U32>, List<&2, U32>, l => List.append(&2, U32, l, Con{13, Con{10, Bytes.to_list(b)}}),
+            Bytes.to_list(f), FLSl(X.rall(fs, clen, conn)), fls.list(X.rall(fs, clen, conn)))))))
+
+def T5(a: Bool, b: Bool, c: Bool, d: Bool, e: Bool) -> Type:
+  {a == True{} : Bool} & {b == True{} : Bool} & {c == True{} : Bool} & {d == True{} : Bool} & {e == True{} : Bool}
+
+def split5(a: Bool, b: Bool, c: Bool, d: Bool, -e: Bool, h: {(a && b && c && d && e) == True{} : Bool}) -> T5(a, b, c, d, e):
+  match a b c d:
+    case True{} True{} True{} True{}:
+      ({==}, ({==}, ({==}, ({==}, h))))
+    case False{} _ _ _:
+      no(T5(False{}, b, c, d, e), h)
+    case True{} False{} _ _:
+      no(T5(True{}, False{}, c, d, e), h)
+    case True{} True{} False{} _:
+      no(T5(True{}, True{}, False{}, d, e), h)
+    case True{} True{} True{} False{}:
+      no(T5(True{}, True{}, True{}, False{}, e), h)
+
+# LEMMA: a response the check passed, sent, is read back as the one that
+# came, to its end
+def rmain.at(+cd: Bytes(), +why: Bytes(), +fs: List<&2, X.Field>, +clen: Bytes(), +head: Bool, +code: U32, +body: Bytes(),
+  +closing: Bool, +v10: Bool,
+  hc: T5(X.rok.all(RS.TDig{}, cd), RS.code.whole(Bytes.to_list(cd)), U32.is_eq(RS.num(Bytes.to_list(cd)), code),
+    Bool.not(U32.is_lt(code, 200)), Bool.not(U32.is_eq(code, 101))),
+  +aw: {X.rok.all(RS.TVal{}, why) == True{} : Bool}, hfs: {X.rok.fields(fs) == True{} : Bool},
+  hl: {X.rok.len(head, X.rbodyless(head, code), clen, body) == True{} : Bool}) ->
+  {RS.walk(X.rask(head), Bytes.to_list(X.rser(X.Rsp{cd, why, fs, clen, body, X.rbodyless(head, code)}, X.conn.val(closing, v10))),
+    RS.W{RS.MStatus{Nil{}}, Nil{}}) ==
+    RS.W{RS.MDone{R.Resp{code, False{}, closing, Bool.pick(Bytes(), X.rbodyless(head, code), "", body)}, Nil{}}, Nil{}} : RS.W}:
+  (+ad, r1) = hc
+  (cw, r2) = r1
+  (heq, r3) = r2
+  (hlt0, h1010) = r3
+  +e = X.rask(head)
+  +conn = X.conn.val(closing, v10)
+  +bl = X.rbodyless(head, code)
+  +b = Bool.pick(Bytes(), bl, "", body)
+  +e2 : List<&2, U32> = Con{13, Con{10, Bytes.to_list(b)}}
+  +cf : List<&2, X.Field> = List.append(&2, X.Field, X.rclf(clen), X.rconf(conn))
+  Equal.trans(RS.W, RS.walk(e, Bytes.to_list(X.rser(X.Rsp{cd, why, fs, clen, body, bl}, conn)), RS.W{RS.MStatus{Nil{}}, Nil{}}),
+    RS.walk(e, RSERl(cd, why, fs, clen, conn, b), RS.W{RS.MStatus{Nil{}}, Nil{}}),
+    RS.W{RS.MDone{R.Resp{code, False{}, closing, b}, Nil{}}, Nil{}},
+    Equal.cong(List<&2, U32>, RS.W, l => RS.walk(e, l, RS.W{RS.MStatus{Nil{}}, Nil{}}),
+      Bytes.to_list(X.rser(X.Rsp{cd, why, fs, clen, body, bl}, conn)), RSERl(cd, why, fs, clen, conn, b),
+      rser.list(cd, why, fs, clen, conn, body, bl)),
+    Equal.trans(RS.W, RS.walk(e, RSERl(cd, why, fs, clen, conn, b), RS.W{RS.MStatus{Nil{}}, Nil{}}),
+      RS.walk(e, List.append(&2, U32, FLSl(X.rall(fs, clen, conn)), e2),
+        RS.W{RS.MField{R.head.new(False{}, RS.num(Bytes.to_list(cd))), Nil{}}, Nil{}}),
+      RS.W{RS.MDone{R.Resp{code, False{}, closing, b}, Nil{}}, Nil{}},
+      rline.st(cd, why, List.append(&2, U32, FLSl(X.rall(fs, clen, conn)), e2), e, Nil{}, ad, cw, aw),
+      Equal.trans(RS.W, RS.walk(e, List.append(&2, U32, FLSl(X.rall(fs, clen, conn)), e2),
+          RS.W{RS.MField{R.head.new(False{}, RS.num(Bytes.to_list(cd))), Nil{}}, Nil{}}),
+        RS.walk(e, List.append(&2, U32, FLSl(X.rall(fs, clen, conn)), e2), RS.W{RS.MField{R.head.new(False{}, code), Nil{}}, Nil{}}),
+        RS.W{RS.MDone{R.Resp{code, False{}, closing, b}, Nil{}}, Nil{}},
+        Equal.cong(U32, RS.W, x => RS.walk(e, List.append(&2, U32, FLSl(X.rall(fs, clen, conn)), e2),
+            RS.W{RS.MField{R.head.new(False{}, x), Nil{}}, Nil{}}),
+          RS.num(Bytes.to_list(cd)), code, u32.eq(RS.num(Bytes.to_list(cd)), code, heq)),
+        Equal.trans(RS.W,
+          RS.walk(e, List.append(&2, U32, FLSl(X.rall(fs, clen, conn)), e2), RS.W{RS.MField{R.head.new(False{}, code), Nil{}}, Nil{}}),
+          RS.walk(e, List.append(&2, U32, FLSl(fs), List.append(&2, U32, FLSl(cf), e2)),
+            RS.W{RS.MField{R.head.new(False{}, code), Nil{}}, Nil{}}),
+          RS.W{RS.MDone{R.Resp{code, False{}, closing, b}, Nil{}}, Nil{}},
+          Equal.cong(List<&2, U32>, RS.W, l => RS.walk(e, l, RS.W{RS.MField{R.head.new(False{}, code), Nil{}}, Nil{}}),
+            List.append(&2, U32, FLSl(X.rall(fs, clen, conn)), e2),
+            List.append(&2, U32, FLSl(fs), List.append(&2, U32, FLSl(cf), e2)),
+            Equal.trans(List<&2, U32>, List.append(&2, U32, FLSl(X.rall(fs, clen, conn)), e2),
+              List.append(&2, U32, List.append(&2, U32, FLSl(fs), FLSl(cf)), e2),
+              List.append(&2, U32, FLSl(fs), List.append(&2, U32, FLSl(cf), e2)),
+              Equal.cong(List<&2, U32>, List<&2, U32>, l => List.append(&2, U32, l, e2), FLSl(X.rall(fs, clen, conn)),
+                List.append(&2, U32, FLSl(fs), FLSl(cf)), fls.app(fs, cf)),
+              app.assoc(U32, FLSl(fs), FLSl(cf), e2))),
+          Equal.trans(RS.W,
+            RS.walk(e, List.append(&2, U32, FLSl(fs), List.append(&2, U32, FLSl(cf), e2)),
+              RS.W{RS.MField{R.head.new(False{}, code), Nil{}}, Nil{}}),
+            RS.walk(e, List.append(&2, U32, FLSl(cf), e2), RS.W{RS.MField{R.head.new(False{}, code), Nil{}}, Nil{}}),
+            RS.W{RS.MDone{R.Resp{code, False{}, closing, b}, Nil{}}, Nil{}},
+            rfields.walk(fs, List.append(&2, U32, FLSl(cf), e2), R.head.new(False{}, code), e, Nil{}, hfs),
+            rtail(clen, head, code, closing, v10, bl, body, {==}, not.true(U32.is_lt(code, 200), hlt0),
+              not.true(U32.is_eq(code, 101), h1010), hl))))))
+
+def rmain.split(+cd: Bytes(), +why: Bytes(), +fs: List<&2, X.Field>, +clen: Bytes(), +head: Bool, +code: U32, +body: Bytes(),
+  +closing: Bool, +v10: Bool,
+  hh: {X.rok.code(cd, code) == True{} : Bool} & {X.rok.all(RS.TVal{}, why) == True{} : Bool} &
+    {X.rok.fields(fs) == True{} : Bool} & {X.rok.len(head, X.rbodyless(head, code), clen, body) == True{} : Bool}) ->
+  {RS.walk(X.rask(head), Bytes.to_list(X.rser(X.Rsp{cd, why, fs, clen, body, X.rbodyless(head, code)}, X.conn.val(closing, v10))),
+    RS.W{RS.MStatus{Nil{}}, Nil{}}) ==
+    RS.W{RS.MDone{R.Resp{code, False{}, closing, Bool.pick(Bytes(), X.rbodyless(head, code), "", body)}, Nil{}}, Nil{}} : RS.W}:
+  (hk, r1) = hh
+  (aw, r2) = r1
+  (hfs, hl) = r2
+  rmain.at(cd, why, fs, clen, head, code, body, closing, v10,
+    split5(X.rok.all(RS.TDig{}, cd), RS.code.whole(Bytes.to_list(cd)), U32.is_eq(RS.num(Bytes.to_list(cd)), code),
+      Bool.not(U32.is_lt(code, 200)), Bool.not(U32.is_eq(code, 101)), hk), aw, hfs, hl)
+
+def rmain(+cd: Bytes(), +why: Bytes(), +fs: List<&2, X.Field>, +clen: Bytes(), +head: Bool, +code: U32, +body: Bytes(),
+  +closing: Bool, +v10: Bool,
+  hv: {X.rvalid(head, code, X.Rsp{cd, why, fs, clen, body, X.rbodyless(head, code)}) == True{} : Bool}) ->
+  {RS.walk(X.rask(head), Bytes.to_list(X.rser(X.Rsp{cd, why, fs, clen, body, X.rbodyless(head, code)}, X.conn.val(closing, v10))),
+    RS.W{RS.MStatus{Nil{}}, Nil{}}) ==
+    RS.W{RS.MDone{R.Resp{code, False{}, closing, Bool.pick(Bytes(), X.rbodyless(head, code), "", body)}, Nil{}}, Nil{}} : RS.W}:
+  rmain.split(cd, why, fs, clen, head, code, body, closing, v10,
+    split4(X.rok.code(cd, code), X.rok.all(RS.TVal{}, why), X.rok.fields(fs), X.rok.len(head, X.rbodyless(head, code), clen, body), hv))
+
+# The law
+# -------
+
+def rr.valid(+cd: Bytes(), +why: Bytes(), +fs: List<&2, X.Field>, +hlen: Bytes(), +head: Bool, +code: U32, +body: Bytes(),
+  +closing: Bool, +v10: Bool,
+  hv: {X.rvalid(head, code, X.rsp.fin(head, code, X.RHead{cd, why, fs, hlen}, body)) == True{} : Bool}) ->
+  {RS.response(X.rask(head), Bytes.to_list(X.reply(Some{X.rsp.fin(head, code, X.RHead{cd, why, fs, hlen}, body)}, head, closing, v10))) ==
+    Laws.rlook(Some{X.rsp.fin(head, code, X.RHead{cd, why, fs, hlen}, body)}, head, code, body, closing) : R.Look}:
+  +clen = X.rclen(head, X.rbodyless(head, code), hlen, body)
+  Equal.cong(RS.W, R.Look, w => RS.finish(X.rask(head), w),
+    RS.walk(X.rask(head), Bytes.to_list(X.rser(X.Rsp{cd, why, fs, clen, body, X.rbodyless(head, code)}, X.conn.val(closing, v10))),
+      RS.W{RS.MStatus{Nil{}}, Nil{}}),
+    RS.W{RS.MDone{R.Resp{code, False{}, closing, Bool.pick(Bytes(), X.rbodyless(head, code), "", body)}, Nil{}}, Nil{}},
+    rmain(cd, why, fs, clen, head, code, body, closing, v10, hv))
+
+def rr.h(h: X.RHead, +head: Bool, +code: U32, +body: Bytes(), +closing: Bool, +v10: Bool,
+  hv: {X.rvalid(head, code, X.rsp.fin(head, code, h, body)) == True{} : Bool}) ->
+  {RS.response(X.rask(head), Bytes.to_list(X.reply(Some{X.rsp.fin(head, code, h, body)}, head, closing, v10))) ==
+    Laws.rlook(Some{X.rsp.fin(head, code, h, body)}, head, code, body, closing) : R.Look}:
+  match h:
+    case X.RHead{+cd, +why, +fs, +hlen}:
+      rr.valid(cd, why, fs, hlen, head, code, body, closing, v10, hv)
+
+def rr.pick(b: Bool, +head: Bool, +code: U32, +h: X.RHead, +body: Bytes(), +closing: Bool, +v10: Bool,
+  e: {X.rvalid(head, code, X.rsp.fin(head, code, h, body)) == b : Bool}) ->
+  {RS.response(X.rask(head), Bytes.to_list(X.reply(Bool.pick(Maybe<&2, X.Rsp>, b, Some{X.rsp.fin(head, code, h, body)}, None{}),
+    head, closing, v10))) ==
+    Laws.rlook(Bool.pick(Maybe<&2, X.Rsp>, b, Some{X.rsp.fin(head, code, h, body)}, None{}), head, code, body, closing) : R.Look}:
+  match b:
+    case True{}:
+      rr.h(h, head, code, body, closing, v10, e)
+    case False{}:
+      r502(head, closing, v10, code, body)
+
+def rr.at(+head: Bool, +code: U32, mh: Maybe<&2, X.RHead>, +body: Bytes(), +closing: Bool, +v10: Bool) ->
+  {RS.response(X.rask(head), Bytes.to_list(X.reply(X.rsp.at(head, code, mh, body), head, closing, v10))) ==
+    Laws.rlook(X.rsp.at(head, code, mh, body), head, code, body, closing) : R.Look}:
+  match mh:
+    case Some{+h}:
+      rr.pick(X.rvalid(head, code, X.rsp.fin(head, code, h, body)), head, code, h, body, closing, v10, {==})
+    case None{}:
+      r502(head, closing, v10, code, body)
+
+def Laws.rsp_reframed(via, head, k, code, got, body, closing, v10):
+  rr.at(head, code, X.rhead.lines(via, X.rlines(k, got)), body, closing, v10)

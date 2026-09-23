@@ -28,6 +28,8 @@ import ../../wire/reader.bend as Wr
 import ../io_http_engine/main.bend as Eng
 import ../io_http_engine/spec.bend as Spec
 import ../io_http_engine/LAWS.bend as EL
+import ../../wire/http1/resp.bend as R
+import ../../wire/http1/spec.bend as RS
 import ./core.bend as X
 
 # The reference framing
@@ -414,3 +416,37 @@ law hop_by_hop_removed_rsp:
   for +len: Bool
   for +fs: List<&2, X.Field>
   {clean(~is.via, ns, List.append(&2, X.Field, X.rends(ns, len, fs), [X.Field{"via", via}])) == True{} : Bool}
+
+# The response read back
+# ======================
+
+# what the client reads: the one final response, with the upstream's
+# status and body (none where the framing says there is none), closing
+# exactly when the proxy closes, and nothing after it; where the proxy
+# had no response it could send, its own 502, closing
+def rlook(m: Maybe<&2, X.Rsp>, +head: Bool, +code: U32, body: Bytes(), +closing: Bool) -> R.Look:
+  match m:
+    case Some{r}:
+      R.Look{Nil{}, R.Final{R.Resp{code, False{}, closing, Bool.pick(Bytes(), X.rbodyless(head, code), "", body)}, ""}}
+    case None{}:
+      R.Look{Nil{}, R.Final{R.Resp{502, False{}, True{}, Bool.pick(Bytes(), head, "", "502 Bad Gateway\n")}, ""}}
+
+# LAW: a response goes back as exactly the response that came. Whatever
+# the exchange read from the upstream (the interim heads and the final
+# one's bytes, the status and the body the reader framed), the bytes the
+# proxy sends the client, read by wire/http1/spec.bend's response() --
+# how a client that reads HTTP/1.1 as the RFC does frames them -- are
+# one final response: the upstream's status and body, the connection's
+# fate as the proxy decided it, and not a byte more. A client can never
+# see a response boundary the proxy did not send.
+law rsp_reframed:
+  for +via: Bytes()
+  for +head: Bool
+  for +k: Nat
+  for +code: U32
+  for +got: Bytes()
+  for +body: Bytes()
+  for +closing: Bool
+  for +v10: Bool
+  {RS.response(X.rask(head), Bytes.to_list(X.reply(X.rsp.of(via, head, k, code, got, body), head, closing, v10))) ==
+    rlook(X.rsp.of(via, head, k, code, got, body), head, code, body, closing) : R.Look}

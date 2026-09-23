@@ -3,8 +3,11 @@
 # a bug would -- the client's raw bytes passed through, a hop-by-hop
 # field forwarded, a field the client's Connection named kept, a refused
 # stream read on, a request sent unchecked or with a field a framing
-# reads, a length that is not the body's -- and PROOF.bend must refuse
-# it. Each runs in a scratch copy of the tree the proof imports (the
+# reads, a length that is not the body's; a response sent back
+# unchecked, with a body its framing says it has not, with a length or
+# a field the check should have stopped, a 101 taken as final, a close
+# the client is not told of, a 502 with a body to HEAD -- and PROOF.bend
+# must refuse it. Each runs in a scratch copy of the tree the proof imports (the
 # proxy, the engine, wire/), checked clean first.
 #
 #   python3 demos/io_proxy/mutants.py        (from the repo root)
@@ -44,6 +47,29 @@ MUTANTS = [
       [Field{"content-length", Nat.show(Bytes.len(body))}]''',
     '''    case True{}:
       [Field{"content-length", Nat.show(1n+Bytes.len(body))}]'''),
+  ('a response sent back unchecked (rsp_reframed)',
+    '''  Bool.pick(Maybe<&2, Rsp>, rvalid(head, code, r), Some{r}, None{})''',
+    '''  Some{r}'''),
+  ('a body sent after a response that has none by its framing (rsp_reframed)',
+    '''Bytes.append("\\r\\n", Bool.pick(Bytes(), bodyless, "", body))''',
+    '''Bytes.append("\\r\\n", body)'''),
+  ('the check lets a length that is not the body\'s through (rsp_reframed)',
+    '''(same(U32.is_zero(n), String.is_empty(body)) && Nat.is_eq(U32.to_nat(n), Bytes.len(body))))''',
+    '''(same(U32.is_zero(n), String.is_empty(body)) && True{}))'''),
+  ('the check lets a response field its framing reads through (rsp_reframed)',
+    '''full(n) && rok.all(RS.TName{}, n) && ris.other(RS.field(RS.lows(Bytes.to_list(n)))) && rok.all(RS.TVal{}, v)''',
+    '''full(n) && rok.all(RS.TName{}, n) && rok.all(RS.TVal{}, v)'''),
+  ('a 101 sent back as a final response (rsp_reframed)',
+    '''&& Bool.not(U32.is_lt(code, 200)) && Bool.not(U32.is_eq(code, 101))''',
+    '''&& Bool.not(U32.is_lt(code, 200))'''),
+  ('no Connection: close on a connection the proxy closes (rsp_reframed)',
+    '''    case True{}:
+      "close"''',
+    '''    case True{}:
+      ""'''),
+  ('the proxy\'s own 502 sent with a body to HEAD (rsp_reframed)',
+    '''"\\r\\nconnection: close\\r\\n\\r\\n", Bool.pick(Bytes(), head, "", body)''',
+    '''"\\r\\nconnection: close\\r\\n\\r\\n", body'''),
 ]
 
 def check(path):

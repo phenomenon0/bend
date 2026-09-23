@@ -95,14 +95,14 @@ class Upstream:
         with self.lock:
           self.conns[i].append((head, body))
         path = lines[0].split(b' ')[1] if len(lines[0].split(b' ')) > 1 else b'/'
-        if not self.answer(c, path, body, i):
+        if not self.answer(c, lines[0].split(b' ')[0], path, body, i):
           return
     except OSError:
       return
     finally:
       c.close()
 
-  def answer(self, c, path, body, i):
+  def answer(self, c, meth, path, body, i):
     if path == b'/slow':
       time.sleep(3); return False
     if path == b'/die':
@@ -115,7 +115,7 @@ class Upstream:
         b'5\r\nhello\r\n6\r\n world\r\n0\r\n\r\n')
       return True
     msg = b'conn %d req %d body %d' % (i, len(self.conns[i]), len(body))
-    c.sendall(b'HTTP/1.1 200 OK\r\nContent-Length: %d\r\n\r\n%s' % (len(msg), msg))
+    c.sendall(b'HTTP/1.1 200 OK\r\nContent-Length: %d\r\n\r\n%s' % (len(msg), b'' if meth == b'HEAD' else msg))
     return True
 
 # A client
@@ -304,7 +304,8 @@ http { access_log off; client_body_temp_path %(d)s/tmp; proxy_temp_path %(d)s/tm
       and rf.get(b'via') == b'1.1 bend-proxy', repr(out))
     # HEAD: the length said, no body
     out = talk(P, R('HEAD / HTTP/1.1\nHost: a\n\n'))
-    case('response.head', statuses(out) == [200] and out.endswith(b'\r\n\r\n'), repr(out))
+    case('response.head', statuses(out) == [200] and out.endswith(b'\r\n\r\n')
+      and re.fullmatch(rb'[0-9]+', dict(fields_of(out.partition(b'\r\n\r\n')[0])).get(b'content-length', b'x')), repr(out))
     # pipelined requests, answered in order, one upstream request each
     m = up.mark()
     out = talk(P, R('GET /1 HTTP/1.1\nHost: a\n\nGET /2 HTTP/1.1\nHost: a\n\nGET /3 HTTP/1.1\nHost: a\n\n'))
