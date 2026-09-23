@@ -1508,7 +1508,7 @@ def Laws.field_by_bytes(k):
 def te.no(pd: Eng.Pend, -out: List<&2, Eng.Req>) ->
   {Eng.step.te.at(False{}, pd, out) == Eng.P{Eng.Bad{}, pd, out} : Eng.P}:
   match pd:
-    case Eng.Pend{m, p, cl, close, host, ws, fx}:
+    case Eng.Pend{m, p, cl, close, host, ws, fx, nx}:
       match fx:
         case Eng.Fx{a, b, c}:
           {==}
@@ -1521,19 +1521,19 @@ def Laws.te_chunked_only(v, pd, out, e):
   te.no(pd, out)
 
 def te.twice(ok: Bool, -m: Eng.Meth, -path: Bytes(), -l: Eng.Cl, -cl: Bool, -h: Eng.Hosts, -ws: Eng.Up,
-  -v10: Bool, -ka: Bool, -out: List<&2, Eng.Req>) ->
-  {Eng.step.te.at(ok, Eng.Pend{m, path, l, cl, h, ws, Eng.Fx{v10, ka, True{}}}, out) ==
-    Eng.P{Eng.Bad{}, Eng.Pend{m, path, l, cl, h, ws, Eng.Fx{v10, ka, True{}}}, out} : Eng.P}:
+  -v10: Bool, -ka: Bool, -nx: Maybe<&2, Eng.Pend>, -out: List<&2, Eng.Req>) ->
+  {Eng.step.te.at(ok, Eng.Pend{m, path, l, cl, h, ws, Eng.Fx{v10, ka, True{}}, nx}, out) ==
+    Eng.P{Eng.Bad{}, Eng.Pend{m, path, l, cl, h, ws, Eng.Fx{v10, ka, True{}}, nx}, out} : Eng.P}:
   match ok:
     case True{}:
       {==}
     case False{}:
       {==}
 
-def Laws.te_once(v, m, path, l, cl, h, ws, v10, ka, out):
-  te.twice(Eng.bytes.eq(Eng.lows(v), Eng.te.lit()), m, path, l, cl, h, ws, v10, ka, out)
+def Laws.te_once(v, m, path, l, cl, h, ws, v10, ka, nx, out):
+  te.twice(Eng.bytes.eq(Eng.lows(v), Eng.te.lit()), m, path, l, cl, h, ws, v10, ka, nx, out)
 
-def Laws.te_cl_refused(m, path, v, cl, h, ws, v10, ka, out):
+def Laws.te_cl_refused(m, path, v, cl, h, ws, v10, ka, nx, out):
   match h v10:
     case Eng.H0{} True{}:
       {==}
@@ -1548,7 +1548,7 @@ def Laws.te_cl_refused(m, path, v, cl, h, ws, v10, ka, out):
     case Eng.H2{} False{}:
       {==}
 
-def Laws.te_10_refused(m, path, l, cl, h, ws, ka, out):
+def Laws.te_10_refused(m, path, l, cl, h, ws, ka, nx, out):
   match h:
     case Eng.H0{}:
       {==}
@@ -1606,29 +1606,29 @@ def Laws.chunk_bare_lf(pos, n, b, left, pd, out, e):
         Eng.P{Eng.Bad{}, pd, out} : Eng.P})
       Unit{}
 
-def Laws.clen_disagree(v, w, m, path, cl, h, ws, fx, out, e):
+def Laws.clen_disagree(v, w, m, path, cl, h, ws, fx, nx, out, e):
   %Equal.sym(Bool, U32.is_eq(w, v), False{}, e) :
-    {Eng.step.clen.dup(Eng.Pend{m, path, Eng.Has{v}, cl, h, ws, fx}, out, _) ==
-      Eng.P{Eng.Bad{}, Eng.Pend{m, path, Eng.Has{v}, cl, h, ws, fx}, out} : Eng.P}
+    {Eng.step.clen.dup(Eng.Pend{m, path, Eng.Has{v}, cl, h, ws, fx, nx}, out, _) ==
+      Eng.P{Eng.Bad{}, Eng.Pend{m, path, Eng.Has{v}, cl, h, ws, fx, nx}, out} : Eng.P}
   {==}
 
-def Laws.host_once(m, path, l, cl, h, ws, v10, ka, te, out, e):
+def Laws.host_once(m, path, l, cl, h, ws, v10, ka, te, nx, out, e):
   match h v10:
     case Eng.H0{} True{}:
-      %e : BD(_, Unit, {Eng.step(Eng.P{Eng.CrL{}, Eng.Pend{m, path, l, cl, Eng.H0{}, ws, Eng.Fx{True{}, ka, te}}, out}, 10) ==
-        Eng.P{Eng.Bad{}, Eng.Pend{m, path, l, cl, Eng.H0{}, ws, Eng.Fx{True{}, ka, te}}, out} : Eng.P})
+      %e : BD(_, Unit, {Eng.step(Eng.P{Eng.CrL{}, Eng.Pend{m, path, l, cl, Eng.H0{}, ws, Eng.Fx{True{}, ka, te}, nx}, out}, 10) ==
+        Eng.P{Eng.Bad{}, Eng.Pend{m, path, l, cl, Eng.H0{}, ws, Eng.Fx{True{}, ka, te}, nx}, out} : Eng.P})
       Unit{}
     case Eng.H1{} True{}:
-      %e : BD(_, Unit, {Eng.step(Eng.P{Eng.CrL{}, Eng.Pend{m, path, l, cl, Eng.H1{}, ws, Eng.Fx{True{}, ka, te}}, out}, 10) ==
-        Eng.P{Eng.Bad{}, Eng.Pend{m, path, l, cl, Eng.H1{}, ws, Eng.Fx{True{}, ka, te}}, out} : Eng.P})
+      %e : BD(_, Unit, {Eng.step(Eng.P{Eng.CrL{}, Eng.Pend{m, path, l, cl, Eng.H1{}, ws, Eng.Fx{True{}, ka, te}, nx}, out}, 10) ==
+        Eng.P{Eng.Bad{}, Eng.Pend{m, path, l, cl, Eng.H1{}, ws, Eng.Fx{True{}, ka, te}, nx}, out} : Eng.P})
       Unit{}
     case Eng.H2{} True{}:
       {==}
     case Eng.H0{} False{}:
       {==}
     case Eng.H1{} False{}:
-      %e : BD(_, Unit, {Eng.step(Eng.P{Eng.CrL{}, Eng.Pend{m, path, l, cl, Eng.H1{}, ws, Eng.Fx{False{}, ka, te}}, out}, 10) ==
-        Eng.P{Eng.Bad{}, Eng.Pend{m, path, l, cl, Eng.H1{}, ws, Eng.Fx{False{}, ka, te}}, out} : Eng.P})
+      %e : BD(_, Unit, {Eng.step(Eng.P{Eng.CrL{}, Eng.Pend{m, path, l, cl, Eng.H1{}, ws, Eng.Fx{False{}, ka, te}, nx}, out}, 10) ==
+        Eng.P{Eng.Bad{}, Eng.Pend{m, path, l, cl, Eng.H1{}, ws, Eng.Fx{False{}, ka, te}, nx}, out} : Eng.P})
       Unit{}
     case Eng.H2{} False{}:
       {==}
@@ -6721,7 +6721,7 @@ def uv(ws: Eng.Up) -> UV:
 
 def pv(pd: Eng.Pend) -> PV:
   match pd:
-    case Eng.Pend{m, p, cl, close, host, ws, fx}:
+    case Eng.Pend{m, p, cl, close, host, ws, fx, nx}:
       PV{m, p, cl, close, host, uv(ws), fx}
 
 def hsat(n: Nat) -> Eng.Hosts:
@@ -6805,7 +6805,7 @@ def pv.te(x: PV) -> PV:
 def e.conn(pd: Eng.Pend, +a: Bool, +b: Bool, +k: Bool) ->
   {pv(Eng.pend.conn(pd, a, b, k)) == pv.conn(pv(pd), a, b, k) : PV}:
   match pd:
-    case Eng.Pend{m, p, cl, close, host, ws, fx}:
+    case Eng.Pend{m, p, cl, close, host, ws, fx, nx}:
       match ws b:
         case Eng.Plain{} False{}:
           {==}
@@ -6816,7 +6816,7 @@ def e.conn(pd: Eng.Pend, +a: Bool, +b: Bool, +k: Bool) ->
 
 def e.up(pd: Eng.Pend, +w: Bool) -> {pv(Eng.pend.up(pd, w)) == pv.up(pv(pd), w) : PV}:
   match pd:
-    case Eng.Pend{m, p, cl, close, host, ws, fx}:
+    case Eng.Pend{m, p, cl, close, host, ws, fx, nx}:
       match ws w:
         case Eng.Plain{} False{}:
           {==}
@@ -6827,7 +6827,7 @@ def e.up(pd: Eng.Pend, +w: Bool) -> {pv(Eng.pend.up(pd, w)) == pv.up(pv(pd), w) 
 
 def e.key(pd: Eng.Pend, +kb: Bytes()) -> {pv(Eng.pend.key(pd, kb)) == pv.key(pv(pd), kb) : PV}:
   match pd:
-    case Eng.Pend{m, p, cl, close, host, ws, fx}:
+    case Eng.Pend{m, p, cl, close, host, ws, fx, nx}:
       match ws:
         case Eng.Plain{}:
           {==}
@@ -6836,7 +6836,7 @@ def e.key(pd: Eng.Pend, +kb: Bytes()) -> {pv(Eng.pend.key(pd, kb)) == pv.key(pv(
 
 def e.ver(pd: Eng.Pend, +ok: Bool) -> {pv(Eng.pend.ver(pd, ok)) == pv.ver(pv(pd), ok) : PV}:
   match pd:
-    case Eng.Pend{m, p, cl, close, host, ws, fx}:
+    case Eng.Pend{m, p, cl, close, host, ws, fx, nx}:
       match ws ok:
         case Eng.Plain{} True{}:
           {==}
@@ -6847,7 +6847,7 @@ def e.ver(pd: Eng.Pend, +ok: Bool) -> {pv(Eng.pend.ver(pd, ok)) == pv.ver(pv(pd)
 
 def e.host(pd: Eng.Pend) -> {pv(Eng.pend.host(pd)) == pv.host(pv(pd)) : PV}:
   match pd:
-    case Eng.Pend{m, p, cl, close, host, ws, fx}:
+    case Eng.Pend{m, p, cl, close, host, ws, fx, nx}:
       {==}
 
 # and the spec's
@@ -6922,10 +6922,10 @@ def pv.teok(x: PV, ok: Bool) -> Bool:
 
 def pend.teset(pd: Eng.Pend) -> Eng.Pend:
   match pd:
-    case Eng.Pend{m, p, cl, close, host, ws, fx}:
+    case Eng.Pend{m, p, cl, close, host, ws, fx, nx}:
       match fx:
         case Eng.Fx{a, b, t}:
-          Eng.Pend{m, p, cl, close, host, ws, Eng.Fx{a, b, True{}}}
+          Eng.Pend{m, p, cl, close, host, ws, Eng.Fx{a, b, True{}}, nx}
 
 def head.teset(h: Spec.Head) -> Spec.Head:
   match h:
@@ -6949,9 +6949,9 @@ def hte.pick(b: Bool, h: Spec.Head) -> Maybe<&2, Spec.Head>:
       None{}
 
 def e.te.go(b: Bool, -m: Eng.Meth, -p: Bytes(), -cl: Eng.Cl, -close: Bool, -host: Eng.Hosts, -ws: Eng.Up,
-  -v10: Bool, -ka: Bool, -out: List<&2, Eng.Req>, -t: Bool) ->
-  {Eng.step.te.go(b, m, p, cl, close, host, ws, v10, ka, out, t) ==
-    te.pick(b, Eng.Pend{m, p, cl, close, host, ws, Eng.Fx{v10, ka, t}}, out) : Eng.P}:
+  -v10: Bool, -ka: Bool, -nx: Maybe<&2, Eng.Pend>, -out: List<&2, Eng.Req>, -t: Bool) ->
+  {Eng.step.te.go(b, m, p, cl, close, host, ws, v10, ka, nx, out, t) ==
+    te.pick(b, Eng.Pend{m, p, cl, close, host, ws, Eng.Fx{v10, ka, t}, nx}, out) : Eng.P}:
   match b:
     case True{}:
       {==}
@@ -6961,10 +6961,10 @@ def e.te.go(b: Bool, -m: Eng.Meth, -p: Bytes(), -cl: Eng.Cl, -close: Bool, -host
 def e.te(pd: Eng.Pend, +ok: Bool, -out: List<&2, Eng.Req>) ->
   {Eng.step.te.at(ok, pd, out) == te.pick(pv.teok(pv(pd), ok), pd, out) : Eng.P}:
   match pd:
-    case Eng.Pend{m, p, cl, close, host, ws, fx}:
+    case Eng.Pend{m, p, cl, close, host, ws, fx, nx}:
       match fx:
         case Eng.Fx{a, b, +t}:
-          e.te.go(ok && Bool.not(t), m, p, cl, close, host, ws, a, b, out, t)
+          e.te.go(ok && Bool.not(t), m, p, cl, close, host, ws, a, b, nx, out, t)
 
 def s.te.go(b: Bool, -m: Eng.Meth, -t: List<&2, U32>, -l: Maybe<&2, U32>, -cl: Bool, -hs: Nat,
   -k: List<&2, U32>, -u: Bool, -c: Bool, -v: Bool, -v10: Bool, -ka: Bool, -x: Bool) ->
@@ -6986,7 +6986,7 @@ def s.te(h: Spec.Head, +ok: Bool) ->
 
 def e.teset(pd: Eng.Pend) -> {pv(pend.teset(pd)) == pv.te(pv(pd)) : PV}:
   match pd:
-    case Eng.Pend{m, p, cl, close, host, ws, fx}:
+    case Eng.Pend{m, p, cl, close, host, ws, fx, nx}:
       match fx:
         case Eng.Fx{a, b, t}:
           {==}
@@ -7870,7 +7870,7 @@ def reqof(x: PV, body: Bytes()) -> Eng.Req:
 
 def e.req(pd: Eng.Pend, -body: Bytes()) -> {Eng.pend.req(pd, body) == reqof(pv(pd), body) : Eng.Req}:
   match pd:
-    case Eng.Pend{m, p, cl, close, host, ws, fx}:
+    case Eng.Pend{m, p, cl, close, host, ws, fx, nx}:
       match ws fx:
         case Eng.Plain{} Eng.Fx{a, b, t}:
           {==}
@@ -8120,11 +8120,12 @@ def PVcl(x: PV) -> Eng.Cl:
 
 # the pending fields with the length set, and the head with it set
 def pr.cl(+m: Eng.Meth, +pa: Bytes(), +cl: Eng.Cl, +cls: Bool, +host: Eng.Hosts, +ws: Eng.Up, +fx: Eng.Fx,
+  +nx: Maybe<&2, Eng.Pend>,
   +hm: Eng.Meth, +ht: List<&2, U32>, +l: Maybe<&2, U32>, +hc: Bool, +hs: Nat, +hk: List<&2, U32>,
   +hu: Bool, +hcu: Bool, +hvb: Bool, +hf: Eng.Fx, +w: U32,
-  pr: PR(Eng.Pend{m, pa, cl, cls, host, ws, fx}, Spec.Head{hm, ht, l, hc, hs, hk, hu, hcu, hvb, hf})) ->
-  PR(Eng.Pend{m, pa, Eng.Has{w}, cls, host, ws, fx}, Spec.Head{hm, ht, Some{w}, hc, hs, hk, hu, hcu, hvb, hf}):
-  pr.by(x => pv.cl(x, Eng.Has{w}), Eng.Pend{m, pa, cl, cls, host, ws, fx}, Eng.Pend{m, pa, Eng.Has{w}, cls, host, ws, fx},
+  pr: PR(Eng.Pend{m, pa, cl, cls, host, ws, fx, nx}, Spec.Head{hm, ht, l, hc, hs, hk, hu, hcu, hvb, hf})) ->
+  PR(Eng.Pend{m, pa, Eng.Has{w}, cls, host, ws, fx, nx}, Spec.Head{hm, ht, Some{w}, hc, hs, hk, hu, hcu, hvb, hf}):
+  pr.by(x => pv.cl(x, Eng.Has{w}), Eng.Pend{m, pa, cl, cls, host, ws, fx, nx}, Eng.Pend{m, pa, Eng.Has{w}, cls, host, ws, fx, nx},
     Spec.Head{hm, ht, l, hc, hs, hk, hu, hcu, hvb, hf}, Spec.Head{hm, ht, Some{w}, hc, hs, hk, hu, hcu, hvb, hf},
     {==}, {==}, pr)
 
@@ -8139,37 +8140,38 @@ def CR.dup(b: Bool, -p: Eng.P, +c: U32, +pd2: Eng.Pend, +h2: Spec.Head, +out: Li
       (pd2, deadvia(Eng.step(p, c), Eng.P{Eng.Bad{}, pd2, out}, out, e, {==}))
 
 def CR.clen.l(l: Maybe<&2, U32>, +n: U32, +m: Eng.Meth, +pa: Bytes(), +cl: Eng.Cl, +cls: Bool,
-  +host: Eng.Hosts, +ws: Eng.Up, +fx: Eng.Fx, +hm: Eng.Meth, +ht: List<&2, U32>, +hc: Bool, +hs: Nat,
+  +host: Eng.Hosts, +ws: Eng.Up, +fx: Eng.Fx, +nx: Maybe<&2, Eng.Pend>,
+  +hm: Eng.Meth, +ht: List<&2, U32>, +hc: Bool, +hs: Nat,
   +hk: List<&2, U32>, +hu: Bool, +hcu: Bool, +hvb: Bool, +hf: Eng.Fx, -p: Eng.P, +c: U32,
   +out: List<&2, Eng.Req>, +since: List<&2, U32>,
-  e: {Eng.step(p, c) == Eng.step.clen.go(m, pa, clv(l), cls, host, ws, fx, n, out) : Eng.P},
+  e: {Eng.step(p, c) == Eng.step.clen.go(m, pa, clv(l), cls, host, ws, fx, nx, n, out) : Eng.P},
   bnd: BND(Eng.step(p, c), Spec.snoc(since, c), out),
-  pr: PR(Eng.Pend{m, pa, cl, cls, host, ws, fx}, Spec.Head{hm, ht, l, hc, hs, hk, hu, hcu, hvb, hf})) ->
+  pr: PR(Eng.Pend{m, pa, cl, cls, host, ws, fx, nx}, Spec.Head{hm, ht, l, hc, hs, hk, hu, hcu, hvb, hf})) ->
   SR(Eng.step(p, c), Spec.field.next(Spec.head.len(Spec.Head{hm, ht, l, hc, hs, hk, hu, hcu, hvb, hf}, n), out,
     Spec.snoc(since, c))):
   match l:
     case None{}:
-      (Eng.Pend{m, pa, Eng.Has{n}, cls, host, ws, fx},
-        (pr.cl(m, pa, cl, cls, host, ws, fx, hm, ht, None{}, hc, hs, hk, hu, hcu, hvb, hf, n, pr), (e, bnd)))
+      (Eng.Pend{m, pa, Eng.Has{n}, cls, host, ws, fx, nx},
+        (pr.cl(m, pa, cl, cls, host, ws, fx, nx, hm, ht, None{}, hc, hs, hk, hu, hcu, hvb, hf, n, pr), (e, bnd)))
     case Some{+w}:
-      CR.dup(U32.is_eq(n, w), p, c, Eng.Pend{m, pa, Eng.Has{w}, cls, host, ws, fx},
+      CR.dup(U32.is_eq(n, w), p, c, Eng.Pend{m, pa, Eng.Has{w}, cls, host, ws, fx, nx},
         Spec.Head{hm, ht, Some{w}, hc, hs, hk, hu, hcu, hvb, hf}, out, since, e, bnd,
-        pr.cl(m, pa, cl, cls, host, ws, fx, hm, ht, Some{w}, hc, hs, hk, hu, hcu, hvb, hf, w, pr))
+        pr.cl(m, pa, cl, cls, host, ws, fx, nx, hm, ht, Some{w}, hc, hs, hk, hu, hcu, hvb, hf, w, pr))
 
 def CR.clen(+n: U32, pd: Eng.Pend, h: Spec.Head, -p: Eng.P, +c: U32, +out: List<&2, Eng.Req>,
   +since: List<&2, U32>, e: {Eng.step(p, c) == Eng.step.clen(n, pd, out) : Eng.P},
   bnd: BND(Eng.step(p, c), Spec.snoc(since, c), out), pr: PR(pd, h)) ->
   SR(Eng.step(p, c), Spec.field.next(Spec.head.len(h, n), out, Spec.snoc(since, c))):
   match pd:
-    case Eng.Pend{+m, +pa, +cl, +cls, +host, +ws, +fx}:
+    case Eng.Pend{+m, +pa, +cl, +cls, +host, +ws, +fx, +nx}:
       match h:
         case Spec.Head{+hm, +ht, +l, +hc, +hs, +hk, +hu, +hcu, +hvb, +hf}:
           +pr2 = pr
-          CR.clen.l(l, n, m, pa, cl, cls, host, ws, fx, hm, ht, hc, hs, hk, hu, hcu, hvb, hf, p, c, out, since,
-            Equal.trans(Eng.P, Eng.step(p, c), Eng.step.clen.go(m, pa, cl, cls, host, ws, fx, n, out),
-              Eng.step.clen.go(m, pa, clv(l), cls, host, ws, fx, n, out), e,
-              Equal.cong(Eng.Cl, Eng.P, x => Eng.step.clen.go(m, pa, x, cls, host, ws, fx, n, out), cl, clv(l),
-                Equal.cong(PV, Eng.Cl, y => PVcl(y), pv(Eng.Pend{m, pa, cl, cls, host, ws, fx}),
+          CR.clen.l(l, n, m, pa, cl, cls, host, ws, fx, nx, hm, ht, hc, hs, hk, hu, hcu, hvb, hf, p, c, out, since,
+            Equal.trans(Eng.P, Eng.step(p, c), Eng.step.clen.go(m, pa, cl, cls, host, ws, fx, nx, n, out),
+              Eng.step.clen.go(m, pa, clv(l), cls, host, ws, fx, nx, n, out), e,
+              Equal.cong(Eng.Cl, Eng.P, x => Eng.step.clen.go(m, pa, x, cls, host, ws, fx, nx, n, out), cl, clv(l),
+                Equal.cong(PV, Eng.Cl, y => PVcl(y), pv(Eng.Pend{m, pa, cl, cls, host, ws, fx, nx}),
                   hv(Spec.Head{hm, ht, l, hc, hs, hk, hu, hcu, hvb, hf}), pr2))),
             bnd, pr2)
 
@@ -8499,7 +8501,7 @@ def pv.bd(x: PV) -> Eng.Bd:
 def e.head(pd: Eng.Pend, -out: List<&2, Eng.Req>) ->
   {Eng.step.head(pd, out) == Eng.step.head.at(pd, pv.hostok(pv(pd)), pv.bd(pv(pd)), out) : Eng.P}:
   match pd:
-    case Eng.Pend{m, p, cl, close, host, ws, fx}:
+    case Eng.Pend{m, p, cl, close, host, ws, fx, nx}:
       match fx:
         case Eng.Fx{a, b, c}:
           {==}

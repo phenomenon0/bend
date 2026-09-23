@@ -123,9 +123,10 @@ law te_once:
   for +ws: Eng.Up
   for +v10: Bool
   for +ka: Bool
+  for +nx: Maybe<&2, Eng.Pend>
   for +out: List<&2, Eng.Req>
-  {Eng.step(Eng.P{Eng.InLe{v}, Eng.Pend{m, path, l, cl, h, ws, Eng.Fx{v10, ka, True{}}}, out}, 13) ==
-    Eng.P{Eng.Bad{}, Eng.Pend{m, path, l, cl, h, ws, Eng.Fx{v10, ka, True{}}}, out} : Eng.P}
+  {Eng.step(Eng.P{Eng.InLe{v}, Eng.Pend{m, path, l, cl, h, ws, Eng.Fx{v10, ka, True{}}, nx}, out}, 13) ==
+    Eng.P{Eng.Bad{}, Eng.Pend{m, path, l, cl, h, ws, Eng.Fx{v10, ka, True{}}, nx}, out} : Eng.P}
 
 # LAW: a head that framed its body two ways -- a Transfer-Encoding and a
 # Content-Length, in either order -- is refused at its blank line
@@ -139,9 +140,10 @@ law te_cl_refused:
   for +ws: Eng.Up
   for +v10: Bool
   for +ka: Bool
+  for +nx: Maybe<&2, Eng.Pend>
   for +out: List<&2, Eng.Req>
-  {Eng.step(Eng.P{Eng.CrL{}, Eng.Pend{m, path, Eng.Has{v}, cl, h, ws, Eng.Fx{v10, ka, True{}}}, out}, 10) ==
-    Eng.P{Eng.Bad{}, Eng.Pend{m, path, Eng.Has{v}, cl, h, ws, Eng.Fx{v10, ka, True{}}}, out} : Eng.P}
+  {Eng.step(Eng.P{Eng.CrL{}, Eng.Pend{m, path, Eng.Has{v}, cl, h, ws, Eng.Fx{v10, ka, True{}}, nx}, out}, 10) ==
+    Eng.P{Eng.Bad{}, Eng.Pend{m, path, Eng.Has{v}, cl, h, ws, Eng.Fx{v10, ka, True{}}, nx}, out} : Eng.P}
 
 # LAW: and so is an HTTP/1.0 head with a Transfer-Encoding (RFC 9112
 # 6.1: faulty framing), whatever else it carried.
@@ -153,9 +155,10 @@ law te_10_refused:
   for +h: Eng.Hosts
   for +ws: Eng.Up
   for +ka: Bool
+  for +nx: Maybe<&2, Eng.Pend>
   for +out: List<&2, Eng.Req>
-  {Eng.step(Eng.P{Eng.CrL{}, Eng.Pend{m, path, l, cl, h, ws, Eng.Fx{True{}, ka, True{}}}, out}, 10) ==
-    Eng.P{Eng.Bad{}, Eng.Pend{m, path, l, cl, h, ws, Eng.Fx{True{}, ka, True{}}}, out} : Eng.P}
+  {Eng.step(Eng.P{Eng.CrL{}, Eng.Pend{m, path, l, cl, h, ws, Eng.Fx{True{}, ka, True{}}, nx}, out}, 10) ==
+    Eng.P{Eng.Bad{}, Eng.Pend{m, path, l, cl, h, ws, Eng.Fx{True{}, ka, True{}}, nx}, out} : Eng.P}
 
 # LAW: a chunk-size is refused at the digit that takes it past what the
 # body's budget has left: for every size so far, every budget, every
@@ -261,10 +264,11 @@ law clen_disagree:
   for +h: Eng.Hosts
   for +ws: Eng.Up
   for +fx: Eng.Fx
+  for +nx: Maybe<&2, Eng.Pend>
   for +out: List<&2, Eng.Req>
   for e: {U32.is_eq(w, v) == False{} : Bool}
-  {Eng.step(Eng.P{Eng.InL{w}, Eng.Pend{m, path, Eng.Has{v}, cl, h, ws, fx}, out}, 13) ==
-    Eng.P{Eng.Bad{}, Eng.Pend{m, path, Eng.Has{v}, cl, h, ws, fx}, out} : Eng.P}
+  {Eng.step(Eng.P{Eng.InL{w}, Eng.Pend{m, path, Eng.Has{v}, cl, h, ws, fx, nx}, out}, 13) ==
+    Eng.P{Eng.Bad{}, Eng.Pend{m, path, Eng.Has{v}, cl, h, ws, fx, nx}, out} : Eng.P}
 
 # LAW: the target carries no control, tab or line end: a CR, LF or NUL
 # in it is refused, so none reaches a route or the log.
@@ -310,10 +314,11 @@ law host_once:
   for +v10: Bool
   for +ka: Bool
   for +te: Bool
+  for +nx: Maybe<&2, Eng.Pend>
   for +out: List<&2, Eng.Req>
   for e: {Spec.hosts.fit(v10, h) == False{} : Bool}
-  {Eng.step(Eng.P{Eng.CrL{}, Eng.Pend{m, path, l, cl, h, ws, Eng.Fx{v10, ka, te}}, out}, 10) ==
-    Eng.P{Eng.Bad{}, Eng.Pend{m, path, l, cl, h, ws, Eng.Fx{v10, ka, te}}, out} : Eng.P}
+  {Eng.step(Eng.P{Eng.CrL{}, Eng.Pend{m, path, l, cl, h, ws, Eng.Fx{v10, ka, te}, nx}, out}, 10) ==
+    Eng.P{Eng.Bad{}, Eng.Pend{m, path, l, cl, h, ws, Eng.Fx{v10, ka, te}, nx}, out} : Eng.P}
 
 # LAW: after a request that asked to upgrade, nothing is read as HTTP:
 # every byte is kept, in order, for the frame reader, and no message
