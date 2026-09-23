@@ -33,36 +33,29 @@ byte that announces it. `PROOF.bend` checks **23 laws**, first try:
 ## The server
 
 `main.bend` is a Redis-protocol server -- PING, ECHO, SET, GET,
-COMMAND, QUIT over the HTTP engine's connection loop. It checks
-(`bend demos/io_resp/main.bend --check-only`, about a second) and the
-built server answers PING, SET and GET. An earlier note here said it
-hung the checker; that was `bend main.bend` without `--check-only`,
-which checks and then runs the server, and never returns.
+COMMAND, QUIT -- on bend-wire (`wire/`, whose README takes it as the
+worked example): the connection loop, its budgets, the accept loop with
+a connection limit and SIGTERM, and their laws are the library's. What
+is RESP's is the planner, from a read's bytes through the reader and
+the commands to the replies, and the hooks. `bend main.bend -o respd
+&& ./respd 6380`.
 
-## What this cost, which was the point of writing it
+`PROOF.bend` now checks 34 laws: the reader's 23; the block walk's four
+(`feed_buf_is_feed`, `feed_buf_split`, `bad_feeds_buf`, `reads_split`),
+instances of the reader kit's; the loop's, at RESP's hooks
+(`end_is_last`, `stop_is_last`, `go_order`, `fail_go`, `segs_wire`,
+`stall_ends`), instances of `wire/world.bend`'s; and one of its own,
+`refuse_ends`: a refused stream is answered with what its values
+earned, then the error, and the connection ends.
 
-The reader and its laws were quick and went in clean. The server was
-not, and every hour of it went to one thing: Bend's rules on shape.
-Nothing here was a RESP problem.
+## What it cost, before and after
 
-- a `match` may not scrutinise a computed value, so every test becomes
-  a parameter and a helper def;
-- scrutinees must come in the order their binders were declared;
-- mutual recursion is refused, so `find`, `drop` and the batch loop
-  each had to be rewritten as one self-recursive def with the rest
-  handed in as an argument -- which is how the base library writes
-  `List.find`, and is a thing to know rather than to discover;
-- a helper must precede its caller;
-- a binder read twice needs `+`, and which ones do is found by trying.
-
-**A name collision that seemed to loop the checker did not reproduce**
-(see `UPSTREAM.md` in the HTTP engine); it is withdrawn.
-
-## What it says about the library
-
-The reader kit is real: the parser, its laws and its proofs took a
-fraction of the time, and `feed_split` transferred without a change of
-idea. The connection loop is not a protocol at all -- it is the same
-two hundred lines of shape-fighting each time -- and that is exactly
-what `bend-wire` should absorb, along with the byte helpers this file
-had to re-type from the HTTP engine.
+Before bend-wire the server was 147 lines (121 of code), every one of
+them the HTTP engine's connection-loop shape re-typed, with none of its
+budgets and none of its laws; every hour of it went to Bend's rules on
+shape (a `match` on parameters only, scrutinees in binder order, no
+mutual recursion). On bend-wire it is 102 lines (69 of code), of which
+the planner is 36 and the rest a configuration record and the hooks;
+the byte helpers are the reader kit's. It gained the head and batch
+budgets, the send deadline, a connection limit, graceful stopping and
+the loop's laws.
