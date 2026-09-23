@@ -26,10 +26,10 @@
 #            step(e, bad(x), c) == bad(x)
 #
 # and what it gets for them is below: chunking never changes a read
-# (feed_split, feed_buf_split, slow_split, reads_split), a refusal is never left
-# (bad_feeds, bad_feeds_buf, bad_feeds_slow), the block walk is the byte machine
-# (feed_buf_is_feed), and however a stream is cut into reads the reader
-# reads it as the stream whole (reads_is).
+# (feed_split, feed_buf_split, slow_split, reads_split), a refusal is
+# never left (bad_feeds, bad_feeds_buf, bad_feeds_slow), the block walk
+# is the byte machine (feed_buf_is_feed), and however a stream is cut
+# into reads the reader reads it as the stream whole (reads_is).
 import Base
 
 # Bytes
