@@ -1047,6 +1047,28 @@ def feed_buf(+e: Ask, +s: Bytes(), p: P) -> P:
 def reads(+e: Ask, rs: List<&2, Bytes()>, p: P) -> P:
   Wr.reads(~Ask, ~P, ~wstep, ~wadv, e, rs, p)
 
+# whether a head is in progress: the reader is in a status line or a
+# field line, or between two lines of a head (a client caps the bytes
+# read while one is)
+def mid(p: P) -> Bool:
+  match p:
+    case P{st, out}:
+      match st:
+        case Bod{h, more, got}:
+          False{}
+        case Chk{h, at, n, got, left}:
+          False{}
+        case Dat{h, more, got, left}:
+          False{}
+        case Clo{h, got, left}:
+          False{}
+        case Fin{r, rest}:
+          False{}
+        case Bad{}:
+          False{}
+        case _:
+          True{}
+
 # What the reader has read
 # ========================
 #
