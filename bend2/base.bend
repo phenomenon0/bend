@@ -417,6 +417,14 @@ def TLS.listen(port: U32, cert: String, key: String) ->
   import "./effs/tls_listen.c"
   import "./effs/tls_listen.js"
 
+# TLS.listen agreeing by ALPN to the names given, comma-separated, in
+# the server's order of preference ("h2", "h2,http/1.1"); TLS.listen
+# agrees to http/1.1
+def TLS.listen_alpn(port: U32, cert: String, key: String, names: String) ->
+  IO(Result<&1, &1, U32 & String, Listener>):
+  import "./effs/tls_listen.c"
+  import "./effs/tls_listen_alpn.js"
+
 def TCP.accept(listener: Listener) ->
   IO(Listener & Result<&1, &1, U32 & String, Socket>):
   import "./effs/tcp_accept.c"

@@ -202,18 +202,25 @@ static void tls_join(int lfd, int fd) {
 
 static IoWire tls_wire = { tls_read, tls_write, tls_join, tls_shut };
 
-// http/1.1 is what this engine speaks, so it is what it agrees to. h2
-// goes here, before http/1.1, when there is an h2 to agree to.
-static const unsigned char tls_alpn[] = { 8, 'h', 't', 't', 'p', '/', '1', '.', '1' };
+// What a listener agrees to by ALPN, in the wire's form (a length byte
+// before each name), in the server's order of preference. TLS.listen's
+// is http/1.1, what the HTTP/1 engine speaks; TLS.listen_alpn names its
+// own (bend-h2's is h2), and a listener's list lives as long as it does.
+typedef struct { u32 n; unsigned char at[255]; } TlsAlpn;
 
+static TlsAlpn tls_alpn = { 9, { 8, 'h', 't', 't', 'p', '/', '1', '.', '1' } };
+
+// The server's first choice the client also offers (SSL_select_next_proto
+// walks the server's list and falls back to its first when nothing
+// matches, which here means no agreement at all)
 static int tls_pick(SSL* ssl, const unsigned char** out, unsigned char* outn,
   const unsigned char* in, unsigned int inn, void* arg) {
-  return SSL_select_next_proto((unsigned char**)out, outn, tls_alpn,
-    sizeof(tls_alpn), in, inn) == OPENSSL_NPN_NEGOTIATED
-    ? SSL_TLSEXT_ERR_OK : SSL_TLSEXT_ERR_NOACK;
+  TlsAlpn* a = arg != NULL ? (TlsAlpn*)arg : &tls_alpn;
+  return SSL_select_next_proto((unsigned char**)out, outn, a->at, a->n, in, inn)
+    == OPENSSL_NPN_NEGOTIATED ? SSL_TLSEXT_ERR_OK : SSL_TLSEXT_ERR_NOACK;
 }
 
-static SSL_CTX* tls_make(const char* cert, const char* key, uint32_t* err) {
+static SSL_CTX* tls_make(const char* cert, const char* key, TlsAlpn* alpn, uint32_t* err) {
   SSL_CTX* ctx = SSL_CTX_new(TLS_server_method());
   if (ctx == NULL) {
     *err = ENOMEM;
@@ -231,7 +238,7 @@ static SSL_CTX* tls_make(const char* cert, const char* key, uint32_t* err) {
     );
   SSL_CTX_set_mode(ctx, SSL_MODE_ENABLE_PARTIAL_WRITE
     | SSL_MODE_ACCEPT_MOVING_WRITE_BUFFER | SSL_MODE_RELEASE_BUFFERS);
-  SSL_CTX_set_alpn_select_cb(ctx, tls_pick, NULL);
+  SSL_CTX_set_alpn_select_cb(ctx, tls_pick, alpn);
   if (SSL_CTX_set_cipher_list(ctx, "ECDHE+AESGCM:ECDHE+CHACHA20:!aNULL") != 1
     || SSL_CTX_use_certificate_chain_file(ctx, cert) != 1
     || SSL_CTX_use_PrivateKey_file(ctx, key, SSL_FILETYPE_PEM) != 1
@@ -270,26 +277,30 @@ static uint32_t tls_bind(uint32_t port, int* out) {
   return 0;
 }
 
-Term tls_listen_run(Env e, Term* f, IoWork* w) {
+// a listener: the certificate and key, the ALPN list, the port
+static Term tls_listen_go(Env e, Term* f, TlsAlpn* alpn) {
   u64   cn = 0, kn = 0;
   char* cert = io_cstr(e, f[1], &cn);
   char* key  = io_cstr(e, f[2], &kn);
   if (io_nul(cert, cn) || io_nul(key, kn)) {
     free(cert);
     free(key);
+    free(alpn);
     return io_fail(e, EINVAL, NULL);
   }
   uint32_t err = 0;
-  SSL_CTX* ctx = tls_make(cert, key, &err);
+  SSL_CTX* ctx = tls_make(cert, key, alpn, &err);
   free(cert);
   free(key);
   if (ctx == NULL) {
+    free(alpn);
     return io_fail(e, err, NULL);
   }
   int out = -1;
   uint32_t q = tls_bind((uint32_t)f[0], &out);
   if (q != 0) {
     SSL_CTX_free(ctx);
+    free(alpn);
     return io_fail(e, q, NULL);
   }
   TLS_SLOT(tls_ctx, tls_ctx_cap, out, SSL_CTX*);
@@ -298,6 +309,53 @@ Term tls_listen_run(Env e, Term* f, IoWork* w) {
   return io_done(e, io_hand(out));
 }
 
+#ifdef CID_TLS_LISTEN
+Term tls_listen_run(Env e, Term* f, IoWork* w) {
+  return tls_listen_go(e, f, NULL);
+}
+
 static void __attribute__((constructor)) tls_listen_use(void) {
   io_eff(CID_TLS_LISTEN, tls_listen_run, 0);
 }
+#endif
+
+// TLS.listen_alpn(port, cert, key, names): names is a comma-separated
+// list ("h2", "h2,http/1.1"), each 1 to 255 bytes, turned here into the
+// wire's form; an empty name or a list past 255 bytes is EINVAL.
+#ifdef CID_TLS_LISTEN_ALPN
+static TlsAlpn* tls_alpn_of(const char* s, u64 n) {
+  TlsAlpn* a = io_mem(calloc(1, sizeof(TlsAlpn)));
+  u64 at = 0;
+  while (at <= n) {
+    u64 end = at;
+    while (end < n && s[end] != ',') {
+      end += 1;
+    }
+    u64 len = end - at;
+    if (len == 0 || len > 254 || a->n + 1 + len > sizeof(a->at)) {
+      free(a);
+      return NULL;
+    }
+    a->at[a->n] = (unsigned char)len;
+    memcpy(a->at + a->n + 1, s + at, len);
+    a->n += 1 + (u32)len;
+    at = end + 1;
+  }
+  return a;
+}
+
+Term tls_listen_alpn_run(Env e, Term* f, IoWork* w) {
+  u64   an = 0;
+  char* names = io_cstr(e, f[3], &an);
+  TlsAlpn* alpn = io_nul(names, an) ? NULL : tls_alpn_of(names, an);
+  free(names);
+  if (alpn == NULL) {
+    return io_fail(e, EINVAL, NULL);
+  }
+  return tls_listen_go(e, f, alpn);
+}
+
+static void __attribute__((constructor)) tls_listen_alpn_use(void) {
+  io_eff(CID_TLS_LISTEN_ALPN, tls_listen_alpn_run, 0);
+}
+#endif
