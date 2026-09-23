@@ -469,32 +469,35 @@ type Fx is Data:
   Fx{v10: Bool, ka: Bool, te: Bool}
 
 # The fields of the message being read. It is rebuilt only when a token
-# closes, so an ordinary byte leaves it untouched and shares it.
+# closes, so an ordinary byte leaves it untouched and shares it. It is
+# one heap node, not fourteen words carried in P: nx, always None and
+# carried along as it came, makes the type recursive, and a recursive
+# type is a node, so a byte's step moves one word for it.
 type Pend is Data:
   Pend{meth: Meth, path: Bytes(), cl: Cl, close: Bool, host: Hosts,
-    ws: Up, fx: Fx}
+    ws: Up, fx: Fx, nx: Maybe<&2, Pend>}
 
 def pend.new() -> Pend:
-  Pend{MOther{}, "", NoCl{}, False{}, H0{}, Plain{}, Fx{False{}, False{}, False{}}}
+  Pend{MOther{}, "", NoCl{}, False{}, H0{}, Plain{}, Fx{False{}, False{}, False{}}, None{}}
 
 # a new method token starts a new message, so the rest resets with it
 def pend.meth(pd: Pend, m: Meth) -> Pend:
   match pd:
-    case Pend{meth, path, cl, close, host, ws, fx}:
-      Pend{m, "", NoCl{}, False{}, H0{}, Plain{}, Fx{False{}, False{}, False{}}}
+    case Pend{meth, path, cl, close, host, ws, fx, nx}:
+      Pend{m, "", NoCl{}, False{}, H0{}, Plain{}, Fx{False{}, False{}, False{}}, nx}
 
 def pend.path(pd: Pend, p: Bytes()) -> Pend:
   match pd:
-    case Pend{meth, path, cl, close, host, ws, fx}:
-      Pend{meth, p, cl, close, host, ws, fx}
+    case Pend{meth, path, cl, close, host, ws, fx, nx}:
+      Pend{meth, p, cl, close, host, ws, fx, nx}
 
 # the request line said HTTP/1.0
 def pend.v10(pd: Pend) -> Pend:
   match pd:
-    case Pend{meth, path, cl, close, host, ws, fx}:
+    case Pend{meth, path, cl, close, host, ws, fx, nx}:
       match fx:
         case Fx{v10, ka, te}:
-          Pend{meth, path, cl, close, host, ws, Fx{True{}, ka, te}}
+          Pend{meth, path, cl, close, host, ws, Fx{True{}, ka, te}, nx}
 
 def hosts.more(h: Hosts) -> Hosts:
   match h:
@@ -507,8 +510,8 @@ def hosts.more(h: Hosts) -> Hosts:
 
 def pend.host(pd: Pend) -> Pend:
   match pd:
-    case Pend{meth, path, cl, close, host, ws, fx}:
-      Pend{meth, path, cl, close, hosts.more(host), ws, fx}
+    case Pend{meth, path, cl, close, host, ws, fx, nx}:
+      Pend{meth, path, cl, close, hosts.more(host), ws, fx, nx}
 
 def fx.ka(fx: Fx, k: Bool) -> Fx:
   match fx:
@@ -520,23 +523,23 @@ def fx.ka(fx: Fx, k: Bool) -> Fx:
 # HTTP/1.0 connection to stay open
 def pend.conn(pd: Pend, cl: Bool, up: Bool, ka: Bool) -> Pend:
   match pd:
-    case Pend{meth, path, c, close, host, ws, fx}:
-      Pend{meth, path, c, close || cl, host, up.cu(ws, up), fx.ka(fx, ka)}
+    case Pend{meth, path, c, close, host, ws, fx, nx}:
+      Pend{meth, path, c, close || cl, host, up.cu(ws, up), fx.ka(fx, ka), nx}
 
 def pend.up(pd: Pend, v: Bool) -> Pend:
   match pd:
-    case Pend{meth, path, cl, close, host, ws, fx}:
-      Pend{meth, path, cl, close, host, up.up(ws, v), fx}
+    case Pend{meth, path, cl, close, host, ws, fx, nx}:
+      Pend{meth, path, cl, close, host, up.up(ws, v), fx, nx}
 
 def pend.key(pd: Pend, k: Bytes()) -> Pend:
   match pd:
-    case Pend{meth, path, cl, close, host, ws, fx}:
-      Pend{meth, path, cl, close, host, up.key(ws, k), fx}
+    case Pend{meth, path, cl, close, host, ws, fx, nx}:
+      Pend{meth, path, cl, close, host, up.key(ws, k), fx, nx}
 
 def pend.ver(pd: Pend, v: Bool) -> Pend:
   match pd:
-    case Pend{meth, path, cl, close, host, ws, fx}:
-      Pend{meth, path, cl, close, host, up.ver(ws, v), fx}
+    case Pend{meth, path, cl, close, host, ws, fx, nx}:
+      Pend{meth, path, cl, close, host, up.ver(ws, v), fx, nx}
 
 def pend.req.go(
   meth: Meth, path: Bytes(), body: Bytes(), close: Bool, gate: Bool, asked: Bool & Bytes()
@@ -554,7 +557,7 @@ def pend.req.fx(meth: Meth, path: Bytes(), body: Bytes(), close: Bool, ws: Up, f
 
 def pend.req(pd: Pend, body: Bytes()) -> Req:
   match pd:
-    case Pend{meth, path, cl, close, host, ws, fx}:
+    case Pend{meth, path, cl, close, host, ws, fx, nx}:
       pend.req.fx(meth, path, body, close, ws, fx)
 
 # The chunked body
@@ -997,19 +1000,19 @@ def step.clen.dup(pd: Pend, out: List<&2, Req>, agree: Bool) -> P:
 
 def step.clen.go(
   meth: Meth, path: Bytes(), cl: Cl, close: Bool, host: Hosts, ws: Up, fx: Fx,
-  +v: U32, out: List<&2, Req>
+  nx: Maybe<&2, Pend>, +v: U32, out: List<&2, Req>
 ) -> P:
   match cl:
     case NoCl{}:
-      P{CrM{}, Pend{meth, path, Has{v}, close, host, ws, fx}, out}
+      P{CrM{}, Pend{meth, path, Has{v}, close, host, ws, fx, nx}, out}
     case Has{+w}:
-      step.clen.dup(Pend{meth, path, Has{w}, close, host, ws, fx}, out, U32.is_eq(v, w))
+      step.clen.dup(Pend{meth, path, Has{w}, close, host, ws, fx, nx}, out, U32.is_eq(v, w))
 
 # a Content-Length value closes
 def step.clen(+v: U32, pd: Pend, out: List<&2, Req>) -> P:
   match pd:
-    case Pend{meth, path, cl, close, host, ws, fx}:
-      step.clen.go(meth, path, cl, close, host, ws, fx, v, out)
+    case Pend{meth, path, cl, close, host, ws, fx, nx}:
+      step.clen.go(meth, path, cl, close, host, ws, fx, nx, v, out)
 
 # a list member closes at a comma, a space or the line's end
 def step.conn(+t: Bytes(), cl: Bool, up: Bool, ka: Bool, pd: Pend, out: List<&2, Req>) -> P:
@@ -1082,19 +1085,19 @@ def step.wsv(v: Bytes(), pd: Pend, out: List<&2, Req>) -> P:
 # last). Any other coding, a list, or whitespace after it is refused
 # here, and so is a second Transfer-Encoding.
 def step.te.go(ok: Bool, meth: Meth, path: Bytes(), cl: Cl, close: Bool, host: Hosts, ws: Up,
-  v10: Bool, ka: Bool, out: List<&2, Req>, te: Bool) -> P:
+  v10: Bool, ka: Bool, nx: Maybe<&2, Pend>, out: List<&2, Req>, te: Bool) -> P:
   match ok:
     case True{}:
-      P{CrM{}, Pend{meth, path, cl, close, host, ws, Fx{v10, ka, True{}}}, out}
+      P{CrM{}, Pend{meth, path, cl, close, host, ws, Fx{v10, ka, True{}}, nx}, out}
     case False{}:
-      P{Bad{}, Pend{meth, path, cl, close, host, ws, Fx{v10, ka, te}}, out}
+      P{Bad{}, Pend{meth, path, cl, close, host, ws, Fx{v10, ka, te}, nx}, out}
 
 def step.te.at(ok: Bool, pd: Pend, out: List<&2, Req>) -> P:
   match pd:
-    case Pend{meth, path, cl, close, host, ws, fx}:
+    case Pend{meth, path, cl, close, host, ws, fx, nx}:
       match fx:
         case Fx{v10, ka, +te}:
-          step.te.go(ok && Bool.not(te), meth, path, cl, close, host, ws, v10, ka, out, te)
+          step.te.go(ok && Bool.not(te), meth, path, cl, close, host, ws, v10, ka, nx, out, te)
 
 def step.te(v: Bytes(), pd: Pend, out: List<&2, Req>) -> P:
   step.te.at(bytes.eq(lows(v), te.lit()), pd, out)
@@ -1167,8 +1170,8 @@ def step.head.fx(pd: Pend, host: Hosts, cl: Cl, fx: Fx, out: List<&2, Req>) -> P
 # few is refused; then its body is framed as body.kind says
 def step.head(pd: Pend, out: List<&2, Req>) -> P:
   match pd:
-    case Pend{meth, path, +cl, close, +host, ws, +fx}:
-      step.head.fx(Pend{meth, path, cl, close, host, ws, fx}, host, cl, fx, out)
+    case Pend{meth, path, +cl, close, +host, ws, +fx, nx}:
+      step.head.fx(Pend{meth, path, cl, close, host, ws, fx, nx}, host, cl, fx, out)
 
 # A chunk's framing, one byte: where the grammar takes it, and the
 # budget. Every byte of a chunk line before its CR is paid from the
