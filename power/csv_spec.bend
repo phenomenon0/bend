@@ -22,11 +22,11 @@
 # input as one record of one empty field; no reader does).
 #
 # It shares no code with csv.bend: it has its own classes, its own
-# lexer, and it reads by the grammar, two symbols ahead where the ABNF
-# looks two ahead (2DQUOTE, CRLF), where the reader is a machine that
-# holds a byte (QQ, CRp) until the next says what it was. It shares the
-# types the answer is written in: the dialect, the byte class names,
-# the refusal reasons and Out.
+# lexer, and it reads by the grammar's productions over the lexemes.
+# Its lexer reads CRLF as one symbol, looking a byte ahead, where the
+# reader is a machine that holds the CR (CRp) until the next byte says
+# what it was. It shares the types the answer is written in: the
+# dialect, the byte class names, the refusal reasons and Out.
 import Base
 import ./csv.bend as Csv
 
@@ -175,13 +175,14 @@ def add(acc: Bytes(), c: U32) -> Bytes():
 
 # where the grammar is: a record is due (at its start, or after a line
 # end); a field is due (after a COMMA); inside a non-escaped field;
-# inside an escaped one; after an escaped one's closing DQUOTE
+# inside an escaped one; after an escaped one's closing DQUOTE. room
+# counts down the bytes the field may still take.
 type At is Data:
   Record{}
   Field{}
   Plain{text: Bytes(), room: Nat}
   Quoted{text: Bytes(), room: Nat}
-  Closed{text: Bytes()}
+  Closed{text: Bytes(), room: Nat}
 
 # a byte of a field, if the field has room: max_field counts them down
 def room(n: Nat, +pos: Nat, k: Nat -> Csv.Out) -> Csv.Out:
@@ -246,103 +247,98 @@ def done.as(h: Bool, rs: Recs()) -> Csv.Out:
 def done(+d: Csv.Dialect, rs: Recs()) -> Csv.Out:
   done.as(named(d), List.reverse(&2, List<&2, Bytes()>, rs))
 
+# the text of the field a mode holds: none yet, where a field is due
+def text(md: At) -> Bytes():
+  match md:
+    case Plain{t, r}:
+      t
+    case Quoted{t, r}:
+      t
+    case Closed{t, r}:
+      t
+    case _:
+      ""
+
+# the end of input. file = ... [CRLF]: a line end at the very end adds
+# nothing, and nor does the empty input; otherwise the last record has
+# no line end and ends with the input. An escaped field must be closed.
+def go.end(+d: Csv.Dialect, +md: At, n: Nat, fs: Fields(), rs: Recs(), first: Maybe<&2, Nat>,
+  +pos: Nat) -> Csv.Out:
+  match md:
+    case Record{}:
+      done(d, rs)
+    case Quoted{t, r}:
+      Csv.Refused{pos, Csv.Unclosed{}}
+    case _:
+      line.end(d, text(md), n, fs, rs, first, pos, rs2 => f2 => done(d, rs2))
+
 # One def reads the whole grammar, as Bend has no mutual recursion: at
 # says which production is being read. n is the fields the record may
 # still take; fs its fields so far; rs the records so far; first what
 # the first record left of max_fields; pos the offset of the next byte.
-def go(ls: List<&2, Lx>, +d: Csv.Dialect, at: At, +n: Nat, fs: Fields(), rs: Recs(),
+def go(ls: List<&2, Lx>, +d: Csv.Dialect, +md: At, +n: Nat, fs: Fields(), rs: Recs(),
   first: Maybe<&2, Nat>, +pos: Nat) -> Csv.Out:
-  match ls at:
-    # file: [CRLF] at the end adds nothing, and nor does the empty input
-    case Nil{} Record{}:
-      done(d, rs)
-    # the last record has no line end: it ends with the input
-    case Nil{} Field{}:
-      line.end(d, "", n, fs, rs, first, pos, rs2 => f2 => done(d, rs2))
-    case Nil{} Plain{text, r}:
-      line.end(d, text, n, fs, rs, first, pos, rs2 => f2 => done(d, rs2))
-    case Nil{} Closed{text}:
-      line.end(d, text, n, fs, rs, first, pos, rs2 => f2 => done(d, rs2))
-    # escaped: a DQUOTE that no DQUOTE follows must close it
-    case Nil{} Quoted{text, r}:
-      Csv.Refused{pos, Csv.Unclosed{}}
-    # escaped = DQUOTE *(TEXTDATA / COMMA / CR / LF / 2DQUOTE) DQUOTE
-    case Con{LQuote{a}, Con{LQuote{b}, t}} Quoted{text, r}:
-      room(r, 1n+pos, m => go(t, d, Quoted{add(text, b), m}, n, fs, rs, first, 1n+1n+pos))
-    case Con{LQuote{a}, t} Quoted{text, r}:
-      go(t, d, Closed{text}, n, fs, rs, first, 1n+pos)
-    case Con{LCrlf{a, b}, t} Quoted{text, r}:
-      room(r, pos, m => room(m, 1n+pos, j =>
-        go(t, d, Quoted{add(add(text, a), b), j}, n, fs, rs, first, 1n+1n+pos)))
-    case Con{LComma{a}, t} Quoted{text, r}:
-      room(r, pos, m => go(t, d, Quoted{add(text, a), m}, n, fs, rs, first, 1n+pos))
-    case Con{LText{a}, t} Quoted{text, r}:
-      room(r, pos, m => go(t, d, Quoted{add(text, a), m}, n, fs, rs, first, 1n+pos))
-    case Con{LEnd{a}, t} Quoted{text, r}:
-      room(r, pos, m => go(t, d, Quoted{add(text, a), m}, n, fs, rs, first, 1n+pos))
-    case Con{LBareCR{a}, t} Quoted{text, r}:
-      room(r, pos, m => go(t, d, Quoted{add(text, a), m}, n, fs, rs, first, 1n+pos))
-    case Con{LBareLF{a}, t} Quoted{text, r}:
-      room(r, pos, m => go(t, d, Quoted{add(text, a), m}, n, fs, rs, first, 1n+pos))
-    # non-escaped = *TEXTDATA: a DQUOTE may not appear in it
-    case Con{LText{a}, t} Plain{text, r}:
-      room(r, pos, m => go(t, d, Plain{add(text, a), m}, n, fs, rs, first, 1n+pos))
-    case Con{LQuote{a}, t} Plain{text, r}:
-      Csv.Refused{pos, Csv.QuoteInField{}}
-    # field = (escaped / non-escaped): a DQUOTE starts an escaped
-    # field, TEXTDATA a non-escaped one; anything else ends an empty one
-    case Con{LQuote{a}, t} Record{}:
-      go(t, d, Quoted{"", budget(d)}, n, fs, rs, first, 1n+pos)
-    case Con{LQuote{a}, t} Field{}:
-      go(t, d, Quoted{"", budget(d)}, n, fs, rs, first, 1n+pos)
-    case Con{LText{a}, t} Record{}:
-      room(budget(d), pos, m => go(t, d, Plain{add("", a), m}, n, fs, rs, first, 1n+pos))
-    case Con{LText{a}, t} Field{}:
-      room(budget(d), pos, m => go(t, d, Plain{add("", a), m}, n, fs, rs, first, 1n+pos))
-    # after the closing DQUOTE: only a COMMA or a line end
-    case Con{LQuote{a}, t} Closed{text}:
-      Csv.Refused{pos, Csv.AfterQuote{}}
-    case Con{LText{a}, t} Closed{text}:
-      Csv.Refused{pos, Csv.AfterQuote{}}
-    # record = field *(COMMA field)
-    case Con{LComma{a}, t} Record{}:
-      field.end(n, "", fs, pos, m => gs => go(t, d, Field{}, m, gs, rs, first, 1n+pos))
-    case Con{LComma{a}, t} Field{}:
-      field.end(n, "", fs, pos, m => gs => go(t, d, Field{}, m, gs, rs, first, 1n+pos))
-    case Con{LComma{a}, t} Plain{text, r}:
-      field.end(n, text, fs, pos, m => gs => go(t, d, Field{}, m, gs, rs, first, 1n+pos))
-    case Con{LComma{a}, t} Closed{text}:
-      field.end(n, text, fs, pos, m => gs => go(t, d, Field{}, m, gs, rs, first, 1n+pos))
-    # *(CRLF record): a line end ends the field and the record
-    case Con{LEnd{a}, t} Record{}:
-      line.end(d, "", n, fs, rs, first, pos, rs2 => f2 =>
-        go(t, d, Record{}, width(d), Nil{}, rs2, f2, 1n+pos))
-    case Con{LEnd{a}, t} Field{}:
-      line.end(d, "", n, fs, rs, first, pos, rs2 => f2 =>
-        go(t, d, Record{}, width(d), Nil{}, rs2, f2, 1n+pos))
-    case Con{LEnd{a}, t} Plain{text, r}:
-      line.end(d, text, n, fs, rs, first, pos, rs2 => f2 =>
-        go(t, d, Record{}, width(d), Nil{}, rs2, f2, 1n+pos))
-    case Con{LEnd{a}, t} Closed{text}:
-      line.end(d, text, n, fs, rs, first, pos, rs2 => f2 =>
-        go(t, d, Record{}, width(d), Nil{}, rs2, f2, 1n+pos))
-    case Con{LCrlf{a, b}, t} Record{}:
-      line.end(d, "", n, fs, rs, first, pos, rs2 => f2 =>
-        go(t, d, Record{}, width(d), Nil{}, rs2, f2, 1n+1n+pos))
-    case Con{LCrlf{a, b}, t} Field{}:
-      line.end(d, "", n, fs, rs, first, pos, rs2 => f2 =>
-        go(t, d, Record{}, width(d), Nil{}, rs2, f2, 1n+1n+pos))
-    case Con{LCrlf{a, b}, t} Plain{text, r}:
-      line.end(d, text, n, fs, rs, first, pos, rs2 => f2 =>
-        go(t, d, Record{}, width(d), Nil{}, rs2, f2, 1n+1n+pos))
-    case Con{LCrlf{a, b}, t} Closed{text}:
-      line.end(d, text, n, fs, rs, first, pos, rs2 => f2 =>
-        go(t, d, Record{}, width(d), Nil{}, rs2, f2, 1n+1n+pos))
-    # a line end the dialect does not take
-    case Con{LBareCR{a}, t} _:
-      Csv.Refused{pos, Csv.BareCR{}}
-    case Con{LBareLF{a}, t} _:
-      Csv.Refused{pos, Csv.BareLF{}}
+  match ls:
+    case Nil{}:
+      go.end(d, md, n, fs, rs, first, pos)
+    case Con{x, t}:
+      match x md:
+        # escaped = DQUOTE *(TEXTDATA / COMMA / CR / LF / 2DQUOTE) DQUOTE.
+        # A DQUOTE inside is the closing one unless the next symbol is a
+        # DQUOTE too, and then the two are one 2DQUOTE: so a DQUOTE
+        # closes the field, and a DQUOTE right after it reopens it with
+        # one quote of text (counted at the second DQUOTE).
+        case LQuote{a} Quoted{txt, r}:
+          go(t, d, Closed{txt, r}, n, fs, rs, first, 1n+pos)
+        case LQuote{a} Closed{txt, r}:
+          room(r, pos, m => go(t, d, Quoted{add(txt, a), m}, n, fs, rs, first, 1n+pos))
+        case LCrlf{a, b} Quoted{txt, r}:
+          room(r, pos, m => room(m, 1n+pos, j =>
+            go(t, d, Quoted{add(add(txt, a), b), j}, n, fs, rs, first, 1n+1n+pos)))
+        case LComma{a} Quoted{txt, r}:
+          room(r, pos, m => go(t, d, Quoted{add(txt, a), m}, n, fs, rs, first, 1n+pos))
+        case LText{a} Quoted{txt, r}:
+          room(r, pos, m => go(t, d, Quoted{add(txt, a), m}, n, fs, rs, first, 1n+pos))
+        case LEnd{a} Quoted{txt, r}:
+          room(r, pos, m => go(t, d, Quoted{add(txt, a), m}, n, fs, rs, first, 1n+pos))
+        case LBareCR{a} Quoted{txt, r}:
+          room(r, pos, m => go(t, d, Quoted{add(txt, a), m}, n, fs, rs, first, 1n+pos))
+        case LBareLF{a} Quoted{txt, r}:
+          room(r, pos, m => go(t, d, Quoted{add(txt, a), m}, n, fs, rs, first, 1n+pos))
+        # non-escaped = *TEXTDATA: no DQUOTE in it
+        case LText{a} Plain{txt, r}:
+          room(r, pos, m => go(t, d, Plain{add(txt, a), m}, n, fs, rs, first, 1n+pos))
+        case LQuote{a} Plain{txt, r}:
+          Csv.Refused{pos, Csv.QuoteInField{}}
+        # field = (escaped / non-escaped): a DQUOTE opens an escaped
+        # field, TEXTDATA starts a non-escaped one; anything else ends
+        # an empty one
+        case LQuote{a} Record{}:
+          go(t, d, Quoted{"", budget(d)}, n, fs, rs, first, 1n+pos)
+        case LQuote{a} Field{}:
+          go(t, d, Quoted{"", budget(d)}, n, fs, rs, first, 1n+pos)
+        case LText{a} Record{}:
+          room(budget(d), pos, m => go(t, d, Plain{add("", a), m}, n, fs, rs, first, 1n+pos))
+        case LText{a} Field{}:
+          room(budget(d), pos, m => go(t, d, Plain{add("", a), m}, n, fs, rs, first, 1n+pos))
+        # after the closing DQUOTE, only a COMMA or a line end
+        case LText{a} Closed{txt, r}:
+          Csv.Refused{pos, Csv.AfterQuote{}}
+        # record = field *(COMMA field)
+        case LComma{a} _:
+          field.end(n, text(md), fs, pos, m => gs => go(t, d, Field{}, m, gs, rs, first, 1n+pos))
+        # *(CRLF record): a line end ends the field, then the record
+        case LEnd{a} _:
+          line.end(d, text(md), n, fs, rs, first, pos, rs2 => f2 =>
+            go(t, d, Record{}, width(d), Nil{}, rs2, f2, 1n+pos))
+        case LCrlf{a, b} _:
+          line.end(d, text(md), n, fs, rs, first, pos, rs2 => f2 =>
+            go(t, d, Record{}, width(d), Nil{}, rs2, f2, 1n+1n+pos))
+        # a line end the dialect does not take
+        case LBareCR{a} _:
+          Csv.Refused{pos, Csv.BareCR{}}
+        case LBareLF{a} _:
+          Csv.Refused{pos, Csv.BareLF{}}
 
 # the whole input: what it reads as, or where and why it was refused
 def parse(bs: List<&2, U32>, +d: Csv.Dialect) -> Csv.Out:

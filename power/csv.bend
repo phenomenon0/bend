@@ -365,7 +365,7 @@ def step.at(+d: Dialect, m: Mode, +k: K, c: U32, fl: Nat, cur: List<&2, Bytes()>
     case QQ{acc, left} KO{}:
       P{Bad{pos, AfterQuote{}}, fl, cur, out, w, pos}
     case CRp{acc, at} _:
-      crp.at(d, is_lf(k) && crlf(d), cr(d), acc, at, k, c, fl, cur, out, w, pos)
+      crp.at(d, crlf(d) && is_lf(k), cr(d), acc, at, k, c, fl, cur, out, w, pos)
     case Bad{at, why} _:
       P{Bad{at, why}, fl, cur, out, w, pos}
 
