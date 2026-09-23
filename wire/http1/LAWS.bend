@@ -65,6 +65,21 @@ law reads_split:
   for +p: R.P
   {R.reads(e, rs, p) == R.feed_buf(e, Bytes.concat(rs), p) : R.P}
 
+# LAW: a body taken as it comes is the body. A client that streams a
+# response takes the body bytes the reader holds after each read
+# (R.take) and hands them on; however TCP cut the response, those
+# chunks joined in order, then what the reader still holds, are the
+# reader fed the response whole -- and so, by resp_sim_reads, the body
+# RFC 9112 frames. Nothing handed on is out of order, doubled or made
+# up, and nothing is lost.
+law drain_reads:
+  for +e: R.Ask
+  for +rs: List<&2, Bytes()>
+  for +p: R.P
+  {R.give(Wr.drain.b(R.P, Wr.drain(~R.Ask, ~R.P, ~R.wstep, ~R.wadv, ~R.take, e, rs, p, "")),
+    Wr.drain.s(R.P, Wr.drain(~R.Ask, ~R.P, ~R.wstep, ~R.wadv, ~R.take, e, rs, p, ""))) ==
+    R.reads(e, rs, p) : R.P}
+
 # The classes
 # ===========
 

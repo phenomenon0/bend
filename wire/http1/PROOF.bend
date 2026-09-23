@@ -2464,6 +2464,552 @@ def adv_ok(+e: R.Ask, +s: Bytes(), p: R.P) ->
       lem.adv.at(e, st, s, out)
 
 
+# Taking the body
+# ===============
+#
+# The kit's obligations of take, give and open (resp.bend), for
+# drain_reads: only an open state holds body bytes, an open state steps
+# to an open one, and a byte stepped with bytes put back in front of an
+# open state's body lands with them still in front.
+
+def t.app_nil(+a: Bytes()) -> {Bytes.append(a, "") == a : Bytes()}:
+  match a:
+    case SNil{}:
+      {==}
+    case SCon{+h, +t}:
+      Equal.cong(Bytes(), Bytes(), x => SCon{h, x}, Bytes.append(t, ""), t, t.app_nil(t))
+
+def t.app_assoc(+a: Bytes(), +b: Bytes(), +c: Bytes()) ->
+  {Bytes.append(Bytes.append(a, b), c) == Bytes.append(a, Bytes.append(b, c)) : Bytes()}:
+  match a:
+    case SNil{}:
+      {==}
+    case SCon{+h, +t}:
+      Equal.cong(Bytes(), Bytes(), x => SCon{h, x}, Bytes.append(Bytes.append(t, b), c),
+        Bytes.append(t, Bytes.append(b, c)), t.app_assoc(t, b, c))
+
+# a byte pushed after bytes put in front
+def t.push_give(+x: Bytes(), +got: Bytes(), +c: U32) ->
+  {Bytes.push(Bytes.append(x, got), c) == Bytes.append(x, Bytes.push(got, c)) : Bytes()}:
+  t.app_assoc(x, got, SCon{Chr{c}, SNil{}})
+
+def t.give_final(+x: Bytes(), h: R.Head, +b: Bytes(), +d: Bool) ->
+  {R.resp.give(x, R.final(h, b, d)) == R.final(h, Bytes.append(x, b), d) : R.Resp}:
+  match h:
+    case R.Head{v10, code, len, te, close, ka}:
+      {==}
+
+def t.give_nil.st(st: R.St, +out: List<&2, U32>) ->
+  {R.P{R.st.give("", st), out} == R.P{st, out} : R.P}:
+  match st:
+    case R.SVer{a, b}:
+      {==}
+    case R.SCode{v10, n, k}:
+      {==}
+    case R.SWhy{v10, code}:
+      {==}
+    case R.Eol{h}:
+      {==}
+    case R.Lin{h}:
+      {==}
+    case R.Nam{h, cl, te, co}:
+      {==}
+    case R.Oth{h}:
+      {==}
+    case R.Len0{h}:
+      {==}
+    case R.Len{h, n}:
+      {==}
+    case R.LenW{h, n}:
+      {==}
+    case R.Te0{h}:
+      {==}
+    case R.Te{h, m}:
+      {==}
+    case R.Conn{h, cl, ka, mc, mk}:
+      {==}
+    case R.Eoh{h}:
+      {==}
+    case R.Bod{h, more, got}:
+      {==}
+    case R.Chk{h, at, n, got, left}:
+      {==}
+    case R.Dat{h, more, got, left}:
+      {==}
+    case R.Clo{h, got, left}:
+      {==}
+    case R.Fin{r, rest}:
+      match r:
+        case R.Resp{code, v10, close, body}:
+          {==}
+    case R.Bad{}:
+      {==}
+
+def t.give_nil(+p: R.P) -> {R.give("", p) == p : R.P}:
+  match p:
+    case R.P{st, +out}:
+      t.give_nil.st(st, out)
+
+def t.give_app.st(+a: Bytes(), +b: Bytes(), st: R.St, +out: List<&2, U32>) ->
+  {R.P{R.st.give(Bytes.append(a, b), st), out} == R.P{R.st.give(a, R.st.give(b, st)), out} : R.P}:
+  match st:
+    case R.SVer{+a, +b}:
+      {==}
+    case R.SCode{+v10, +n, +k}:
+      {==}
+    case R.SWhy{+v10, +code}:
+      {==}
+    case R.Eol{+h}:
+      {==}
+    case R.Lin{+h}:
+      {==}
+    case R.Nam{+h, +cl, +te, +co}:
+      {==}
+    case R.Oth{+h}:
+      {==}
+    case R.Len0{+h}:
+      {==}
+    case R.Len{+h, +n}:
+      {==}
+    case R.LenW{+h, +n}:
+      {==}
+    case R.Te0{+h}:
+      {==}
+    case R.Te{+h, +m}:
+      {==}
+    case R.Conn{+h, +cl, +ka, +mc, +mk}:
+      {==}
+    case R.Eoh{+h}:
+      {==}
+    case R.Bod{+h, +more, +got}:
+      Equal.cong(Bytes(), R.P, y => R.P{R.Bod{h, more, y}, out},
+        Bytes.append(Bytes.append(a, b), got), Bytes.append(a, Bytes.append(b, got)),
+        t.app_assoc(a, b, got))
+    case R.Chk{+h, +at, +n, +got, +left}:
+      Equal.cong(Bytes(), R.P, y => R.P{R.Chk{h, at, n, y, left}, out},
+        Bytes.append(Bytes.append(a, b), got), Bytes.append(a, Bytes.append(b, got)),
+        t.app_assoc(a, b, got))
+    case R.Dat{+h, +more, +got, +left}:
+      Equal.cong(Bytes(), R.P, y => R.P{R.Dat{h, more, y, left}, out},
+        Bytes.append(Bytes.append(a, b), got), Bytes.append(a, Bytes.append(b, got)),
+        t.app_assoc(a, b, got))
+    case R.Clo{+h, +got, +left}:
+      Equal.cong(Bytes(), R.P, y => R.P{R.Clo{h, y, left}, out},
+        Bytes.append(Bytes.append(a, b), got), Bytes.append(a, Bytes.append(b, got)),
+        t.app_assoc(a, b, got))
+    case R.Fin{+r, +rest}:
+      match r:
+        case R.Resp{code, v10, close, +body}:
+          Equal.cong(Bytes(), R.P, y => R.P{R.Fin{R.Resp{code, v10, close, y}, rest}, out},
+            Bytes.append(Bytes.append(a, b), body), Bytes.append(a, Bytes.append(b, body)),
+            t.app_assoc(a, b, body))
+    case R.Bad{}:
+      {==}
+
+def t.give_app(+a: Bytes(), +b: Bytes(), +p: R.P) ->
+  {R.give(Bytes.append(a, b), p) == R.give(a, R.give(b, p)) : R.P}:
+  match p:
+    case R.P{st, +out}:
+      t.give_app.st(a, b, st, out)
+
+def t.give_take.st(st: R.St, +out: List<&2, U32>) ->
+  {R.give(Wr.drain.b(R.P, R.take.at(R.st.take(st), out)),
+    Wr.drain.s(R.P, R.take.at(R.st.take(st), out))) == R.P{st, out} : R.P}:
+  match st:
+    case R.SVer{+a, +b}:
+      {==}
+    case R.SCode{+v10, +n, +k}:
+      {==}
+    case R.SWhy{+v10, +code}:
+      {==}
+    case R.Eol{+h}:
+      {==}
+    case R.Lin{+h}:
+      {==}
+    case R.Nam{+h, +cl, +te, +co}:
+      {==}
+    case R.Oth{+h}:
+      {==}
+    case R.Len0{+h}:
+      {==}
+    case R.Len{+h, +n}:
+      {==}
+    case R.LenW{+h, +n}:
+      {==}
+    case R.Te0{+h}:
+      {==}
+    case R.Te{+h, +m}:
+      {==}
+    case R.Conn{+h, +cl, +ka, +mc, +mk}:
+      {==}
+    case R.Eoh{+h}:
+      {==}
+    case R.Bod{+h, +more, +got}:
+      Equal.cong(Bytes(), R.P, y => R.P{R.Bod{h, more, y}, out},
+        Bytes.append(got, ""), got, t.app_nil(got))
+    case R.Chk{+h, +at, +n, +got, +left}:
+      Equal.cong(Bytes(), R.P, y => R.P{R.Chk{h, at, n, y, left}, out},
+        Bytes.append(got, ""), got, t.app_nil(got))
+    case R.Dat{+h, +more, +got, +left}:
+      Equal.cong(Bytes(), R.P, y => R.P{R.Dat{h, more, y, left}, out},
+        Bytes.append(got, ""), got, t.app_nil(got))
+    case R.Clo{+h, +got, +left}:
+      Equal.cong(Bytes(), R.P, y => R.P{R.Clo{h, y, left}, out},
+        Bytes.append(got, ""), got, t.app_nil(got))
+    case R.Fin{+r, +rest}:
+      match r:
+        case R.Resp{code, v10, close, +body}:
+          Equal.cong(Bytes(), R.P, y => R.P{R.Fin{R.Resp{code, v10, close, y}, rest}, out},
+            Bytes.append(body, ""), body, t.app_nil(body))
+    case R.Bad{}:
+      {==}
+
+def t.give_take(+p: R.P) ->
+  {R.give(Wr.drain.b(R.P, R.take(p)), Wr.drain.s(R.P, R.take(p))) == p : R.P}:
+  match p:
+    case R.P{st, +out}:
+      t.give_take.st(st, out)
+
+def t.take_open.st(st: R.St, +out: List<&2, U32>) ->
+  {R.open(Wr.drain.s(R.P, R.take.at(R.st.take(st), out))) == R.st.open(st) : Bool}:
+  match st:
+    case R.SVer{a, b}:
+      {==}
+    case R.SCode{v10, n, k}:
+      {==}
+    case R.SWhy{v10, code}:
+      {==}
+    case R.Eol{h}:
+      {==}
+    case R.Lin{h}:
+      {==}
+    case R.Nam{h, cl, te, co}:
+      {==}
+    case R.Oth{h}:
+      {==}
+    case R.Len0{h}:
+      {==}
+    case R.Len{h, n}:
+      {==}
+    case R.LenW{h, n}:
+      {==}
+    case R.Te0{h}:
+      {==}
+    case R.Te{h, m}:
+      {==}
+    case R.Conn{h, cl, ka, mc, mk}:
+      {==}
+    case R.Eoh{h}:
+      {==}
+    case R.Bod{h, more, got}:
+      {==}
+    case R.Chk{h, at, n, got, left}:
+      {==}
+    case R.Dat{h, more, got, left}:
+      {==}
+    case R.Clo{h, got, left}:
+      {==}
+    case R.Fin{r, rest}:
+      match r:
+        case R.Resp{code, v10, close, body}:
+          {==}
+    case R.Bad{}:
+      {==}
+
+def t.take_open(+p: R.P) -> {R.open(Wr.drain.s(R.P, R.take(p))) == R.open(p) : Bool}:
+  match p:
+    case R.P{st, +out}:
+      t.take_open.st(st, out)
+
+def t.shut_take.st(st: R.St, +out: List<&2, U32>, o: {R.st.open(st) == False{} : Bool}) ->
+  {Wr.drain.b(R.P, R.take.at(R.st.take(st), out)) == "" : Bytes()}:
+  match st:
+    case R.SVer{a, b}:
+      {==}
+    case R.SCode{v10, n, k}:
+      {==}
+    case R.SWhy{v10, code}:
+      {==}
+    case R.Eol{h}:
+      {==}
+    case R.Lin{h}:
+      {==}
+    case R.Nam{h, cl, te, co}:
+      {==}
+    case R.Oth{h}:
+      {==}
+    case R.Len0{h}:
+      {==}
+    case R.Len{h, n}:
+      {==}
+    case R.LenW{h, n}:
+      {==}
+    case R.Te0{h}:
+      {==}
+    case R.Te{h, m}:
+      {==}
+    case R.Conn{h, cl, ka, mc, mk}:
+      {==}
+    case R.Eoh{h}:
+      {==}
+    case R.Bod{h, more, got}:
+      no2({Wr.drain.b(R.P, R.take.at(R.st.take(R.Bod{h, more, got}), out)) == "" : Bytes()}, o)
+    case R.Chk{h, at, n, got, left}:
+      no2({Wr.drain.b(R.P, R.take.at(R.st.take(R.Chk{h, at, n, got, left}), out)) == "" : Bytes()}, o)
+    case R.Dat{h, more, got, left}:
+      no2({Wr.drain.b(R.P, R.take.at(R.st.take(R.Dat{h, more, got, left}), out)) == "" : Bytes()}, o)
+    case R.Clo{h, got, left}:
+      no2({Wr.drain.b(R.P, R.take.at(R.st.take(R.Clo{h, got, left}), out)) == "" : Bytes()}, o)
+    case R.Fin{r, rest}:
+      no2({Wr.drain.b(R.P, R.take.at(R.st.take(R.Fin{r, rest}), out)) == "" : Bytes()}, o)
+    case R.Bad{}:
+      no2({Wr.drain.b(R.P, R.take.at(R.st.take(R.Bad{}), out)) == "" : Bytes()}, o)
+
+def t.shut_take(+p: R.P, o: {R.open(p) == False{} : Bool}) ->
+  {Wr.drain.b(R.P, R.take(p)) == "" : Bytes()}:
+  match p:
+    case R.P{st, +out}:
+      t.shut_take.st(st, out, o)
+
+def t.paid_open(over: Bool, -h: R.Head, -at: R.At, -n: U32, -got: Bytes(), -left: U32) ->
+  {R.st.open(R.chunk.paid(over, h, at, n, got, left)) == True{} : Bool}:
+  match over:
+    case True{}:
+      {==}
+    case False{}:
+      {==}
+
+def t.line_open(z: Bool, -h: R.Head, -n: U32, -got: Bytes(), -left: U32) ->
+  {R.st.open(R.chunk.line(z, h, n, got, left)) == True{} : Bool}:
+  match z:
+    case True{}:
+      {==}
+    case False{}:
+      {==}
+
+def t.chk_open(g: R.Go, -h: R.Head, +n: U32, -got: Bytes(), +left: U32) ->
+  {R.st.open(R.chunk.go(g, h, n, got, left)) == True{} : Bool}:
+  match g:
+    case R.GBad{}:
+      {==}
+    case R.GTo{at, paid}:
+      match paid:
+        case True{}:
+          t.paid_open(U32.is_le(left, n), h, at, n, got, left)
+        case False{}:
+          {==}
+    case R.GDigit{+d}:
+      t.paid_open(U32.is_le(left, (n * 16 + d : U32)), h, R.ASize{}, (n * 16 + d : U32), got, left)
+    case R.GLine{}:
+      t.line_open(U32.is_zero(n), h, n, got, left)
+    case R.GDone{}:
+      {==}
+
+def t.step_open.st(+e: R.Ask, st: R.St, +c: U32, +out: List<&2, U32>,
+  o: {R.st.open(st) == True{} : Bool}) ->
+  {R.open(R.step.at(e, st, R.cls(c), c, out)) == True{} : Bool}:
+  match st:
+    case R.SVer{+a, +b}:
+      no({R.open(R.step.at(e, R.SVer{a, b}, R.cls(c), c, out)) == True{} : Bool}, o)
+    case R.SCode{+v10, +n, +k}:
+      no({R.open(R.step.at(e, R.SCode{v10, n, k}, R.cls(c), c, out)) == True{} : Bool}, o)
+    case R.SWhy{+v10, +code}:
+      no({R.open(R.step.at(e, R.SWhy{v10, code}, R.cls(c), c, out)) == True{} : Bool}, o)
+    case R.Eol{+h}:
+      no({R.open(R.step.at(e, R.Eol{h}, R.cls(c), c, out)) == True{} : Bool}, o)
+    case R.Lin{+h}:
+      no({R.open(R.step.at(e, R.Lin{h}, R.cls(c), c, out)) == True{} : Bool}, o)
+    case R.Nam{+h, +cl, +te, +co}:
+      no({R.open(R.step.at(e, R.Nam{h, cl, te, co}, R.cls(c), c, out)) == True{} : Bool}, o)
+    case R.Oth{+h}:
+      no({R.open(R.step.at(e, R.Oth{h}, R.cls(c), c, out)) == True{} : Bool}, o)
+    case R.Len0{+h}:
+      no({R.open(R.step.at(e, R.Len0{h}, R.cls(c), c, out)) == True{} : Bool}, o)
+    case R.Len{+h, +n}:
+      no({R.open(R.step.at(e, R.Len{h, n}, R.cls(c), c, out)) == True{} : Bool}, o)
+    case R.LenW{+h, +n}:
+      no({R.open(R.step.at(e, R.LenW{h, n}, R.cls(c), c, out)) == True{} : Bool}, o)
+    case R.Te0{+h}:
+      no({R.open(R.step.at(e, R.Te0{h}, R.cls(c), c, out)) == True{} : Bool}, o)
+    case R.Te{+h, +m}:
+      no({R.open(R.step.at(e, R.Te{h, m}, R.cls(c), c, out)) == True{} : Bool}, o)
+    case R.Conn{+h, +cl, +ka, +mc, +mk}:
+      no({R.open(R.step.at(e, R.Conn{h, cl, ka, mc, mk}, R.cls(c), c, out)) == True{} : Bool}, o)
+    case R.Eoh{+h}:
+      no({R.open(R.step.at(e, R.Eoh{h}, R.cls(c), c, out)) == True{} : Bool}, o)
+    case R.Bod{+h, +more, +got}:
+      match more:
+        case 0n:
+          {==}
+        case 1n+q:
+          {==}
+    case R.Chk{+h, +at, +n, +got, +left}:
+      t.chk_open(R.chunk.step(at, R.xk.of(R.cls(c), c)), h, n, got, left)
+    case R.Dat{+h, +more, +got, +left}:
+      match more:
+        case 0n:
+          {==}
+        case 1n+q:
+          {==}
+    case R.Clo{+h, +got, +left}:
+      match left:
+        case 0n:
+          {==}
+        case 1n+q:
+          {==}
+    case R.Fin{+r, +rest}:
+      {==}
+    case R.Bad{}:
+      {==}
+
+def t.step_open(+e: R.Ask, +p: R.P, +c: U32, o: {R.open(p) == True{} : Bool}) ->
+  {R.open(R.wstep(e, p, c)) == True{} : Bool}:
+  match p:
+    case R.P{st, +out}:
+      t.step_open.st(e, st, c, out, o)
+
+def t.paid_give(over: Bool, +x: Bytes(), -h: R.Head, -at: R.At, -n: U32, -got: Bytes(),
+  -left: U32, -out: List<&2, U32>) ->
+  {R.P{R.chunk.paid(over, h, at, n, Bytes.append(x, got), left), out} ==
+    R.P{R.st.give(x, R.chunk.paid(over, h, at, n, got, left)), out} : R.P}:
+  match over:
+    case True{}:
+      {==}
+    case False{}:
+      {==}
+
+def t.line_give(z: Bool, +x: Bytes(), -h: R.Head, +n: U32, -got: Bytes(), +left: U32,
+  -out: List<&2, U32>) ->
+  {R.P{R.chunk.line(z, h, n, Bytes.append(x, got), left), out} ==
+    R.P{R.st.give(x, R.chunk.line(z, h, n, got, left)), out} : R.P}:
+  match z:
+    case True{}:
+      {==}
+    case False{}:
+      {==}
+
+def t.chk_give(g: R.Go, +x: Bytes(), +h: R.Head, +n: U32, +got: Bytes(), +left: U32,
+  +out: List<&2, U32>) ->
+  {R.P{R.chunk.go(g, h, n, Bytes.append(x, got), left), out} ==
+    R.P{R.st.give(x, R.chunk.go(g, h, n, got, left)), out} : R.P}:
+  match g:
+    case R.GBad{}:
+      {==}
+    case R.GTo{at, paid}:
+      match paid:
+        case True{}:
+          t.paid_give(U32.is_le(left, n), x, h, at, n, got, left, out)
+        case False{}:
+          {==}
+    case R.GDigit{+d}:
+      t.paid_give(U32.is_le(left, (n * 16 + d : U32)), x, h, R.ASize{}, (n * 16 + d : U32), got,
+        left, out)
+    case R.GLine{}:
+      t.line_give(U32.is_zero(n), x, h, n, got, left, out)
+    case R.GDone{}:
+      Equal.cong(R.Resp, R.P, y => R.P{R.Fin{y, ""}, out}, R.final(h, Bytes.append(x, got), False{}),
+        R.resp.give(x, R.final(h, got, False{})),
+        Equal.sym(R.Resp, R.resp.give(x, R.final(h, got, False{})),
+          R.final(h, Bytes.append(x, got), False{}), t.give_final(x, h, got, False{})))
+
+def t.step_give.st(+e: R.Ask, +x: Bytes(), st: R.St, +c: U32, +out: List<&2, U32>,
+  o: {R.st.open(st) == True{} : Bool}) ->
+  {R.step.at(e, R.st.give(x, st), R.cls(c), c, out) == R.give(x, R.step.at(e, st, R.cls(c), c, out)) :
+    R.P}:
+  match st:
+    case R.SVer{+a, +b}:
+      no({R.step.at(e, R.st.give(x, R.SVer{a, b}), R.cls(c), c, out) ==
+        R.give(x, R.step.at(e, R.SVer{a, b}, R.cls(c), c, out)) : R.P}, o)
+    case R.SCode{+v10, +n, +k}:
+      no({R.step.at(e, R.st.give(x, R.SCode{v10, n, k}), R.cls(c), c, out) ==
+        R.give(x, R.step.at(e, R.SCode{v10, n, k}, R.cls(c), c, out)) : R.P}, o)
+    case R.SWhy{+v10, +code}:
+      no({R.step.at(e, R.st.give(x, R.SWhy{v10, code}), R.cls(c), c, out) ==
+        R.give(x, R.step.at(e, R.SWhy{v10, code}, R.cls(c), c, out)) : R.P}, o)
+    case R.Eol{+h}:
+      no({R.step.at(e, R.st.give(x, R.Eol{h}), R.cls(c), c, out) ==
+        R.give(x, R.step.at(e, R.Eol{h}, R.cls(c), c, out)) : R.P}, o)
+    case R.Lin{+h}:
+      no({R.step.at(e, R.st.give(x, R.Lin{h}), R.cls(c), c, out) ==
+        R.give(x, R.step.at(e, R.Lin{h}, R.cls(c), c, out)) : R.P}, o)
+    case R.Nam{+h, +cl, +te, +co}:
+      no({R.step.at(e, R.st.give(x, R.Nam{h, cl, te, co}), R.cls(c), c, out) ==
+        R.give(x, R.step.at(e, R.Nam{h, cl, te, co}, R.cls(c), c, out)) : R.P}, o)
+    case R.Oth{+h}:
+      no({R.step.at(e, R.st.give(x, R.Oth{h}), R.cls(c), c, out) ==
+        R.give(x, R.step.at(e, R.Oth{h}, R.cls(c), c, out)) : R.P}, o)
+    case R.Len0{+h}:
+      no({R.step.at(e, R.st.give(x, R.Len0{h}), R.cls(c), c, out) ==
+        R.give(x, R.step.at(e, R.Len0{h}, R.cls(c), c, out)) : R.P}, o)
+    case R.Len{+h, +n}:
+      no({R.step.at(e, R.st.give(x, R.Len{h, n}), R.cls(c), c, out) ==
+        R.give(x, R.step.at(e, R.Len{h, n}, R.cls(c), c, out)) : R.P}, o)
+    case R.LenW{+h, +n}:
+      no({R.step.at(e, R.st.give(x, R.LenW{h, n}), R.cls(c), c, out) ==
+        R.give(x, R.step.at(e, R.LenW{h, n}, R.cls(c), c, out)) : R.P}, o)
+    case R.Te0{+h}:
+      no({R.step.at(e, R.st.give(x, R.Te0{h}), R.cls(c), c, out) ==
+        R.give(x, R.step.at(e, R.Te0{h}, R.cls(c), c, out)) : R.P}, o)
+    case R.Te{+h, +m}:
+      no({R.step.at(e, R.st.give(x, R.Te{h, m}), R.cls(c), c, out) ==
+        R.give(x, R.step.at(e, R.Te{h, m}, R.cls(c), c, out)) : R.P}, o)
+    case R.Conn{+h, +cl, +ka, +mc, +mk}:
+      no({R.step.at(e, R.st.give(x, R.Conn{h, cl, ka, mc, mk}), R.cls(c), c, out) ==
+        R.give(x, R.step.at(e, R.Conn{h, cl, ka, mc, mk}, R.cls(c), c, out)) : R.P}, o)
+    case R.Eoh{+h}:
+      no({R.step.at(e, R.st.give(x, R.Eoh{h}), R.cls(c), c, out) ==
+        R.give(x, R.step.at(e, R.Eoh{h}, R.cls(c), c, out)) : R.P}, o)
+    case R.Bod{+h, +more, +got}:
+      match more:
+        case 0n:
+          Equal.trans(R.P, R.P{R.Fin{R.final(h, Bytes.push(Bytes.append(x, got), c), False{}), ""}, out},
+            R.P{R.Fin{R.final(h, Bytes.append(x, Bytes.push(got, c)), False{}), ""}, out},
+            R.P{R.Fin{R.resp.give(x, R.final(h, Bytes.push(got, c), False{})), ""}, out},
+            Equal.cong(Bytes(), R.P, y => R.P{R.Fin{R.final(h, y, False{}), ""}, out},
+              Bytes.push(Bytes.append(x, got), c), Bytes.append(x, Bytes.push(got, c)),
+              t.push_give(x, got, c)),
+            Equal.cong(R.Resp, R.P, y => R.P{R.Fin{y, ""}, out},
+              R.final(h, Bytes.append(x, Bytes.push(got, c)), False{}),
+              R.resp.give(x, R.final(h, Bytes.push(got, c), False{})),
+              Equal.sym(R.Resp, R.resp.give(x, R.final(h, Bytes.push(got, c), False{})),
+                R.final(h, Bytes.append(x, Bytes.push(got, c)), False{}),
+                t.give_final(x, h, Bytes.push(got, c), False{}))))
+        case 1n+q:
+          Equal.cong(Bytes(), R.P, y => R.P{R.Bod{h, q, y}, out},
+            Bytes.push(Bytes.append(x, got), c), Bytes.append(x, Bytes.push(got, c)),
+            t.push_give(x, got, c))
+    case R.Chk{+h, +at, +n, +got, +left}:
+      t.chk_give(R.chunk.step(at, R.xk.of(R.cls(c), c)), x, h, n, got, left, out)
+    case R.Dat{+h, +more, +got, +left}:
+      match more:
+        case 0n:
+          Equal.cong(Bytes(), R.P, y => R.P{R.Chk{h, R.ADataCr{}, 0, y, left}, out},
+            Bytes.push(Bytes.append(x, got), c), Bytes.append(x, Bytes.push(got, c)),
+            t.push_give(x, got, c))
+        case 1n+q:
+          Equal.cong(Bytes(), R.P, y => R.P{R.Dat{h, q, y, left}, out},
+            Bytes.push(Bytes.append(x, got), c), Bytes.append(x, Bytes.push(got, c)),
+            t.push_give(x, got, c))
+    case R.Clo{+h, +got, +left}:
+      match left:
+        case 0n:
+          {==}
+        case 1n+q:
+          Equal.cong(Bytes(), R.P, y => R.P{R.Clo{h, y, q}, out},
+            Bytes.push(Bytes.append(x, got), c), Bytes.append(x, Bytes.push(got, c)),
+            t.push_give(x, got, c))
+    case R.Fin{+r, +rest}:
+      {==}
+    case R.Bad{}:
+      {==}
+
+def t.step_give(+e: R.Ask, +x: Bytes(), +p: R.P, +c: U32, o: {R.open(p) == True{} : Bool}) ->
+  {R.wstep(e, R.give(x, p), c) == R.give(x, R.wstep(e, p, c)) : R.P}:
+  match p:
+    case R.P{st, +out}:
+      t.step_give.st(e, x, st, c, out, o)
+
+
 # The laws, whole
 # ===============
 
@@ -2494,6 +3040,11 @@ def Laws.bad_feeds_buf(e, s, out):
 
 def Laws.reads_split(e, rs, p):
   Wr.reads_split(~R.Ask, ~R.P, ~R.wstep, ~R.wadv, ~adv_ok, e, rs, p)
+
+def Laws.drain_reads(e, rs, p):
+  Wr.drain_reads(~R.Ask, ~R.P, ~R.wstep, ~R.wadv, ~adv_ok, ~R.take, ~R.wgive, ~R.open,
+    ~t.step_open, ~t.step_give, ~t.take_open, ~t.shut_take, ~t.give_take, ~t.give_nil,
+    ~t.give_app, e, rs, p)
 
 def Laws.cls_rfc():
   {==}

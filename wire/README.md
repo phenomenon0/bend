@@ -60,6 +60,18 @@ is the byte machine), `feed_buf_split`, `slow_split` (chunking, on
 blocks), `reads_is` and `reads_split` (any list of reads reads as their
 concatenation).
 
+**Taking a body as it comes.** A reader that frames a body can hand it
+on as it arrives: `~take` answers the body bytes the state holds and
+the state without them, `~give` puts bytes back in front, `~open` says
+the head is behind. `Wr.drain` is a stream read that way, each read
+fed and then taken. For seven obligations (an open state stays open
+and steps the same with bytes put back in front, a state not open
+holds none, take and give are inverse, give of nothing is nothing and
+of two joined the two in turn) the kit proves `drain_reads`: the
+chunks taken, joined in order, put back in front of what the reader
+still holds, are the reader fed the stream whole, however it was cut.
+`wire/http1/resp.bend` proves them (`R.take`, `R.give`, `R.open`).
+
 ## The loop
 
 A server hands `wire/loop.bend` its hooks (the names are the loop's
