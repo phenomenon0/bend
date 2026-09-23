@@ -24,7 +24,7 @@ run() { # run LABEL CMD...: compare CMD's output to $work/expected
   fi
 }
 
-for t in demos/monoids/utf8.bend demos/monoids/kulisch.bend demos/monoids/pcg.bend; do
+for t in demos/monoids/{utf8,kulisch,pcg,lostupdate,probe}.bend; do
   name=$(basename "$t" .bend)
   [ -n "${1:-}" ] && [ "$name" != "$1" ] && continue
   sed -n 's/^#|//p' "$t" > "$work/expected"
@@ -46,7 +46,7 @@ done
 printf '\nmonoids PASS: %d, FAIL: %d\n' "$pass" "$fail"
 
 if [ -n "${BIG:-}" ]; then
-  for b in utf8 kulisch pcg; do
+  for b in utf8 kulisch pcg lostupdate probe; do
     bun bend2/main.ts "demos/monoids/${b}_big.bend" -o "$work/${b}_big" > /dev/null || exit 1
     for th in 1 2 4 8; do
       s=$(date +%s%N)
