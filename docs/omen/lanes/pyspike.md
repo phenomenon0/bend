@@ -353,5 +353,6 @@ Both now classify the tag once with an `S.choose` chain into a nullary construct
 
 Battery: `VM PASS: 34, FAIL: 0` (7 fixtures × 3 lanes + check + mutation + 12
 refusals), on x86_64 with 4 cores and 15 GB. `fib(24)` on the C lane takes 0.95 s on this host. There is no pre-change C number on the same host, because the old file could not build here.
-The ttok caps were not measured: the tokenizer's BPE download is blocked by
-this host's egress policy. `vm.bend` was at 17.8k of 64k and grew about 10%.
+Caps: `vm.bend` 27,059 / 64,000 ttok (25,453 before this round, so +1,606) and `vm_run.sh` 1,744 / 4,000. These were measured with
+js-tiktoken's cl100k ranks, because ttok's own BPE download is blocked on this host.
+They match `gates/repo.ts` exactly on the unmerged tree.

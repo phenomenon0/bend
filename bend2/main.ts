@@ -29,7 +29,7 @@ import * as Comp from "./comp.ts";
 // Constants
 // =========
 
-const VERSION = "2.0.21";
+const VERSION = "2.0.26";
 
 const HELP = `Bend ${VERSION}: check, run, build and publish Bend programs.
 
@@ -38,6 +38,11 @@ usage:
   bend <file.bend> -o <out>     build a binary; <out>.c emits C, <out>.js JS
   bend <file.bend> --check-only check the file and its imports; run nothing
   bend <file.bend> --publish    publish the file and its imports to the hub
+  bend <file.bend> --publish <name>@<version>
+                                publish, then name it (needs login)
+  bend link <name>@<version> 0x<hash>
+                                name a package already on the hub
+  bend login                    log in to Bender for --publish <name>@…
   bend <page.html> -o <dir>     bundle a page that imports .bend files
   bend base [--types|<name>]    print Base, its types, or a name and subnames
   bend guide                    print the Bend guide
@@ -52,6 +57,9 @@ const BASE = Bend.BASE_BEND;
 const GUIDE = path.join(Bend.BEND_DIR, "..", "guide");
 
 const ORIGIN = process.env.BEND_ORIGIN ?? "https://bend-lang.com";
+
+// the Bender key `bend login` wrote: {key, login}, mode 0600
+const BENDER = path.join(os.homedir(), ".bend", "bender.json");
 
 // the daily version check's cache: when it last asked, and the answer
 const CHECK = path.join(os.homedir(), ".bend", "check.json");
@@ -97,6 +105,19 @@ async function cli(): Promise<void> {
   }
   if (args[0] === "update" && args.length === 1) {
     return cli_update();
+  }
+  if (args[0] === "login" || args[0] === "link") {
+    if (args.length !== (args[0] === "link" ? 3 : 1)) {
+      cli_fail(args[0] === "link" ? "link takes <name>@<version> and 0x<hash>"
+        : args[0] + " takes no argument");
+    }
+    try {
+      await (args[0] === "login" ? cli_login() : cli_link(args[1], args[2]));
+    } catch (e) {
+      cli_say(2, book_err(e) + "\n");
+      process.exitCode = 1;
+    }
+    return;
   }
   if (args[0] === "guide" && args.length <= 2) {
     cli_guide(args[1] ?? "guide");
@@ -176,6 +197,7 @@ async function cli_file(args: string[]): Promise<void> {
   let only = false;
   let checkup = false;
   let publish = false;
+  let named: string | undefined;
   for (let i = 0; i < args.length; i += 1) {
     const a = args[i];
     if (a === "--help" || a === "-h") {
@@ -186,6 +208,11 @@ async function cli_file(args: string[]): Promise<void> {
       checkup = true;
     } else if (a === "--publish") {
       publish = true;
+      if (args[i + 1]?.includes("@")) {
+        i += 1;
+        named = args[i];
+        named_parts(named);
+      }
     } else if (a === "-o") {
       i += 1;
       outs.push(args[i] ?? cli_fail("-o needs an output file"));
@@ -224,7 +251,7 @@ async function cli_file(args: string[]): Promise<void> {
   }
   try {
     if (publish) {
-      return await cli_publish(file);
+      return await cli_publish(file, named);
     }
     if (checkup) {
       return await cli_checkup(file);
@@ -267,7 +294,8 @@ async function cli_checkup(file: string): Promise<void> {
     if (m === null) {
       continue;
     }
-    const at = path.join(path.dirname(file), m[1]);
+    const at = m[1].startsWith("/") ? m[1]
+      : path.join(path.dirname(file), m[1]);
     cli_say(1, "--- " + m[1] + " ---\n");
     let code = 1;
     try {
@@ -291,7 +319,7 @@ function path_real(p: string): string {
 }
 
 function cli_emit(book: Bend.Book, out: string): void {
-  if (out.endsWith(".js")) {
+  if (/\.c?js$/.test(out)) {
     fs.writeFileSync(out, Comp.js_book(book));
   } else if (out.endsWith(".c")) {
     fs.writeFileSync(out, Comp.compile_book(book));
@@ -419,7 +447,7 @@ async function cli_bundle(page: string, dir: string): Promise<void> {
 
 // cli_publish checks the file, then posts what the loader read (no TODO
 // left) to the hub with its proof of work, and prints the import line.
-async function cli_publish(file: string): Promise<void> {
+async function cli_publish(file: string, named?: string): Promise<void> {
   const seen = new Map<string, string | null>();
   const [book, n0] = await book_read(file, undefined, seen);
   cli_report(book, n0, 2);
@@ -433,17 +461,133 @@ async function cli_publish(file: string): Promise<void> {
   const bytes = paths.reduce((n, p) => n + Buffer.byteLength(files[p]), 0);
   const hash  = "0x" + sha256(paths.map((p) => sha256(files[p]) + " " + p
     + "\n").join("")).slice(0, 32);
+  const auth  = named === undefined ? null : await hub_check(named);
   cli_say(2, "publishing " + String(paths.length) + " files, "
     + String(bytes) + " bytes, as " + hash + " (mining its proof of work)\n");
   const nonce = await pow_mine(hash, bytes);
   const res = await fetch(Bend.BEND_HUB, { method: "POST",
+    headers: auth === null ? {} : { authorization: "Bearer " + auth.key },
     body: JSON.stringify({ files, nonce }) });
+  if (res.status === 401) {
+    key_dead();
+  }
   const got = (await res.text()).trim();
   if (!res.ok || got !== hash) {
     throw "Error: " + Bend.BEND_HUB + " answered: " + got;
   }
-  cli_say(1, hash + "\nimport " + hash + "/" + entry + " as "
+  cli_say(1, hash + "\n");
+  if (auth !== null) {
+    await hub_name(auth, hash).catch((e: unknown) => {
+      throw String(e) + "\n" + hash + " is published but not named: bend link " + auth.named + " " + hash;
+    });
+    cli_say(1, "published " + auth.named + "\n");
+  }
+  cli_say(1, "import " + (auth === null ? hash : auth.named) + "/" + entry + " as "
     + name[0].toUpperCase() + name.slice(1) + "\n");
+}
+
+// cli_link names a package already on the hub
+async function cli_link(named: string, hash: string): Promise<void> {
+  if (!/^0x[0-9a-f]{32}$/.test(hash)) {
+    cli_fail("link takes the package's hash: 0x and 32 hex digits");
+  }
+  await hub_name(await hub_check(named), hash);
+  cli_say(1, "linked " + named + " to " + hash + "\n");
+}
+
+// named_parts splits a <name>@<version>, or fails
+function named_parts(named: string): [string, string] {
+  const m = Bend.NAMED.exec(named);
+  return m === null ? cli_fail("a package is named <name>@<version>: a-z, 0-9 and -,"
+    + " 12 to 64 characters, at four numbers like 1.0.0.0") : [m[1], m[2]];
+}
+
+// hub_check reads the key (a login when there is none), then asks the
+// hub's /publish-check whose the name is and whether the version goes up
+async function hub_check(named: string): Promise<{ named: string; key: string; free: boolean }> {
+  const [name, version] = named_parts(named);
+  let key = "";
+  try {
+    key = String((JSON.parse(fs.readFileSync(BENDER, "utf8")) as { key?: string }).key ?? "");
+  } catch {}
+  if (key === "") {
+    key = await cli_login();
+  }
+  const got = await hub_ask("/publish-check?name=" + name + "&version=" + version, key);
+  if ((got.name !== "yours" && got.name !== "free") || got.version_ok !== true) {
+    throw "Error: " + String(got.reason);
+  }
+  return { named, key, free: got.name === "free" };
+}
+
+// hub_name registers a free name and links name@version to a hash
+async function hub_name(auth: { named: string; key: string; free: boolean }, hash: string): Promise<void> {
+  const [name, version] = named_parts(auth.named);
+  if (auth.free) {
+    await hub_ask("/register", auth.key, { name });
+    cli_say(2, "registered " + name + "\n");
+  }
+  await hub_ask("/link", auth.key, { name, version, hash });
+}
+
+// hub_ask sends the key with a GET, or a POST of body, and answers the
+// hub's JSON; unreachable, a refused key or a refused request ends the run
+async function hub_ask(route: string, key: string, body?: unknown): Promise<Record<string, unknown>> {
+  const res = await fetch(Bend.BEND_HUB + route, { method: body === undefined ? "GET" : "POST",
+    headers: { authorization: "Bearer " + key, "content-type": "application/json" },
+    body: JSON.stringify(body) }).catch(() => null);
+  if (res === null) {
+    throw "Error: " + Bend.BEND_HUB + " could not be reached";
+  }
+  if (res.status === 401) {
+    key_dead();
+  }
+  const got = await res.json().catch(() => null) as Record<string, unknown> | null;
+  if (!res.ok || got === null) {
+    throw "Error: " + Bend.BEND_HUB + route + " answered: "
+      + (typeof got?.reason === "string" ? got.reason : String(res.status));
+  }
+  return got;
+}
+
+// key_dead forgets a key the hub refused, so the next run logs in
+function key_dead(): never {
+  fs.rmSync(BENDER, { force: true });
+  throw "Error: " + Bend.BEND_HUB + " does not know this login: run bend login";
+}
+
+// cli_login starts Bender's CLI login, opens its page and polls until the
+// browser authorized a key (SPEC.md 6.14 of bend-lang.com)
+async function cli_login(): Promise<string> {
+  const st = await fetch(ORIGIN + "/bender/cli/start", { method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ machine: os.hostname() }) }).then((r) => r.json()).catch(() => null) as
+    { poll_secret?: string; verify_url?: string; expires_at?: string; interval_ms?: number } | null;
+  if (st === null || typeof st.poll_secret !== "string" || typeof st.verify_url !== "string") {
+    throw "Error: " + ORIGIN + " did not start a login";
+  }
+  cli_say(2, "log in at " + st.verify_url + "\n");
+  try {
+    Bun.spawn([process.platform === "darwin" ? "open" : "xdg-open", st.verify_url], { stdout: "ignore", stderr: "ignore" });
+  } catch {}
+  const until = Date.parse(st.expires_at ?? "") || Date.now() + 600000;
+  while (Date.now() < until) {
+    await new Promise((r) => setTimeout(r, Math.max(1000, st.interval_ms ?? 2000)));
+    const got = await fetch(ORIGIN + "/bender/cli/poll", { method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ poll_secret: st.poll_secret }) }).then((r) => r.json()).catch(() => null) as
+      { status?: string; key?: string; login?: string } | null;
+    if (got?.status === "authorized" && typeof got.key === "string") {
+      fs.mkdirSync(path.dirname(BENDER), { recursive: true });
+      fs.writeFileSync(BENDER, JSON.stringify({ key: got.key, login: got.login ?? "" }) + "\n", { mode: 0o600 });
+      cli_say(2, "logged in as " + String(got.login ?? "") + "\n");
+      return got.key;
+    }
+    if (got?.status === "expired") {
+      break;
+    }
+  }
+  throw "Error: the login was not authorized in time: run bend login again";
 }
 
 // pkg_files is the package the loader read for this file, the entry first:
@@ -643,7 +787,8 @@ function book_err(e: unknown): string {
 
 async function load_js(path: string): Promise<string> {
   try {
-    const [book] = await book_read(path);
+    const [book, n0] = await book_read(path);
+    cli_report(book, n0, 2);
     const outs = [...new Set(book.order)].filter((k) => {
       const tld = book.tlds[k];
       return tld.$ === "Def" && tld.v !== null && tld.b !== true

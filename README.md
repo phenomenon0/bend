@@ -203,6 +203,7 @@ def add_zero(x):
 - Formalization: [bend.lean](bend2/bend.lean), Bend's core in Lean.
 - Benches: [bench/](bench), every bench used to make the charts above.
 - Formatter: [bend-fmt-lsp](tools/bend-fmt-lsp), a formatting-only Bend 2 language server.
+- Community language server: [bend2-lsp](https://github.com/don2e4/bend2-lsp), with formatting, diagnostics, and hover.
 
 # Community
 
@@ -244,7 +245,7 @@ def add_zero(x):
 - No Windows (WSL works); on Linux, Window and Audio need X11 and ALSA headers.
 - The hub has no names, versions, accounts or search yet. Packages are hashes.
 - Error messages are terse; no debugger, profiler or REPL.
-- Editor support is limited to formatting; there is no completion, hover or diagnostics LSP.
+- The bundled editor support is limited to formatting; the community [bend2-lsp](https://github.com/don2e4/bend2-lsp) provides diagnostics and hover, but no completion.
 - No test framework and no documentation beyond the guide.
 - And more that escape me. Be patient, report bugs and request features!
 
@@ -252,3 +253,21 @@ Most of these limitations are being addressed and will improve over time!
 ```
 
 **BEND IS YOUNG. EXPECT BUGS AND [REPORT THEM](https://github.com/bendlang/bend/issues).**
+
+# Credits
+
+Bend is created by [Victor Taelin](https://github.com/VictorTaelin) and built
+by the team:
+
+- [Lorenzo W Battistela](https://github.com/Lorenzobattistela)
+- [Paulo J Cavalcanti](https://github.com/pjcavalcanti)
+- [Nico](https://github.com/nicolas-abril)
+- [Vanessa Ostroski](https://github.com/Ostrowskii)
+- [Vitor Chiarelli Neves](https://github.com/Sipher)
+- [Alex Van de Sande](https://x.com/avsa)
+
+If you were part of this and your name is missing, please get in touch so we
+can add it here.
+
+Thanks to [Ayush Somani](https://ayushsomani.me/) for reserving the
+`bend-lang` name for us.

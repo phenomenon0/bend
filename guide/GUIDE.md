@@ -486,6 +486,9 @@ filled in another as `def M.name(..)`, so a proof can ship separately from its
 claim. `import 0x<hash>/main.bend as P` imports a package by content hash,
 fetched from the hub and checked against it; `bend main.bend --publish` uploads
 a file with everything it imports and prints that line.
+`import <name>@<version>/main.bend as P` is the same package by the name
+its author gave it on the hub, with `bend main.bend --publish
+<name>@<version>` after `bend login`.
 
 ## Tooling
 
