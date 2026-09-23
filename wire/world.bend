@@ -25,7 +25,7 @@
 # The model is only as good as the contracts: what it assumes of each
 # effect is written below as a relation on what the effect answers
 # (rx.ok, tx.ok, lsn.ok, fopen.ok, fread.ok; cx.ok and tls.ok for the
-# client's connects), the model is proved to
+# client's connects, idle.ok for its pool's probe), the model is proved to
 # keep them (rx_model, tx_stalled, tx_served, fread_model), and
 # wire/conform.bend drives each real effect through the same cases and
 # checks the same relations against what it observes. That is the
@@ -667,6 +667,22 @@ def tls.ok(c: Cert, r: Result<&1, &1, U32 & String, Unit>) -> Bool:
           False{}
         case Fail{e}:
           Bool.not(eacces(e))
+
+# TCP.idle(s), on a connection where nothing waits, where a byte has
+# arrived unread, or whose peer has closed: True only for the first.
+type Pend is Data:
+  PQuiet{}
+  PByte{}
+  PFin{}
+
+def idle.ok(k: Pend, ok: Bool) -> Bool:
+  match k:
+    case PQuiet{}:
+      ok
+    case PByte{}:
+      Bool.not(ok)
+    case PFin{}:
+      Bool.not(ok)
 
 # What the laws speak of
 # ======================

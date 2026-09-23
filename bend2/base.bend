@@ -456,6 +456,16 @@ def TCP.connect_poll(host: String, port: U32, ms: U32) ->
   import "./effs/tcp_connect_poll.c"
   import "./effs/tcp_connect_poll.js"
 
+# Whether nothing waits to be read on a socket and its peer has not
+# closed it: one poll with no wait, readable (a byte, the FIN, an error)
+# being not idle. Contract (wire/world.bend, idle.ok): False whenever a
+# byte or the FIN has arrived and not been read; True for a connection
+# with nothing pending. A pool asks it before handing a kept connection
+# out (wire/pool.bend).
+def TCP.idle(sock: Socket) -> IO(Socket & Bool):
+  import "./effs/tcp_idle.c"
+  import "./effs/tcp_idle.js"
+
 # The first IPv4 address the system's resolver has for a name, dotted
 # (/etc/hosts, then DNS); a dotted address is its own answer, and a name
 # with none is ENOENT. The resolver blocks, so it runs off the loop.

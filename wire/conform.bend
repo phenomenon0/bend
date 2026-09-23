@@ -582,6 +582,40 @@ def tls.case(name: String, +port: U32, name2: String, ca: String, c: W.Cert, f: 
   IO.bind(Result<&1, &1, U32 & String, Socket & String>, U32,
     TLS.connect("127.0.0.1", port, name2, "http/1.1", ca, 2000), r => tls.back(name, c, f, r))
 
+# TCP.idle: port + 6 takes one byte saying what to do -- "q" nothing,
+# "b" send a byte, "f" close -- and conform asks, a moment later,
+# whether the connection is idle
+def idle.judge(name: String, k: W.Pend, m: Socket & Bool, f: U32) -> IO(U32):
+  (s, +ok) = m
+  do IO<U32>:
+    Socket.close(s)
+    x : U32 <- verdict(name, W.idle.ok(k, ok), Bool.pick(String, ok, "idle", "not idle"))
+    return (f + x : U32)
+
+def idle.sent(name: String, k: W.Pend, m: Socket & Result<&1, &1, U32 & String, Unit>, f: U32) -> IO(U32):
+  (s, r) = m
+  do IO<U32>:
+    IO.sleep(200)
+    got : Socket & Bool <- TCP.idle(s)
+    idle.judge(name, k, got, f)
+
+def verdict.add.io(name: String, f: U32) -> IO(U32):
+  do IO<U32>:
+    x : U32 <- verdict(name, False{}, "no connection")
+    return (f + x : U32)
+
+def idle.case.at(name: String, cmd: String, k: W.Pend, f: U32, r: Result<&1, &1, U32 & String, Socket>) -> IO(U32):
+  match r:
+    case Done{s}:
+      IO.bind(Socket & Result<&1, &1, U32 & String, Unit>, U32, TCP.send_buf_poll(s, cmd, 2000),
+        m => idle.sent(name, k, m, f))
+    case Fail{e}:
+      verdict.add.io(name, f)
+
+def idle.case(name: String, +port: U32, cmd: String, k: W.Pend, f: U32) -> IO(U32):
+  IO.bind(Result<&1, &1, U32 & String, Socket>, U32, TCP.connect_poll("127.0.0.1", port, 2000),
+    r => idle.case.at(name, cmd, k, f, r))
+
 def connects(+port: U32, +ca: String, f: U32) -> IO(U32):
   do IO<U32>:
     a : U32 <- cx.case("cx.accepts", (port + 1 : U32), 2000, W.Accepts{}, f)
@@ -590,7 +624,10 @@ def connects(+port: U32, +ca: String, f: U32) -> IO(U32):
     d : U32 <- tls.case("tls.pinned", (port + 4 : U32), "localhost", ca, W.Trusted{}, c)
     e : U32 <- tls.case("tls.untrusted", (port + 4 : U32), "localhost", "", W.Untrusted{}, d)
     g : U32 <- tls.case("tls.misnamed", (port + 4 : U32), "example.com", ca, W.Misnamed{}, e)
-    tls.case("tls.plain", (port + 5 : U32), "localhost", ca, W.NotTls{}, g)
+    h : U32 <- tls.case("tls.plain", (port + 5 : U32), "localhost", ca, W.NotTls{}, g)
+    i : U32 <- idle.case("idle.quiet", (port + 6 : U32), "q", W.PQuiet{}, h)
+    j : U32 <- idle.case("idle.byte", (port + 6 : U32), "b", W.PByte{}, i)
+    idle.case("idle.fin", (port + 6 : U32), "f", W.PFin{}, j)
 
 # The run
 # =======

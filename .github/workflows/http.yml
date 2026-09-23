@@ -33,7 +33,7 @@ jobs:
       - name: the laws hold
         run: |
           for f in demos/io_http_engine/PROOF.bend demos/io_resp/PROOF.bend power/csv_proof.bend \
-            demos/io_http2/PROOF.bend wire/http1/PROOF.bend wire/client.bend; do
+            demos/io_http2/PROOF.bend wire/http1/PROOF.bend wire/client.bend wire/pool.bend; do
             out=$(bun bend2/main.ts "$f"); echo "$out"
             [ "$out" = "All terms check." ] || { echo "$f: not a clean proof"; exit 1; }
           done
@@ -45,7 +45,7 @@ jobs:
           cargo build --release --manifest-path kernel/Cargo.toml
           bash kernel/tests/run.sh
           for f in demos/io_http_engine/PROOF.bend demos/io_resp/PROOF.bend power/csv_proof.bend \
-            demos/io_http2/PROOF.bend wire/http1/PROOF.bend wire/client.bend; do
+            demos/io_http2/PROOF.bend wire/http1/PROOF.bend wire/client.bend wire/pool.bend; do
             bun bend2/main.ts "$f" --export proof.core
             kernel/target/release/bend-kernel -q proof.core || { echo "$f: the kernel refuses it"; exit 1; }
           done

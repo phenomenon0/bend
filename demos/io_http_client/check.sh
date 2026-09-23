@@ -75,7 +75,8 @@ EOF
   else
     echo "FAIL nginx.chunked: nginx did not send the SSI page chunked"; fail=1
   fi
-  expect nginx.close 'not reusable$' "$N/close/index.html" --twice
+  expect nginx.close "not reusable$" "$N/close/index.html" --twice
+  expect nginx.close.new "again, on a new connection" "$N/close/index.html" --twice
   expect nginx.tls '^status 200, body 14 bytes' "$S/" --ca "$D/cert.pem" --twice
 else
   echo "SKIP nginx: not installed"

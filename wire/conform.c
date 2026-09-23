@@ -22,7 +22,8 @@
 // (its SYNs go unanswered), port + 4 is TLS with a certificate for
 // localhost that is its own CA (made here with the openssl command,
 // passed to conform as the pin) and answers "ping" with "pong", and
-// port + 5 answers in plain HTTP and closes.
+// port + 5 answers in plain HTTP and closes; port + 6 is told what to do
+// by conform's first byte: nothing, send a byte, or close (TCP.idle).
 #define _GNU_SOURCE
 #include <errno.h>
 #include <fcntl.h>
@@ -155,10 +156,11 @@ static int listen_on(int port, int backlog) {
 
 // the connects' servers, in a child of their own until killed
 static pid_t servers(const char* cert, const char* key) {
-  int acc = listen_on(PORT + 1, 16), tls = listen_on(PORT + 4, 16), plain = listen_on(PORT + 5, 16);
+  int acc = listen_on(PORT + 1, 16), tls = listen_on(PORT + 4, 16), plain = listen_on(PORT + 5, 16),
+    idle = listen_on(PORT + 6, 16);
   pid_t pid = fork();
   if (pid != 0) {
-    close(acc); close(tls); close(plain);
+    close(acc); close(tls); close(plain); close(idle);
     return pid;
   }
   SSL_CTX* ctx = SSL_CTX_new(TLS_server_method());
@@ -169,8 +171,20 @@ static pid_t servers(const char* cert, const char* key) {
   }
   SSL_CTX_set_alpn_select_cb(ctx, alpn_h11, NULL);
   for (;;) {
-    struct pollfd p[3] = { { acc, POLLIN, 0 }, { tls, POLLIN, 0 }, { plain, POLLIN, 0 } };
-    if (poll(p, 3, -1) < 0) continue;
+    struct pollfd p[4] = { { acc, POLLIN, 0 }, { tls, POLLIN, 0 }, { plain, POLLIN, 0 },
+      { idle, POLLIN, 0 } };
+    if (poll(p, 4, -1) < 0) continue;
+    // port + 6: one byte says what to do -- q nothing, b a byte, f close --
+    // and then the connection is held until conform closes it
+    if (p[3].revents) {
+      int c = accept(idle, NULL, NULL);
+      char cmd = 0, b[64];
+      if (c >= 0 && read_for(c, &cmd, 1, 3000) == 1) {
+        if (cmd == 'b') send(c, "x", 1, 0);
+        if (cmd != 'f') while (read_for(c, b, sizeof(b), 3000) > 0) {}
+      }
+      if (c >= 0) close(c);
+    }
     if (p[0].revents) {
       int c = accept(acc, NULL, NULL);
       if (c >= 0) close(c);

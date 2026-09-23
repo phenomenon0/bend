@@ -15,12 +15,15 @@
 #
 # It prints one line per response: the status, the body's length, the
 # interim statuses before it, and whether the connection could carry
-# another request; --twice sends a second request on the same
-# connection when it could. It exits 1 when there is no response, with
-# why.
+# another request. --twice gives the connection back to a pool
+# (wire/pool.bend) and sends a second request on what the pool hands
+# out: the same connection when it was fit to keep and nothing waits
+# unread on it, a new one otherwise. It exits 1 when there is no
+# response, with why.
 import Base
 import ../../wire/client.bend as C
 import ../../wire/http1/resp.bend as R
+import ../../wire/pool.bend as P
 
 # The URL
 # =======
@@ -171,47 +174,19 @@ def said(+show: Bool, +g: C.Got) -> IO(Unit):
     IO.print(got.line(g))
     said.body(show, g)
 
-def fail(s: Socket, w: C.Why) -> IO(Socket):
-  do IO<Socket>:
-    Socket.close(s)
-    IO.die(Socket, 1, "no response: " ++ C.why.show(w))
-
-# the second exchange's answer
-def last(+show: Bool, m: C.Out(Socket)) -> IO(Socket):
+# an exchange's answer: printed, and the socket back with whether it may
+# carry another request; no response ends the program, with why
+def answered(+show: Bool, m: C.Out(Socket)) -> IO(Socket & Bool):
   (s, r) = m
   match r:
     case Fail{w}:
-      fail(s, w)
+      do IO<Socket & Bool>:
+        Socket.close(s)
+        IO.die(Socket & Bool, 1, "no response: " ++ C.why.show(w))
     case Done{+g}:
-      do IO<Socket>:
+      do IO<Socket & Bool>:
         said(show, g)
-        return s
-
-# the second exchange, on the same connection, when the first left it
-# fit to carry one
-def again(+o: Opt, +u: Url, go: Bool, s: Socket) -> IO(Socket):
-  match o:
-    case Opt{url, +head, +body, twice, ca, next}:
-      match go:
-        case False{}:
-          IO.pure(Socket, s)
-        case True{}:
-          do IO<Socket>:
-            IO.print("again, on the same connection:")
-            m : C.Out(Socket) <- C.fetch(ask.of(head), budget(), req.of(head, u), s)
-            last(body, m)
-
-def first(+o: Opt, +u: Url, m: C.Out(Socket)) -> IO(Socket):
-  match o:
-    case Opt{url, head, +body, twice, ca, next}:
-      (s, r) = m
-      match r:
-        case Fail{w}:
-          fail(s, w)
-        case Done{+g}:
-          do IO<Socket>:
-            said(body, g)
-            again(o, u, twice && got.reuse(g), s)
+        return (s, got.reuse(g))
 
 # The connection
 # ==============
@@ -238,17 +213,68 @@ def dial(+o: Opt, +u: Url, addr: String) -> IO(Socket):
         case False{}:
           IO.bind(Result<&1, &1, U32 & String, Socket>, Socket, TCP.connect_poll(addr, port, 10000), plain)
 
-def run(+o: Opt, +u: Url) -> IO(Unit):
+# one exchange on a socket
+def exchange(+o: Opt, +u: Url, s: Socket) -> IO(Socket & Bool):
   match o:
-    case Opt{url, +head, body, twice, ca, next}:
-      match u:
-        case Url{tls, host, port, path}:
+    case Opt{url, +head, +body, twice, ca, next}:
+      IO.bind(C.Out(Socket), Socket & Bool, C.fetch(ask.of(head), budget(), req.of(head, u), s), m => answered(body, m))
+
+# The pool
+# ========
+#
+# The first connection goes back to a pool (wire/pool.bend) with whether
+# its exchange left it fit; --twice takes from the pool, which hands it
+# out only if it was kept, is fresh, and has nothing unread on it --
+# else the second request dials a new one.
+
+def keep(+now: Nat, +born: Nat, sb: Socket & Bool) -> IO(P.Pool<&1, Socket>):
+  (s, ok) = sb
+  P.give.io(P.pool.new(&1, Socket, 4n, 60000n, 5000n), s, born, now, ok)
+
+def second.on(+o: Opt, +u: Url, +addr: String, may: Maybe<&1, P.Slot<&1, Socket>>) -> IO(Socket & Bool):
+  match may:
+    case Some{sl}:
+      match sl:
+        case P.Slot{s, born, last}:
+          do IO<Socket & Bool>:
+            IO.print("again, on the same connection:")
+            exchange(o, u, s)
+    case None{}:
+      do IO<Socket & Bool>:
+        IO.print("again, on a new connection (the first was not fit to keep):")
+        s : Socket <- dial(o, u, addr)
+        exchange(o, u, s)
+
+def second(+o: Opt, +u: Url, +addr: String, pm: P.Pool<&1, Socket> & Maybe<&1, P.Slot<&1, Socket>>) -> IO(Unit):
+  (pool, may) = pm
+  do IO<Unit>:
+    sb : Socket & Bool <- second.on(o, u, addr, may)
+    Socket.close(Pair.fst(Socket, Bool, sb))
+    P.close.all(~(A => IO(A)), ~IO.pure, ~IO.bind, ~&1, ~Socket, ~Socket.close, P.pool.xs(&1, Socket, pool))
+
+def done(+o: Opt, +u: Url, +addr: String, pool: P.Pool<&1, Socket>) -> IO(Unit):
+  match o:
+    case Opt{url, head, body, twice, ca, next}:
+      match twice:
+        case False{}:
+          P.close.all(~(A => IO(A)), ~IO.pure, ~IO.bind, ~&1, ~Socket, ~Socket.close, P.pool.xs(&1, Socket, pool))
+        case True{}:
           do IO<Unit>:
-            addr : String <- IO.try(String, DNS.resolve(host))
-            s  : Socket <- dial(o, u, addr)
-            m  : C.Out(Socket) <- C.fetch(ask.of(head), budget(), req.of(head, u), s)
-            s2 : Socket <- first(o, u, m)
-            Socket.close(s2)
+            now : Nat <- IO.now()
+            pm : P.Pool<&1, Socket> & Maybe<&1, P.Slot<&1, Socket>> <- P.take.io(pool, now)
+            second(o, u, addr, pm)
+
+def run(+o: Opt, +u: Url) -> IO(Unit):
+  match u:
+    case Url{tls, host, port, path}:
+      do IO<Unit>:
+        +addr : String <- IO.try(String, DNS.resolve(host))
+        +t0 : Nat <- IO.now()
+        s : Socket <- dial(o, u, addr)
+        sb : Socket & Bool <- exchange(o, u, s)
+        +t1 : Nat <- IO.now()
+        pool : P.Pool<&1, Socket> <- keep(t1, t0, sb)
+        done(o, u, addr, pool)
 
 def start(+o: Opt, may: Maybe<&2, Url>) -> IO(Unit):
   match may:
