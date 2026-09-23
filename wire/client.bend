@@ -74,10 +74,11 @@ type Why is Data:
   CEof{}
   CFuel{}
 
-# The response: the interim statuses, the final response, and whether
-# the connection may carry another request.
+# The response: the interim statuses, the final response, what came
+# after it on the connection, and whether the connection may carry
+# another request.
 type Got is Data:
-  Got{interim: List<&2, U32>, resp: R.Resp, reuse: Bool}
+  Got{interim: List<&2, U32>, resp: R.Resp, extra: Bytes(), reuse: Bool}
 
 def Res() -> Data:
   Result<&2, &2, Why, Got>
@@ -91,8 +92,8 @@ def resp.close(r: R.Resp) -> Bool:
       close
 
 # a final response, and what came after it
-def final(i: List<&2, U32>, +r: R.Resp, rest: Bytes()) -> Result<&2, &2, Why, Got>:
-  Done{Got{i, r, Bool.not(resp.close(r)) && String.is_empty(rest)}}
+def final(i: List<&2, U32>, +r: R.Resp, +rest: Bytes()) -> Result<&2, &2, Why, Got>:
+  Done{Got{i, r, rest, Bool.not(resp.close(r)) && String.is_empty(rest)}}
 
 # the peer closed: whole only if the body was one that runs to the close
 def at.eof(lk: R.Look) -> Result<&2, &2, Why, Got>:
@@ -100,7 +101,7 @@ def at.eof(lk: R.Look) -> Result<&2, &2, Why, Got>:
     case R.Look{i, end}:
       match end:
         case R.Closing{r}:
-          Done{Got{i, r, False{}}}
+          Done{Got{i, r, "", False{}}}
         case _:
           Fail{CEof{}}
 
@@ -329,22 +330,23 @@ def sim.exchange(+e: R.Ask, +b: Budget, req: Bytes(), s: W.World) -> Out(W.World
 # The laws
 # ========
 
-# a connection is reused only when its response did not close it
+# a connection is reused only when its response did not close it and
+# nothing came after the response
 def ok.reuse(r: Result<&2, &2, Why, Got>) -> Bool:
   match r:
     case Fail{w}:
       True{}
     case Done{g}:
       match g:
-        case Got{i, x, reuse}:
-          Bool.not(reuse) || Bool.not(resp.close(x))
+        case Got{i, x, extra, reuse}:
+          Bool.not(reuse) || (Bool.not(resp.close(x)) && String.is_empty(extra))
 
 def ok.of(m: Out(W.World)) -> Bool:
   (s, r) = m
   ok.reuse(r)
 
 def ok.final.at(-i: List<&2, U32>, -r: R.Resp, c: Bool, e: Bool) ->
-  {Bool.not(Bool.not(c) && e) || Bool.not(c) == True{} : Bool}:
+  {Bool.not(Bool.not(c) && e) || (Bool.not(c) && e) == True{} : Bool}:
   match c:
     case True{}:
       {==}
@@ -485,11 +487,10 @@ def ok.start(+e: R.Ask, +b: Budget, req: Bytes(), sn: W.World & Nat) ->
 # For every peer the script can describe -- whatever it sends, however
 # it cuts it, whenever it stops, resets or goes silent -- an exchange
 # that says the connection may carry another request (reuse) got a
-# final response that did not close it: no Connection: close, not
+# final response that did not close it -- no Connection: close, not
 # HTTP/1.0 without keep-alive, not a 101, and not a body that ran to
-# the close (R.final marks each of those close). And reuse also needs
-# nothing after the response (final, above), so a connection with a
-# byte unread is never handed on.
+# the close (R.final marks each of those close) -- and nothing came
+# after it: a connection with a byte unread is never handed on.
 law reuse_clean:
   for +e: R.Ask
   for +b: Budget

@@ -65,6 +65,11 @@ jobs:
       # resp_sim alone must refuse every one
       - name: the response reader's laws are not vacuous
         run: python3 wire/http1/mutants.py
+      # each of the client's and the pool's mutants reuses a connection it
+      # must not, reads past the deadline or the head's cap, or hands out
+      # a pooled connection it must not, and their laws must refuse it
+      - name: the client's and the pool's laws are not vacuous
+        run: python3 wire/client_mutants.py
       - name: the server builds
         run: |
           bun bend2/main.ts demos/io_http_engine/main.bend -o httpd

@@ -17,6 +17,13 @@ one-line instance.
                         run (a connection limit, SIGTERM, a grace time)
     wire/conform.bend   the real effects judged by the contracts, with
     wire/conform.c      conform.c as the peer
+    wire/http1/         HTTP/1.1 responses: the reader (resp.bend), RFC
+                        9112's framing as its spec (spec.bend), resp_sim
+                        and the vectors (LAWS.bend, PROOF.bend), mutants.py
+    wire/client.bend    the client's exchange: a request out, a response
+                        in, under budgets, and whether to reuse; its laws
+    wire/pool.bend      idle connections to an upstream, bounded, probed
+                        as they are taken; its laws
 
 Its users: `demos/io_http_engine` (HTTP/1.1, WebSocket, SSE, files),
 `demos/io_resp` (RESP, below) and `power/csv.bend` (the reader kit only).
@@ -170,3 +177,56 @@ the hooks filled in, so a hook that computes to a large number -- an
 idle time written as a literal `300000` -- makes the checker unfold
 `U32.to_nat` of it. Keep budgets in `srv` (RESP's `Cfg`), where the
 checker sees a variable.
+
+## The client
+
+The other side of the wire. A client connects (`TCP.connect_poll`, or
+`TLS.connect`: SNI, ALPN, the certificate verified against the system's
+store or a pinned CA, the name checked; `DNS.resolve` for a name), and
+`wire/client.bend` runs one exchange on the connection: the request out
+under the step deadline, the response read through `wire/http1`'s
+reader until it is framed, refused, or out of time, under a head cap, a
+body cap (the reader's `Ask`) and the exchange's deadline, each read's
+wait cut to the time left. What comes back is the framed response or
+why there is none (`Why`), and whether the connection may carry another
+request: only when the response did not close it (Connection: close,
+HTTP/1.0 without keep-alive, a 101, a body that ran to the close) and
+nothing came after it.
+
+**The response reader** (`wire/http1/resp.bend`) is a reader on the kit,
+with the request's method as its context (a response to HEAD has no
+body) and the body's cap. It accepts the status line of HTTP/1.1 or
+HTTP/1.0 with a code from 100 to 599, field lines by the same strict
+grammar as the engine's requests, and frames the body by RFC 9112 6.3:
+HEAD, 1xx, 204 and 304 have none (a 1xx other than 101 is interim and
+the final response follows), chunked is decoded by 7.1's grammar,
+extensions and trailers dropped, a Content-Length is counted off, and
+anything else runs to the close. It refuses a Transfer-Encoding beside
+a Content-Length, one in HTTP/1.0, any coding but chunked or chunked
+twice, a length list or two that disagree, obs-fold, a bare LF, a
+malformed status line. **resp_sim** holds it to `spec.bend`, the
+framing written line by line from the RFC: for every context and every
+input the two read the same interim statuses and the same end, and the
+kit carries that to every way TCP cuts the input (`resp_sim_reads`).
+`mutants.py` breaks the reader twenty-seven ways, each refused by
+resp_sim alone.
+
+**The client's laws** (`wire/client.bend`, in `world.bend`'s model):
+`reuse_clean` (a connection is reused only when its response did not
+close it and nothing came after it, for every peer the script can
+describe), `expires` (a turn
+at or past the deadline reads nothing), `read_in_time` (a turn before
+it returns by it, whatever the peer does), `head_capped`.
+
+**The pool's laws** (`wire/pool.bend`, over model connections that say
+whether bytes wait unread on them): `take_ok` (a take hands out at most
+one connection, one with nothing unread, fresh by the pool's age and
+idle time, and leaves it out of the pool; the pool only shrinks) and
+`give_ok` (a give keeps the pool within its cap and every connection in
+it once). `client_mutants.py` breaks the client and the pool nine
+ways, each refused by these laws. `TCP.idle` is the probe, and `conform.bend` checks its
+contract (`idle.ok`) with the connects' (`cx.ok`, `tls.ok`).
+
+`demos/io_http_client` is a command-line client on all of it; its
+`check.sh` runs it against the HTTP engine, plain and over TLS, and
+against nginx.

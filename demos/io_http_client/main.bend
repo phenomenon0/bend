@@ -144,7 +144,7 @@ def interim.show(xs: List<&2, U32>) -> String:
 
 def got.line(g: C.Got) -> String:
   match g:
-    case C.Got{i, r, reuse}:
+    case C.Got{i, r, extra, reuse}:
       match r:
         case R.Resp{code, v10, close, +body}:
           "status " ++ U32.show(code) ++ ", body " ++ Nat.show(Bytes.len(body)) ++ " bytes, interim ["
@@ -152,14 +152,14 @@ def got.line(g: C.Got) -> String:
 
 def got.body(g: C.Got) -> String:
   match g:
-    case C.Got{i, r, reuse}:
+    case C.Got{i, r, extra, reuse}:
       match r:
         case R.Resp{code, v10, close, body}:
           body
 
 def got.reuse(g: C.Got) -> Bool:
   match g:
-    case C.Got{i, r, reuse}:
+    case C.Got{i, r, extra, reuse}:
       reuse
 
 def said.body(show: Bool, g: C.Got) -> IO(Unit):
