@@ -189,6 +189,11 @@ type Ans is Data:
   AErr{status: Bytes()}
   AStale{}
 
+# An exchange's outcome, and the upstream connection it leaves fit to
+# carry the client's next request (none when the exchange spent it).
+type Out is Type:
+  Out{a: Ans, up: Maybe<&1, P.Slot<&1, Socket>>}
+
 def why.status(w: C.Why) -> Bytes():
   match w:
     case C.CTime{}:
@@ -249,6 +254,16 @@ def pool.give(+ch: Chan(P.Pool<&1, Socket>), s: Socket, +born: Nat, ok: Bool) ->
     m : Maybe<&1, P.Pool<&1, Socket>> <- Chan.recv(P.Pool<&1, Socket>, ch)
     pool.back(ch, s, born, now, ok, m)
 
+# a connection a client held, back to the pool when the client is done
+def pool.home(+ch: Chan(P.Pool<&1, Socket>), up: Maybe<&1, P.Slot<&1, Socket>>) -> IO(Unit):
+  match up:
+    case Some{sl}:
+      match sl:
+        case P.Slot{s, born, last}:
+          pool.give(ch, s, born, True{})
+    case None{}:
+      IO.pure(Unit, Unit{})
+
 # a new connection to the upstream, under the connect deadline
 def dial.tls(r: Result<&1, &1, U32 & String, Socket & String>) -> Result<&1, &1, U32 & String, Socket>:
   match r:
@@ -286,84 +301,122 @@ def ex.fail(again: Bool, w: C.Why) -> Ans:
     case False{}:
       AErr{why.status(w)}
 
+# the connection after an exchange: kept for the client's next request
+# if the exchange left it fit, else closed
+def ex.keep(s: Socket, +born: Nat, +now: Nat, reuse: Bool) -> IO(Maybe<&1, P.Slot<&1, Socket>>):
+  match reuse:
+    case True{}:
+      IO.pure(Maybe<&1, P.Slot<&1, Socket>>, Some{P.Slot{s, born, now}})
+    case False{}:
+      IO.bind(Unit, Maybe<&1, P.Slot<&1, Socket>>, Socket.close(s), u => IO.pure(Maybe<&1, P.Slot<&1, Socket>>, None{}))
+
+def ex.out(a: Ans, up: Maybe<&1, P.Slot<&1, Socket>>) -> IO(Out):
+  IO.pure(Out, Out{a, up})
+
 # One exchange on a connection made at born; pooled says it came from
 # the pool. A response goes back to the client rebuilt; the connection
-# goes back to the pool if the exchange left it fit.
-def ex.got(+srv: Srv, +head: Bool, +born: Nat, s: Socket, +got: Bytes(), g: C.Got) -> IO(Ans):
+# stays with the client if the exchange left it fit.
+def ex.got(+srv: Srv, +head: Bool, +born: Nat, s: Socket, +got: Bytes(), g: C.Got) -> IO(Out):
   match g:
     case C.Got{i, resp, extra, reuse}:
       match resp:
         case R.Resp{+code, v10, close, body}:
-          do IO<Ans>:
-            pool.give(srv.pool(srv), s, born, reuse)
-            return ex.rsp(X.rsp.of(srv.via(srv), head, List.length(&2, U32, i), code, got, body))
+          do IO<Out>:
+            now : Nat <- IO.now()
+            up : Maybe<&1, P.Slot<&1, Socket>> <- ex.keep(s, born, now, reuse)
+            ex.out(ex.rsp(X.rsp.of(srv.via(srv), head, List.length(&2, U32, i), code, got, body)), up)
 
 def ex.res(+srv: Srv, +head: Bool, +born: Nat, pooled: Bool, s: Socket, +got: Bytes(),
-  res: Result<&2, &2, C.Why, C.Got>) -> IO(Ans):
+  res: Result<&2, &2, C.Why, C.Got>) -> IO(Out):
   match res:
     case Done{g}:
       ex.got(srv, head, born, s, got, g)
     case Fail{+w}:
-      do IO<Ans>:
+      do IO<Out>:
         Socket.close(s)
-        return ex.fail(pooled && stale(w) && String.is_empty(got), w)
+        ex.out(ex.fail(pooled && stale(w) && String.is_empty(got), w), None{})
 
-def ex.done(+srv: Srv, +head: Bool, +born: Nat, pooled: Bool, out: C.Out(Rec)) -> IO(Ans):
+def ex.done(+srv: Srv, +head: Bool, +born: Nat, pooled: Bool, out: C.Out(Rec)) -> IO(Out):
   (r, res) = out
   match r:
     case Rec{s, got}:
       ex.res(srv, head, born, pooled, s, got, res)
 
-def ex.go(+srv: Srv, +head: Bool, req: Bytes(), s: Socket, +born: Nat, pooled: Bool) -> IO(Ans):
-  IO.bind(C.Out(Rec), Ans,
+def ex.go(+srv: Srv, +head: Bool, req: Bytes(), s: Socket, +born: Nat, pooled: Bool) -> IO(Out):
+  IO.bind(C.Out(Rec), Out,
     C.exchange(~(A => IO(A)), ~IO.pure, ~IO.bind, ~Rec, ~rec.rx, ~rec.tx, ~rec.clk,
       R.ask.new(head, body.cap()), budget(srv), req, Rec{s, ""}),
     out => ex.done(srv, head, born, pooled, out))
 
 def ex.dialed(+srv: Srv, +head: Bool, req: Bytes(), +born: Nat, r: Result<&1, &1, U32 & String, Socket>) ->
-  IO(Ans):
+  IO(Out):
   match r:
     case Done{s}:
       ex.go(srv, head, req, s, born, False{})
     case Fail{e}:
       match e:
         case (+code, msg):
-          IO.pure(Ans, AErr{dial.status(code)})
+          ex.out(AErr{dial.status(code)}, None{})
 
 # on a new connection
-def ex.fresh(+srv: Srv, +head: Bool, req: Bytes()) -> IO(Ans):
-  do IO<Ans>:
+def ex.fresh(+srv: Srv, +head: Bool, req: Bytes()) -> IO(Out):
+  do IO<Out>:
     born : Nat <- IO.now()
     r : Result<&1, &1, U32 & String, Socket> <- dial(srv)
     ex.dialed(srv, head, req, born, r)
 
 # a stale pooled connection is tried again once, on a new one, when the
 # request may be sent twice (RFC 9110 9.2.2: an idempotent method)
-def ex.again(+srv: Srv, +head: Bool, idem: Bool, +req: Bytes(), a: Ans) -> IO(Ans):
+def ex.again.at(+srv: Srv, +head: Bool, idem: Bool, +req: Bytes(), a: Ans, up: Maybe<&1, P.Slot<&1, Socket>>) -> IO(Out):
   match idem a:
     case True{} AStale{}:
-      ex.fresh(srv, head, req)
+      IO.bind(Unit, Out, pool.home(srv.pool(srv), up), u => ex.fresh(srv, head, req))
     case False{} AStale{}:
-      IO.pure(Ans, AErr{"502 Bad Gateway"})
+      ex.out(AErr{"502 Bad Gateway"}, up)
     case _ AOk{r}:
-      IO.pure(Ans, AOk{r})
+      ex.out(AOk{r}, up)
     case _ AErr{st}:
-      IO.pure(Ans, AErr{st})
+      ex.out(AErr{st}, up)
 
-def ex.slot(+srv: Srv, +head: Bool, idem: Bool, +req: Bytes(), m: Maybe<&1, P.Slot<&1, Socket>>) -> IO(Ans):
+def ex.again(+srv: Srv, +head: Bool, idem: Bool, +req: Bytes(), o: Out) -> IO(Out):
+  match o:
+    case Out{a, up}:
+      ex.again.at(srv, head, idem, req, a, up)
+
+def ex.slot(+srv: Srv, +head: Bool, idem: Bool, +req: Bytes(), m: Maybe<&1, P.Slot<&1, Socket>>) -> IO(Out):
   match m:
     case Some{sl}:
       match sl:
         case P.Slot{s, +born, last}:
-          IO.bind(Ans, Ans, ex.go(srv, head, req, s, born, True{}), a => ex.again(srv, head, idem, req, a))
+          IO.bind(Out, Out, ex.go(srv, head, req, s, born, True{}), o => ex.again(srv, head, idem, req, o))
     case None{}:
-      IO.bind(Ans, Ans, ex.fresh(srv, head, req), a => ex.again(srv, head, False{}, req, a))
+      IO.bind(Out, Out, ex.fresh(srv, head, req), o => ex.again(srv, head, False{}, req, o))
 
-# a request upstream: on a pooled connection if one is fit, else a new one
-def upstream(+srv: Srv, +head: Bool, idem: Bool, +req: Bytes()) -> IO(Ans):
-  do IO<Ans>:
+# the connection a client holds, if it is fit to use now: used within a
+# second, and young enough for the pool; else it goes back to the pool
+# (which probes it) and the pool gives one
+def held.at(+srv: Srv, +now: Nat, ok: Bool, s: Socket, +born: Nat, +last: Nat) -> IO(Maybe<&1, P.Slot<&1, Socket>>):
+  match ok:
+    case True{}:
+      IO.pure(Maybe<&1, P.Slot<&1, Socket>>, Some{P.Slot{s, born, last}})
+    case False{}:
+      IO.bind(Unit, Maybe<&1, P.Slot<&1, Socket>>, pool.give(srv.pool(srv), s, born, True{}), u => pool.take(srv.pool(srv), now))
+
+def held(+srv: Srv, +now: Nat, up: Maybe<&1, P.Slot<&1, Socket>>) -> IO(Maybe<&1, P.Slot<&1, Socket>>):
+  match up:
+    case Some{sl}:
+      match sl:
+        case P.Slot{s, +born, +last}:
+          held.at(srv, now, Nat.is_lt(Nat.sub(now, last), 1000n) && Nat.is_lt(Nat.sub(now, born), 60000n), s, born, last)
+    case None{}:
+      pool.take(srv.pool(srv), now)
+
+# a request upstream: on the connection the client holds if it is fit,
+# else on a pooled one, else a new one
+def upstream(+srv: Srv, +head: Bool, idem: Bool, +req: Bytes(), up: Maybe<&1, P.Slot<&1, Socket>>) -> IO(Out):
+  do IO<Out>:
     now : Nat <- IO.now()
-    m : Maybe<&1, P.Slot<&1, Socket>> <- pool.take(srv.pool(srv), now)
+    m : Maybe<&1, P.Slot<&1, Socket>> <- held(srv, now, up)
     ex.slot(srv, head, idem, req, m)
 
 # RFC 9110 9.2.2
@@ -373,6 +426,13 @@ def idempotent(+m: Bytes()) -> Bool:
 
 # The client
 # ==========
+#
+# A client connection, and the upstream connection it holds between its
+# requests (so a keep-alive client's requests go up one connection, with
+# no pool to lock and no probe on the way; it goes back to the pool when
+# the client is done).
+type Cx is Type:
+  Cx{cs: Socket, up: Maybe<&1, P.Slot<&1, Socket>>}
 
 def send.ok(m: L.Put(Socket)) -> Socket & Bool:
   (s, r) = m
@@ -385,43 +445,54 @@ def send.ok(m: L.Put(Socket)) -> Socket & Bool:
 def send(cs: Socket, bs: Bytes(), +ms: U32) -> IO(Socket & Bool):
   IO.bind(L.Put(Socket), Socket & Bool, TCP.send_buf_poll(cs, bs, ms), m => IO.pure(Socket & Bool, send.ok(m)))
 
+def cx.of(sb: Socket & Bool, up: Maybe<&1, P.Slot<&1, Socket>>) -> Cx:
+  (s, ok) = sb
+  Cx{s, up}
+
 # a reply of the proxy's own, and the connection closes
-def refuse(+srv: Srv, +head: Bool, cs: Socket, +status: Bytes()) -> IO(Socket):
-  IO.bind(Socket & Bool, Socket, send(cs, X.own.reply.at(head, status, Bytes.append(status, "\n")), srv.idle(srv)),
-    sb => IO.pure(Socket, Pair.fst(Socket, Bool, sb)))
+def refuse(+srv: Srv, +head: Bool, cx: Cx, +status: Bytes()) -> IO(Cx):
+  match cx:
+    case Cx{cs, up}:
+      IO.bind(Socket & Bool, Cx, send(cs, X.own.reply.at(head, status, Bytes.append(status, "\n")), srv.idle(srv)),
+        sb => IO.pure(Cx, cx.of(sb, up)))
 
 # after a response went back: on to the next request, unless the
 # connection closes or the send failed
-def sent(sb: Socket & Bool, closing: Bool, more: Socket -> IO(Socket)) -> IO(Socket):
+def sent(sb: Socket & Bool, up: Maybe<&1, P.Slot<&1, Socket>>, closing: Bool, more: Cx -> IO(Cx)) -> IO(Cx):
   (s, ok) = sb
   match ok closing:
     case True{} False{}:
-      more(s)
+      more(Cx{s, up})
     case _ _:
-      IO.pure(Socket, s)
+      IO.pure(Cx, Cx{s, up})
 
-def answer(+srv: Srv, +head: Bool, +closing: Bool, v10: Bool, a: Ans, cs: Socket, more: Socket -> IO(Socket)) ->
-  IO(Socket):
+def answer(+srv: Srv, +head: Bool, +closing: Bool, v10: Bool, a: Ans, cs: Socket, up: Maybe<&1, P.Slot<&1, Socket>>,
+  more: Cx -> IO(Cx)) -> IO(Cx):
   match a:
     case AOk{r}:
-      IO.bind(Socket & Bool, Socket, send(cs, X.reply(Some{r}, head, closing, v10), srv.idle(srv)),
-        sb => sent(sb, closing, more))
+      IO.bind(Socket & Bool, Cx, send(cs, X.reply(Some{r}, head, closing, v10), srv.idle(srv)),
+        sb => sent(sb, up, closing, more))
     case AErr{st}:
-      refuse(srv, head, cs, st)
+      refuse(srv, head, Cx{cs, up}, st)
     case AStale{}:
-      refuse(srv, head, cs, "502 Bad Gateway")
+      refuse(srv, head, Cx{cs, up}, "502 Bad Gateway")
 
-def serve.msg(+srv: Srv, mm: Maybe<&2, X.Msg>, +v10: Bool, +closing: Bool, cs: Socket, more: Socket -> IO(Socket)) ->
-  IO(Socket):
+def answered(+srv: Srv, +head: Bool, +closing: Bool, v10: Bool, cs: Socket, o: Out, more: Cx -> IO(Cx)) -> IO(Cx):
+  match o:
+    case Out{a, up}:
+      answer(srv, head, closing, v10, a, cs, up, more)
+
+def serve.msg(+srv: Srv, mm: Maybe<&2, X.Msg>, +v10: Bool, +closing: Bool, cx: Cx, more: Cx -> IO(Cx)) ->
+  IO(Cx):
   match mm:
     case Some{+msg}:
-      match msg:
-        case X.Msg{+hm, target, host, fs, body, framed}:
+      match msg cx:
+        case X.Msg{+hm, target, host, fs, body, framed} Cx{cs, up}:
           +hd = Eng.bytes.eq(hm, "HEAD")
-          IO.bind(Ans, Socket, upstream(srv, hd, idempotent(hm), X.ser(msg)),
-            a => answer(srv, hd, closing, v10, a, cs, more))
+          IO.bind(Out, Cx, upstream(srv, hd, idempotent(hm), X.ser(msg), up),
+            o => answered(srv, hd, closing, v10, cs, o, more))
     case None{}:
-      refuse(srv, False{}, cs, "400 Bad Request")
+      refuse(srv, False{}, cx, "400 Bad Request")
 
 def hd.v10(h: Eng.Hd) -> Bool:
   match h:
@@ -430,8 +501,8 @@ def hd.v10(h: Eng.Hd) -> Bool:
 
 # one request: forwarded (core.bend's fwd of what the reader read),
 # answered, and then more
-def serve(+srv: Srv, +ip: Bytes(), +r: Eng.Req, cs: Socket, more: Socket -> IO(Socket)) -> IO(Socket):
-  serve.msg(srv, X.fwd(srv.fwd(srv, ip), r), hd.v10(Eng.req.hd(r)), Eng.req.close(r) || Eng.req.ws(r), cs, more)
+def serve(+srv: Srv, +ip: Bytes(), +r: Eng.Req, cx: Cx, more: Cx -> IO(Cx)) -> IO(Cx):
+  serve.msg(srv, X.fwd(srv.fwd(srv, ip), r), hd.v10(Eng.req.hd(r)), Eng.req.close(r) || Eng.req.ws(r), cx, more)
 
 # a request whose head is whole and whose body is coming, asking to be
 # told to send it (RFC 9110 10.1.1): told once
@@ -445,89 +516,95 @@ def expects.low(xs: List<&2, Bytes()>) -> List<&2, Bytes()>:
 def expects(+p: Eng.P) -> Bool:
   X.in.names("100-continue", expects.low(X.values("expect", Eng.p.fields(p))))
 
-def cont.send(on: Bool, cs: Socket, +ms: U32) -> IO(Socket):
-  match on:
-    case True{}:
-      IO.bind(Socket & Bool, Socket, send(cs, "HTTP/1.1 100 Continue\r\n\r\n", ms),
-        sb => IO.pure(Socket, Pair.fst(Socket, Bool, sb)))
-    case False{}:
-      IO.pure(Socket, cs)
+def cont.send(on: Bool, cx: Cx, +ms: U32) -> IO(Cx):
+  match on cx:
+    case True{} Cx{cs, up}:
+      IO.bind(Socket & Bool, Cx, send(cs, "HTTP/1.1 100 Continue\r\n\r\n", ms),
+        sb => IO.pure(Cx, cx.of(sb, up)))
+    case False{} _:
+      IO.pure(Cx, cx)
 
-def wait.at(+srv: Srv, big: Bool, body: Bool, cont: Bool, +p: Eng.P, +n: Nat, cs: Socket,
-  again: Socket -> X.Scan -> Bool -> IO(Socket)) -> IO(Socket):
+def wait.at(+srv: Srv, big: Bool, body: Bool, cont: Bool, +p: Eng.P, +n: Nat, cx: Cx,
+  again: Cx -> X.Scan -> Bool -> IO(Cx)) -> IO(Cx):
   match big body cont:
     case True{} _ _:
-      refuse(srv, False{}, cs, "431 Request Header Fields Too Large")
+      refuse(srv, False{}, cx, "431 Request Header Fields Too Large")
     case False{} True{} False{}:
-      IO.bind(Socket, Socket, cont.send(expects(p), cs, srv.idle(srv)), s2 => again(s2, X.Scan{p, n}, True{}))
+      IO.bind(Cx, Cx, cont.send(expects(p), cx, srv.idle(srv)), c2 => again(c2, X.Scan{p, n}, True{}))
     case False{} _ _:
-      again(cs, X.Scan{p, n}, cont)
+      again(cx, X.Scan{p, n}, cont)
 
 # waiting for more: a head past its cap is refused with 431
-def wait(+srv: Srv, sc: X.Scan, cont: Bool, cs: Socket, again: Socket -> X.Scan -> Bool -> IO(Socket)) -> IO(Socket):
+def wait(+srv: Srv, sc: X.Scan, cont: Bool, cx: Cx, again: Cx -> X.Scan -> Bool -> IO(Cx)) -> IO(Cx):
   match sc:
     case X.Scan{+p, +n}:
-      wait.at(srv, Eng.p.head(p) && U32.is_lt(srv.head(srv), U32.from_nat(n)), Eng.p.body(p), cont, p, n, cs, again)
+      wait.at(srv, Eng.p.head(p) && U32.is_lt(srv.head(srv), U32.from_nat(n)), Eng.p.body(p), cont, p, n, cx, again)
 
-def tail(+srv: Srv, t: X.Tail, cont: Bool, cs: Socket, again: Socket -> X.Scan -> Bool -> IO(Socket)) -> IO(Socket):
+def tail(+srv: Srv, t: X.Tail, cont: Bool, cx: Cx, again: Cx -> X.Scan -> Bool -> IO(Cx)) -> IO(Cx):
   match t:
     case X.TWait{sc}:
-      wait(srv, sc, cont, cs, again)
+      wait(srv, sc, cont, cx, again)
     case X.TBad{}:
-      refuse(srv, False{}, cs, "400 Bad Request")
+      refuse(srv, False{}, cx, "400 Bad Request")
     case X.TUp{}:
-      IO.pure(Socket, cs)
+      IO.pure(Cx, cx)
 
 # the requests a read completed, one after another, and then its tail;
 # a request completed resets the Expect check
-def took(+srv: Srv, +ip: Bytes(), ts: List<&2, Eng.Req>, t: X.Tail, cont: Bool, cs: Socket,
-  again: Socket -> X.Scan -> Bool -> IO(Socket)) -> IO(Socket):
+def took(+srv: Srv, +ip: Bytes(), ts: List<&2, Eng.Req>, t: X.Tail, cont: Bool, cx: Cx,
+  again: Cx -> X.Scan -> Bool -> IO(Cx)) -> IO(Cx):
   match ts:
     case Nil{}:
-      tail(srv, t, cont, cs, again)
+      tail(srv, t, cont, cx, again)
     case Con{x, rest}:
-      serve(srv, ip, x, cs, s2 => took(srv, ip, rest, t, False{}, s2, again))
+      serve(srv, ip, x, cx, c2 => took(srv, ip, rest, t, False{}, c2, again))
 
-def scanned(+srv: Srv, +ip: Bytes(), sd: X.Scanned, cont: Bool, cs: Socket,
-  again: Socket -> X.Scan -> Bool -> IO(Socket)) -> IO(Socket):
+def scanned(+srv: Srv, +ip: Bytes(), sd: X.Scanned, cont: Bool, cx: Cx,
+  again: Cx -> X.Scan -> Bool -> IO(Cx)) -> IO(Cx):
   match sd:
     case X.Scanned{ts, t}:
-      took(srv, ip, ts, t, cont, cs, again)
+      took(srv, ip, ts, t, cont, cx, again)
 
-def bytes.in(+srv: Srv, +ip: Bytes(), sc: X.Scan, cont: Bool, cs: Socket, fin: Bool, +bs: Bytes(),
-  again: Socket -> X.Scan -> Bool -> IO(Socket)) -> IO(Socket):
+def bytes.in(+srv: Srv, +ip: Bytes(), sc: X.Scan, cont: Bool, cx: Cx, fin: Bool, +bs: Bytes(),
+  again: Cx -> X.Scan -> Bool -> IO(Cx)) -> IO(Cx):
   match fin:
     case True{}:
-      IO.pure(Socket, cs)
+      IO.pure(Cx, cx)
     case False{}:
-      scanned(srv, ip, X.scan(bs, sc), cont, cs, again)
+      scanned(srv, ip, X.scan(bs, sc), cont, cx, again)
 
 # a read: a failure, the idle time out, or the peer's FIN end the
 # connection; bytes go through the scan
-def got(+srv: Srv, +ip: Bytes(), sc: X.Scan, cont: Bool, g: L.Got(Socket),
-  again: Socket -> X.Scan -> Bool -> IO(Socket)) -> IO(Socket):
+def got(+srv: Srv, +ip: Bytes(), sc: X.Scan, cont: Bool, g: L.Got(Socket), up: Maybe<&1, P.Slot<&1, Socket>>,
+  again: Cx -> X.Scan -> Bool -> IO(Cx)) -> IO(Cx):
   (cs, r) = g
   match r:
     case Fail{e}:
-      IO.pure(Socket, cs)
+      IO.pure(Cx, Cx{cs, up})
     case Done{m}:
       match m:
         case None{}:
-          IO.pure(Socket, cs)
+          IO.pure(Cx, Cx{cs, up})
         case Some{+bs}:
-          bytes.in(srv, ip, sc, cont, cs, String.is_empty(bs), bs, again)
+          bytes.in(srv, ip, sc, cont, Cx{cs, up}, String.is_empty(bs), bs, again)
 
-def read(+srv: Srv, +ip: Bytes(), k: Nat, sc: X.Scan, cont: Bool, cs: Socket) -> IO(Socket):
-  match k:
-    case 0n:
-      IO.pure(Socket, cs)
-    case 1n+j:
-      IO.bind(L.Got(Socket), Socket, TCP.poll_buf(cs, 65536, srv.idle(srv)),
-        g => got(srv, ip, sc, cont, g, s2 => sc2 => c2 => read(srv, ip, j, sc2, c2, s2)))
+def read(+srv: Srv, +ip: Bytes(), k: Nat, sc: X.Scan, cont: Bool, cx: Cx) -> IO(Cx):
+  match k cx:
+    case 0n _:
+      IO.pure(Cx, cx)
+    case 1n+j Cx{cs, up}:
+      IO.bind(L.Got(Socket), Cx, TCP.poll_buf(cs, 65536, srv.idle(srv)),
+        g => got(srv, ip, sc, cont, g, up, c2 => sc2 => k2 => read(srv, ip, j, sc2, k2, c2)))
+
+# the client done: the upstream connection it held back to the pool
+def home(+srv: Srv, cx: Cx) -> IO(Socket):
+  match cx:
+    case Cx{cs, up}:
+      IO.bind(Unit, Socket, pool.home(srv.pool(srv), up), u => IO.pure(Socket, cs))
 
 def go.at(+srv: Srv, sa: Socket & String) -> IO(Socket):
   (cs, ip) = sa
-  read(srv, ip, L.conn.fuel(), X.scan.new(), False{}, cs)
+  IO.bind(Cx, Socket, read(srv, ip, L.conn.fuel(), X.scan.new(), False{}, Cx{cs, None{}}), cx => home(srv, cx))
 
 # one client connection
 def go(+srv: Srv, cs: Socket) -> IO(Socket):
