@@ -1,0 +1,79 @@
+(bend-core 1)
+# The kernel's own regression book: one item per rule, each line below it
+# names the verdict it must earn. kernel/tests/run.sh checks them.
+(adt "Empty" 0 (flags) (kind (q 2)))
+(adt "Nat" 0 (flags) (kind (q 2)) (ctr "Zero" 0 (adt "Nat" ())) (ctr "Succ" 1 (all 1 (adt "Nat" ()) (adt "Nat" ()))))
+# expect: OK Empty
+# expect: OK Nat
+# a Data family cannot hold a function field (adt_valid: Kind(G))
+(adt "Box" 0 (flags) (kind (q 2)) (ctr "Box" 1 (all 1 (all 1 (ref "Nat") (ref "Nat")) (adt "Box" ()))))
+# expect: REJECT Box
+# a constructor must tip at its family at its own parameters
+(adt "Wrap" 1 (flags) (all 0 (kind (q 1)) (kind (q 1))) (ctr "Wrap" 0 (all 0 (kind (q 1)) (adt "Wrap" () (ref "Nat")))))
+# expect: REJECT Wrap
+(def "add" 2 0 (flags) (all 1 (ref "Nat") (all 1 (ref "Nat") (ref "Nat"))) (mat "Zero" (lam _ (var 0)) (mat "Succ" (lam _ (lam _ (ctr "Succ" (app (app (ref "add") (var 1)) (var 0))))) efq)))
+# expect: OK add
+(def "add_zero" 1 0 (flags law) (all 1 (ref "Nat") (eql (app (app (ref "add") (var 0)) (ctr "Zero")) (var 0) (ref "Nat"))) (mat "Zero" rfl (mat "Succ" (lam _ (rwt (app (ref "add_zero") (var 0)) (lam _ (lam _ (eql (ctr "Succ" (app (app (ref "add") (var 2)) (ctr "Zero"))) (ctr "Succ" (var 1)) (ref "Nat")))) rfl)) efq)))
+# expect: OK add_zero
+# a self-call must descend on a strict subterm
+(def "loop" 1 0 (flags) (all 1 (ref "Nat") (ref "Empty")) (lam _ (app (ref "loop") (var 0))))
+# expect: REJECT loop
+# a self-call on a constructor that is no subterm
+(def "grow" 1 0 (flags) (all 1 (ref "Nat") (ref "Empty")) (mat "Zero" (app (ref "grow") (ctr "Zero")) (mat "Succ" (lam _ (app (ref "grow") (ctr "Succ" (ctr "Succ" (var 0))))) efq)))
+# expect: REJECT grow
+# an affine function used twice
+(def "twice" 2 0 (flags) (all 1 (all 1 (ref "Nat") (ref "Nat")) (all 1 (ref "Nat") (ref "Nat"))) (lam _ (lam _ (app (var 1) (app (var 1) (var 0))))))
+# expect: REJECT twice
+# an affine Nat used twice, and a + one
+(def "dbl1" 1 0 (flags) (all 1 (ref "Nat") (ref "Nat")) (lam _ (app (app (ref "add") (var 0)) (var 0))))
+# expect: REJECT dbl1
+(def "dbl2" 1 0 (flags) (all 2 (ref "Nat") (ref "Nat")) (lam _ (app (app (ref "add") (var 0)) (var 0))))
+# expect: OK dbl2
+# a + mark rebinds an affine Nat reusable (it is Data), not a function
+(def "dbl3" 1 0 (flags) (all 1 (ref "Nat") (ref "Nat")) (lam + (app (app (ref "add") (var 0)) (var 0))))
+# expect: OK dbl3
+(def "twice2" 2 0 (flags) (all 1 (all 1 (ref "Nat") (ref "Nat")) (all 1 (ref "Nat") (ref "Nat"))) (lam + (lam _ (app (var 1) (app (var 1) (var 0))))))
+# expect: REJECT twice2
+# a + binder forms only at Data: a function is Type
+(def "dupf" 1 0 (flags) (all 2 (all 1 (ref "Nat") (ref "Nat")) (ref "Nat")) (lam _ (app (var 0) (app (var 0) (ctr "Zero")))))
+# expect: REJECT dupf
+# {==} needs its endpoints to convert
+(def "one_is_zero" 0 0 (flags law) (eql (ctr "Zero") (ctr "Succ" (ctr "Zero")) (ref "Nat")) rfl)
+# expect: REJECT one_is_zero
+# a match must cover every constructor
+(def "pred" 1 0 (flags) (all 1 (ref "Nat") (ref "Nat")) (mat "Zero" (ctr "Zero") efq))
+# expect: REJECT pred
+# an erased Empty in scope proves nothing live
+(def "vac" 1 0 (flags) (all 0 (ref "Empty") (all 1 (ref "Nat") (ref "Nat"))) (lam _ (mat "Zero" (ctr "Zero") efq)))
+# expect: REJECT vac
+# a live one does
+(def "vac2" 1 0 (flags) (all 1 (ref "Empty") (all 1 (ref "Nat") (ref "Nat"))) (lam _ (mat "Zero" (ctr "Zero") efq)))
+# expect: OK vac2
+# a live match on an erased scrutinee
+(def "peek" 1 0 (flags) (all 0 (ref "Nat") (ref "Nat")) (mat "Zero" (ctr "Zero") (mat "Succ" (lam _ (var 0)) efq)))
+# expect: REJECT peek
+# an unfilled law is a dead claim: live code cannot use it
+(def "claim" 0 0 (flags law) (ref "Empty") none)
+# expect: OPEN claim
+(def "use_claim" 0 0 (flags) (ref "Empty") (ref "claim"))
+# expect: REJECT use_claim
+# an @unsafe def is an axiom, and a law resting on it lists it
+(def "cheat" 1 0 (flags unsafe) (all 1 (ref "Nat") (ref "Empty")) (lam _ (app (ref "cheat") (var 0))))
+# expect: AXIOM cheat
+(def "boom" 0 0 (flags law) (ref "Empty") (app (ref "cheat") (ctr "Zero")))
+# expect: OK boom
+# a rewrite's motive must give the goal
+(def "sym_bad" 3 0 (flags) (all 0 (ref "Nat") (all 0 (ref "Nat") (all 1 (eql (var 1) (var 0) (ref "Nat")) (eql (var 1) (var 1) (ref "Nat"))))) (lam _ (lam _ (lam _ (rwt (var 0) (lam _ (lam _ (eql (var 1) (var 4) (ref "Nat")))) rfl)))))
+# expect: REJECT sym_bad
+(def "sym" 3 0 (flags) (all 0 (ref "Nat") (all 0 (ref "Nat") (all 1 (eql (var 1) (var 0) (ref "Nat")) (eql (var 1) (var 2) (ref "Nat"))))) (lam _ (lam _ (lam _ (rwt (var 0) (lam _ (lam _ (eql (var 1) (var 4) (ref "Nat")))) rfl)))))
+# expect: OK sym
+# a live call to a def filled later is checked as a cycle: through a
+# helper, each round must descend against the callee's columns
+(def "h1" 1 0 (flags) (all 1 (ref "Nat") (ref "Nat")) (lam _ (app (ref "l1") (var 0))))
+(def "l1" 1 0 (flags) (all 1 (ref "Nat") (ref "Nat")) (mat "Zero" (ctr "Zero") (mat "Succ" (lam _ (app (ref "h1") (var 0))) efq)))
+# expect: OK h1
+# expect: OK l1
+(def "h2" 1 0 (flags) (all 1 (ref "Nat") (ref "Nat")) (lam _ (app (ref "l2") (var 0))))
+(def "l2" 1 0 (flags) (all 1 (ref "Nat") (ref "Nat")) (lam _ (app (ref "h2") (var 0))))
+# expect: REJECT h2
+# expect: REJECT l2

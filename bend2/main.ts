@@ -22,6 +22,7 @@ import type { BunPlugin } from "bun";
 
 import * as Bend from "./bend.ts";
 import * as Comp from "./comp.ts";
+import * as Export from "./export.ts";
 
 // Main
 // ====
@@ -38,6 +39,8 @@ usage:
   bend <file.bend> -o <out>     build a binary; <out>.c emits C, <out>.js JS
   bend <file.bend> --check-only check the file and its imports; run nothing
   bend <file.bend> --publish    publish the file and its imports to the hub
+  bend <file.bend> --export <o> check the file, write its core terms to <o>
+                    (--export-unchecked: parse only, for the kernel's refusals)
   bend <page.html> -o <dir>     bundle a page that imports .bend files
   bend base [--types|<name>]    print Base, its types, or a name and subnames
   bend guide                    print the Bend guide
@@ -176,6 +179,8 @@ async function cli_file(args: string[]): Promise<void> {
   let only = false;
   let checkup = false;
   let publish = false;
+  let exp: string | undefined;
+  let raw = false;
   for (let i = 0; i < args.length; i += 1) {
     const a = args[i];
     if (a === "--help" || a === "-h") {
@@ -186,6 +191,10 @@ async function cli_file(args: string[]): Promise<void> {
       checkup = true;
     } else if (a === "--publish") {
       publish = true;
+    } else if (a === "--export" || a === "--export-unchecked") {
+      raw = a === "--export-unchecked";
+      i += 1;
+      exp = args[i] ?? cli_fail("--export needs an output file");
     } else if (a === "-o") {
       i += 1;
       outs.push(args[i] ?? cli_fail("-o needs an output file"));
@@ -223,6 +232,13 @@ async function cli_file(args: string[]): Promise<void> {
       + " import alone");
   }
   try {
+    if (exp !== undefined) {
+      const book = raw ? Bend.book_nil() : (await book_read(file))[0];
+      if (raw) {
+        await Bend.book_load(book, file, "", new Map());
+      }
+      return fs.writeFileSync(exp, Export.book_export(book));
+    }
     if (publish) {
       return await cli_publish(file);
     }
