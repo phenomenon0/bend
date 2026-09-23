@@ -1,0 +1,290 @@
+[
+ {
+  "seq": 220,
+  "family": "h2",
+  "name": "plain get",
+  "label": "clean",
+  "detail": {
+   "expect": "accept:1",
+   "h2_status": 200,
+   "h2_events": [
+    "RemoteSettingsChanged",
+    "WindowUpdated",
+    "SettingsAcknowledged",
+    "ResponseReceived",
+    "DataReceived",
+    "StreamEnded"
+   ],
+   "forwarded": 1,
+   "up_targets": [
+    "/"
+   ],
+   "up_body_len": [
+    0
+   ],
+   "up_error": false
+  }
+ },
+ {
+  "seq": 221,
+  "family": "h2",
+  "name": "post with data",
+  "label": "clean",
+  "detail": {
+   "expect": "accept:1",
+   "h2_status": 200,
+   "h2_events": [
+    "RemoteSettingsChanged",
+    "WindowUpdated",
+    "SettingsAcknowledged",
+    "WindowUpdated",
+    "ResponseReceived",
+    "DataReceived",
+    "StreamEnded"
+   ],
+   "forwarded": 1,
+   "up_targets": [
+    "/e"
+   ],
+   "up_body_len": [
+    5
+   ],
+   "up_error": false
+  }
+ },
+ {
+  "seq": 222,
+  "family": "h2_cl",
+  "name": "content-length disagrees short",
+  "label": "reject",
+  "detail": {
+   "expect": "reject",
+   "h2_status": 400,
+   "h2_events": [
+    "RemoteSettingsChanged",
+    "WindowUpdated",
+    "SettingsAcknowledged",
+    "WindowUpdated",
+    "ResponseReceived",
+    "DataReceived",
+    "StreamEnded"
+   ],
+   "forwarded": 0,
+   "up_targets": [],
+   "up_body_len": [],
+   "up_error": false
+  }
+ },
+ {
+  "seq": 223,
+  "family": "h2_cl",
+  "name": "content-length disagrees long",
+  "label": "reject",
+  "detail": {
+   "expect": "reject",
+   "h2_status": 400,
+   "h2_events": [
+    "RemoteSettingsChanged",
+    "WindowUpdated",
+    "SettingsAcknowledged",
+    "WindowUpdated",
+    "ResponseReceived",
+    "DataReceived",
+    "StreamEnded"
+   ],
+   "forwarded": 0,
+   "up_targets": [],
+   "up_body_len": [],
+   "up_error": false
+  }
+ },
+ {
+  "seq": 224,
+  "family": "h2_te",
+  "name": "transfer-encoding in h2",
+  "label": "fwd_reject",
+  "detail": {
+   "expect": "reject",
+   "h2_status": 200,
+   "h2_events": [
+    "RemoteSettingsChanged",
+    "WindowUpdated",
+    "SettingsAcknowledged",
+    "WindowUpdated",
+    "ResponseReceived",
+    "DataReceived",
+    "StreamEnded"
+   ],
+   "forwarded": 1,
+   "up_targets": [
+    "/e"
+   ],
+   "up_body_len": [
+    5
+   ],
+   "up_error": false
+  }
+ },
+ {
+  "seq": 225,
+  "family": "h2_crlf",
+  "name": "crlf injection in value",
+  "label": "reject",
+  "detail": {
+   "expect": "reject",
+   "h2_status": 400,
+   "h2_events": [
+    "RemoteSettingsChanged",
+    "WindowUpdated",
+    "SettingsAcknowledged",
+    "ResponseReceived",
+    "DataReceived",
+    "StreamEnded"
+   ],
+   "forwarded": 0,
+   "up_targets": [],
+   "up_body_len": [],
+   "up_error": false
+  }
+ },
+ {
+  "seq": 226,
+  "family": "h2_crlf",
+  "name": "crlf in path",
+  "label": "reject",
+  "detail": {
+   "expect": "reject",
+   "h2_status": 400,
+   "h2_events": [
+    "RemoteSettingsChanged",
+    "WindowUpdated",
+    "SettingsAcknowledged",
+    "ResponseReceived",
+    "DataReceived",
+    "StreamEnded"
+   ],
+   "forwarded": 0,
+   "up_targets": [],
+   "up_body_len": [],
+   "up_error": false
+  }
+ },
+ {
+  "seq": 227,
+  "family": "h2_pseudo",
+  "name": "duplicate method pseudo",
+  "label": "reject",
+  "detail": {
+   "expect": "reject",
+   "h2_status": 400,
+   "h2_events": [
+    "RemoteSettingsChanged",
+    "WindowUpdated",
+    "SettingsAcknowledged",
+    "ResponseReceived",
+    "DataReceived",
+    "StreamEnded"
+   ],
+   "forwarded": 0,
+   "up_targets": [],
+   "up_body_len": [],
+   "up_error": false
+  }
+ },
+ {
+  "seq": 228,
+  "family": "h2_pseudo",
+  "name": "pseudo after regular",
+  "label": "fwd_reject",
+  "detail": {
+   "expect": "reject",
+   "h2_status": 200,
+   "h2_events": [
+    "RemoteSettingsChanged",
+    "WindowUpdated",
+    "SettingsAcknowledged",
+    "ResponseReceived",
+    "DataReceived",
+    "StreamEnded"
+   ],
+   "forwarded": 1,
+   "up_targets": [
+    "/"
+   ],
+   "up_body_len": [
+    0
+   ],
+   "up_error": false
+  }
+ },
+ {
+  "seq": 229,
+  "family": "h2_pseudo",
+  "name": "unknown pseudo header",
+  "label": "reject",
+  "detail": {
+   "expect": "reject",
+   "h2_status": 400,
+   "h2_events": [
+    "RemoteSettingsChanged",
+    "WindowUpdated",
+    "SettingsAcknowledged",
+    "ResponseReceived",
+    "DataReceived",
+    "StreamEnded"
+   ],
+   "forwarded": 0,
+   "up_targets": [],
+   "up_body_len": [],
+   "up_error": false
+  }
+ },
+ {
+  "seq": 230,
+  "family": "h2_pseudo",
+  "name": "connection header in h2",
+  "label": "fwd_reject",
+  "detail": {
+   "expect": "reject",
+   "h2_status": 200,
+   "h2_events": [
+    "RemoteSettingsChanged",
+    "WindowUpdated",
+    "SettingsAcknowledged",
+    "ResponseReceived",
+    "DataReceived",
+    "StreamEnded"
+   ],
+   "forwarded": 1,
+   "up_targets": [
+    "/"
+   ],
+   "up_body_len": [
+    0
+   ],
+   "up_error": false
+  }
+ },
+ {
+  "seq": 231,
+  "family": "h2_pseudo",
+  "name": "uppercase header name",
+  "label": "reject",
+  "detail": {
+   "expect": "reject",
+   "h2_status": 400,
+   "h2_events": [
+    "RemoteSettingsChanged",
+    "WindowUpdated",
+    "SettingsAcknowledged",
+    "ResponseReceived",
+    "DataReceived",
+    "StreamEnded"
+   ],
+   "forwarded": 0,
+   "up_targets": [],
+   "up_body_len": [],
+   "up_error": false
+  }
+ }
+]

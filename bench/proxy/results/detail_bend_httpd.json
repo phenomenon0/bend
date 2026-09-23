@@ -1,0 +1,2652 @@
+[
+ {
+  "seq": 1,
+  "family": "baseline",
+  "name": "simple get",
+  "label": "match_accept",
+  "detail": {
+   "ref": "accept:1",
+   "client_statuses": [
+    200
+   ]
+  }
+ },
+ {
+  "seq": 2,
+  "family": "baseline",
+  "name": "get with query",
+  "label": "match_accept",
+  "detail": {
+   "ref": "accept:1",
+   "client_statuses": [
+    404
+   ]
+  }
+ },
+ {
+  "seq": 3,
+  "family": "baseline",
+  "name": "post content-length",
+  "label": "match_accept",
+  "detail": {
+   "ref": "accept:1",
+   "client_statuses": [
+    405
+   ]
+  }
+ },
+ {
+  "seq": 4,
+  "family": "baseline",
+  "name": "chunked ok",
+  "label": "match_accept",
+  "detail": {
+   "ref": "accept:1",
+   "client_statuses": [
+    405
+   ]
+  }
+ },
+ {
+  "seq": 5,
+  "family": "baseline",
+  "name": "chunked with trailer",
+  "label": "match_accept",
+  "detail": {
+   "ref": "accept:1",
+   "client_statuses": [
+    405
+   ]
+  }
+ },
+ {
+  "seq": 6,
+  "family": "baseline",
+  "name": "head request",
+  "label": "match_accept",
+  "detail": {
+   "ref": "accept:1",
+   "client_statuses": [
+    200
+   ]
+  }
+ },
+ {
+  "seq": 7,
+  "family": "pipeline",
+  "name": "two gets",
+  "label": "match_accept",
+  "detail": {
+   "ref": "accept:2",
+   "client_statuses": [
+    404,
+    404
+   ]
+  }
+ },
+ {
+  "seq": 8,
+  "family": "pipeline",
+  "name": "three gets",
+  "label": "match_accept",
+  "detail": {
+   "ref": "accept:3",
+   "client_statuses": [
+    404,
+    404,
+    404
+   ]
+  }
+ },
+ {
+  "seq": 9,
+  "family": "pipeline",
+  "name": "post then get",
+  "label": "match_accept",
+  "detail": {
+   "ref": "accept:2",
+   "client_statuses": [
+    405,
+    404
+   ]
+  }
+ },
+ {
+  "seq": 10,
+  "family": "pipeline",
+  "name": "chunked then get",
+  "label": "match_accept",
+  "detail": {
+   "ref": "accept:2",
+   "client_statuses": [
+    405,
+    404
+   ]
+  }
+ },
+ {
+  "seq": 11,
+  "family": "cl_te",
+  "name": "cl then te plain",
+  "label": "match_reject",
+  "detail": {
+   "ref": "reject",
+   "client_statuses": [
+    400
+   ]
+  }
+ },
+ {
+  "seq": 12,
+  "family": "cl_te",
+  "name": "cl then te upper",
+  "label": "match_reject",
+  "detail": {
+   "ref": "reject",
+   "client_statuses": [
+    400
+   ]
+  }
+ },
+ {
+  "seq": 13,
+  "family": "cl_te",
+  "name": "cl then te mixed",
+  "label": "match_reject",
+  "detail": {
+   "ref": "reject",
+   "client_statuses": [
+    400
+   ]
+  }
+ },
+ {
+  "seq": 14,
+  "family": "cl_te",
+  "name": "te then cl",
+  "label": "match_reject",
+  "detail": {
+   "ref": "reject",
+   "client_statuses": [
+    400
+   ]
+  }
+ },
+ {
+  "seq": 15,
+  "family": "cl_te",
+  "name": "cl zero te chunked",
+  "label": "match_reject",
+  "detail": {
+   "ref": "reject",
+   "client_statuses": [
+    400
+   ]
+  }
+ },
+ {
+  "seq": 16,
+  "family": "te_cl",
+  "name": "te chunked cl 4",
+  "label": "match_reject",
+  "detail": {
+   "ref": "reject",
+   "client_statuses": [
+    400
+   ]
+  }
+ },
+ {
+  "seq": 17,
+  "family": "te_te",
+  "name": "trailing space value",
+  "label": "httpd_stricter",
+  "detail": {
+   "ref": "accept:1",
+   "client_statuses": [
+    400
+   ]
+  }
+ },
+ {
+  "seq": 18,
+  "family": "te_te",
+  "name": "leading space value",
+  "label": "match_accept",
+  "detail": {
+   "ref": "accept:1",
+   "client_statuses": [
+    405
+   ]
+  }
+ },
+ {
+  "seq": 19,
+  "family": "te_te",
+  "name": "tab before value",
+  "label": "match_accept",
+  "detail": {
+   "ref": "accept:1",
+   "client_statuses": [
+    405
+   ]
+  }
+ },
+ {
+  "seq": 20,
+  "family": "te_te",
+  "name": "xchunked",
+  "label": "match_reject",
+  "detail": {
+   "ref": "reject",
+   "client_statuses": [
+    400
+   ]
+  }
+ },
+ {
+  "seq": 21,
+  "family": "te_te",
+  "name": "chunked space suffix token",
+  "label": "match_reject",
+  "detail": {
+   "ref": "reject",
+   "client_statuses": [
+    400
+   ]
+  }
+ },
+ {
+  "seq": 22,
+  "family": "te_te",
+  "name": "chunked identity",
+  "label": "match_reject",
+  "detail": {
+   "ref": "reject",
+   "client_statuses": [
+    400
+   ]
+  }
+ },
+ {
+  "seq": 23,
+  "family": "te_te",
+  "name": "identity chunked",
+  "label": "match_reject",
+  "detail": {
+   "ref": "reject",
+   "client_statuses": [
+    400
+   ]
+  }
+ },
+ {
+  "seq": 24,
+  "family": "te_te",
+  "name": "double chunked one header",
+  "label": "match_reject",
+  "detail": {
+   "ref": "reject",
+   "client_statuses": [
+    400
+   ]
+  }
+ },
+ {
+  "seq": 25,
+  "family": "te_te",
+  "name": "two te headers",
+  "label": "match_reject",
+  "detail": {
+   "ref": "reject",
+   "client_statuses": [
+    400
+   ]
+  }
+ },
+ {
+  "seq": 26,
+  "family": "te_te",
+  "name": "te gzip chunked two headers",
+  "label": "match_reject",
+  "detail": {
+   "ref": "reject",
+   "client_statuses": [
+    400
+   ]
+  }
+ },
+ {
+  "seq": 27,
+  "family": "te_te",
+  "name": "name with trailing space",
+  "label": "match_reject",
+  "detail": {
+   "ref": "reject",
+   "client_statuses": [
+    400
+   ]
+  }
+ },
+ {
+  "seq": 28,
+  "family": "te_te",
+  "name": "te in http 1.0",
+  "label": "match_reject",
+  "detail": {
+   "ref": "reject",
+   "client_statuses": [
+    400
+   ]
+  }
+ },
+ {
+  "seq": 29,
+  "family": "te_te",
+  "name": "vertical tab obfuscation",
+  "label": "match_reject",
+  "detail": {
+   "ref": "reject",
+   "client_statuses": [
+    400
+   ]
+  }
+ },
+ {
+  "seq": 30,
+  "family": "cl_bad",
+  "name": "two conflicting cl",
+  "label": "match_reject",
+  "detail": {
+   "ref": "reject",
+   "client_statuses": [
+    400
+   ]
+  }
+ },
+ {
+  "seq": 31,
+  "family": "cl_bad",
+  "name": "two equal cl",
+  "label": "match_accept",
+  "detail": {
+   "ref": "accept:1",
+   "client_statuses": [
+    405
+   ]
+  }
+ },
+ {
+  "seq": 32,
+  "family": "cl_bad",
+  "name": "cl list conflict",
+  "label": "match_reject",
+  "detail": {
+   "ref": "reject",
+   "client_statuses": [
+    400
+   ]
+  }
+ },
+ {
+  "seq": 33,
+  "family": "cl_bad",
+  "name": "cl list equal",
+  "label": "httpd_stricter",
+  "detail": {
+   "ref": "accept:1",
+   "client_statuses": [
+    400
+   ]
+  }
+ },
+ {
+  "seq": 34,
+  "family": "cl_bad",
+  "name": "cl plus sign",
+  "label": "match_reject",
+  "detail": {
+   "ref": "reject",
+   "client_statuses": [
+    400
+   ]
+  }
+ },
+ {
+  "seq": 35,
+  "family": "cl_bad",
+  "name": "cl minus sign",
+  "label": "match_reject",
+  "detail": {
+   "ref": "reject",
+   "client_statuses": [
+    400
+   ]
+  }
+ },
+ {
+  "seq": 36,
+  "family": "cl_bad",
+  "name": "cl leading space in value",
+  "label": "match_accept",
+  "detail": {
+   "ref": "accept:1",
+   "client_statuses": [
+    405
+   ]
+  }
+ },
+ {
+  "seq": 37,
+  "family": "cl_bad",
+  "name": "cl trailing junk",
+  "label": "match_reject",
+  "detail": {
+   "ref": "reject",
+   "client_statuses": [
+    400
+   ]
+  }
+ },
+ {
+  "seq": 38,
+  "family": "cl_bad",
+  "name": "cl hex",
+  "label": "match_reject",
+  "detail": {
+   "ref": "reject",
+   "client_statuses": [
+    400
+   ]
+  }
+ },
+ {
+  "seq": 39,
+  "family": "cl_bad",
+  "name": "cl leading zeros",
+  "label": "match_accept",
+  "detail": {
+   "ref": "accept:1",
+   "client_statuses": [
+    405
+   ]
+  }
+ },
+ {
+  "seq": 40,
+  "family": "cl_bad",
+  "name": "cl overflow",
+  "label": "match_reject",
+  "detail": {
+   "ref": "reject",
+   "client_statuses": [
+    400
+   ]
+  }
+ },
+ {
+  "seq": 41,
+  "family": "cl_bad",
+  "name": "cl huge over cap",
+  "label": "match_reject",
+  "detail": {
+   "ref": "reject",
+   "client_statuses": [
+    400
+   ]
+  }
+ },
+ {
+  "seq": 42,
+  "family": "cl_bad",
+  "name": "cl tab padded",
+  "label": "match_accept",
+  "detail": {
+   "ref": "accept:1",
+   "client_statuses": [
+    405
+   ]
+  }
+ },
+ {
+  "seq": 43,
+  "family": "obs_fold",
+  "name": "folded value space",
+  "label": "match_reject",
+  "detail": {
+   "ref": "reject",
+   "client_statuses": [
+    400
+   ]
+  }
+ },
+ {
+  "seq": 44,
+  "family": "obs_fold",
+  "name": "folded value tab",
+  "label": "match_reject",
+  "detail": {
+   "ref": "reject",
+   "client_statuses": [
+    400
+   ]
+  }
+ },
+ {
+  "seq": 45,
+  "family": "obs_fold",
+  "name": "folded host",
+  "label": "match_reject",
+  "detail": {
+   "ref": "reject",
+   "client_statuses": [
+    400
+   ]
+  }
+ },
+ {
+  "seq": 46,
+  "family": "bare_eol",
+  "name": "bare lf request line",
+  "label": "match_reject",
+  "detail": {
+   "ref": "reject",
+   "client_statuses": [
+    400
+   ]
+  }
+ },
+ {
+  "seq": 47,
+  "family": "bare_eol",
+  "name": "bare lf all",
+  "label": "match_reject",
+  "detail": {
+   "ref": "reject",
+   "client_statuses": [
+    400
+   ]
+  }
+ },
+ {
+  "seq": 48,
+  "family": "bare_eol",
+  "name": "bare lf header",
+  "label": "match_reject",
+  "detail": {
+   "ref": "reject",
+   "client_statuses": [
+    400
+   ]
+  }
+ },
+ {
+  "seq": 49,
+  "family": "bare_eol",
+  "name": "bare cr in value",
+  "label": "match_reject",
+  "detail": {
+   "ref": "reject",
+   "client_statuses": [
+    400
+   ]
+  }
+ },
+ {
+  "seq": 50,
+  "family": "bare_eol",
+  "name": "bare lf then chunk",
+  "label": "match_reject",
+  "detail": {
+   "ref": "reject",
+   "client_statuses": [
+    400
+   ]
+  }
+ },
+ {
+  "seq": 51,
+  "family": "bare_eol",
+  "name": "lf lf terminator",
+  "label": "match_reject",
+  "detail": {
+   "ref": "reject",
+   "client_statuses": [
+    400
+   ]
+  }
+ },
+ {
+  "seq": 52,
+  "family": "ctrl",
+  "name": "nul in value",
+  "label": "match_reject",
+  "detail": {
+   "ref": "reject",
+   "client_statuses": [
+    400
+   ]
+  }
+ },
+ {
+  "seq": 53,
+  "family": "ctrl",
+  "name": "nul in name",
+  "label": "match_reject",
+  "detail": {
+   "ref": "reject",
+   "client_statuses": [
+    400
+   ]
+  }
+ },
+ {
+  "seq": 54,
+  "family": "ctrl",
+  "name": "control in value",
+  "label": "match_reject",
+  "detail": {
+   "ref": "reject",
+   "client_statuses": [
+    400
+   ]
+  }
+ },
+ {
+  "seq": 55,
+  "family": "ctrl",
+  "name": "nul in target",
+  "label": "match_reject",
+  "detail": {
+   "ref": "reject",
+   "client_statuses": [
+    400
+   ]
+  }
+ },
+ {
+  "seq": 56,
+  "family": "ctrl",
+  "name": "control in target",
+  "label": "match_reject",
+  "detail": {
+   "ref": "reject",
+   "client_statuses": [
+    400
+   ]
+  }
+ },
+ {
+  "seq": 57,
+  "family": "ctrl",
+  "name": "del in value",
+  "label": "match_reject",
+  "detail": {
+   "ref": "reject",
+   "client_statuses": [
+    400
+   ]
+  }
+ },
+ {
+  "seq": 58,
+  "family": "ctrl",
+  "name": "tab in value ok",
+  "label": "match_accept",
+  "detail": {
+   "ref": "accept:1",
+   "client_statuses": [
+    200
+   ]
+  }
+ },
+ {
+  "seq": 59,
+  "family": "name",
+  "name": "space before colon",
+  "label": "match_reject",
+  "detail": {
+   "ref": "reject",
+   "client_statuses": [
+    400
+   ]
+  }
+ },
+ {
+  "seq": 60,
+  "family": "name",
+  "name": "empty name",
+  "label": "match_reject",
+  "detail": {
+   "ref": "reject",
+   "client_statuses": [
+    400
+   ]
+  }
+ },
+ {
+  "seq": 61,
+  "family": "name",
+  "name": "no colon",
+  "label": "match_reject",
+  "detail": {
+   "ref": "reject",
+   "client_statuses": [
+    400
+   ]
+  }
+ },
+ {
+  "seq": 62,
+  "family": "name",
+  "name": "space in name",
+  "label": "match_reject",
+  "detail": {
+   "ref": "reject",
+   "client_statuses": [
+    400
+   ]
+  }
+ },
+ {
+  "seq": 63,
+  "family": "name",
+  "name": "unicode in name",
+  "label": "match_reject",
+  "detail": {
+   "ref": "reject",
+   "client_statuses": [
+    400
+   ]
+  }
+ },
+ {
+  "seq": 64,
+  "family": "target",
+  "name": "absolute form",
+  "label": "match_accept",
+  "detail": {
+   "ref": "accept:1",
+   "client_statuses": [
+    404
+   ]
+  }
+ },
+ {
+  "seq": 65,
+  "family": "target",
+  "name": "absolute form other host",
+  "label": "match_accept",
+  "detail": {
+   "ref": "accept:1",
+   "client_statuses": [
+    404
+   ]
+  }
+ },
+ {
+  "seq": 66,
+  "family": "target",
+  "name": "double space in line",
+  "label": "match_reject",
+  "detail": {
+   "ref": "reject",
+   "client_statuses": [
+    400
+   ]
+  }
+ },
+ {
+  "seq": 67,
+  "family": "target",
+  "name": "tab in request line",
+  "label": "match_reject",
+  "detail": {
+   "ref": "reject",
+   "client_statuses": [
+    400
+   ]
+  }
+ },
+ {
+  "seq": 68,
+  "family": "target",
+  "name": "missing version",
+  "label": "match_reject",
+  "detail": {
+   "ref": "reject",
+   "client_statuses": [
+    400
+   ]
+  }
+ },
+ {
+  "seq": 69,
+  "family": "target",
+  "name": "http 0.9 style",
+  "label": "match_reject",
+  "detail": {
+   "ref": "reject",
+   "client_statuses": [
+    400
+   ]
+  }
+ },
+ {
+  "seq": 70,
+  "family": "target",
+  "name": "bad version",
+  "label": "match_reject",
+  "detail": {
+   "ref": "reject",
+   "client_statuses": [
+    400
+   ]
+  }
+ },
+ {
+  "seq": 71,
+  "family": "target",
+  "name": "lowercase method",
+  "label": "match_accept",
+  "detail": {
+   "ref": "accept:1",
+   "client_statuses": [
+    405
+   ]
+  }
+ },
+ {
+  "seq": 72,
+  "family": "target",
+  "name": "asterisk form",
+  "label": "match_accept",
+  "detail": {
+   "ref": "accept:1",
+   "client_statuses": [
+    405
+   ]
+  }
+ },
+ {
+  "seq": 73,
+  "family": "target",
+  "name": "very long target",
+  "label": "match_reject",
+  "detail": {
+   "ref": "reject",
+   "client_statuses": [
+    414
+   ]
+  }
+ },
+ {
+  "seq": 74,
+  "family": "target",
+  "name": "very long header line",
+  "label": "httpd_looser",
+  "detail": {
+   "ref": "reject",
+   "client_statuses": [
+    200
+   ],
+   "note": "accepted 1 (statuses [200]) for a reject stream"
+  }
+ },
+ {
+  "seq": 75,
+  "family": "host",
+  "name": "no host 1.1",
+  "label": "match_reject",
+  "detail": {
+   "ref": "reject",
+   "client_statuses": [
+    400
+   ]
+  }
+ },
+ {
+  "seq": 76,
+  "family": "host",
+  "name": "two host",
+  "label": "match_reject",
+  "detail": {
+   "ref": "reject",
+   "client_statuses": [
+    400
+   ]
+  }
+ },
+ {
+  "seq": 77,
+  "family": "host",
+  "name": "no host 1.0 ok",
+  "label": "match_accept",
+  "detail": {
+   "ref": "accept:1",
+   "client_statuses": [
+    200
+   ]
+  }
+ },
+ {
+  "seq": 78,
+  "family": "keepalive",
+  "name": "1.0 keep-alive two",
+  "label": "match_accept",
+  "detail": {
+   "ref": "accept:2",
+   "client_statuses": [
+    404,
+    404
+   ]
+  }
+ },
+ {
+  "seq": 79,
+  "family": "keepalive",
+  "name": "1.1 close",
+  "label": "match_accept",
+  "detail": {
+   "ref": "accept:1",
+   "client_statuses": [
+    200
+   ]
+  }
+ },
+ {
+  "seq": 80,
+  "family": "expect",
+  "name": "expect 100 continue",
+  "label": "match_accept",
+  "detail": {
+   "ref": "accept:1",
+   "client_statuses": [
+    405
+   ]
+  }
+ },
+ {
+  "seq": 81,
+  "family": "expect",
+  "name": "expect unknown",
+  "label": "match_accept",
+  "detail": {
+   "ref": "accept:1",
+   "client_statuses": [
+    405
+   ]
+  }
+ },
+ {
+  "seq": 82,
+  "family": "chunk",
+  "name": "chunk size overflow",
+  "label": "match_reject",
+  "detail": {
+   "ref": "reject",
+   "client_statuses": [
+    400
+   ]
+  }
+ },
+ {
+  "seq": 83,
+  "family": "chunk",
+  "name": "chunk size non hex",
+  "label": "match_reject",
+  "detail": {
+   "ref": "reject",
+   "client_statuses": [
+    400
+   ]
+  }
+ },
+ {
+  "seq": 84,
+  "family": "chunk",
+  "name": "chunk extension",
+  "label": "match_accept",
+  "detail": {
+   "ref": "accept:1",
+   "client_statuses": [
+    405
+   ]
+  }
+ },
+ {
+  "seq": 85,
+  "family": "chunk",
+  "name": "chunk quoted extension",
+  "label": "match_accept",
+  "detail": {
+   "ref": "accept:1",
+   "client_statuses": [
+    405
+   ]
+  }
+ },
+ {
+  "seq": 86,
+  "family": "chunk",
+  "name": "chunk leading zeros",
+  "label": "match_accept",
+  "detail": {
+   "ref": "accept:1",
+   "client_statuses": [
+    405
+   ]
+  }
+ },
+ {
+  "seq": 87,
+  "family": "chunk",
+  "name": "chunk missing crlf after data",
+  "label": "match_reject",
+  "detail": {
+   "ref": "reject",
+   "client_statuses": [
+    400
+   ]
+  }
+ },
+ {
+  "seq": 88,
+  "family": "chunk",
+  "name": "chunk trailer smuggle",
+  "label": "match_reject",
+  "detail": {
+   "ref": "reject",
+   "client_statuses": [
+    400
+   ]
+  }
+ },
+ {
+  "seq": 89,
+  "family": "chunk",
+  "name": "chunk negative size",
+  "label": "match_reject",
+  "detail": {
+   "ref": "reject",
+   "client_statuses": [
+    400
+   ]
+  }
+ },
+ {
+  "seq": 90,
+  "family": "upgrade",
+  "name": "websocket upgrade",
+  "label": "httpd_stricter",
+  "detail": {
+   "ref": "accept:1",
+   "client_statuses": [
+    400
+   ]
+  }
+ },
+ {
+  "seq": 91,
+  "family": "upgrade",
+  "name": "upgrade trailing bytes",
+  "label": "httpd_looser",
+  "detail": {
+   "ref": "reject",
+   "client_statuses": [
+    426
+   ],
+   "note": "accepted 1 (statuses [426]) for a reject stream"
+  }
+ },
+ {
+  "seq": 92,
+  "family": "upgrade",
+  "name": "h2c upgrade",
+  "label": "match_accept",
+  "detail": {
+   "ref": "accept:1",
+   "client_statuses": [
+    200
+   ]
+  }
+ },
+ {
+  "seq": 93,
+  "family": "upgrade",
+  "name": "upgrade in 1.0",
+  "label": "match_accept",
+  "detail": {
+   "ref": "accept:1",
+   "client_statuses": [
+    200
+   ]
+  }
+ },
+ {
+  "seq": 94,
+  "family": "smuggle",
+  "name": "cl te space name",
+  "label": "match_reject",
+  "detail": {
+   "ref": "reject",
+   "client_statuses": [
+    400
+   ]
+  }
+ },
+ {
+  "seq": 95,
+  "family": "smuggle",
+  "name": "double content length body",
+  "label": "match_reject",
+  "detail": {
+   "ref": "reject",
+   "client_statuses": [
+    400
+   ]
+  }
+ },
+ {
+  "seq": 96,
+  "family": "smuggle",
+  "name": "underscore te header",
+  "label": "match_accept",
+  "detail": {
+   "ref": "accept:1",
+   "client_statuses": [
+    405
+   ]
+  }
+ },
+ {
+  "seq": 97,
+  "family": "ctrl_sweep",
+  "name": "value byte 01",
+  "label": "match_reject",
+  "detail": {
+   "ref": "reject",
+   "client_statuses": [
+    400
+   ]
+  }
+ },
+ {
+  "seq": 98,
+  "family": "ctrl_sweep",
+  "name": "value byte 02",
+  "label": "match_reject",
+  "detail": {
+   "ref": "reject",
+   "client_statuses": [
+    400
+   ]
+  }
+ },
+ {
+  "seq": 99,
+  "family": "ctrl_sweep",
+  "name": "value byte 03",
+  "label": "match_reject",
+  "detail": {
+   "ref": "reject",
+   "client_statuses": [
+    400
+   ]
+  }
+ },
+ {
+  "seq": 100,
+  "family": "ctrl_sweep",
+  "name": "value byte 04",
+  "label": "match_reject",
+  "detail": {
+   "ref": "reject",
+   "client_statuses": [
+    400
+   ]
+  }
+ },
+ {
+  "seq": 101,
+  "family": "ctrl_sweep",
+  "name": "value byte 05",
+  "label": "match_reject",
+  "detail": {
+   "ref": "reject",
+   "client_statuses": [
+    400
+   ]
+  }
+ },
+ {
+  "seq": 102,
+  "family": "ctrl_sweep",
+  "name": "value byte 06",
+  "label": "match_reject",
+  "detail": {
+   "ref": "reject",
+   "client_statuses": [
+    400
+   ]
+  }
+ },
+ {
+  "seq": 103,
+  "family": "ctrl_sweep",
+  "name": "value byte 07",
+  "label": "match_reject",
+  "detail": {
+   "ref": "reject",
+   "client_statuses": [
+    400
+   ]
+  }
+ },
+ {
+  "seq": 104,
+  "family": "ctrl_sweep",
+  "name": "value byte 08",
+  "label": "match_reject",
+  "detail": {
+   "ref": "reject",
+   "client_statuses": [
+    400
+   ]
+  }
+ },
+ {
+  "seq": 105,
+  "family": "ctrl_sweep",
+  "name": "value byte 09",
+  "label": "match_accept",
+  "detail": {
+   "ref": "accept:1",
+   "client_statuses": [
+    200
+   ]
+  }
+ },
+ {
+  "seq": 106,
+  "family": "ctrl_sweep",
+  "name": "value byte 0a",
+  "label": "match_reject",
+  "detail": {
+   "ref": "reject",
+   "client_statuses": [
+    400
+   ]
+  }
+ },
+ {
+  "seq": 107,
+  "family": "ctrl_sweep",
+  "name": "value byte 0b",
+  "label": "match_reject",
+  "detail": {
+   "ref": "reject",
+   "client_statuses": [
+    400
+   ]
+  }
+ },
+ {
+  "seq": 108,
+  "family": "ctrl_sweep",
+  "name": "value byte 0c",
+  "label": "match_reject",
+  "detail": {
+   "ref": "reject",
+   "client_statuses": [
+    400
+   ]
+  }
+ },
+ {
+  "seq": 109,
+  "family": "ctrl_sweep",
+  "name": "value byte 0d",
+  "label": "match_reject",
+  "detail": {
+   "ref": "reject",
+   "client_statuses": [
+    400
+   ]
+  }
+ },
+ {
+  "seq": 110,
+  "family": "ctrl_sweep",
+  "name": "value byte 0e",
+  "label": "match_reject",
+  "detail": {
+   "ref": "reject",
+   "client_statuses": [
+    400
+   ]
+  }
+ },
+ {
+  "seq": 111,
+  "family": "ctrl_sweep",
+  "name": "value byte 0f",
+  "label": "match_reject",
+  "detail": {
+   "ref": "reject",
+   "client_statuses": [
+    400
+   ]
+  }
+ },
+ {
+  "seq": 112,
+  "family": "ctrl_sweep",
+  "name": "value byte 10",
+  "label": "match_reject",
+  "detail": {
+   "ref": "reject",
+   "client_statuses": [
+    400
+   ]
+  }
+ },
+ {
+  "seq": 113,
+  "family": "ctrl_sweep",
+  "name": "value byte 11",
+  "label": "match_reject",
+  "detail": {
+   "ref": "reject",
+   "client_statuses": [
+    400
+   ]
+  }
+ },
+ {
+  "seq": 114,
+  "family": "ctrl_sweep",
+  "name": "value byte 12",
+  "label": "match_reject",
+  "detail": {
+   "ref": "reject",
+   "client_statuses": [
+    400
+   ]
+  }
+ },
+ {
+  "seq": 115,
+  "family": "ctrl_sweep",
+  "name": "value byte 13",
+  "label": "match_reject",
+  "detail": {
+   "ref": "reject",
+   "client_statuses": [
+    400
+   ]
+  }
+ },
+ {
+  "seq": 116,
+  "family": "ctrl_sweep",
+  "name": "value byte 14",
+  "label": "match_reject",
+  "detail": {
+   "ref": "reject",
+   "client_statuses": [
+    400
+   ]
+  }
+ },
+ {
+  "seq": 117,
+  "family": "ctrl_sweep",
+  "name": "value byte 15",
+  "label": "match_reject",
+  "detail": {
+   "ref": "reject",
+   "client_statuses": [
+    400
+   ]
+  }
+ },
+ {
+  "seq": 118,
+  "family": "ctrl_sweep",
+  "name": "value byte 16",
+  "label": "match_reject",
+  "detail": {
+   "ref": "reject",
+   "client_statuses": [
+    400
+   ]
+  }
+ },
+ {
+  "seq": 119,
+  "family": "ctrl_sweep",
+  "name": "value byte 17",
+  "label": "match_reject",
+  "detail": {
+   "ref": "reject",
+   "client_statuses": [
+    400
+   ]
+  }
+ },
+ {
+  "seq": 120,
+  "family": "ctrl_sweep",
+  "name": "value byte 18",
+  "label": "match_reject",
+  "detail": {
+   "ref": "reject",
+   "client_statuses": [
+    400
+   ]
+  }
+ },
+ {
+  "seq": 121,
+  "family": "ctrl_sweep",
+  "name": "value byte 19",
+  "label": "match_reject",
+  "detail": {
+   "ref": "reject",
+   "client_statuses": [
+    400
+   ]
+  }
+ },
+ {
+  "seq": 122,
+  "family": "ctrl_sweep",
+  "name": "value byte 1a",
+  "label": "match_reject",
+  "detail": {
+   "ref": "reject",
+   "client_statuses": [
+    400
+   ]
+  }
+ },
+ {
+  "seq": 123,
+  "family": "ctrl_sweep",
+  "name": "value byte 1b",
+  "label": "match_reject",
+  "detail": {
+   "ref": "reject",
+   "client_statuses": [
+    400
+   ]
+  }
+ },
+ {
+  "seq": 124,
+  "family": "ctrl_sweep",
+  "name": "value byte 1c",
+  "label": "match_reject",
+  "detail": {
+   "ref": "reject",
+   "client_statuses": [
+    400
+   ]
+  }
+ },
+ {
+  "seq": 125,
+  "family": "ctrl_sweep",
+  "name": "value byte 1d",
+  "label": "match_reject",
+  "detail": {
+   "ref": "reject",
+   "client_statuses": [
+    400
+   ]
+  }
+ },
+ {
+  "seq": 126,
+  "family": "ctrl_sweep",
+  "name": "value byte 1e",
+  "label": "match_reject",
+  "detail": {
+   "ref": "reject",
+   "client_statuses": [
+    400
+   ]
+  }
+ },
+ {
+  "seq": 127,
+  "family": "ctrl_sweep",
+  "name": "value byte 1f",
+  "label": "match_reject",
+  "detail": {
+   "ref": "reject",
+   "client_statuses": [
+    400
+   ]
+  }
+ },
+ {
+  "seq": 128,
+  "family": "ctrl_sweep",
+  "name": "value byte 7f",
+  "label": "match_reject",
+  "detail": {
+   "ref": "reject",
+   "client_statuses": [
+    400
+   ]
+  }
+ },
+ {
+  "seq": 129,
+  "family": "ctrl_sweep",
+  "name": "target byte 00",
+  "label": "match_reject",
+  "detail": {
+   "ref": "reject",
+   "client_statuses": [
+    400
+   ]
+  }
+ },
+ {
+  "seq": 130,
+  "family": "ctrl_sweep",
+  "name": "target byte 01",
+  "label": "match_reject",
+  "detail": {
+   "ref": "reject",
+   "client_statuses": [
+    400
+   ]
+  }
+ },
+ {
+  "seq": 131,
+  "family": "ctrl_sweep",
+  "name": "target byte 02",
+  "label": "match_reject",
+  "detail": {
+   "ref": "reject",
+   "client_statuses": [
+    400
+   ]
+  }
+ },
+ {
+  "seq": 132,
+  "family": "ctrl_sweep",
+  "name": "target byte 03",
+  "label": "match_reject",
+  "detail": {
+   "ref": "reject",
+   "client_statuses": [
+    400
+   ]
+  }
+ },
+ {
+  "seq": 133,
+  "family": "ctrl_sweep",
+  "name": "target byte 04",
+  "label": "match_reject",
+  "detail": {
+   "ref": "reject",
+   "client_statuses": [
+    400
+   ]
+  }
+ },
+ {
+  "seq": 134,
+  "family": "ctrl_sweep",
+  "name": "target byte 05",
+  "label": "match_reject",
+  "detail": {
+   "ref": "reject",
+   "client_statuses": [
+    400
+   ]
+  }
+ },
+ {
+  "seq": 135,
+  "family": "ctrl_sweep",
+  "name": "target byte 06",
+  "label": "match_reject",
+  "detail": {
+   "ref": "reject",
+   "client_statuses": [
+    400
+   ]
+  }
+ },
+ {
+  "seq": 136,
+  "family": "ctrl_sweep",
+  "name": "target byte 07",
+  "label": "match_reject",
+  "detail": {
+   "ref": "reject",
+   "client_statuses": [
+    400
+   ]
+  }
+ },
+ {
+  "seq": 137,
+  "family": "ctrl_sweep",
+  "name": "target byte 08",
+  "label": "match_reject",
+  "detail": {
+   "ref": "reject",
+   "client_statuses": [
+    400
+   ]
+  }
+ },
+ {
+  "seq": 138,
+  "family": "ctrl_sweep",
+  "name": "target byte 09",
+  "label": "match_reject",
+  "detail": {
+   "ref": "reject",
+   "client_statuses": [
+    400
+   ]
+  }
+ },
+ {
+  "seq": 139,
+  "family": "ctrl_sweep",
+  "name": "target byte 0a",
+  "label": "match_reject",
+  "detail": {
+   "ref": "reject",
+   "client_statuses": [
+    400
+   ]
+  }
+ },
+ {
+  "seq": 140,
+  "family": "ctrl_sweep",
+  "name": "target byte 0b",
+  "label": "match_reject",
+  "detail": {
+   "ref": "reject",
+   "client_statuses": [
+    400
+   ]
+  }
+ },
+ {
+  "seq": 141,
+  "family": "ctrl_sweep",
+  "name": "target byte 0c",
+  "label": "match_reject",
+  "detail": {
+   "ref": "reject",
+   "client_statuses": [
+    400
+   ]
+  }
+ },
+ {
+  "seq": 142,
+  "family": "ctrl_sweep",
+  "name": "target byte 0d",
+  "label": "match_reject",
+  "detail": {
+   "ref": "reject",
+   "client_statuses": [
+    400
+   ]
+  }
+ },
+ {
+  "seq": 143,
+  "family": "ctrl_sweep",
+  "name": "target byte 0e",
+  "label": "match_reject",
+  "detail": {
+   "ref": "reject",
+   "client_statuses": [
+    400
+   ]
+  }
+ },
+ {
+  "seq": 144,
+  "family": "ctrl_sweep",
+  "name": "target byte 0f",
+  "label": "match_reject",
+  "detail": {
+   "ref": "reject",
+   "client_statuses": [
+    400
+   ]
+  }
+ },
+ {
+  "seq": 145,
+  "family": "ctrl_sweep",
+  "name": "target byte 10",
+  "label": "match_reject",
+  "detail": {
+   "ref": "reject",
+   "client_statuses": [
+    400
+   ]
+  }
+ },
+ {
+  "seq": 146,
+  "family": "ctrl_sweep",
+  "name": "target byte 11",
+  "label": "match_reject",
+  "detail": {
+   "ref": "reject",
+   "client_statuses": [
+    400
+   ]
+  }
+ },
+ {
+  "seq": 147,
+  "family": "ctrl_sweep",
+  "name": "target byte 12",
+  "label": "match_reject",
+  "detail": {
+   "ref": "reject",
+   "client_statuses": [
+    400
+   ]
+  }
+ },
+ {
+  "seq": 148,
+  "family": "ctrl_sweep",
+  "name": "target byte 13",
+  "label": "match_reject",
+  "detail": {
+   "ref": "reject",
+   "client_statuses": [
+    400
+   ]
+  }
+ },
+ {
+  "seq": 149,
+  "family": "ctrl_sweep",
+  "name": "target byte 14",
+  "label": "match_reject",
+  "detail": {
+   "ref": "reject",
+   "client_statuses": [
+    400
+   ]
+  }
+ },
+ {
+  "seq": 150,
+  "family": "ctrl_sweep",
+  "name": "target byte 15",
+  "label": "match_reject",
+  "detail": {
+   "ref": "reject",
+   "client_statuses": [
+    400
+   ]
+  }
+ },
+ {
+  "seq": 151,
+  "family": "ctrl_sweep",
+  "name": "target byte 16",
+  "label": "match_reject",
+  "detail": {
+   "ref": "reject",
+   "client_statuses": [
+    400
+   ]
+  }
+ },
+ {
+  "seq": 152,
+  "family": "ctrl_sweep",
+  "name": "target byte 17",
+  "label": "match_reject",
+  "detail": {
+   "ref": "reject",
+   "client_statuses": [
+    400
+   ]
+  }
+ },
+ {
+  "seq": 153,
+  "family": "ctrl_sweep",
+  "name": "target byte 18",
+  "label": "match_reject",
+  "detail": {
+   "ref": "reject",
+   "client_statuses": [
+    400
+   ]
+  }
+ },
+ {
+  "seq": 154,
+  "family": "ctrl_sweep",
+  "name": "target byte 19",
+  "label": "match_reject",
+  "detail": {
+   "ref": "reject",
+   "client_statuses": [
+    400
+   ]
+  }
+ },
+ {
+  "seq": 155,
+  "family": "ctrl_sweep",
+  "name": "target byte 1a",
+  "label": "match_reject",
+  "detail": {
+   "ref": "reject",
+   "client_statuses": [
+    400
+   ]
+  }
+ },
+ {
+  "seq": 156,
+  "family": "ctrl_sweep",
+  "name": "target byte 1b",
+  "label": "match_reject",
+  "detail": {
+   "ref": "reject",
+   "client_statuses": [
+    400
+   ]
+  }
+ },
+ {
+  "seq": 157,
+  "family": "ctrl_sweep",
+  "name": "target byte 1c",
+  "label": "match_reject",
+  "detail": {
+   "ref": "reject",
+   "client_statuses": [
+    400
+   ]
+  }
+ },
+ {
+  "seq": 158,
+  "family": "ctrl_sweep",
+  "name": "target byte 1d",
+  "label": "match_reject",
+  "detail": {
+   "ref": "reject",
+   "client_statuses": [
+    400
+   ]
+  }
+ },
+ {
+  "seq": 159,
+  "family": "ctrl_sweep",
+  "name": "target byte 1e",
+  "label": "match_reject",
+  "detail": {
+   "ref": "reject",
+   "client_statuses": [
+    400
+   ]
+  }
+ },
+ {
+  "seq": 160,
+  "family": "ctrl_sweep",
+  "name": "target byte 1f",
+  "label": "match_reject",
+  "detail": {
+   "ref": "reject",
+   "client_statuses": [
+    400
+   ]
+  }
+ },
+ {
+  "seq": 161,
+  "family": "ctrl_sweep",
+  "name": "target byte 20",
+  "label": "match_reject",
+  "detail": {
+   "ref": "reject",
+   "client_statuses": [
+    400
+   ]
+  }
+ },
+ {
+  "seq": 162,
+  "family": "ctrl_sweep",
+  "name": "target byte 7f",
+  "label": "match_reject",
+  "detail": {
+   "ref": "reject",
+   "client_statuses": [
+    400
+   ]
+  }
+ },
+ {
+  "seq": 163,
+  "family": "cl_sweep",
+  "name": "space inside",
+  "label": "match_reject",
+  "detail": {
+   "ref": "reject",
+   "client_statuses": [
+    400
+   ]
+  }
+ },
+ {
+  "seq": 164,
+  "family": "cl_sweep",
+  "name": "comma space",
+  "label": "match_reject",
+  "detail": {
+   "ref": "reject",
+   "client_statuses": [
+    400
+   ]
+  }
+ },
+ {
+  "seq": 165,
+  "family": "cl_sweep",
+  "name": "comma tight",
+  "label": "match_reject",
+  "detail": {
+   "ref": "reject",
+   "client_statuses": [
+    400
+   ]
+  }
+ },
+ {
+  "seq": 166,
+  "family": "cl_sweep",
+  "name": "comma equal",
+  "label": "httpd_stricter",
+  "detail": {
+   "ref": "accept:1",
+   "client_statuses": [
+    400
+   ]
+  }
+ },
+ {
+  "seq": 167,
+  "family": "cl_sweep",
+  "name": "trailing comma",
+  "label": "match_reject",
+  "detail": {
+   "ref": "reject",
+   "client_statuses": [
+    400
+   ]
+  }
+ },
+ {
+  "seq": 168,
+  "family": "cl_sweep",
+  "name": "leading comma",
+  "label": "match_reject",
+  "detail": {
+   "ref": "reject",
+   "client_statuses": [
+    400
+   ]
+  }
+ },
+ {
+  "seq": 169,
+  "family": "cl_sweep",
+  "name": "dot",
+  "label": "match_reject",
+  "detail": {
+   "ref": "reject",
+   "client_statuses": [
+    400
+   ]
+  }
+ },
+ {
+  "seq": 170,
+  "family": "cl_sweep",
+  "name": "hex prefix",
+  "label": "match_reject",
+  "detail": {
+   "ref": "reject",
+   "client_statuses": [
+    400
+   ]
+  }
+ },
+ {
+  "seq": 171,
+  "family": "cl_sweep",
+  "name": "plus",
+  "label": "match_reject",
+  "detail": {
+   "ref": "reject",
+   "client_statuses": [
+    400
+   ]
+  }
+ },
+ {
+  "seq": 172,
+  "family": "cl_sweep",
+  "name": "space plus",
+  "label": "match_reject",
+  "detail": {
+   "ref": "reject",
+   "client_statuses": [
+    400
+   ]
+  }
+ },
+ {
+  "seq": 173,
+  "family": "cl_sweep",
+  "name": "tab",
+  "label": "match_accept",
+  "detail": {
+   "ref": "accept:1",
+   "client_statuses": [
+    405
+   ]
+  }
+ },
+ {
+  "seq": 174,
+  "family": "cl_sweep",
+  "name": "newline pad",
+  "label": "match_accept",
+  "detail": {
+   "ref": "accept:1",
+   "client_statuses": [
+    405
+   ]
+  }
+ },
+ {
+  "seq": 175,
+  "family": "cl_sweep",
+  "name": "unicode digit",
+  "label": "match_reject",
+  "detail": {
+   "ref": "reject",
+   "client_statuses": [
+    400
+   ]
+  }
+ },
+ {
+  "seq": 176,
+  "family": "cl_sweep",
+  "name": "empty",
+  "label": "match_reject",
+  "detail": {
+   "ref": "reject",
+   "client_statuses": [
+    400
+   ]
+  }
+ },
+ {
+  "seq": 177,
+  "family": "cl_sweep",
+  "name": "just spaces",
+  "label": "match_reject",
+  "detail": {
+   "ref": "reject",
+   "client_statuses": [
+    400
+   ]
+  }
+ },
+ {
+  "seq": 178,
+  "family": "cl_sweep",
+  "name": "neg zero",
+  "label": "match_reject",
+  "detail": {
+   "ref": "reject",
+   "client_statuses": [
+    400
+   ]
+  }
+ },
+ {
+  "seq": 179,
+  "family": "cl_sweep",
+  "name": "big",
+  "label": "match_reject",
+  "detail": {
+   "ref": "reject",
+   "client_statuses": [
+    400
+   ]
+  }
+ },
+ {
+  "seq": 180,
+  "family": "cl_sweep",
+  "name": "overflow64",
+  "label": "match_reject",
+  "detail": {
+   "ref": "reject",
+   "client_statuses": [
+    400
+   ]
+  }
+ },
+ {
+  "seq": 181,
+  "family": "te_sweep",
+  "name": "chunked",
+  "label": "match_accept",
+  "detail": {
+   "ref": "accept:1",
+   "client_statuses": [
+    405
+   ]
+  }
+ },
+ {
+  "seq": 182,
+  "family": "te_sweep",
+  "name": "CHUNKED",
+  "label": "match_accept",
+  "detail": {
+   "ref": "accept:1",
+   "client_statuses": [
+    405
+   ]
+  }
+ },
+ {
+  "seq": 183,
+  "family": "te_sweep",
+  "name": "Chunked",
+  "label": "match_accept",
+  "detail": {
+   "ref": "accept:1",
+   "client_statuses": [
+    405
+   ]
+  }
+ },
+ {
+  "seq": 184,
+  "family": "te_sweep",
+  "name": "chunked sp",
+  "label": "httpd_stricter",
+  "detail": {
+   "ref": "accept:1",
+   "client_statuses": [
+    400
+   ]
+  }
+ },
+ {
+  "seq": 185,
+  "family": "te_sweep",
+  "name": "sp chunked",
+  "label": "match_accept",
+  "detail": {
+   "ref": "accept:1",
+   "client_statuses": [
+    405
+   ]
+  }
+ },
+ {
+  "seq": 186,
+  "family": "te_sweep",
+  "name": "chunkedx",
+  "label": "match_reject",
+  "detail": {
+   "ref": "reject",
+   "client_statuses": [
+    400
+   ]
+  }
+ },
+ {
+  "seq": 187,
+  "family": "te_sweep",
+  "name": "xchunked",
+  "label": "match_reject",
+  "detail": {
+   "ref": "reject",
+   "client_statuses": [
+    400
+   ]
+  }
+ },
+ {
+  "seq": 188,
+  "family": "te_sweep",
+  "name": "chunk",
+  "label": "match_reject",
+  "detail": {
+   "ref": "reject",
+   "client_statuses": [
+    400
+   ]
+  }
+ },
+ {
+  "seq": 189,
+  "family": "te_sweep",
+  "name": "chunked comma",
+  "label": "match_reject",
+  "detail": {
+   "ref": "reject",
+   "client_statuses": [
+    400
+   ]
+  }
+ },
+ {
+  "seq": 190,
+  "family": "te_sweep",
+  "name": "comma chunked",
+  "label": "match_reject",
+  "detail": {
+   "ref": "reject",
+   "client_statuses": [
+    400
+   ]
+  }
+ },
+ {
+  "seq": 191,
+  "family": "te_sweep",
+  "name": "chunked id",
+  "label": "match_reject",
+  "detail": {
+   "ref": "reject",
+   "client_statuses": [
+    400
+   ]
+  }
+ },
+ {
+  "seq": 192,
+  "family": "te_sweep",
+  "name": "id chunked",
+  "label": "match_reject",
+  "detail": {
+   "ref": "reject",
+   "client_statuses": [
+    400
+   ]
+  }
+ },
+ {
+  "seq": 193,
+  "family": "te_sweep",
+  "name": "gzip chunked",
+  "label": "match_reject",
+  "detail": {
+   "ref": "reject",
+   "client_statuses": [
+    400
+   ]
+  }
+ },
+ {
+  "seq": 194,
+  "family": "te_sweep",
+  "name": "chunked gzip",
+  "label": "match_reject",
+  "detail": {
+   "ref": "reject",
+   "client_statuses": [
+    400
+   ]
+  }
+ },
+ {
+  "seq": 195,
+  "family": "te_sweep",
+  "name": "chunked cr",
+  "label": "match_reject",
+  "detail": {
+   "ref": "reject",
+   "client_statuses": [
+    400
+   ]
+  }
+ },
+ {
+  "seq": 196,
+  "family": "te_sweep",
+  "name": "chunked tab",
+  "label": "httpd_stricter",
+  "detail": {
+   "ref": "accept:1",
+   "client_statuses": [
+    400
+   ]
+  }
+ },
+ {
+  "seq": 197,
+  "family": "te_sweep",
+  "name": "chunked null",
+  "label": "match_reject",
+  "detail": {
+   "ref": "reject",
+   "client_statuses": [
+    400
+   ]
+  }
+ },
+ {
+  "seq": 198,
+  "family": "te_sweep",
+  "name": "double",
+  "label": "match_reject",
+  "detail": {
+   "ref": "reject",
+   "client_statuses": [
+    400
+   ]
+  }
+ },
+ {
+  "seq": 199,
+  "family": "te_sweep",
+  "name": "quoted",
+  "label": "match_reject",
+  "detail": {
+   "ref": "reject",
+   "client_statuses": [
+    400
+   ]
+  }
+ },
+ {
+  "seq": 200,
+  "family": "te_sweep",
+  "name": "chunked semi",
+  "label": "match_reject",
+  "detail": {
+   "ref": "reject",
+   "client_statuses": [
+    400
+   ]
+  }
+ },
+ {
+  "seq": 201,
+  "family": "pipe_sweep",
+  "name": "depth 2",
+  "label": "match_accept",
+  "detail": {
+   "ref": "accept:2",
+   "client_statuses": [
+    404,
+    404
+   ]
+  }
+ },
+ {
+  "seq": 202,
+  "family": "pipe_sweep",
+  "name": "depth 4",
+  "label": "match_accept",
+  "detail": {
+   "ref": "accept:4",
+   "client_statuses": [
+    404,
+    404,
+    404,
+    404
+   ]
+  }
+ },
+ {
+  "seq": 203,
+  "family": "pipe_sweep",
+  "name": "depth 8",
+  "label": "match_accept",
+  "detail": {
+   "ref": "accept:8",
+   "client_statuses": [
+    404,
+    404,
+    404,
+    404,
+    404,
+    404,
+    404,
+    404
+   ]
+  }
+ },
+ {
+  "seq": 204,
+  "family": "pipe_sweep",
+  "name": "get post get",
+  "label": "match_accept",
+  "detail": {
+   "ref": "accept:3",
+   "client_statuses": [
+    404,
+    405,
+    404
+   ]
+  }
+ },
+ {
+  "seq": 205,
+  "family": "pipe_sweep",
+  "name": "good then bad",
+  "label": "match_reject",
+  "detail": {
+   "ref": "reject",
+   "client_statuses": [
+    404,
+    400
+   ]
+  }
+ },
+ {
+  "seq": 206,
+  "family": "pipe_sweep",
+  "name": "bad then good",
+  "label": "match_reject",
+  "detail": {
+   "ref": "reject",
+   "client_statuses": [
+    400
+   ]
+  }
+ },
+ {
+  "seq": 207,
+  "family": "target_sweep",
+  "name": "http scheme",
+  "label": "match_accept",
+  "detail": {
+   "ref": "accept:1",
+   "client_statuses": [
+    404
+   ]
+  }
+ },
+ {
+  "seq": 208,
+  "family": "target_sweep",
+  "name": "https scheme",
+  "label": "match_accept",
+  "detail": {
+   "ref": "accept:1",
+   "client_statuses": [
+    404
+   ]
+  }
+ },
+ {
+  "seq": 209,
+  "family": "target_sweep",
+  "name": "other host",
+  "label": "match_accept",
+  "detail": {
+   "ref": "accept:1",
+   "client_statuses": [
+    404
+   ]
+  }
+ },
+ {
+  "seq": 210,
+  "family": "target_sweep",
+  "name": "with port",
+  "label": "match_accept",
+  "detail": {
+   "ref": "accept:1",
+   "client_statuses": [
+    404
+   ]
+  }
+ },
+ {
+  "seq": 211,
+  "family": "target_sweep",
+  "name": "authority form",
+  "label": "match_accept",
+  "detail": {
+   "ref": "accept:1",
+   "client_statuses": [
+    404
+   ]
+  }
+ },
+ {
+  "seq": 212,
+  "family": "target_sweep",
+  "name": "scheme only",
+  "label": "match_accept",
+  "detail": {
+   "ref": "accept:1",
+   "client_statuses": [
+    404
+   ]
+  }
+ },
+ {
+  "seq": 213,
+  "family": "target_sweep",
+  "name": "no scheme slashes",
+  "label": "match_accept",
+  "detail": {
+   "ref": "accept:1",
+   "client_statuses": [
+    404
+   ]
+  }
+ },
+ {
+  "seq": 214,
+  "family": "target_sweep",
+  "name": "backslash",
+  "label": "match_accept",
+  "detail": {
+   "ref": "accept:1",
+   "client_statuses": [
+    404
+   ]
+  }
+ },
+ {
+  "seq": 215,
+  "family": "target_sweep",
+  "name": "double slash path",
+  "label": "match_accept",
+  "detail": {
+   "ref": "accept:1",
+   "client_statuses": [
+    404
+   ]
+  }
+ },
+ {
+  "seq": 216,
+  "family": "target_sweep",
+  "name": "dotdot",
+  "label": "match_accept",
+  "detail": {
+   "ref": "accept:1",
+   "client_statuses": [
+    404
+   ]
+  }
+ },
+ {
+  "seq": 217,
+  "family": "target_sweep",
+  "name": "encoded dotdot",
+  "label": "match_accept",
+  "detail": {
+   "ref": "accept:1",
+   "client_statuses": [
+    404
+   ]
+  }
+ },
+ {
+  "seq": 218,
+  "family": "target_sweep",
+  "name": "fragment",
+  "label": "match_accept",
+  "detail": {
+   "ref": "accept:1",
+   "client_statuses": [
+    404
+   ]
+  }
+ },
+ {
+  "seq": 219,
+  "family": "target_sweep",
+  "name": "at sign",
+  "label": "match_accept",
+  "detail": {
+   "ref": "accept:1",
+   "client_statuses": [
+    404
+   ]
+  }
+ }
+]

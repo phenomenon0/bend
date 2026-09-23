@@ -1,0 +1,268 @@
+{
+ "nginx": {
+  "baseline": {
+   "clean": 6
+  },
+  "pipeline": {
+   "clean": 4
+  },
+  "cl_te": {
+   "reject": 5
+  },
+  "te_cl": {
+   "reject": 1
+  },
+  "te_te": {
+   "clean": 2,
+   "front_stricter": 1,
+   "reject": 10
+  },
+  "cl_bad": {
+   "reject": 8,
+   "front_stricter": 3,
+   "clean": 2
+  },
+  "obs_fold": {
+   "reject": 3
+  },
+  "bare_eol": {
+   "fwd_reject": 5,
+   "reject": 1
+  },
+  "ctrl": {
+   "reject": 6,
+   "clean": 1
+  },
+  "name": {
+   "reject": 4,
+   "fwd_reject": 1
+  },
+  "target": {
+   "clean": 2,
+   "fwd_reject": 3,
+   "reject": 4,
+   "front_stricter": 2
+  },
+  "host": {
+   "reject": 2,
+   "clean": 1
+  },
+  "keepalive": {
+   "clean": 2
+  },
+  "expect": {
+   "clean": 2
+  },
+  "chunk": {
+   "reject": 4,
+   "clean": 3,
+   "fwd_reject": 1
+  },
+  "upgrade": {
+   "clean": 3,
+   "fwd_reject": 1
+  },
+  "smuggle": {
+   "reject": 2,
+   "clean": 1
+  },
+  "ctrl_sweep": {
+   "reject": 63,
+   "clean": 1,
+   "fwd_reject": 2
+  },
+  "cl_sweep": {
+   "reject": 15,
+   "front_stricter": 2,
+   "clean": 1
+  },
+  "te_sweep": {
+   "clean": 5,
+   "reject": 13,
+   "fwd_reject": 1,
+   "front_stricter": 1
+  },
+  "pipe_sweep": {
+   "clean": 4,
+   "fwd_reject": 1,
+   "reject": 1
+  },
+  "target_sweep": {
+   "clean": 9,
+   "front_stricter": 4
+  }
+ },
+ "haproxy": {
+  "baseline": {
+   "clean": 6
+  },
+  "pipeline": {
+   "clean": 4
+  },
+  "cl_te": {
+   "fwd_reject": 5
+  },
+  "te_cl": {
+   "reject": 1
+  },
+  "te_te": {
+   "clean": 3,
+   "reject": 10
+  },
+  "cl_bad": {
+   "reject": 8,
+   "clean": 5
+  },
+  "obs_fold": {
+   "fwd_reject": 2,
+   "reject": 1
+  },
+  "bare_eol": {
+   "fwd_reject": 4,
+   "reject": 2
+  },
+  "ctrl": {
+   "reject": 6,
+   "clean": 1
+  },
+  "name": {
+   "reject": 5
+  },
+  "target": {
+   "clean": 3,
+   "front_stricter": 1,
+   "fwd_reject": 2,
+   "reject": 5
+  },
+  "host": {
+   "reject": 2,
+   "clean": 1
+  },
+  "keepalive": {
+   "clean": 2
+  },
+  "expect": {
+   "clean": 2
+  },
+  "chunk": {
+   "reject": 5,
+   "clean": 3
+  },
+  "upgrade": {
+   "front_stricter": 2,
+   "reject": 1,
+   "clean": 1
+  },
+  "smuggle": {
+   "reject": 2,
+   "clean": 1
+  },
+  "ctrl_sweep": {
+   "reject": 65,
+   "clean": 1
+  },
+  "cl_sweep": {
+   "reject": 15,
+   "clean": 3
+  },
+  "te_sweep": {
+   "clean": 6,
+   "reject": 14
+  },
+  "pipe_sweep": {
+   "clean": 4,
+   "fwd_reject": 1,
+   "reject": 1
+  },
+  "target_sweep": {
+   "clean": 11,
+   "front_stricter": 2
+  }
+ },
+ "bend_httpd": {
+  "baseline": {
+   "match_accept": 6
+  },
+  "pipeline": {
+   "match_accept": 4
+  },
+  "cl_te": {
+   "match_reject": 5
+  },
+  "te_cl": {
+   "match_reject": 1
+  },
+  "te_te": {
+   "httpd_stricter": 1,
+   "match_accept": 2,
+   "match_reject": 10
+  },
+  "cl_bad": {
+   "match_reject": 8,
+   "match_accept": 4,
+   "httpd_stricter": 1
+  },
+  "obs_fold": {
+   "match_reject": 3
+  },
+  "bare_eol": {
+   "match_reject": 6
+  },
+  "ctrl": {
+   "match_reject": 6,
+   "match_accept": 1
+  },
+  "name": {
+   "match_reject": 5
+  },
+  "target": {
+   "match_accept": 4,
+   "match_reject": 6,
+   "httpd_looser": 1
+  },
+  "host": {
+   "match_reject": 2,
+   "match_accept": 1
+  },
+  "keepalive": {
+   "match_accept": 2
+  },
+  "expect": {
+   "match_accept": 2
+  },
+  "chunk": {
+   "match_reject": 5,
+   "match_accept": 3
+  },
+  "upgrade": {
+   "httpd_stricter": 1,
+   "httpd_looser": 1,
+   "match_accept": 2
+  },
+  "smuggle": {
+   "match_reject": 2,
+   "match_accept": 1
+  },
+  "ctrl_sweep": {
+   "match_reject": 65,
+   "match_accept": 1
+  },
+  "cl_sweep": {
+   "match_reject": 15,
+   "httpd_stricter": 1,
+   "match_accept": 2
+  },
+  "te_sweep": {
+   "match_accept": 4,
+   "httpd_stricter": 2,
+   "match_reject": 14
+  },
+  "pipe_sweep": {
+   "match_accept": 4,
+   "match_reject": 2
+  },
+  "target_sweep": {
+   "match_accept": 13
+  }
+ }
+}

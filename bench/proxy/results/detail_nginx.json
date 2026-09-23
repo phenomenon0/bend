@@ -1,0 +1,3814 @@
+[
+ {
+  "seq": 1,
+  "family": "baseline",
+  "name": "simple get",
+  "label": "clean",
+  "detail": {
+   "ref": "accept:1",
+   "forwarded": 1,
+   "up_targets": [
+    "/"
+   ],
+   "up_bodies": [
+    0
+   ],
+   "client_statuses": [
+    200
+   ],
+   "up_error": false
+  }
+ },
+ {
+  "seq": 2,
+  "family": "baseline",
+  "name": "get with query",
+  "label": "clean",
+  "detail": {
+   "ref": "accept:1",
+   "forwarded": 1,
+   "up_targets": [
+    "/p?x=1&y=2"
+   ],
+   "up_bodies": [
+    0
+   ],
+   "client_statuses": [
+    200
+   ],
+   "up_error": false
+  }
+ },
+ {
+  "seq": 3,
+  "family": "baseline",
+  "name": "post content-length",
+  "label": "clean",
+  "detail": {
+   "ref": "accept:1",
+   "forwarded": 1,
+   "up_targets": [
+    "/e"
+   ],
+   "up_bodies": [
+    5
+   ],
+   "client_statuses": [
+    200
+   ],
+   "up_error": false
+  }
+ },
+ {
+  "seq": 4,
+  "family": "baseline",
+  "name": "chunked ok",
+  "label": "clean",
+  "detail": {
+   "ref": "accept:1",
+   "forwarded": 1,
+   "up_targets": [
+    "/e"
+   ],
+   "up_bodies": [
+    9
+   ],
+   "client_statuses": [
+    200
+   ],
+   "up_error": false
+  }
+ },
+ {
+  "seq": 5,
+  "family": "baseline",
+  "name": "chunked with trailer",
+  "label": "clean",
+  "detail": {
+   "ref": "accept:1",
+   "forwarded": 1,
+   "up_targets": [
+    "/e"
+   ],
+   "up_bodies": [
+    3
+   ],
+   "client_statuses": [
+    200
+   ],
+   "up_error": false
+  }
+ },
+ {
+  "seq": 6,
+  "family": "baseline",
+  "name": "head request",
+  "label": "clean",
+  "detail": {
+   "ref": "accept:1",
+   "forwarded": 1,
+   "up_targets": [
+    "/"
+   ],
+   "up_bodies": [
+    0
+   ],
+   "client_statuses": [
+    200
+   ],
+   "up_error": false
+  }
+ },
+ {
+  "seq": 7,
+  "family": "pipeline",
+  "name": "two gets",
+  "label": "clean",
+  "detail": {
+   "ref": "accept:2",
+   "forwarded": 2,
+   "up_targets": [
+    "/a",
+    "/b"
+   ],
+   "up_bodies": [
+    0,
+    0
+   ],
+   "client_statuses": [
+    200,
+    200
+   ],
+   "up_error": false
+  }
+ },
+ {
+  "seq": 8,
+  "family": "pipeline",
+  "name": "three gets",
+  "label": "clean",
+  "detail": {
+   "ref": "accept:3",
+   "forwarded": 3,
+   "up_targets": [
+    "/0",
+    "/1",
+    "/2"
+   ],
+   "up_bodies": [
+    0,
+    0,
+    0
+   ],
+   "client_statuses": [
+    200,
+    200,
+    200
+   ],
+   "up_error": false
+  }
+ },
+ {
+  "seq": 9,
+  "family": "pipeline",
+  "name": "post then get",
+  "label": "clean",
+  "detail": {
+   "ref": "accept:2",
+   "forwarded": 2,
+   "up_targets": [
+    "/e",
+    "/b"
+   ],
+   "up_bodies": [
+    3,
+    0
+   ],
+   "client_statuses": [
+    200,
+    200
+   ],
+   "up_error": false
+  }
+ },
+ {
+  "seq": 10,
+  "family": "pipeline",
+  "name": "chunked then get",
+  "label": "clean",
+  "detail": {
+   "ref": "accept:2",
+   "forwarded": 2,
+   "up_targets": [
+    "/e",
+    "/b"
+   ],
+   "up_bodies": [
+    3,
+    0
+   ],
+   "client_statuses": [
+    200,
+    200
+   ],
+   "up_error": false
+  }
+ },
+ {
+  "seq": 11,
+  "family": "cl_te",
+  "name": "cl then te plain",
+  "label": "reject",
+  "detail": {
+   "ref": "reject",
+   "forwarded": 0,
+   "up_targets": [],
+   "up_bodies": [],
+   "client_statuses": [
+    400
+   ],
+   "up_error": false
+  }
+ },
+ {
+  "seq": 12,
+  "family": "cl_te",
+  "name": "cl then te upper",
+  "label": "reject",
+  "detail": {
+   "ref": "reject",
+   "forwarded": 0,
+   "up_targets": [],
+   "up_bodies": [],
+   "client_statuses": [
+    400
+   ],
+   "up_error": false
+  }
+ },
+ {
+  "seq": 13,
+  "family": "cl_te",
+  "name": "cl then te mixed",
+  "label": "reject",
+  "detail": {
+   "ref": "reject",
+   "forwarded": 0,
+   "up_targets": [],
+   "up_bodies": [],
+   "client_statuses": [
+    400
+   ],
+   "up_error": false
+  }
+ },
+ {
+  "seq": 14,
+  "family": "cl_te",
+  "name": "te then cl",
+  "label": "reject",
+  "detail": {
+   "ref": "reject",
+   "forwarded": 0,
+   "up_targets": [],
+   "up_bodies": [],
+   "client_statuses": [
+    400
+   ],
+   "up_error": false
+  }
+ },
+ {
+  "seq": 15,
+  "family": "cl_te",
+  "name": "cl zero te chunked",
+  "label": "reject",
+  "detail": {
+   "ref": "reject",
+   "forwarded": 0,
+   "up_targets": [],
+   "up_bodies": [],
+   "client_statuses": [
+    400
+   ],
+   "up_error": false
+  }
+ },
+ {
+  "seq": 16,
+  "family": "te_cl",
+  "name": "te chunked cl 4",
+  "label": "reject",
+  "detail": {
+   "ref": "reject",
+   "forwarded": 0,
+   "up_targets": [],
+   "up_bodies": [],
+   "client_statuses": [
+    400
+   ],
+   "up_error": false
+  }
+ },
+ {
+  "seq": 17,
+  "family": "te_te",
+  "name": "trailing space value",
+  "label": "clean",
+  "detail": {
+   "ref": "accept:1",
+   "forwarded": 1,
+   "up_targets": [
+    "/"
+   ],
+   "up_bodies": [
+    0
+   ],
+   "client_statuses": [
+    200
+   ],
+   "up_error": false
+  }
+ },
+ {
+  "seq": 18,
+  "family": "te_te",
+  "name": "leading space value",
+  "label": "clean",
+  "detail": {
+   "ref": "accept:1",
+   "forwarded": 1,
+   "up_targets": [
+    "/"
+   ],
+   "up_bodies": [
+    0
+   ],
+   "client_statuses": [
+    200
+   ],
+   "up_error": false
+  }
+ },
+ {
+  "seq": 19,
+  "family": "te_te",
+  "name": "tab before value",
+  "label": "front_stricter",
+  "detail": {
+   "ref": "accept:1",
+   "forwarded": 0,
+   "up_targets": [],
+   "up_bodies": [],
+   "client_statuses": [
+    501
+   ],
+   "up_error": false
+  }
+ },
+ {
+  "seq": 20,
+  "family": "te_te",
+  "name": "xchunked",
+  "label": "reject",
+  "detail": {
+   "ref": "reject",
+   "forwarded": 0,
+   "up_targets": [],
+   "up_bodies": [],
+   "client_statuses": [
+    501
+   ],
+   "up_error": false
+  }
+ },
+ {
+  "seq": 21,
+  "family": "te_te",
+  "name": "chunked space suffix token",
+  "label": "reject",
+  "detail": {
+   "ref": "reject",
+   "forwarded": 0,
+   "up_targets": [],
+   "up_bodies": [],
+   "client_statuses": [
+    501
+   ],
+   "up_error": false
+  }
+ },
+ {
+  "seq": 22,
+  "family": "te_te",
+  "name": "chunked identity",
+  "label": "reject",
+  "detail": {
+   "ref": "reject",
+   "forwarded": 0,
+   "up_targets": [],
+   "up_bodies": [],
+   "client_statuses": [
+    501
+   ],
+   "up_error": false
+  }
+ },
+ {
+  "seq": 23,
+  "family": "te_te",
+  "name": "identity chunked",
+  "label": "reject",
+  "detail": {
+   "ref": "reject",
+   "forwarded": 0,
+   "up_targets": [],
+   "up_bodies": [],
+   "client_statuses": [
+    501
+   ],
+   "up_error": false
+  }
+ },
+ {
+  "seq": 24,
+  "family": "te_te",
+  "name": "double chunked one header",
+  "label": "reject",
+  "detail": {
+   "ref": "reject",
+   "forwarded": 0,
+   "up_targets": [],
+   "up_bodies": [],
+   "client_statuses": [
+    501
+   ],
+   "up_error": false
+  }
+ },
+ {
+  "seq": 25,
+  "family": "te_te",
+  "name": "two te headers",
+  "label": "reject",
+  "detail": {
+   "ref": "reject",
+   "forwarded": 0,
+   "up_targets": [],
+   "up_bodies": [],
+   "client_statuses": [
+    400
+   ],
+   "up_error": false
+  }
+ },
+ {
+  "seq": 26,
+  "family": "te_te",
+  "name": "te gzip chunked two headers",
+  "label": "reject",
+  "detail": {
+   "ref": "reject",
+   "forwarded": 0,
+   "up_targets": [],
+   "up_bodies": [],
+   "client_statuses": [
+    400
+   ],
+   "up_error": false
+  }
+ },
+ {
+  "seq": 27,
+  "family": "te_te",
+  "name": "name with trailing space",
+  "label": "reject",
+  "detail": {
+   "ref": "reject",
+   "forwarded": 0,
+   "up_targets": [],
+   "up_bodies": [],
+   "client_statuses": [
+    400
+   ],
+   "up_error": false
+  }
+ },
+ {
+  "seq": 28,
+  "family": "te_te",
+  "name": "te in http 1.0",
+  "label": "reject",
+  "detail": {
+   "ref": "reject",
+   "forwarded": 0,
+   "up_targets": [],
+   "up_bodies": [],
+   "client_statuses": [
+    400
+   ],
+   "up_error": false
+  }
+ },
+ {
+  "seq": 29,
+  "family": "te_te",
+  "name": "vertical tab obfuscation",
+  "label": "reject",
+  "detail": {
+   "ref": "reject",
+   "forwarded": 0,
+   "up_targets": [],
+   "up_bodies": [],
+   "client_statuses": [
+    501
+   ],
+   "up_error": false
+  }
+ },
+ {
+  "seq": 30,
+  "family": "cl_bad",
+  "name": "two conflicting cl",
+  "label": "reject",
+  "detail": {
+   "ref": "reject",
+   "forwarded": 0,
+   "up_targets": [],
+   "up_bodies": [],
+   "client_statuses": [
+    400
+   ],
+   "up_error": false
+  }
+ },
+ {
+  "seq": 31,
+  "family": "cl_bad",
+  "name": "two equal cl",
+  "label": "front_stricter",
+  "detail": {
+   "ref": "accept:1",
+   "forwarded": 0,
+   "up_targets": [],
+   "up_bodies": [],
+   "client_statuses": [
+    400
+   ],
+   "up_error": false
+  }
+ },
+ {
+  "seq": 32,
+  "family": "cl_bad",
+  "name": "cl list conflict",
+  "label": "reject",
+  "detail": {
+   "ref": "reject",
+   "forwarded": 0,
+   "up_targets": [],
+   "up_bodies": [],
+   "client_statuses": [
+    400
+   ],
+   "up_error": false
+  }
+ },
+ {
+  "seq": 33,
+  "family": "cl_bad",
+  "name": "cl list equal",
+  "label": "front_stricter",
+  "detail": {
+   "ref": "accept:1",
+   "forwarded": 0,
+   "up_targets": [],
+   "up_bodies": [],
+   "client_statuses": [
+    400
+   ],
+   "up_error": false
+  }
+ },
+ {
+  "seq": 34,
+  "family": "cl_bad",
+  "name": "cl plus sign",
+  "label": "reject",
+  "detail": {
+   "ref": "reject",
+   "forwarded": 0,
+   "up_targets": [],
+   "up_bodies": [],
+   "client_statuses": [
+    400
+   ],
+   "up_error": false
+  }
+ },
+ {
+  "seq": 35,
+  "family": "cl_bad",
+  "name": "cl minus sign",
+  "label": "reject",
+  "detail": {
+   "ref": "reject",
+   "forwarded": 0,
+   "up_targets": [],
+   "up_bodies": [],
+   "client_statuses": [
+    400
+   ],
+   "up_error": false
+  }
+ },
+ {
+  "seq": 36,
+  "family": "cl_bad",
+  "name": "cl leading space in value",
+  "label": "clean",
+  "detail": {
+   "ref": "accept:1",
+   "forwarded": 1,
+   "up_targets": [
+    "/"
+   ],
+   "up_bodies": [
+    5
+   ],
+   "client_statuses": [
+    200
+   ],
+   "up_error": false
+  }
+ },
+ {
+  "seq": 37,
+  "family": "cl_bad",
+  "name": "cl trailing junk",
+  "label": "reject",
+  "detail": {
+   "ref": "reject",
+   "forwarded": 0,
+   "up_targets": [],
+   "up_bodies": [],
+   "client_statuses": [
+    400
+   ],
+   "up_error": false
+  }
+ },
+ {
+  "seq": 38,
+  "family": "cl_bad",
+  "name": "cl hex",
+  "label": "reject",
+  "detail": {
+   "ref": "reject",
+   "forwarded": 0,
+   "up_targets": [],
+   "up_bodies": [],
+   "client_statuses": [
+    400
+   ],
+   "up_error": false
+  }
+ },
+ {
+  "seq": 39,
+  "family": "cl_bad",
+  "name": "cl leading zeros",
+  "label": "clean",
+  "detail": {
+   "ref": "accept:1",
+   "forwarded": 1,
+   "up_targets": [
+    "/"
+   ],
+   "up_bodies": [
+    5
+   ],
+   "client_statuses": [
+    200
+   ],
+   "up_error": false
+  }
+ },
+ {
+  "seq": 40,
+  "family": "cl_bad",
+  "name": "cl overflow",
+  "label": "reject",
+  "detail": {
+   "ref": "reject",
+   "forwarded": 0,
+   "up_targets": [],
+   "up_bodies": [],
+   "client_statuses": [
+    400
+   ],
+   "up_error": false
+  }
+ },
+ {
+  "seq": 41,
+  "family": "cl_bad",
+  "name": "cl huge over cap",
+  "label": "reject",
+  "detail": {
+   "ref": "reject",
+   "forwarded": 0,
+   "up_targets": [],
+   "up_bodies": [],
+   "client_statuses": [
+    413
+   ],
+   "up_error": false
+  }
+ },
+ {
+  "seq": 42,
+  "family": "cl_bad",
+  "name": "cl tab padded",
+  "label": "front_stricter",
+  "detail": {
+   "ref": "accept:1",
+   "forwarded": 0,
+   "up_targets": [],
+   "up_bodies": [],
+   "client_statuses": [
+    400
+   ],
+   "up_error": false
+  }
+ },
+ {
+  "seq": 43,
+  "family": "obs_fold",
+  "name": "folded value space",
+  "label": "reject",
+  "detail": {
+   "ref": "reject",
+   "forwarded": 0,
+   "up_targets": [],
+   "up_bodies": [],
+   "client_statuses": [
+    400
+   ],
+   "up_error": false
+  }
+ },
+ {
+  "seq": 44,
+  "family": "obs_fold",
+  "name": "folded value tab",
+  "label": "reject",
+  "detail": {
+   "ref": "reject",
+   "forwarded": 0,
+   "up_targets": [],
+   "up_bodies": [],
+   "client_statuses": [
+    400
+   ],
+   "up_error": false
+  }
+ },
+ {
+  "seq": 45,
+  "family": "obs_fold",
+  "name": "folded host",
+  "label": "reject",
+  "detail": {
+   "ref": "reject",
+   "forwarded": 0,
+   "up_targets": [],
+   "up_bodies": [],
+   "client_statuses": [
+    400
+   ],
+   "up_error": false
+  }
+ },
+ {
+  "seq": 46,
+  "family": "bare_eol",
+  "name": "bare lf request line",
+  "label": "fwd_reject",
+  "detail": {
+   "ref": "reject",
+   "forwarded": 1,
+   "up_targets": [
+    "/"
+   ],
+   "up_bodies": [
+    0
+   ],
+   "client_statuses": [
+    200
+   ],
+   "up_error": false
+  }
+ },
+ {
+  "seq": 47,
+  "family": "bare_eol",
+  "name": "bare lf all",
+  "label": "fwd_reject",
+  "detail": {
+   "ref": "reject",
+   "forwarded": 1,
+   "up_targets": [
+    "/"
+   ],
+   "up_bodies": [
+    0
+   ],
+   "client_statuses": [
+    200
+   ],
+   "up_error": false
+  }
+ },
+ {
+  "seq": 48,
+  "family": "bare_eol",
+  "name": "bare lf header",
+  "label": "fwd_reject",
+  "detail": {
+   "ref": "reject",
+   "forwarded": 1,
+   "up_targets": [
+    "/"
+   ],
+   "up_bodies": [
+    0
+   ],
+   "client_statuses": [
+    200
+   ],
+   "up_error": false
+  }
+ },
+ {
+  "seq": 49,
+  "family": "bare_eol",
+  "name": "bare cr in value",
+  "label": "reject",
+  "detail": {
+   "ref": "reject",
+   "forwarded": 0,
+   "up_targets": [],
+   "up_bodies": [],
+   "client_statuses": [
+    400
+   ],
+   "up_error": false
+  }
+ },
+ {
+  "seq": 50,
+  "family": "bare_eol",
+  "name": "bare lf then chunk",
+  "label": "fwd_reject",
+  "detail": {
+   "ref": "reject",
+   "forwarded": 1,
+   "up_targets": [
+    "/"
+   ],
+   "up_bodies": [
+    3
+   ],
+   "client_statuses": [
+    200
+   ],
+   "up_error": false
+  }
+ },
+ {
+  "seq": 51,
+  "family": "bare_eol",
+  "name": "lf lf terminator",
+  "label": "fwd_reject",
+  "detail": {
+   "ref": "reject",
+   "forwarded": 1,
+   "up_targets": [
+    "/"
+   ],
+   "up_bodies": [
+    3
+   ],
+   "client_statuses": [
+    200
+   ],
+   "up_error": false
+  }
+ },
+ {
+  "seq": 52,
+  "family": "ctrl",
+  "name": "nul in value",
+  "label": "reject",
+  "detail": {
+   "ref": "reject",
+   "forwarded": 0,
+   "up_targets": [],
+   "up_bodies": [],
+   "client_statuses": [
+    400
+   ],
+   "up_error": false
+  }
+ },
+ {
+  "seq": 53,
+  "family": "ctrl",
+  "name": "nul in name",
+  "label": "reject",
+  "detail": {
+   "ref": "reject",
+   "forwarded": 0,
+   "up_targets": [],
+   "up_bodies": [],
+   "client_statuses": [
+    400
+   ],
+   "up_error": false
+  }
+ },
+ {
+  "seq": 54,
+  "family": "ctrl",
+  "name": "control in value",
+  "label": "reject",
+  "detail": {
+   "ref": "reject",
+   "forwarded": 0,
+   "up_targets": [],
+   "up_bodies": [],
+   "client_statuses": [
+    400
+   ],
+   "up_error": true
+  }
+ },
+ {
+  "seq": 55,
+  "family": "ctrl",
+  "name": "nul in target",
+  "label": "reject",
+  "detail": {
+   "ref": "reject",
+   "forwarded": 0,
+   "up_targets": [],
+   "up_bodies": [],
+   "client_statuses": [
+    400
+   ],
+   "up_error": false
+  }
+ },
+ {
+  "seq": 56,
+  "family": "ctrl",
+  "name": "control in target",
+  "label": "reject",
+  "detail": {
+   "ref": "reject",
+   "forwarded": 0,
+   "up_targets": [],
+   "up_bodies": [],
+   "client_statuses": [
+    400
+   ],
+   "up_error": false
+  }
+ },
+ {
+  "seq": 57,
+  "family": "ctrl",
+  "name": "del in value",
+  "label": "reject",
+  "detail": {
+   "ref": "reject",
+   "forwarded": 0,
+   "up_targets": [],
+   "up_bodies": [],
+   "client_statuses": [
+    400
+   ],
+   "up_error": true
+  }
+ },
+ {
+  "seq": 58,
+  "family": "ctrl",
+  "name": "tab in value ok",
+  "label": "clean",
+  "detail": {
+   "ref": "accept:1",
+   "forwarded": 1,
+   "up_targets": [
+    "/"
+   ],
+   "up_bodies": [
+    0
+   ],
+   "client_statuses": [
+    200
+   ],
+   "up_error": false
+  }
+ },
+ {
+  "seq": 59,
+  "family": "name",
+  "name": "space before colon",
+  "label": "reject",
+  "detail": {
+   "ref": "reject",
+   "forwarded": 0,
+   "up_targets": [],
+   "up_bodies": [],
+   "client_statuses": [
+    400
+   ],
+   "up_error": false
+  }
+ },
+ {
+  "seq": 60,
+  "family": "name",
+  "name": "empty name",
+  "label": "reject",
+  "detail": {
+   "ref": "reject",
+   "forwarded": 0,
+   "up_targets": [],
+   "up_bodies": [],
+   "client_statuses": [
+    400
+   ],
+   "up_error": false
+  }
+ },
+ {
+  "seq": 61,
+  "family": "name",
+  "name": "no colon",
+  "label": "reject",
+  "detail": {
+   "ref": "reject",
+   "forwarded": 0,
+   "up_targets": [],
+   "up_bodies": [],
+   "client_statuses": [
+    400
+   ],
+   "up_error": false
+  }
+ },
+ {
+  "seq": 62,
+  "family": "name",
+  "name": "space in name",
+  "label": "reject",
+  "detail": {
+   "ref": "reject",
+   "forwarded": 0,
+   "up_targets": [],
+   "up_bodies": [],
+   "client_statuses": [
+    400
+   ],
+   "up_error": false
+  }
+ },
+ {
+  "seq": 63,
+  "family": "name",
+  "name": "unicode in name",
+  "label": "fwd_reject",
+  "detail": {
+   "ref": "reject",
+   "forwarded": 1,
+   "up_targets": [
+    "/"
+   ],
+   "up_bodies": [
+    0
+   ],
+   "client_statuses": [
+    200
+   ],
+   "up_error": false
+  }
+ },
+ {
+  "seq": 64,
+  "family": "target",
+  "name": "absolute form",
+  "label": "clean",
+  "detail": {
+   "ref": "accept:1",
+   "forwarded": 1,
+   "up_targets": [
+    "/x"
+   ],
+   "up_bodies": [
+    0
+   ],
+   "client_statuses": [
+    200
+   ],
+   "up_error": false
+  }
+ },
+ {
+  "seq": 65,
+  "family": "target",
+  "name": "absolute form other host",
+  "label": "clean",
+  "detail": {
+   "ref": "accept:1",
+   "forwarded": 1,
+   "up_targets": [
+    "/x"
+   ],
+   "up_bodies": [
+    0
+   ],
+   "client_statuses": [
+    200
+   ],
+   "up_error": false
+  }
+ },
+ {
+  "seq": 66,
+  "family": "target",
+  "name": "double space in line",
+  "label": "fwd_reject",
+  "detail": {
+   "ref": "reject",
+   "forwarded": 1,
+   "up_targets": [
+    "/"
+   ],
+   "up_bodies": [
+    0
+   ],
+   "client_statuses": [
+    200
+   ],
+   "up_error": false
+  }
+ },
+ {
+  "seq": 67,
+  "family": "target",
+  "name": "tab in request line",
+  "label": "reject",
+  "detail": {
+   "ref": "reject",
+   "forwarded": 0,
+   "up_targets": [],
+   "up_bodies": [],
+   "client_statuses": [
+    400
+   ],
+   "up_error": false
+  }
+ },
+ {
+  "seq": 68,
+  "family": "target",
+  "name": "missing version",
+  "label": "fwd_reject",
+  "detail": {
+   "ref": "reject",
+   "forwarded": 1,
+   "up_targets": [
+    "/"
+   ],
+   "up_bodies": [
+    0
+   ],
+   "client_statuses": [],
+   "up_error": false
+  }
+ },
+ {
+  "seq": 69,
+  "family": "target",
+  "name": "http 0.9 style",
+  "label": "fwd_reject",
+  "detail": {
+   "ref": "reject",
+   "forwarded": 1,
+   "up_targets": [
+    "/"
+   ],
+   "up_bodies": [
+    0
+   ],
+   "client_statuses": [],
+   "up_error": false
+  }
+ },
+ {
+  "seq": 70,
+  "family": "target",
+  "name": "bad version",
+  "label": "reject",
+  "detail": {
+   "ref": "reject",
+   "forwarded": 0,
+   "up_targets": [],
+   "up_bodies": [],
+   "client_statuses": [
+    505
+   ],
+   "up_error": false
+  }
+ },
+ {
+  "seq": 71,
+  "family": "target",
+  "name": "lowercase method",
+  "label": "front_stricter",
+  "detail": {
+   "ref": "accept:1",
+   "forwarded": 0,
+   "up_targets": [],
+   "up_bodies": [],
+   "client_statuses": [
+    400
+   ],
+   "up_error": false
+  }
+ },
+ {
+  "seq": 72,
+  "family": "target",
+  "name": "asterisk form",
+  "label": "front_stricter",
+  "detail": {
+   "ref": "accept:1",
+   "forwarded": 0,
+   "up_targets": [],
+   "up_bodies": [],
+   "client_statuses": [
+    400
+   ],
+   "up_error": false
+  }
+ },
+ {
+  "seq": 73,
+  "family": "target",
+  "name": "very long target",
+  "label": "reject",
+  "detail": {
+   "ref": "reject",
+   "forwarded": 0,
+   "up_targets": [],
+   "up_bodies": [],
+   "client_statuses": [
+    414
+   ],
+   "up_error": false
+  }
+ },
+ {
+  "seq": 74,
+  "family": "target",
+  "name": "very long header line",
+  "label": "reject",
+  "detail": {
+   "ref": "reject",
+   "forwarded": 0,
+   "up_targets": [],
+   "up_bodies": [],
+   "client_statuses": [
+    400
+   ],
+   "up_error": false
+  }
+ },
+ {
+  "seq": 75,
+  "family": "host",
+  "name": "no host 1.1",
+  "label": "reject",
+  "detail": {
+   "ref": "reject",
+   "forwarded": 0,
+   "up_targets": [],
+   "up_bodies": [],
+   "client_statuses": [
+    400
+   ],
+   "up_error": false
+  }
+ },
+ {
+  "seq": 76,
+  "family": "host",
+  "name": "two host",
+  "label": "reject",
+  "detail": {
+   "ref": "reject",
+   "forwarded": 0,
+   "up_targets": [],
+   "up_bodies": [],
+   "client_statuses": [
+    400
+   ],
+   "up_error": false
+  }
+ },
+ {
+  "seq": 77,
+  "family": "host",
+  "name": "no host 1.0 ok",
+  "label": "clean",
+  "detail": {
+   "ref": "accept:1",
+   "forwarded": 1,
+   "up_targets": [
+    "/"
+   ],
+   "up_bodies": [
+    0
+   ],
+   "client_statuses": [
+    200
+   ],
+   "up_error": false
+  }
+ },
+ {
+  "seq": 78,
+  "family": "keepalive",
+  "name": "1.0 keep-alive two",
+  "label": "clean",
+  "detail": {
+   "ref": "accept:2",
+   "forwarded": 2,
+   "up_targets": [
+    "/a",
+    "/b"
+   ],
+   "up_bodies": [
+    0,
+    0
+   ],
+   "client_statuses": [
+    200,
+    200
+   ],
+   "up_error": false
+  }
+ },
+ {
+  "seq": 79,
+  "family": "keepalive",
+  "name": "1.1 close",
+  "label": "clean",
+  "detail": {
+   "ref": "accept:1",
+   "forwarded": 1,
+   "up_targets": [
+    "/"
+   ],
+   "up_bodies": [
+    0
+   ],
+   "client_statuses": [
+    200
+   ],
+   "up_error": false
+  }
+ },
+ {
+  "seq": 80,
+  "family": "expect",
+  "name": "expect 100 continue",
+  "label": "clean",
+  "detail": {
+   "ref": "accept:1",
+   "forwarded": 1,
+   "up_targets": [
+    "/e"
+   ],
+   "up_bodies": [
+    3
+   ],
+   "client_statuses": [
+    100
+   ],
+   "up_error": false
+  }
+ },
+ {
+  "seq": 81,
+  "family": "expect",
+  "name": "expect unknown",
+  "label": "clean",
+  "detail": {
+   "ref": "accept:1",
+   "forwarded": 1,
+   "up_targets": [
+    "/e"
+   ],
+   "up_bodies": [
+    3
+   ],
+   "client_statuses": [
+    200
+   ],
+   "up_error": false
+  }
+ },
+ {
+  "seq": 82,
+  "family": "chunk",
+  "name": "chunk size overflow",
+  "label": "reject",
+  "detail": {
+   "ref": "reject",
+   "forwarded": 0,
+   "up_targets": [],
+   "up_bodies": [],
+   "client_statuses": [
+    400
+   ],
+   "up_error": false
+  }
+ },
+ {
+  "seq": 83,
+  "family": "chunk",
+  "name": "chunk size non hex",
+  "label": "reject",
+  "detail": {
+   "ref": "reject",
+   "forwarded": 0,
+   "up_targets": [],
+   "up_bodies": [],
+   "client_statuses": [
+    400
+   ],
+   "up_error": false
+  }
+ },
+ {
+  "seq": 84,
+  "family": "chunk",
+  "name": "chunk extension",
+  "label": "clean",
+  "detail": {
+   "ref": "accept:1",
+   "forwarded": 1,
+   "up_targets": [
+    "/"
+   ],
+   "up_bodies": [
+    3
+   ],
+   "client_statuses": [
+    200
+   ],
+   "up_error": false
+  }
+ },
+ {
+  "seq": 85,
+  "family": "chunk",
+  "name": "chunk quoted extension",
+  "label": "clean",
+  "detail": {
+   "ref": "accept:1",
+   "forwarded": 1,
+   "up_targets": [
+    "/"
+   ],
+   "up_bodies": [
+    3
+   ],
+   "client_statuses": [
+    200
+   ],
+   "up_error": false
+  }
+ },
+ {
+  "seq": 86,
+  "family": "chunk",
+  "name": "chunk leading zeros",
+  "label": "clean",
+  "detail": {
+   "ref": "accept:1",
+   "forwarded": 1,
+   "up_targets": [
+    "/"
+   ],
+   "up_bodies": [
+    3
+   ],
+   "client_statuses": [
+    200
+   ],
+   "up_error": false
+  }
+ },
+ {
+  "seq": 87,
+  "family": "chunk",
+  "name": "chunk missing crlf after data",
+  "label": "reject",
+  "detail": {
+   "ref": "reject",
+   "forwarded": 0,
+   "up_targets": [],
+   "up_bodies": [],
+   "client_statuses": [
+    400
+   ],
+   "up_error": false
+  }
+ },
+ {
+  "seq": 88,
+  "family": "chunk",
+  "name": "chunk trailer smuggle",
+  "label": "fwd_reject",
+  "detail": {
+   "ref": "reject",
+   "forwarded": 1,
+   "up_targets": [
+    "/"
+   ],
+   "up_bodies": [
+    0
+   ],
+   "client_statuses": [
+    200
+   ],
+   "up_error": false
+  }
+ },
+ {
+  "seq": 89,
+  "family": "chunk",
+  "name": "chunk negative size",
+  "label": "reject",
+  "detail": {
+   "ref": "reject",
+   "forwarded": 0,
+   "up_targets": [],
+   "up_bodies": [],
+   "client_statuses": [
+    400
+   ],
+   "up_error": false
+  }
+ },
+ {
+  "seq": 90,
+  "family": "upgrade",
+  "name": "websocket upgrade",
+  "label": "clean",
+  "detail": {
+   "ref": "accept:1",
+   "forwarded": 1,
+   "up_targets": [
+    "/ws"
+   ],
+   "up_bodies": [
+    0
+   ],
+   "client_statuses": [
+    200
+   ],
+   "up_error": false
+  }
+ },
+ {
+  "seq": 91,
+  "family": "upgrade",
+  "name": "upgrade trailing bytes",
+  "label": "fwd_reject",
+  "detail": {
+   "ref": "reject",
+   "forwarded": 1,
+   "up_targets": [
+    "/ws"
+   ],
+   "up_bodies": [
+    0
+   ],
+   "client_statuses": [
+    200
+   ],
+   "up_error": false
+  }
+ },
+ {
+  "seq": 92,
+  "family": "upgrade",
+  "name": "h2c upgrade",
+  "label": "clean",
+  "detail": {
+   "ref": "accept:1",
+   "forwarded": 1,
+   "up_targets": [
+    "/"
+   ],
+   "up_bodies": [
+    0
+   ],
+   "client_statuses": [
+    200
+   ],
+   "up_error": false
+  }
+ },
+ {
+  "seq": 93,
+  "family": "upgrade",
+  "name": "upgrade in 1.0",
+  "label": "clean",
+  "detail": {
+   "ref": "accept:1",
+   "forwarded": 1,
+   "up_targets": [
+    "/"
+   ],
+   "up_bodies": [
+    0
+   ],
+   "client_statuses": [
+    200
+   ],
+   "up_error": false
+  }
+ },
+ {
+  "seq": 94,
+  "family": "smuggle",
+  "name": "cl te space name",
+  "label": "reject",
+  "detail": {
+   "ref": "reject",
+   "forwarded": 0,
+   "up_targets": [],
+   "up_bodies": [],
+   "client_statuses": [
+    400
+   ],
+   "up_error": false
+  }
+ },
+ {
+  "seq": 95,
+  "family": "smuggle",
+  "name": "double content length body",
+  "label": "reject",
+  "detail": {
+   "ref": "reject",
+   "forwarded": 0,
+   "up_targets": [],
+   "up_bodies": [],
+   "client_statuses": [
+    400
+   ],
+   "up_error": false
+  }
+ },
+ {
+  "seq": 96,
+  "family": "smuggle",
+  "name": "underscore te header",
+  "label": "clean",
+  "detail": {
+   "ref": "accept:1",
+   "forwarded": 1,
+   "up_targets": [
+    "/"
+   ],
+   "up_bodies": [
+    3
+   ],
+   "client_statuses": [
+    200
+   ],
+   "up_error": false
+  }
+ },
+ {
+  "seq": 97,
+  "family": "ctrl_sweep",
+  "name": "value byte 01",
+  "label": "reject",
+  "detail": {
+   "ref": "reject",
+   "forwarded": 0,
+   "up_targets": [],
+   "up_bodies": [],
+   "client_statuses": [
+    400
+   ],
+   "up_error": true
+  }
+ },
+ {
+  "seq": 98,
+  "family": "ctrl_sweep",
+  "name": "value byte 02",
+  "label": "reject",
+  "detail": {
+   "ref": "reject",
+   "forwarded": 0,
+   "up_targets": [],
+   "up_bodies": [],
+   "client_statuses": [
+    400
+   ],
+   "up_error": true
+  }
+ },
+ {
+  "seq": 99,
+  "family": "ctrl_sweep",
+  "name": "value byte 03",
+  "label": "reject",
+  "detail": {
+   "ref": "reject",
+   "forwarded": 0,
+   "up_targets": [],
+   "up_bodies": [],
+   "client_statuses": [
+    400
+   ],
+   "up_error": true
+  }
+ },
+ {
+  "seq": 100,
+  "family": "ctrl_sweep",
+  "name": "value byte 04",
+  "label": "reject",
+  "detail": {
+   "ref": "reject",
+   "forwarded": 0,
+   "up_targets": [],
+   "up_bodies": [],
+   "client_statuses": [
+    400
+   ],
+   "up_error": true
+  }
+ },
+ {
+  "seq": 101,
+  "family": "ctrl_sweep",
+  "name": "value byte 05",
+  "label": "reject",
+  "detail": {
+   "ref": "reject",
+   "forwarded": 0,
+   "up_targets": [],
+   "up_bodies": [],
+   "client_statuses": [
+    400
+   ],
+   "up_error": true
+  }
+ },
+ {
+  "seq": 102,
+  "family": "ctrl_sweep",
+  "name": "value byte 06",
+  "label": "reject",
+  "detail": {
+   "ref": "reject",
+   "forwarded": 0,
+   "up_targets": [],
+   "up_bodies": [],
+   "client_statuses": [
+    400
+   ],
+   "up_error": true
+  }
+ },
+ {
+  "seq": 103,
+  "family": "ctrl_sweep",
+  "name": "value byte 07",
+  "label": "reject",
+  "detail": {
+   "ref": "reject",
+   "forwarded": 0,
+   "up_targets": [],
+   "up_bodies": [],
+   "client_statuses": [
+    400
+   ],
+   "up_error": true
+  }
+ },
+ {
+  "seq": 104,
+  "family": "ctrl_sweep",
+  "name": "value byte 08",
+  "label": "reject",
+  "detail": {
+   "ref": "reject",
+   "forwarded": 0,
+   "up_targets": [],
+   "up_bodies": [],
+   "client_statuses": [
+    400
+   ],
+   "up_error": true
+  }
+ },
+ {
+  "seq": 105,
+  "family": "ctrl_sweep",
+  "name": "value byte 09",
+  "label": "clean",
+  "detail": {
+   "ref": "accept:1",
+   "forwarded": 1,
+   "up_targets": [
+    "/"
+   ],
+   "up_bodies": [
+    0
+   ],
+   "client_statuses": [
+    200
+   ],
+   "up_error": false
+  }
+ },
+ {
+  "seq": 106,
+  "family": "ctrl_sweep",
+  "name": "value byte 0a",
+  "label": "fwd_reject",
+  "detail": {
+   "ref": "reject",
+   "forwarded": 1,
+   "up_targets": [
+    "/"
+   ],
+   "up_bodies": [
+    0
+   ],
+   "client_statuses": [
+    200
+   ],
+   "up_error": false
+  }
+ },
+ {
+  "seq": 107,
+  "family": "ctrl_sweep",
+  "name": "value byte 0b",
+  "label": "reject",
+  "detail": {
+   "ref": "reject",
+   "forwarded": 0,
+   "up_targets": [],
+   "up_bodies": [],
+   "client_statuses": [
+    400
+   ],
+   "up_error": true
+  }
+ },
+ {
+  "seq": 108,
+  "family": "ctrl_sweep",
+  "name": "value byte 0c",
+  "label": "reject",
+  "detail": {
+   "ref": "reject",
+   "forwarded": 0,
+   "up_targets": [],
+   "up_bodies": [],
+   "client_statuses": [
+    400
+   ],
+   "up_error": true
+  }
+ },
+ {
+  "seq": 109,
+  "family": "ctrl_sweep",
+  "name": "value byte 0d",
+  "label": "reject",
+  "detail": {
+   "ref": "reject",
+   "forwarded": 0,
+   "up_targets": [],
+   "up_bodies": [],
+   "client_statuses": [
+    400
+   ],
+   "up_error": false
+  }
+ },
+ {
+  "seq": 110,
+  "family": "ctrl_sweep",
+  "name": "value byte 0e",
+  "label": "reject",
+  "detail": {
+   "ref": "reject",
+   "forwarded": 0,
+   "up_targets": [],
+   "up_bodies": [],
+   "client_statuses": [
+    400
+   ],
+   "up_error": true
+  }
+ },
+ {
+  "seq": 111,
+  "family": "ctrl_sweep",
+  "name": "value byte 0f",
+  "label": "reject",
+  "detail": {
+   "ref": "reject",
+   "forwarded": 0,
+   "up_targets": [],
+   "up_bodies": [],
+   "client_statuses": [
+    400
+   ],
+   "up_error": true
+  }
+ },
+ {
+  "seq": 112,
+  "family": "ctrl_sweep",
+  "name": "value byte 10",
+  "label": "reject",
+  "detail": {
+   "ref": "reject",
+   "forwarded": 0,
+   "up_targets": [],
+   "up_bodies": [],
+   "client_statuses": [
+    400
+   ],
+   "up_error": true
+  }
+ },
+ {
+  "seq": 113,
+  "family": "ctrl_sweep",
+  "name": "value byte 11",
+  "label": "reject",
+  "detail": {
+   "ref": "reject",
+   "forwarded": 0,
+   "up_targets": [],
+   "up_bodies": [],
+   "client_statuses": [
+    400
+   ],
+   "up_error": true
+  }
+ },
+ {
+  "seq": 114,
+  "family": "ctrl_sweep",
+  "name": "value byte 12",
+  "label": "reject",
+  "detail": {
+   "ref": "reject",
+   "forwarded": 0,
+   "up_targets": [],
+   "up_bodies": [],
+   "client_statuses": [
+    400
+   ],
+   "up_error": true
+  }
+ },
+ {
+  "seq": 115,
+  "family": "ctrl_sweep",
+  "name": "value byte 13",
+  "label": "reject",
+  "detail": {
+   "ref": "reject",
+   "forwarded": 0,
+   "up_targets": [],
+   "up_bodies": [],
+   "client_statuses": [
+    400
+   ],
+   "up_error": true
+  }
+ },
+ {
+  "seq": 116,
+  "family": "ctrl_sweep",
+  "name": "value byte 14",
+  "label": "reject",
+  "detail": {
+   "ref": "reject",
+   "forwarded": 0,
+   "up_targets": [],
+   "up_bodies": [],
+   "client_statuses": [
+    400
+   ],
+   "up_error": true
+  }
+ },
+ {
+  "seq": 117,
+  "family": "ctrl_sweep",
+  "name": "value byte 15",
+  "label": "reject",
+  "detail": {
+   "ref": "reject",
+   "forwarded": 0,
+   "up_targets": [],
+   "up_bodies": [],
+   "client_statuses": [
+    400
+   ],
+   "up_error": true
+  }
+ },
+ {
+  "seq": 118,
+  "family": "ctrl_sweep",
+  "name": "value byte 16",
+  "label": "reject",
+  "detail": {
+   "ref": "reject",
+   "forwarded": 0,
+   "up_targets": [],
+   "up_bodies": [],
+   "client_statuses": [
+    400
+   ],
+   "up_error": true
+  }
+ },
+ {
+  "seq": 119,
+  "family": "ctrl_sweep",
+  "name": "value byte 17",
+  "label": "reject",
+  "detail": {
+   "ref": "reject",
+   "forwarded": 0,
+   "up_targets": [],
+   "up_bodies": [],
+   "client_statuses": [
+    400
+   ],
+   "up_error": true
+  }
+ },
+ {
+  "seq": 120,
+  "family": "ctrl_sweep",
+  "name": "value byte 18",
+  "label": "reject",
+  "detail": {
+   "ref": "reject",
+   "forwarded": 0,
+   "up_targets": [],
+   "up_bodies": [],
+   "client_statuses": [
+    400
+   ],
+   "up_error": true
+  }
+ },
+ {
+  "seq": 121,
+  "family": "ctrl_sweep",
+  "name": "value byte 19",
+  "label": "reject",
+  "detail": {
+   "ref": "reject",
+   "forwarded": 0,
+   "up_targets": [],
+   "up_bodies": [],
+   "client_statuses": [
+    400
+   ],
+   "up_error": true
+  }
+ },
+ {
+  "seq": 122,
+  "family": "ctrl_sweep",
+  "name": "value byte 1a",
+  "label": "reject",
+  "detail": {
+   "ref": "reject",
+   "forwarded": 0,
+   "up_targets": [],
+   "up_bodies": [],
+   "client_statuses": [
+    400
+   ],
+   "up_error": true
+  }
+ },
+ {
+  "seq": 123,
+  "family": "ctrl_sweep",
+  "name": "value byte 1b",
+  "label": "reject",
+  "detail": {
+   "ref": "reject",
+   "forwarded": 0,
+   "up_targets": [],
+   "up_bodies": [],
+   "client_statuses": [
+    400
+   ],
+   "up_error": true
+  }
+ },
+ {
+  "seq": 124,
+  "family": "ctrl_sweep",
+  "name": "value byte 1c",
+  "label": "reject",
+  "detail": {
+   "ref": "reject",
+   "forwarded": 0,
+   "up_targets": [],
+   "up_bodies": [],
+   "client_statuses": [
+    400
+   ],
+   "up_error": true
+  }
+ },
+ {
+  "seq": 125,
+  "family": "ctrl_sweep",
+  "name": "value byte 1d",
+  "label": "reject",
+  "detail": {
+   "ref": "reject",
+   "forwarded": 0,
+   "up_targets": [],
+   "up_bodies": [],
+   "client_statuses": [
+    400
+   ],
+   "up_error": true
+  }
+ },
+ {
+  "seq": 126,
+  "family": "ctrl_sweep",
+  "name": "value byte 1e",
+  "label": "reject",
+  "detail": {
+   "ref": "reject",
+   "forwarded": 0,
+   "up_targets": [],
+   "up_bodies": [],
+   "client_statuses": [
+    400
+   ],
+   "up_error": true
+  }
+ },
+ {
+  "seq": 127,
+  "family": "ctrl_sweep",
+  "name": "value byte 1f",
+  "label": "reject",
+  "detail": {
+   "ref": "reject",
+   "forwarded": 0,
+   "up_targets": [],
+   "up_bodies": [],
+   "client_statuses": [
+    400
+   ],
+   "up_error": true
+  }
+ },
+ {
+  "seq": 128,
+  "family": "ctrl_sweep",
+  "name": "value byte 7f",
+  "label": "reject",
+  "detail": {
+   "ref": "reject",
+   "forwarded": 0,
+   "up_targets": [],
+   "up_bodies": [],
+   "client_statuses": [
+    400
+   ],
+   "up_error": true
+  }
+ },
+ {
+  "seq": 129,
+  "family": "ctrl_sweep",
+  "name": "target byte 00",
+  "label": "reject",
+  "detail": {
+   "ref": "reject",
+   "forwarded": 0,
+   "up_targets": [],
+   "up_bodies": [],
+   "client_statuses": [
+    400
+   ],
+   "up_error": false
+  }
+ },
+ {
+  "seq": 130,
+  "family": "ctrl_sweep",
+  "name": "target byte 01",
+  "label": "reject",
+  "detail": {
+   "ref": "reject",
+   "forwarded": 0,
+   "up_targets": [],
+   "up_bodies": [],
+   "client_statuses": [
+    400
+   ],
+   "up_error": false
+  }
+ },
+ {
+  "seq": 131,
+  "family": "ctrl_sweep",
+  "name": "target byte 02",
+  "label": "reject",
+  "detail": {
+   "ref": "reject",
+   "forwarded": 0,
+   "up_targets": [],
+   "up_bodies": [],
+   "client_statuses": [
+    400
+   ],
+   "up_error": false
+  }
+ },
+ {
+  "seq": 132,
+  "family": "ctrl_sweep",
+  "name": "target byte 03",
+  "label": "reject",
+  "detail": {
+   "ref": "reject",
+   "forwarded": 0,
+   "up_targets": [],
+   "up_bodies": [],
+   "client_statuses": [
+    400
+   ],
+   "up_error": false
+  }
+ },
+ {
+  "seq": 133,
+  "family": "ctrl_sweep",
+  "name": "target byte 04",
+  "label": "reject",
+  "detail": {
+   "ref": "reject",
+   "forwarded": 0,
+   "up_targets": [],
+   "up_bodies": [],
+   "client_statuses": [
+    400
+   ],
+   "up_error": false
+  }
+ },
+ {
+  "seq": 134,
+  "family": "ctrl_sweep",
+  "name": "target byte 05",
+  "label": "reject",
+  "detail": {
+   "ref": "reject",
+   "forwarded": 0,
+   "up_targets": [],
+   "up_bodies": [],
+   "client_statuses": [
+    400
+   ],
+   "up_error": false
+  }
+ },
+ {
+  "seq": 135,
+  "family": "ctrl_sweep",
+  "name": "target byte 06",
+  "label": "reject",
+  "detail": {
+   "ref": "reject",
+   "forwarded": 0,
+   "up_targets": [],
+   "up_bodies": [],
+   "client_statuses": [
+    400
+   ],
+   "up_error": false
+  }
+ },
+ {
+  "seq": 136,
+  "family": "ctrl_sweep",
+  "name": "target byte 07",
+  "label": "reject",
+  "detail": {
+   "ref": "reject",
+   "forwarded": 0,
+   "up_targets": [],
+   "up_bodies": [],
+   "client_statuses": [
+    400
+   ],
+   "up_error": false
+  }
+ },
+ {
+  "seq": 137,
+  "family": "ctrl_sweep",
+  "name": "target byte 08",
+  "label": "reject",
+  "detail": {
+   "ref": "reject",
+   "forwarded": 0,
+   "up_targets": [],
+   "up_bodies": [],
+   "client_statuses": [
+    400
+   ],
+   "up_error": false
+  }
+ },
+ {
+  "seq": 138,
+  "family": "ctrl_sweep",
+  "name": "target byte 09",
+  "label": "reject",
+  "detail": {
+   "ref": "reject",
+   "forwarded": 0,
+   "up_targets": [],
+   "up_bodies": [],
+   "client_statuses": [
+    400
+   ],
+   "up_error": false
+  }
+ },
+ {
+  "seq": 139,
+  "family": "ctrl_sweep",
+  "name": "target byte 0a",
+  "label": "fwd_reject",
+  "detail": {
+   "ref": "reject",
+   "forwarded": 1,
+   "up_targets": [
+    "/a"
+   ],
+   "up_bodies": [
+    0
+   ],
+   "client_statuses": [],
+   "up_error": false
+  }
+ },
+ {
+  "seq": 140,
+  "family": "ctrl_sweep",
+  "name": "target byte 0b",
+  "label": "reject",
+  "detail": {
+   "ref": "reject",
+   "forwarded": 0,
+   "up_targets": [],
+   "up_bodies": [],
+   "client_statuses": [
+    400
+   ],
+   "up_error": false
+  }
+ },
+ {
+  "seq": 141,
+  "family": "ctrl_sweep",
+  "name": "target byte 0c",
+  "label": "reject",
+  "detail": {
+   "ref": "reject",
+   "forwarded": 0,
+   "up_targets": [],
+   "up_bodies": [],
+   "client_statuses": [
+    400
+   ],
+   "up_error": false
+  }
+ },
+ {
+  "seq": 142,
+  "family": "ctrl_sweep",
+  "name": "target byte 0d",
+  "label": "reject",
+  "detail": {
+   "ref": "reject",
+   "forwarded": 0,
+   "up_targets": [],
+   "up_bodies": [],
+   "client_statuses": [
+    400
+   ],
+   "up_error": false
+  }
+ },
+ {
+  "seq": 143,
+  "family": "ctrl_sweep",
+  "name": "target byte 0e",
+  "label": "reject",
+  "detail": {
+   "ref": "reject",
+   "forwarded": 0,
+   "up_targets": [],
+   "up_bodies": [],
+   "client_statuses": [
+    400
+   ],
+   "up_error": false
+  }
+ },
+ {
+  "seq": 144,
+  "family": "ctrl_sweep",
+  "name": "target byte 0f",
+  "label": "reject",
+  "detail": {
+   "ref": "reject",
+   "forwarded": 0,
+   "up_targets": [],
+   "up_bodies": [],
+   "client_statuses": [
+    400
+   ],
+   "up_error": false
+  }
+ },
+ {
+  "seq": 145,
+  "family": "ctrl_sweep",
+  "name": "target byte 10",
+  "label": "reject",
+  "detail": {
+   "ref": "reject",
+   "forwarded": 0,
+   "up_targets": [],
+   "up_bodies": [],
+   "client_statuses": [
+    400
+   ],
+   "up_error": false
+  }
+ },
+ {
+  "seq": 146,
+  "family": "ctrl_sweep",
+  "name": "target byte 11",
+  "label": "reject",
+  "detail": {
+   "ref": "reject",
+   "forwarded": 0,
+   "up_targets": [],
+   "up_bodies": [],
+   "client_statuses": [
+    400
+   ],
+   "up_error": false
+  }
+ },
+ {
+  "seq": 147,
+  "family": "ctrl_sweep",
+  "name": "target byte 12",
+  "label": "reject",
+  "detail": {
+   "ref": "reject",
+   "forwarded": 0,
+   "up_targets": [],
+   "up_bodies": [],
+   "client_statuses": [
+    400
+   ],
+   "up_error": false
+  }
+ },
+ {
+  "seq": 148,
+  "family": "ctrl_sweep",
+  "name": "target byte 13",
+  "label": "reject",
+  "detail": {
+   "ref": "reject",
+   "forwarded": 0,
+   "up_targets": [],
+   "up_bodies": [],
+   "client_statuses": [
+    400
+   ],
+   "up_error": false
+  }
+ },
+ {
+  "seq": 149,
+  "family": "ctrl_sweep",
+  "name": "target byte 14",
+  "label": "reject",
+  "detail": {
+   "ref": "reject",
+   "forwarded": 0,
+   "up_targets": [],
+   "up_bodies": [],
+   "client_statuses": [
+    400
+   ],
+   "up_error": false
+  }
+ },
+ {
+  "seq": 150,
+  "family": "ctrl_sweep",
+  "name": "target byte 15",
+  "label": "reject",
+  "detail": {
+   "ref": "reject",
+   "forwarded": 0,
+   "up_targets": [],
+   "up_bodies": [],
+   "client_statuses": [
+    400
+   ],
+   "up_error": false
+  }
+ },
+ {
+  "seq": 151,
+  "family": "ctrl_sweep",
+  "name": "target byte 16",
+  "label": "reject",
+  "detail": {
+   "ref": "reject",
+   "forwarded": 0,
+   "up_targets": [],
+   "up_bodies": [],
+   "client_statuses": [
+    400
+   ],
+   "up_error": false
+  }
+ },
+ {
+  "seq": 152,
+  "family": "ctrl_sweep",
+  "name": "target byte 17",
+  "label": "reject",
+  "detail": {
+   "ref": "reject",
+   "forwarded": 0,
+   "up_targets": [],
+   "up_bodies": [],
+   "client_statuses": [
+    400
+   ],
+   "up_error": false
+  }
+ },
+ {
+  "seq": 153,
+  "family": "ctrl_sweep",
+  "name": "target byte 18",
+  "label": "reject",
+  "detail": {
+   "ref": "reject",
+   "forwarded": 0,
+   "up_targets": [],
+   "up_bodies": [],
+   "client_statuses": [
+    400
+   ],
+   "up_error": false
+  }
+ },
+ {
+  "seq": 154,
+  "family": "ctrl_sweep",
+  "name": "target byte 19",
+  "label": "reject",
+  "detail": {
+   "ref": "reject",
+   "forwarded": 0,
+   "up_targets": [],
+   "up_bodies": [],
+   "client_statuses": [
+    400
+   ],
+   "up_error": false
+  }
+ },
+ {
+  "seq": 155,
+  "family": "ctrl_sweep",
+  "name": "target byte 1a",
+  "label": "reject",
+  "detail": {
+   "ref": "reject",
+   "forwarded": 0,
+   "up_targets": [],
+   "up_bodies": [],
+   "client_statuses": [
+    400
+   ],
+   "up_error": false
+  }
+ },
+ {
+  "seq": 156,
+  "family": "ctrl_sweep",
+  "name": "target byte 1b",
+  "label": "reject",
+  "detail": {
+   "ref": "reject",
+   "forwarded": 0,
+   "up_targets": [],
+   "up_bodies": [],
+   "client_statuses": [
+    400
+   ],
+   "up_error": false
+  }
+ },
+ {
+  "seq": 157,
+  "family": "ctrl_sweep",
+  "name": "target byte 1c",
+  "label": "reject",
+  "detail": {
+   "ref": "reject",
+   "forwarded": 0,
+   "up_targets": [],
+   "up_bodies": [],
+   "client_statuses": [
+    400
+   ],
+   "up_error": false
+  }
+ },
+ {
+  "seq": 158,
+  "family": "ctrl_sweep",
+  "name": "target byte 1d",
+  "label": "reject",
+  "detail": {
+   "ref": "reject",
+   "forwarded": 0,
+   "up_targets": [],
+   "up_bodies": [],
+   "client_statuses": [
+    400
+   ],
+   "up_error": false
+  }
+ },
+ {
+  "seq": 159,
+  "family": "ctrl_sweep",
+  "name": "target byte 1e",
+  "label": "reject",
+  "detail": {
+   "ref": "reject",
+   "forwarded": 0,
+   "up_targets": [],
+   "up_bodies": [],
+   "client_statuses": [
+    400
+   ],
+   "up_error": false
+  }
+ },
+ {
+  "seq": 160,
+  "family": "ctrl_sweep",
+  "name": "target byte 1f",
+  "label": "reject",
+  "detail": {
+   "ref": "reject",
+   "forwarded": 0,
+   "up_targets": [],
+   "up_bodies": [],
+   "client_statuses": [
+    400
+   ],
+   "up_error": false
+  }
+ },
+ {
+  "seq": 161,
+  "family": "ctrl_sweep",
+  "name": "target byte 20",
+  "label": "reject",
+  "detail": {
+   "ref": "reject",
+   "forwarded": 0,
+   "up_targets": [],
+   "up_bodies": [],
+   "client_statuses": [
+    400
+   ],
+   "up_error": false
+  }
+ },
+ {
+  "seq": 162,
+  "family": "ctrl_sweep",
+  "name": "target byte 7f",
+  "label": "reject",
+  "detail": {
+   "ref": "reject",
+   "forwarded": 0,
+   "up_targets": [],
+   "up_bodies": [],
+   "client_statuses": [
+    400
+   ],
+   "up_error": false
+  }
+ },
+ {
+  "seq": 163,
+  "family": "cl_sweep",
+  "name": "space inside",
+  "label": "reject",
+  "detail": {
+   "ref": "reject",
+   "forwarded": 0,
+   "up_targets": [],
+   "up_bodies": [],
+   "client_statuses": [
+    400
+   ],
+   "up_error": false
+  }
+ },
+ {
+  "seq": 164,
+  "family": "cl_sweep",
+  "name": "comma space",
+  "label": "reject",
+  "detail": {
+   "ref": "reject",
+   "forwarded": 0,
+   "up_targets": [],
+   "up_bodies": [],
+   "client_statuses": [
+    400
+   ],
+   "up_error": false
+  }
+ },
+ {
+  "seq": 165,
+  "family": "cl_sweep",
+  "name": "comma tight",
+  "label": "reject",
+  "detail": {
+   "ref": "reject",
+   "forwarded": 0,
+   "up_targets": [],
+   "up_bodies": [],
+   "client_statuses": [
+    400
+   ],
+   "up_error": false
+  }
+ },
+ {
+  "seq": 166,
+  "family": "cl_sweep",
+  "name": "comma equal",
+  "label": "front_stricter",
+  "detail": {
+   "ref": "accept:1",
+   "forwarded": 0,
+   "up_targets": [],
+   "up_bodies": [],
+   "client_statuses": [
+    400
+   ],
+   "up_error": false
+  }
+ },
+ {
+  "seq": 167,
+  "family": "cl_sweep",
+  "name": "trailing comma",
+  "label": "reject",
+  "detail": {
+   "ref": "reject",
+   "forwarded": 0,
+   "up_targets": [],
+   "up_bodies": [],
+   "client_statuses": [
+    400
+   ],
+   "up_error": false
+  }
+ },
+ {
+  "seq": 168,
+  "family": "cl_sweep",
+  "name": "leading comma",
+  "label": "reject",
+  "detail": {
+   "ref": "reject",
+   "forwarded": 0,
+   "up_targets": [],
+   "up_bodies": [],
+   "client_statuses": [
+    400
+   ],
+   "up_error": false
+  }
+ },
+ {
+  "seq": 169,
+  "family": "cl_sweep",
+  "name": "dot",
+  "label": "reject",
+  "detail": {
+   "ref": "reject",
+   "forwarded": 0,
+   "up_targets": [],
+   "up_bodies": [],
+   "client_statuses": [
+    400
+   ],
+   "up_error": false
+  }
+ },
+ {
+  "seq": 170,
+  "family": "cl_sweep",
+  "name": "hex prefix",
+  "label": "reject",
+  "detail": {
+   "ref": "reject",
+   "forwarded": 0,
+   "up_targets": [],
+   "up_bodies": [],
+   "client_statuses": [
+    400
+   ],
+   "up_error": false
+  }
+ },
+ {
+  "seq": 171,
+  "family": "cl_sweep",
+  "name": "plus",
+  "label": "reject",
+  "detail": {
+   "ref": "reject",
+   "forwarded": 0,
+   "up_targets": [],
+   "up_bodies": [],
+   "client_statuses": [
+    400
+   ],
+   "up_error": false
+  }
+ },
+ {
+  "seq": 172,
+  "family": "cl_sweep",
+  "name": "space plus",
+  "label": "reject",
+  "detail": {
+   "ref": "reject",
+   "forwarded": 0,
+   "up_targets": [],
+   "up_bodies": [],
+   "client_statuses": [
+    400
+   ],
+   "up_error": false
+  }
+ },
+ {
+  "seq": 173,
+  "family": "cl_sweep",
+  "name": "tab",
+  "label": "front_stricter",
+  "detail": {
+   "ref": "accept:1",
+   "forwarded": 0,
+   "up_targets": [],
+   "up_bodies": [],
+   "client_statuses": [
+    400
+   ],
+   "up_error": false
+  }
+ },
+ {
+  "seq": 174,
+  "family": "cl_sweep",
+  "name": "newline pad",
+  "label": "clean",
+  "detail": {
+   "ref": "accept:1",
+   "forwarded": 1,
+   "up_targets": [
+    "/"
+   ],
+   "up_bodies": [
+    5
+   ],
+   "client_statuses": [
+    200
+   ],
+   "up_error": false
+  }
+ },
+ {
+  "seq": 175,
+  "family": "cl_sweep",
+  "name": "unicode digit",
+  "label": "reject",
+  "detail": {
+   "ref": "reject",
+   "forwarded": 0,
+   "up_targets": [],
+   "up_bodies": [],
+   "client_statuses": [
+    400
+   ],
+   "up_error": false
+  }
+ },
+ {
+  "seq": 176,
+  "family": "cl_sweep",
+  "name": "empty",
+  "label": "reject",
+  "detail": {
+   "ref": "reject",
+   "forwarded": 0,
+   "up_targets": [],
+   "up_bodies": [],
+   "client_statuses": [
+    400
+   ],
+   "up_error": false
+  }
+ },
+ {
+  "seq": 177,
+  "family": "cl_sweep",
+  "name": "just spaces",
+  "label": "reject",
+  "detail": {
+   "ref": "reject",
+   "forwarded": 0,
+   "up_targets": [],
+   "up_bodies": [],
+   "client_statuses": [
+    400
+   ],
+   "up_error": false
+  }
+ },
+ {
+  "seq": 178,
+  "family": "cl_sweep",
+  "name": "neg zero",
+  "label": "reject",
+  "detail": {
+   "ref": "reject",
+   "forwarded": 0,
+   "up_targets": [],
+   "up_bodies": [],
+   "client_statuses": [
+    400
+   ],
+   "up_error": false
+  }
+ },
+ {
+  "seq": 179,
+  "family": "cl_sweep",
+  "name": "big",
+  "label": "reject",
+  "detail": {
+   "ref": "reject",
+   "forwarded": 0,
+   "up_targets": [],
+   "up_bodies": [],
+   "client_statuses": [
+    413
+   ],
+   "up_error": false
+  }
+ },
+ {
+  "seq": 180,
+  "family": "cl_sweep",
+  "name": "overflow64",
+  "label": "reject",
+  "detail": {
+   "ref": "reject",
+   "forwarded": 0,
+   "up_targets": [],
+   "up_bodies": [],
+   "client_statuses": [
+    400
+   ],
+   "up_error": false
+  }
+ },
+ {
+  "seq": 181,
+  "family": "te_sweep",
+  "name": "chunked",
+  "label": "clean",
+  "detail": {
+   "ref": "accept:1",
+   "forwarded": 1,
+   "up_targets": [
+    "/"
+   ],
+   "up_bodies": [
+    0
+   ],
+   "client_statuses": [
+    200
+   ],
+   "up_error": false
+  }
+ },
+ {
+  "seq": 182,
+  "family": "te_sweep",
+  "name": "CHUNKED",
+  "label": "clean",
+  "detail": {
+   "ref": "accept:1",
+   "forwarded": 1,
+   "up_targets": [
+    "/"
+   ],
+   "up_bodies": [
+    0
+   ],
+   "client_statuses": [
+    200
+   ],
+   "up_error": false
+  }
+ },
+ {
+  "seq": 183,
+  "family": "te_sweep",
+  "name": "Chunked",
+  "label": "clean",
+  "detail": {
+   "ref": "accept:1",
+   "forwarded": 1,
+   "up_targets": [
+    "/"
+   ],
+   "up_bodies": [
+    0
+   ],
+   "client_statuses": [
+    200
+   ],
+   "up_error": false
+  }
+ },
+ {
+  "seq": 184,
+  "family": "te_sweep",
+  "name": "chunked sp",
+  "label": "clean",
+  "detail": {
+   "ref": "accept:1",
+   "forwarded": 1,
+   "up_targets": [
+    "/"
+   ],
+   "up_bodies": [
+    0
+   ],
+   "client_statuses": [
+    200
+   ],
+   "up_error": false
+  }
+ },
+ {
+  "seq": 185,
+  "family": "te_sweep",
+  "name": "sp chunked",
+  "label": "clean",
+  "detail": {
+   "ref": "accept:1",
+   "forwarded": 1,
+   "up_targets": [
+    "/"
+   ],
+   "up_bodies": [
+    0
+   ],
+   "client_statuses": [
+    200
+   ],
+   "up_error": false
+  }
+ },
+ {
+  "seq": 186,
+  "family": "te_sweep",
+  "name": "chunkedx",
+  "label": "reject",
+  "detail": {
+   "ref": "reject",
+   "forwarded": 0,
+   "up_targets": [],
+   "up_bodies": [],
+   "client_statuses": [
+    501
+   ],
+   "up_error": false
+  }
+ },
+ {
+  "seq": 187,
+  "family": "te_sweep",
+  "name": "xchunked",
+  "label": "reject",
+  "detail": {
+   "ref": "reject",
+   "forwarded": 0,
+   "up_targets": [],
+   "up_bodies": [],
+   "client_statuses": [
+    501
+   ],
+   "up_error": false
+  }
+ },
+ {
+  "seq": 188,
+  "family": "te_sweep",
+  "name": "chunk",
+  "label": "reject",
+  "detail": {
+   "ref": "reject",
+   "forwarded": 0,
+   "up_targets": [],
+   "up_bodies": [],
+   "client_statuses": [
+    501
+   ],
+   "up_error": false
+  }
+ },
+ {
+  "seq": 189,
+  "family": "te_sweep",
+  "name": "chunked comma",
+  "label": "reject",
+  "detail": {
+   "ref": "reject",
+   "forwarded": 0,
+   "up_targets": [],
+   "up_bodies": [],
+   "client_statuses": [
+    501
+   ],
+   "up_error": false
+  }
+ },
+ {
+  "seq": 190,
+  "family": "te_sweep",
+  "name": "comma chunked",
+  "label": "reject",
+  "detail": {
+   "ref": "reject",
+   "forwarded": 0,
+   "up_targets": [],
+   "up_bodies": [],
+   "client_statuses": [
+    501
+   ],
+   "up_error": false
+  }
+ },
+ {
+  "seq": 191,
+  "family": "te_sweep",
+  "name": "chunked id",
+  "label": "reject",
+  "detail": {
+   "ref": "reject",
+   "forwarded": 0,
+   "up_targets": [],
+   "up_bodies": [],
+   "client_statuses": [
+    501
+   ],
+   "up_error": false
+  }
+ },
+ {
+  "seq": 192,
+  "family": "te_sweep",
+  "name": "id chunked",
+  "label": "reject",
+  "detail": {
+   "ref": "reject",
+   "forwarded": 0,
+   "up_targets": [],
+   "up_bodies": [],
+   "client_statuses": [
+    501
+   ],
+   "up_error": false
+  }
+ },
+ {
+  "seq": 193,
+  "family": "te_sweep",
+  "name": "gzip chunked",
+  "label": "reject",
+  "detail": {
+   "ref": "reject",
+   "forwarded": 0,
+   "up_targets": [],
+   "up_bodies": [],
+   "client_statuses": [
+    501
+   ],
+   "up_error": false
+  }
+ },
+ {
+  "seq": 194,
+  "family": "te_sweep",
+  "name": "chunked gzip",
+  "label": "reject",
+  "detail": {
+   "ref": "reject",
+   "forwarded": 0,
+   "up_targets": [],
+   "up_bodies": [],
+   "client_statuses": [
+    501
+   ],
+   "up_error": false
+  }
+ },
+ {
+  "seq": 195,
+  "family": "te_sweep",
+  "name": "chunked cr",
+  "label": "fwd_reject",
+  "detail": {
+   "ref": "reject",
+   "forwarded": 1,
+   "up_targets": [
+    "/"
+   ],
+   "up_bodies": [
+    0
+   ],
+   "client_statuses": [
+    200
+   ],
+   "up_error": false
+  }
+ },
+ {
+  "seq": 196,
+  "family": "te_sweep",
+  "name": "chunked tab",
+  "label": "front_stricter",
+  "detail": {
+   "ref": "accept:1",
+   "forwarded": 0,
+   "up_targets": [],
+   "up_bodies": [],
+   "client_statuses": [
+    501
+   ],
+   "up_error": false
+  }
+ },
+ {
+  "seq": 197,
+  "family": "te_sweep",
+  "name": "chunked null",
+  "label": "reject",
+  "detail": {
+   "ref": "reject",
+   "forwarded": 0,
+   "up_targets": [],
+   "up_bodies": [],
+   "client_statuses": [
+    400
+   ],
+   "up_error": false
+  }
+ },
+ {
+  "seq": 198,
+  "family": "te_sweep",
+  "name": "double",
+  "label": "reject",
+  "detail": {
+   "ref": "reject",
+   "forwarded": 0,
+   "up_targets": [],
+   "up_bodies": [],
+   "client_statuses": [
+    501
+   ],
+   "up_error": false
+  }
+ },
+ {
+  "seq": 199,
+  "family": "te_sweep",
+  "name": "quoted",
+  "label": "reject",
+  "detail": {
+   "ref": "reject",
+   "forwarded": 0,
+   "up_targets": [],
+   "up_bodies": [],
+   "client_statuses": [
+    501
+   ],
+   "up_error": false
+  }
+ },
+ {
+  "seq": 200,
+  "family": "te_sweep",
+  "name": "chunked semi",
+  "label": "reject",
+  "detail": {
+   "ref": "reject",
+   "forwarded": 0,
+   "up_targets": [],
+   "up_bodies": [],
+   "client_statuses": [
+    501
+   ],
+   "up_error": false
+  }
+ },
+ {
+  "seq": 201,
+  "family": "pipe_sweep",
+  "name": "depth 2",
+  "label": "clean",
+  "detail": {
+   "ref": "accept:2",
+   "forwarded": 2,
+   "up_targets": [
+    "/0",
+    "/1"
+   ],
+   "up_bodies": [
+    0,
+    0
+   ],
+   "client_statuses": [
+    200,
+    200
+   ],
+   "up_error": false
+  }
+ },
+ {
+  "seq": 202,
+  "family": "pipe_sweep",
+  "name": "depth 4",
+  "label": "clean",
+  "detail": {
+   "ref": "accept:4",
+   "forwarded": 4,
+   "up_targets": [
+    "/0",
+    "/1",
+    "/2",
+    "/3"
+   ],
+   "up_bodies": [
+    0,
+    0,
+    0,
+    0
+   ],
+   "client_statuses": [
+    200,
+    200,
+    200,
+    200
+   ],
+   "up_error": false
+  }
+ },
+ {
+  "seq": 203,
+  "family": "pipe_sweep",
+  "name": "depth 8",
+  "label": "clean",
+  "detail": {
+   "ref": "accept:8",
+   "forwarded": 8,
+   "up_targets": [
+    "/0",
+    "/1",
+    "/2",
+    "/3",
+    "/4",
+    "/5",
+    "/6",
+    "/7"
+   ],
+   "up_bodies": [
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0
+   ],
+   "client_statuses": [
+    200,
+    200,
+    200,
+    200,
+    200,
+    200,
+    200,
+    200
+   ],
+   "up_error": false
+  }
+ },
+ {
+  "seq": 204,
+  "family": "pipe_sweep",
+  "name": "get post get",
+  "label": "clean",
+  "detail": {
+   "ref": "accept:3",
+   "forwarded": 3,
+   "up_targets": [
+    "/a",
+    "/e",
+    "/b"
+   ],
+   "up_bodies": [
+    0,
+    2,
+    0
+   ],
+   "client_statuses": [
+    200,
+    200,
+    200
+   ],
+   "up_error": false
+  }
+ },
+ {
+  "seq": 205,
+  "family": "pipe_sweep",
+  "name": "good then bad",
+  "label": "fwd_reject",
+  "detail": {
+   "ref": "reject",
+   "forwarded": 1,
+   "up_targets": [
+    "/a"
+   ],
+   "up_bodies": [
+    0
+   ],
+   "client_statuses": [
+    200,
+    400
+   ],
+   "up_error": false
+  }
+ },
+ {
+  "seq": 206,
+  "family": "pipe_sweep",
+  "name": "bad then good",
+  "label": "reject",
+  "detail": {
+   "ref": "reject",
+   "forwarded": 0,
+   "up_targets": [],
+   "up_bodies": [],
+   "client_statuses": [
+    400
+   ],
+   "up_error": false
+  }
+ },
+ {
+  "seq": 207,
+  "family": "target_sweep",
+  "name": "http scheme",
+  "label": "clean",
+  "detail": {
+   "ref": "accept:1",
+   "forwarded": 1,
+   "up_targets": [
+    "/x"
+   ],
+   "up_bodies": [
+    0
+   ],
+   "client_statuses": [
+    200
+   ],
+   "up_error": false
+  }
+ },
+ {
+  "seq": 208,
+  "family": "target_sweep",
+  "name": "https scheme",
+  "label": "clean",
+  "detail": {
+   "ref": "accept:1",
+   "forwarded": 1,
+   "up_targets": [
+    "/x"
+   ],
+   "up_bodies": [
+    0
+   ],
+   "client_statuses": [
+    200
+   ],
+   "up_error": false
+  }
+ },
+ {
+  "seq": 209,
+  "family": "target_sweep",
+  "name": "other host",
+  "label": "clean",
+  "detail": {
+   "ref": "accept:1",
+   "forwarded": 1,
+   "up_targets": [
+    "/x"
+   ],
+   "up_bodies": [
+    0
+   ],
+   "client_statuses": [
+    200
+   ],
+   "up_error": false
+  }
+ },
+ {
+  "seq": 210,
+  "family": "target_sweep",
+  "name": "with port",
+  "label": "clean",
+  "detail": {
+   "ref": "accept:1",
+   "forwarded": 1,
+   "up_targets": [
+    "/x"
+   ],
+   "up_bodies": [
+    0
+   ],
+   "client_statuses": [
+    200
+   ],
+   "up_error": false
+  }
+ },
+ {
+  "seq": 211,
+  "family": "target_sweep",
+  "name": "authority form",
+  "label": "front_stricter",
+  "detail": {
+   "ref": "accept:1",
+   "forwarded": 0,
+   "up_targets": [],
+   "up_bodies": [],
+   "client_statuses": [
+    400
+   ],
+   "up_error": false
+  }
+ },
+ {
+  "seq": 212,
+  "family": "target_sweep",
+  "name": "scheme only",
+  "label": "front_stricter",
+  "detail": {
+   "ref": "accept:1",
+   "forwarded": 0,
+   "up_targets": [],
+   "up_bodies": [],
+   "client_statuses": [
+    400
+   ],
+   "up_error": false
+  }
+ },
+ {
+  "seq": 213,
+  "family": "target_sweep",
+  "name": "no scheme slashes",
+  "label": "clean",
+  "detail": {
+   "ref": "accept:1",
+   "forwarded": 1,
+   "up_targets": [
+    "//a/x"
+   ],
+   "up_bodies": [
+    0
+   ],
+   "client_statuses": [
+    200
+   ],
+   "up_error": false
+  }
+ },
+ {
+  "seq": 214,
+  "family": "target_sweep",
+  "name": "backslash",
+  "label": "clean",
+  "detail": {
+   "ref": "accept:1",
+   "forwarded": 1,
+   "up_targets": [
+    "/a\\b"
+   ],
+   "up_bodies": [
+    0
+   ],
+   "client_statuses": [
+    200
+   ],
+   "up_error": false
+  }
+ },
+ {
+  "seq": 215,
+  "family": "target_sweep",
+  "name": "double slash path",
+  "label": "clean",
+  "detail": {
+   "ref": "accept:1",
+   "forwarded": 1,
+   "up_targets": [
+    "//x"
+   ],
+   "up_bodies": [
+    0
+   ],
+   "client_statuses": [
+    200
+   ],
+   "up_error": false
+  }
+ },
+ {
+  "seq": 216,
+  "family": "target_sweep",
+  "name": "dotdot",
+  "label": "front_stricter",
+  "detail": {
+   "ref": "accept:1",
+   "forwarded": 0,
+   "up_targets": [],
+   "up_bodies": [],
+   "client_statuses": [
+    400
+   ],
+   "up_error": false
+  }
+ },
+ {
+  "seq": 217,
+  "family": "target_sweep",
+  "name": "encoded dotdot",
+  "label": "front_stricter",
+  "detail": {
+   "ref": "accept:1",
+   "forwarded": 0,
+   "up_targets": [],
+   "up_bodies": [],
+   "client_statuses": [
+    400
+   ],
+   "up_error": false
+  }
+ },
+ {
+  "seq": 218,
+  "family": "target_sweep",
+  "name": "fragment",
+  "label": "clean",
+  "detail": {
+   "ref": "accept:1",
+   "forwarded": 1,
+   "up_targets": [
+    "/x#y"
+   ],
+   "up_bodies": [
+    0
+   ],
+   "client_statuses": [
+    200
+   ],
+   "up_error": false
+  }
+ },
+ {
+  "seq": 219,
+  "family": "target_sweep",
+  "name": "at sign",
+  "label": "clean",
+  "detail": {
+   "ref": "accept:1",
+   "forwarded": 1,
+   "up_targets": [
+    "/x@y"
+   ],
+   "up_bodies": [
+    0
+   ],
+   "client_statuses": [
+    200
+   ],
+   "up_error": false
+  }
+ }
+]

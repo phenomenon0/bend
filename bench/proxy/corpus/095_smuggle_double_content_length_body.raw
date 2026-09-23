@@ -1,0 +1,10 @@
+POST / HTTP/1.1
+Host: a
+Content-Length: 44
+Content-Length: 0
+
+GET /admin HTTP/1.1
+Host: a
+Content-Length: 10
+
+x=

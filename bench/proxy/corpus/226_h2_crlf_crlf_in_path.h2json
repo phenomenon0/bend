@@ -1,0 +1,23 @@
+[
+ {
+  "headers": [
+   [
+    ":method",
+    "GET"
+   ],
+   [
+    ":path",
+    "/a HTTP/1.1\r\nHost: evil\r\n\r\nGET /b"
+   ],
+   [
+    ":scheme",
+    "http"
+   ],
+   [
+    ":authority",
+    "a"
+   ]
+  ],
+  "end_stream": true
+ }
+]
