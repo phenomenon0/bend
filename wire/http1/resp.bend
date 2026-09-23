@@ -732,6 +732,20 @@ def head.end(+e: Ask, +h: Head, out: List<&2, U32>) -> P:
 # Bodies
 # ------
 
+# A request's body, framed by what its head said, for a server that
+# streams it (wire/stream.bend): the reader entered at the body, n bytes
+# to count off, or chunked under the cap -- the same states, and so the
+# same grammar and budget, a response's body is read by. What follows the
+# body (a pipelined request) is the final state's rest.
+def body.head() -> Head:
+  Head{False{}, 200, None{}, False{}, False{}, False{}}
+
+def body.len(+n: U32) -> P:
+  P{head.len(U32.is_zero(n), body.head(), n), Nil{}}
+
+def body.chunked(+cap: U32) -> P:
+  P{Chk{body.head(), ASize0{}, 0, "", cap}, Nil{}}
+
 def body.byte(more: Nat, c: U32, h: Head, got: Bytes()) -> St:
   match more:
     case 0n:

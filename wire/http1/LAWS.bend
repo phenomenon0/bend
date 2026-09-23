@@ -224,6 +224,25 @@ law v_close_cap:
   {rd(R.Ask{False{}, 4}, "HTTP/1.1 200 OK\r\n\r\nabcd") ==
     R.Look{[], R.Closing{R.Resp{200, False{}, True{}, "abcd"}}} : R.Look}
 
+# LAW: a request's body, the reader entered at it: counted off, with a
+# pipelined request after it left as the rest; chunked, the same.
+law v_body_len:
+  {R.look(R.feed_buf(A(), "abcdefGET", R.body.len(6))) ==
+    R.Look{[], R.Final{R.Resp{200, False{}, False{}, "abcdef"}, "GET"}} : R.Look}
+
+law v_body_chunked:
+  {R.look(R.feed_buf(A(), "3;x=1\r\nabc\r\n2\r\nde\r\n0\r\nT: 1\r\n\r\nGET",
+    R.body.chunked(1024))) ==
+    R.Look{[], R.Final{R.Resp{200, False{}, False{}, "abcde"}, "GET"}} : R.Look}
+
+# LAW: and streamed: a chunked body cut into reads in the middle of a
+# size, of the data and of a CRLF, taken after each read, is handed on
+# as its data, in order, and nothing is left behind.
+law v_body_drain:
+  {Wr.drain.b(R.P, Wr.drain(~R.Ask, ~R.P, ~R.wstep, ~R.wadv, ~R.take, A(),
+    ["1", "0\r\n0123", "456789", "abcdef\r", "\n0\r\n\r\n"], R.body.chunked(1024), "")) ==
+    "0123456789abcdef" : Bytes()}
+
 # LAW: and what is refused. None of these completes a response: each is
 # how a response is split, or a request smuggled behind one, by a
 # reader that frames it another way.

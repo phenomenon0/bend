@@ -3114,6 +3114,15 @@ def Laws.v_after():
 def Laws.v_close_cap():
   {==}
 
+def Laws.v_body_len():
+  {==}
+
+def Laws.v_body_chunked():
+  {==}
+
+def Laws.v_body_drain():
+  {==}
+
 def Laws.r_cl_te():
   {==}
 

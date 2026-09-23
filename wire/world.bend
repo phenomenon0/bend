@@ -34,6 +34,7 @@
 # in the cases conform.bend does not try.
 import Base
 import ./loop.bend as L
+import ./stream.bend as Bs
 
 # The identity monad
 # ==================
@@ -2692,3 +2693,689 @@ def fread_model(f, n):
         1n+String.length.go(String.take(t, p), 0n), Bytes.len.shift(String.take(t, p), 0n)) :
         {Nat.is_le(_, 1n+p) == True{} : Bool}
       fread_model(t, p)
+
+# The body stream in the model
+# ============================
+#
+# wire/stream.bend's pass, pull and turn with the identity monad, the
+# scripted peer, and a scripted consumer: what it takes of each offer,
+# in order (past its script, all of it), what it has taken so far, and
+# how many ends it has been told. The framer is any: its state, feed,
+# take and look are the laws' template parameters, so the laws hold for
+# every body a reader frames.
+type Snk is Data:
+  Snk{takes: List<&2, Nat>, got: Bytes(), fins: Nat}
+
+def k.give.at(takes: List<&2, Nat>, +got: Bytes(), fins: Nat, +bs: Bytes()) -> Snk & Nat:
+  match takes:
+    case Nil{}:
+      (Snk{Nil{}, Bytes.append(got, String.take(bs, Bytes.len(bs))), fins}, Bytes.len(bs))
+    case Con{+n, t}:
+      (Snk{t, Bytes.append(got, String.take(bs, n)), fins}, n)
+
+def k.give.go(k: Snk, +bs: Bytes()) -> Snk & Nat:
+  match k:
+    case Snk{takes, +got, fins}:
+      k.give.at(takes, got, fins, bs)
+
+def k.give(k: Snk, bs: Bytes()) -> Snk & Nat:
+  k.give.go(k, bs)
+
+def k.fin(k: Snk) -> Snk:
+  match k:
+    case Snk{takes, got, fins}:
+      Snk{takes, got, 1n+fins}
+
+def sb.pass(~R: Data, ~look: R -> Bs.Stage, +win: Nat, bq: Bs.Bq<World, R, Snk>) ->
+  Bs.Turn(World, R, Snk):
+  Bs.pass(~Id, ~Id.pure, ~Id.bind, ~World, ~R, ~look, ~Snk, ~k.give, win, bq)
+
+def sb.pull(
+  ~E: Data, ~R: Data, ~feed: E -> Bytes() -> R -> R, ~take: R -> R & Bytes(),
+  ~look: R -> Bs.Stage, +e: E, +win: Nat, +ms: U32, bq: Bs.Bq<World, R, Snk>
+) -> Bs.Turn(World, R, Snk):
+  Bs.pull(~Id, ~Id.pure, ~Id.bind, ~World, ~w.rx, ~E, ~R, ~feed, ~take, ~look, ~Snk, ~k.fin, e,
+    win, ms, bq)
+
+def sb.turn(
+  ~E: Data, ~R: Data, ~feed: E -> Bytes() -> R -> R, ~take: R -> R & Bytes(),
+  ~look: R -> Bs.Stage, +e: E, +win: Nat, +ms: U32, bq: Bs.Bq<World, R, Snk>
+) -> Bs.Turn(World, R, Snk):
+  Bs.turn(~Id, ~Id.pure, ~Id.bind, ~World, ~w.rx, ~E, ~R, ~feed, ~take, ~look, ~Snk, ~k.give,
+    ~k.fin, e, win, ms, bq)
+
+# what a turn leaves: the socket, what the consumer has taken followed by
+# what the stream still holds, and the ends told
+def sb.moved(-R: Data, t: Bs.Turn(World, R, Snk)) -> World & Bytes() & Nat:
+  (bq, w) = t
+  match bq:
+    case Bs.Bq{s, r, k, held, eof}:
+      match k:
+        case Snk{takes, got, fins}:
+          (s, (Bytes.append(got, held), fins))
+
+def sb.fins(-R: Data, t: Bs.Turn(World, R, Snk)) -> Nat:
+  (bq, w) = t
+  match bq:
+    case Bs.Bq{s, r, k, held, eof}:
+      match k:
+        case Snk{takes, got, fins}:
+          fins
+
+def sb.qs(-R: Data, q: R & Bytes()) -> R:
+  (r, x) = q
+  r
+
+def sb.qb(-R: Data, q: R & Bytes()) -> Bytes():
+  (r, x) = q
+  x
+
+# LAW: a pass moves bytes, and only moves them. Whatever the consumer
+# takes, what it has taken followed by what the stream still holds is
+# what it had taken followed by what the stream held: in order, none
+# lost, none doubled; the socket is not touched and no end is told.
+def wl.take_drop(+b: Bytes(), +n: Nat) ->
+  {Bytes.append(String.take(b, n), String.drop(b, n)) == b : Bytes()}:
+  match b n:
+    case SNil{} 0n:
+      {==}
+    case SNil{} 1n+p:
+      {==}
+    case SCon{h, t} 0n:
+      {==}
+    case SCon{+h, +t} 1n+p:
+      Equal.cong(Bytes(), Bytes(), x => SCon{h, x}, Bytes.append(String.take(t, p), String.drop(t, p)),
+        t, wl.take_drop(t, p))
+
+law wl.stall_moved:
+  for -R: Data
+  for s: World
+  for r: R
+  for takes: List<&2, Nat>
+  for +got: Bytes()
+  for fins: Nat
+  for +held: Bytes()
+  for eof: Bool
+  for stalled: Bool
+  {sb.moved(R, Bs.pass.stall(World, R, Snk, s, r, Snk{takes, got, fins}, held, eof, stalled)) ==
+    (s, (Bytes.append(got, held), fins)) : World & Bytes() & Nat}
+
+def wl.stall_moved(R, s, r, takes, got, fins, held, eof, stalled):
+  match stalled:
+    case True{}:
+      {==}
+    case False{}:
+      {==}
+
+# a consumer that took n of what was held: taken, then held, is as before
+law wl.took_moved:
+  for -R: Data
+  for s: World
+  for r: R
+  for takes: List<&2, Nat>
+  for +got: Bytes()
+  for fins: Nat
+  for +held: Bytes()
+  for +n: Nat
+  for eof: Bool
+  for stalled: Bool
+  {sb.moved(R, Bs.pass.stall(World, R, Snk, s, r, Snk{takes, Bytes.append(got,
+    String.take(held, n)), fins}, String.drop(held, n), eof, stalled)) ==
+    (s, (Bytes.append(got, held), fins)) : World & Bytes() & Nat}
+
+def wl.took_moved(R, s, r, takes, got, fins, held, n, eof, stalled):
+  Equal.trans(World & Bytes() & Nat,
+    sb.moved(R, Bs.pass.stall(World, R, Snk, s, r, Snk{takes, Bytes.append(got,
+      String.take(held, n)), fins}, String.drop(held, n), eof, stalled)),
+    (s, (Bytes.append(Bytes.append(got, String.take(held, n)), String.drop(held, n)), fins)),
+    (s, (Bytes.append(got, held), fins)),
+    wl.stall_moved(R, s, r, takes, Bytes.append(got, String.take(held, n)), fins,
+      String.drop(held, n), eof, stalled),
+    Equal.cong(Bytes(), World & Bytes() & Nat, y => (s, (y, fins)),
+      Bytes.append(Bytes.append(got, String.take(held, n)), String.drop(held, n)),
+      Bytes.append(got, held),
+      Equal.trans(Bytes(),
+        Bytes.append(Bytes.append(got, String.take(held, n)), String.drop(held, n)),
+        Bytes.append(got, Bytes.append(String.take(held, n), String.drop(held, n))),
+        Bytes.append(got, held),
+        wl.app_assoc(got, String.take(held, n), String.drop(held, n)),
+        Equal.cong(Bytes(), Bytes(), y => Bytes.append(got, y),
+          Bytes.append(String.take(held, n), String.drop(held, n)), held, wl.take_drop(held, n)))))
+
+law stream_pass:
+  for ~R: Data
+  for ~look: R -> Bs.Stage
+  for +win: Nat
+  for s: World
+  for +r: R
+  for takes: List<&2, Nat>
+  for +got: Bytes()
+  for fins: Nat
+  for +held: Bytes()
+  for +eof: Bool
+  {sb.moved(R, sb.pass(~R, ~look, win, Bs.Bq{s, r, Snk{takes, got, fins}, held, eof})) ==
+    (s, (Bytes.append(got, held), fins)) : World & Bytes() & Nat}
+
+def stream_pass(R, look, win, s, r, takes, got, fins, held, eof):
+  match takes held:
+    case Nil{} SNil{}:
+      {==}
+    case Con{n, t} SNil{}:
+      {==}
+    case Nil{} SCon{+h, +t}:
+      wl.took_moved(R, s, r, Nil{}, got, fins, SCon{h, t}, Bytes.len(SCon{h, t}), eof,
+        Nat.is_eq(Bytes.len(SCon{h, t}), 0n) && (Nat.is_le(win, Bytes.len(SCon{h, t}))
+          || Bool.not(Bs.more(look(r), eof))))
+    case Con{+n, tk} SCon{+h, +t}:
+      wl.took_moved(R, s, r, tk, got, fins, SCon{h, t}, n, eof,
+        Nat.is_eq(n, 0n) && (Nat.is_le(win, Bytes.len(SCon{h, t}))
+          || Bool.not(Bs.more(look(r), eof))))
+
+# LAW: a stalled consumer stops reads. With a window's worth held or
+# more, a consumer that takes none of it ends the stream: the turn's
+# pull never runs, the socket is not read, and nothing more is held.
+law stream_stall:
+  for ~E: Data
+  for ~R: Data
+  for ~feed: E -> Bytes() -> R -> R
+  for ~take: R -> R & Bytes()
+  for ~look: R -> Bs.Stage
+  for +e: E
+  for +win: Nat
+  for +ms: U32
+  for s: World
+  for +r: R
+  for rest: List<&2, Nat>
+  for +got: Bytes()
+  for fins: Nat
+  for +h: Char
+  for +t: Bytes()
+  for +eof: Bool
+  for full: {Nat.is_le(win, Bytes.len(SCon{h, t})) == True{} : Bool}
+  {sb.turn(~E, ~R, ~feed, ~take, ~look, e, win, ms,
+      Bs.Bq{s, r, Snk{Con{0n, rest}, got, fins}, SCon{h, t}, eof}) ==
+    (Bs.Bq{s, r, Snk{rest, Bytes.append(got, ""), fins}, SCon{h, t}, eof}, Some{Bs.BStall{}}) :
+    Bs.Turn(World, R, Snk)}
+
+def stream_stall(E, R, feed, take, look, e, win, ms, s, r, rest, got, fins, h, t, eof, full):
+  %Equal.sym(Bool, Nat.is_le(win, Bytes.len(SCon{h, t})), True{}, full) :
+    {Bs.turn.then(~Id, ~Id.pure, ~Id.bind, ~World, ~w.rx, ~E, ~R, ~feed, ~take, ~look, ~Snk,
+      ~k.fin, e, win, ms, Bs.pass.stall(World, R, Snk, s, r, Snk{rest, Bytes.append(got, ""), fins},
+        SCon{h, t}, eof, _ || Bool.not(Bs.more(look(r), eof)))) ==
+      (Bs.Bq{s, r, Snk{rest, Bytes.append(got, ""), fins}, SCon{h, t}, eof}, Some{Bs.BStall{}}) :
+      Bs.Turn(World, R, Snk)}
+  {==}
+
+# LAW: a full window stops reads. With win bytes or more held and the
+# body still coming, a pull reads nothing and holds what it held.
+law stream_full:
+  for ~E: Data
+  for ~R: Data
+  for ~feed: E -> Bytes() -> R -> R
+  for ~take: R -> R & Bytes()
+  for ~look: R -> Bs.Stage
+  for +e: E
+  for +win: Nat
+  for +ms: U32
+  for s: World
+  for +r: R
+  for k: Snk
+  for +held: Bytes()
+  for st: Bs.Stage
+  for es: {look(r) == st : Bs.Stage}
+  for em: {Bs.more(st, False{}) == True{} : Bool}
+  for full: {Nat.is_lt(Bytes.len(held), win) == False{} : Bool}
+  {sb.pull(~E, ~R, ~feed, ~take, ~look, e, win, ms, Bs.Bq{s, r, k, held, False{}}) ==
+    (Bs.Bq{s, r, k, held, False{}}, None{}) : Bs.Turn(World, R, Snk)}
+
+def stream_full(E, R, feed, take, look, e, win, ms, s, r, k, held, st, es, em, full):
+  match st:
+    case Bs.Going{}:
+      %Equal.sym(Bs.Stage, look(r), Bs.Going{}, es) :
+        {Bs.pull.go(~Id, ~Id.pure, ~Id.bind, ~World, ~w.rx, ~E, ~R, ~feed, ~take, ~Snk, ~k.fin,
+          e, win, ms, _, False{}, s, r, k, held) == (Bs.Bq{s, r, k, held, False{}}, None{}) :
+          Bs.Turn(World, R, Snk)}
+      %Equal.sym(Bool, Nat.is_lt(Bytes.len(held), win), False{}, full) :
+        {Bs.pull.room(~Id, ~Id.pure, ~Id.bind, ~World, ~w.rx, ~E, ~R, ~feed, ~take, ~Snk, e, ms,
+          s, r, k, held, False{}, _) == (Bs.Bq{s, r, k, held, False{}}, None{}) :
+          Bs.Turn(World, R, Snk)}
+      {==}
+    case Bs.Closing{}:
+      %Equal.sym(Bs.Stage, look(r), Bs.Closing{}, es) :
+        {Bs.pull.go(~Id, ~Id.pure, ~Id.bind, ~World, ~w.rx, ~E, ~R, ~feed, ~take, ~Snk, ~k.fin,
+          e, win, ms, _, False{}, s, r, k, held) == (Bs.Bq{s, r, k, held, False{}}, None{}) :
+          Bs.Turn(World, R, Snk)}
+      %Equal.sym(Bool, Nat.is_lt(Bytes.len(held), win), False{}, full) :
+        {Bs.pull.room(~Id, ~Id.pure, ~Id.bind, ~World, ~w.rx, ~E, ~R, ~feed, ~take, ~Snk, e, ms,
+          s, r, k, held, False{}, _) == (Bs.Bq{s, r, k, held, False{}}, None{}) :
+          Bs.Turn(World, R, Snk)}
+      {==}
+    case Bs.Ended{}:
+      no({sb.pull(~E, ~R, ~feed, ~take, ~look, e, win, ms, Bs.Bq{s, r, k, held, False{}}) ==
+        (Bs.Bq{s, r, k, held, False{}}, None{}) : Bs.Turn(World, R, Snk)}, em)
+    case Bs.Refused{}:
+      no({sb.pull(~E, ~R, ~feed, ~take, ~look, e, win, ms, Bs.Bq{s, r, k, held, False{}}) ==
+        (Bs.Bq{s, r, k, held, False{}}, None{}) : Bs.Turn(World, R, Snk)}, em)
+
+# LAW: a read joins the body at the end of what is held, exactly. With
+# room in the window and the body still coming, a pull reads the
+# peer's next bytes, feeds them to the framer, and holds what the
+# framer then holds of the body after what it held before -- the bytes
+# drain_reads says are the body's, in their order -- and the framer
+# goes on holding none.
+law wl.fed_ok:
+  for -R: Data
+  for s: World
+  for q: R & Bytes()
+  for k: Snk
+  for +held: Bytes()
+  for +n: Nat
+  for ok: {Nat.is_le(Bytes.len(sb.qb(R, q)), n) == True{} : Bool}
+  {Bs.pull.fed(World, R, Snk, s, q, k, held, False{}, n) ==
+    (Bs.Bq{s, sb.qs(R, q), k, Bytes.append(held, sb.qb(R, q)), False{}}, None{}) :
+    Bs.Turn(World, R, Snk)}
+
+def wl.fed_ok(R, s, q, k, held, n, ok):
+  (r, +x) = q
+  %Equal.sym(Bool, Nat.is_le(Bytes.len(x), n), True{}, ok) :
+    {Bs.pull.fits(World, R, Snk, s, r, k, held, x, False{}, _) ==
+      (Bs.Bq{s, r, k, Bytes.append(held, x), False{}}, None{}) : Bs.Turn(World, R, Snk)}
+  {==}
+
+law wl.room_read:
+  for ~E: Data
+  for ~R: Data
+  for ~feed: E -> Bytes() -> R -> R
+  for ~take: R -> R & Bytes()
+  for +e: E
+  for +ms: U32
+  for +r: R
+  for k: Snk
+  for +held: Bytes()
+  for +wait: Nat
+  for +h: Char
+  for +t: Bytes()
+  for rd: List<&2, Rd>
+  for wr: List<&2, Wr>
+  for eager: Bool
+  for +now: Nat
+  for fs: List<&2, Fil>
+  for out: Bytes()
+  for ew: {Nat.is_lt(wait, U32.to_nat(ms)) == True{} : Bool}
+  for q: R & Bytes()
+  for eq: {take(feed(e, SCon{h, t}, r)) == q : R & Bytes()}
+  for ok: {Nat.is_le(Bytes.len(sb.qb(R, q)), Bytes.len(SCon{h, t})) == True{} : Bool}
+  {Bs.pull.room(~Id, ~Id.pure, ~Id.bind, ~World, ~w.rx, ~E, ~R, ~feed, ~take, ~Snk, e, ms,
+      World{Con{Give{wait, SCon{h, t}}, rd}, wr, eager, now, fs, out}, r, k, held, False{}, True{}) ==
+    (Bs.Bq{World{rd, wr, eager, Nat.add(now, wait), fs, out}, sb.qs(R, q), k,
+      Bytes.append(held, sb.qb(R, q)), False{}}, None{}) : Bs.Turn(World, R, Snk)}
+
+def wl.room_read(E, R, feed, take, e, ms, r, k, held, wait, h, t, rd, wr, eager, now, fs, out, ew, q,
+  eq, ok):
+  %Equal.sym(Bool, Nat.is_lt(wait, U32.to_nat(ms)), True{}, ew) :
+    {Bs.pull.got(~E, ~R, ~feed, ~take, World, Snk, e,
+      w.rx.give(rd, wait, SCon{h, t}, ms, wr, eager, now, fs, out, _), r, k, held, False{}) ==
+      (Bs.Bq{World{rd, wr, eager, Nat.add(now, wait), fs, out}, sb.qs(R, q), k,
+        Bytes.append(held, sb.qb(R, q)), False{}}, None{}) : Bs.Turn(World, R, Snk)}
+  %Equal.sym(R & Bytes(), take(feed(e, SCon{h, t}, r)), q, eq) :
+    {Bs.pull.fed(World, R, Snk, World{rd, wr, eager, Nat.add(now, wait), fs, out}, _, k, held,
+      False{}, Bytes.len(SCon{h, t})) ==
+      (Bs.Bq{World{rd, wr, eager, Nat.add(now, wait), fs, out}, sb.qs(R, q), k,
+        Bytes.append(held, sb.qb(R, q)), False{}}, None{}) : Bs.Turn(World, R, Snk)}
+  wl.fed_ok(R, World{rd, wr, eager, Nat.add(now, wait), fs, out}, q, k, held,
+    Bytes.len(SCon{h, t}), ok)
+
+law stream_pull:
+  for ~E: Data
+  for ~R: Data
+  for ~feed: E -> Bytes() -> R -> R
+  for ~take: R -> R & Bytes()
+  for ~look: R -> Bs.Stage
+  for +e: E
+  for +win: Nat
+  for +ms: U32
+  for +r: R
+  for k: Snk
+  for +held: Bytes()
+  for st: Bs.Stage
+  for es: {look(r) == st : Bs.Stage}
+  for em: {Bs.more(st, False{}) == True{} : Bool}
+  for room: {Nat.is_lt(Bytes.len(held), win) == True{} : Bool}
+  for +wait: Nat
+  for +h: Char
+  for +t: Bytes()
+  for rd: List<&2, Rd>
+  for wr: List<&2, Wr>
+  for eager: Bool
+  for +now: Nat
+  for fs: List<&2, Fil>
+  for out: Bytes()
+  for ew: {Nat.is_lt(wait, U32.to_nat(ms)) == True{} : Bool}
+  for q: R & Bytes()
+  for eq: {take(feed(e, SCon{h, t}, r)) == q : R & Bytes()}
+  for ok: {Nat.is_le(Bytes.len(sb.qb(R, q)), Bytes.len(SCon{h, t})) == True{} : Bool}
+  {sb.pull(~E, ~R, ~feed, ~take, ~look, e, win, ms,
+      Bs.Bq{World{Con{Give{wait, SCon{h, t}}, rd}, wr, eager, now, fs, out}, r, k, held, False{}}) ==
+    (Bs.Bq{World{rd, wr, eager, Nat.add(now, wait), fs, out}, sb.qs(R, q), k,
+      Bytes.append(held, sb.qb(R, q)), False{}}, None{}) : Bs.Turn(World, R, Snk)}
+
+def stream_pull(E, R, feed, take, look, e, win, ms, r, k, held, st, es, em, room, wait, h, t, rd, wr,
+  eager, now, fs, out, ew, q, eq, ok):
+  match st:
+    case Bs.Going{}:
+      %Equal.sym(Bs.Stage, look(r), Bs.Going{}, es) :
+        {Bs.pull.go(~Id, ~Id.pure, ~Id.bind, ~World, ~w.rx, ~E, ~R, ~feed, ~take, ~Snk, ~k.fin,
+          e, win, ms, _, False{}, World{Con{Give{wait, SCon{h, t}}, rd}, wr, eager, now, fs, out}, r,
+          k, held) ==
+          (Bs.Bq{World{rd, wr, eager, Nat.add(now, wait), fs, out}, sb.qs(R, q), k,
+            Bytes.append(held, sb.qb(R, q)), False{}}, None{}) : Bs.Turn(World, R, Snk)}
+      %Equal.sym(Bool, Nat.is_lt(Bytes.len(held), win), True{}, room) :
+        {Bs.pull.room(~Id, ~Id.pure, ~Id.bind, ~World, ~w.rx, ~E, ~R, ~feed, ~take, ~Snk, e, ms,
+          World{Con{Give{wait, SCon{h, t}}, rd}, wr, eager, now, fs, out}, r, k, held, False{}, _) ==
+          (Bs.Bq{World{rd, wr, eager, Nat.add(now, wait), fs, out}, sb.qs(R, q), k,
+            Bytes.append(held, sb.qb(R, q)), False{}}, None{}) : Bs.Turn(World, R, Snk)}
+      wl.room_read(~E, ~R, ~feed, ~take, e, ms, r, k, held, wait, h, t, rd, wr, eager, now, fs, out,
+        ew, q, eq, ok)
+    case Bs.Closing{}:
+      %Equal.sym(Bs.Stage, look(r), Bs.Closing{}, es) :
+        {Bs.pull.go(~Id, ~Id.pure, ~Id.bind, ~World, ~w.rx, ~E, ~R, ~feed, ~take, ~Snk, ~k.fin,
+          e, win, ms, _, False{}, World{Con{Give{wait, SCon{h, t}}, rd}, wr, eager, now, fs, out}, r,
+          k, held) ==
+          (Bs.Bq{World{rd, wr, eager, Nat.add(now, wait), fs, out}, sb.qs(R, q), k,
+            Bytes.append(held, sb.qb(R, q)), False{}}, None{}) : Bs.Turn(World, R, Snk)}
+      %Equal.sym(Bool, Nat.is_lt(Bytes.len(held), win), True{}, room) :
+        {Bs.pull.room(~Id, ~Id.pure, ~Id.bind, ~World, ~w.rx, ~E, ~R, ~feed, ~take, ~Snk, e, ms,
+          World{Con{Give{wait, SCon{h, t}}, rd}, wr, eager, now, fs, out}, r, k, held, False{}, _) ==
+          (Bs.Bq{World{rd, wr, eager, Nat.add(now, wait), fs, out}, sb.qs(R, q), k,
+            Bytes.append(held, sb.qb(R, q)), False{}}, None{}) : Bs.Turn(World, R, Snk)}
+      wl.room_read(~E, ~R, ~feed, ~take, e, ms, r, k, held, wait, h, t, rd, wr, eager, now, fs, out,
+        ew, q, eq, ok)
+    case Bs.Ended{}:
+      no({sb.pull(~E, ~R, ~feed, ~take, ~look, e, win, ms,
+          Bs.Bq{World{Con{Give{wait, SCon{h, t}}, rd}, wr, eager, now, fs, out}, r, k, held, False{}}) ==
+        (Bs.Bq{World{rd, wr, eager, Nat.add(now, wait), fs, out}, sb.qs(R, q), k,
+          Bytes.append(held, sb.qb(R, q)), False{}}, None{}) : Bs.Turn(World, R, Snk)}, em)
+    case Bs.Refused{}:
+      no({sb.pull(~E, ~R, ~feed, ~take, ~look, e, win, ms,
+          Bs.Bq{World{Con{Give{wait, SCon{h, t}}, rd}, wr, eager, now, fs, out}, r, k, held, False{}}) ==
+        (Bs.Bq{World{rd, wr, eager, Nat.add(now, wait), fs, out}, sb.qs(R, q), k,
+          Bytes.append(held, sb.qb(R, q)), False{}}, None{}) : Bs.Turn(World, R, Snk)}, em)
+
+# LAW: the window. A read is taken only with fewer than win bytes held
+# (stream_full), and adds no more body than it brought bytes (the
+# pull's own check), so what a stream holds after it is under the
+# window plus that read: with reads at most Bs.chunk() bytes, a stream
+# never holds more than win + chunk() of a body, however large the
+# body and however slow its consumer.
+def wl.lt_succ(+x: Nat, +m: Nat, e: {Nat.is_le(x, m) == True{} : Bool}) ->
+  {Nat.is_lt(x, 1n+m) == True{} : Bool}:
+  match x m:
+    case 0n 0n:
+      {==}
+    case 0n 1n+q:
+      {==}
+    case 1n+p 0n:
+      no({Nat.is_lt(1n+p, 1n) == True{} : Bool}, e)
+    case 1n+p 1n+q:
+      wl.lt_succ(p, q, e)
+
+def wl.le_up(+x: Nat, +m: Nat, e: {Nat.is_le(x, m) == True{} : Bool}) ->
+  {Nat.is_le(x, 1n+m) == True{} : Bool}:
+  wl.lt_le(x, 1n+m, wl.lt_succ(x, m, e))
+
+def wl.le_addl(+w: Nat, +x: Nat, +n: Nat, e: {Nat.is_le(x, n) == True{} : Bool}) ->
+  {Nat.is_le(x, Nat.add(w, n)) == True{} : Bool}:
+  match w:
+    case 0n:
+      e
+    case 1n+p:
+      wl.le_up(x, Nat.add(p, n), wl.le_addl(p, x, n, e))
+
+def wl.lt_add(+a: Nat, +w: Nat, +x: Nat, +n: Nat, e1: {Nat.is_lt(a, w) == True{} : Bool},
+  e2: {Nat.is_le(x, n) == True{} : Bool}) -> {Nat.is_lt(Nat.add(a, x), Nat.add(w, n)) == True{} : Bool}:
+  match a w:
+    case 0n 0n:
+      no({Nat.is_lt(x, n) == True{} : Bool}, e1)
+    case 0n 1n+q:
+      wl.lt_succ(x, Nat.add(q, n), wl.le_addl(q, x, n, e2))
+    case 1n+p 0n:
+      no({Nat.is_lt(1n+Nat.add(p, x), n) == True{} : Bool}, e1)
+    case 1n+p 1n+q:
+      wl.lt_add(p, q, x, n, e1, e2)
+
+law stream_window:
+  for +held: Bytes()
+  for +x: Bytes()
+  for +win: Nat
+  for +n: Nat
+  for room: {Nat.is_lt(Bytes.len(held), win) == True{} : Bool}
+  for ok: {Nat.is_le(Bytes.len(x), n) == True{} : Bool}
+  {Nat.is_lt(Bytes.len(Bytes.append(held, x)), Nat.add(win, n)) == True{} : Bool}
+
+def stream_window(held, x, win, n, room, ok):
+  %Equal.sym(Nat, Bytes.len(Bytes.append(held, x)), Nat.add(Bytes.len(held), Bytes.len(x)),
+    Bytes.len_append(held, x)) :
+    {Nat.is_lt(_, Nat.add(win, n)) == True{} : Bool}
+  wl.lt_add(Bytes.len(held), win, Bytes.len(x), n, room, ok)
+
+# LAW: the end is told once, after the last byte. A pull tells the
+# consumer the body is over only when the framer says so and nothing
+# is held (so after every byte was taken), and the stream ends with it;
+# while bytes are held, no pull tells it, and no pass ever does
+# (stream_pass).
+def sb.run(
+  ~E: Data, ~R: Data, ~feed: E -> Bytes() -> R -> R, ~take: R -> R & Bytes(),
+  ~look: R -> Bs.Stage, +e: E, +win: Nat, +ms: U32, n: Nat, bq: Bs.Bq<World, R, Snk>
+) -> Bs.Bq<World, R, Snk> & Bs.Why:
+  Bs.run(~Id, ~Id.pure, ~Id.bind, ~World, ~w.rx, ~E, ~R, ~feed, ~take, ~look, ~Snk, ~k.give,
+    ~k.fin, e, win, ms, n, bq)
+
+law stream_fin_last:
+  for ~E: Data
+  for ~R: Data
+  for ~feed: E -> Bytes() -> R -> R
+  for ~take: R -> R & Bytes()
+  for ~look: R -> Bs.Stage
+  for +e: E
+  for +win: Nat
+  for +ms: U32
+  for n: Nat
+  for s: World
+  for +r: R
+  for takes: List<&2, Nat>
+  for got: Bytes()
+  for fins: Nat
+  for +eof: Bool
+  for es: {look(r) == Bs.Ended{} : Bs.Stage}
+  {sb.run(~E, ~R, ~feed, ~take, ~look, e, win, ms, 1n+n, Bs.Bq{s, r, Snk{takes, got, fins}, "", eof}) ==
+    (Bs.Bq{s, r, Snk{takes, got, 1n+fins}, "", eof}, Bs.BDone{}) :
+    Bs.Bq<World, R, Snk> & Bs.Why}
+
+def stream_fin_last(E, R, feed, take, look, e, win, ms, n, s, r, takes, got, fins, eof, es):
+  %Equal.sym(Bs.Stage, look(r), Bs.Ended{}, es) :
+    {Bs.run.next(~Id, ~Id.pure, World, R, Snk,
+      Bs.pull.go(~Id, ~Id.pure, ~Id.bind, ~World, ~w.rx, ~E, ~R, ~feed, ~take, ~Snk, ~k.fin, e,
+        win, ms, _, eof, s, r, Snk{takes, got, fins}, ""),
+      b => Bs.run(~Id, ~Id.pure, ~Id.bind, ~World, ~w.rx, ~E, ~R, ~feed, ~take, ~look, ~Snk,
+        ~k.give, ~k.fin, e, win, ms, n, b)) ==
+      (Bs.Bq{s, r, Snk{takes, got, 1n+fins}, "", eof}, Bs.BDone{}) :
+      Bs.Bq<World, R, Snk> & Bs.Why}
+  {==}
+
+def wl.fits_fins(-R: Data, s: World, r: R, takes: List<&2, Nat>, got: Bytes(), fins: Nat,
+  +held: Bytes(), +x: Bytes(), eof: Bool, ok: Bool) ->
+  {sb.fins(R, Bs.pull.fits(World, R, Snk, s, r, Snk{takes, got, fins}, held, x, eof, ok)) ==
+    fins : Nat}:
+  match ok:
+    case True{}:
+      {==}
+    case False{}:
+      {==}
+
+def wl.fed_fins(-R: Data, s: World, q: R & Bytes(), takes: List<&2, Nat>, got: Bytes(),
+  fins: Nat, +held: Bytes(), eof: Bool, +n: Nat) ->
+  {sb.fins(R, Bs.pull.fed(World, R, Snk, s, q, Snk{takes, got, fins}, held, eof, n)) ==
+    fins : Nat}:
+  (r, +x) = q
+  wl.fits_fins(R, s, r, takes, got, fins, held, x, eof, Nat.is_le(Bytes.len(x), n))
+
+def wl.bytes_fins(~E: Data, ~R: Data, ~feed: E -> Bytes() -> R -> R, ~take: R -> R & Bytes(),
+  +e: E, s: World, r: R, takes: List<&2, Nat>, got: Bytes(), fins: Nat, +held: Bytes(),
+  eof: Bool, empty: Bool, +bs: Bytes()) ->
+  {sb.fins(R, Bs.pull.bytes(~E, ~R, ~feed, ~take, World, Snk, e, s, r, Snk{takes, got, fins},
+    held, eof, empty, bs)) == fins : Nat}:
+  match empty:
+    case True{}:
+      {==}
+    case False{}:
+      wl.fed_fins(R, s, take(feed(e, bs, r)), takes, got, fins, held, eof, Bytes.len(bs))
+
+def wl.cut_fins(-R: Data, s: World, r: R, takes: List<&2, Nat>, got: Bytes(), fins: Nat,
+  held: Bytes(), eof: Bool, er: U32 & String) ->
+  {sb.fins(R, Bs.pull.cut(World, R, Snk, s, r, Snk{takes, got, fins}, held, eof, er)) ==
+    fins : Nat}:
+  (code, msg) = er
+  {==}
+
+def wl.got_fins(~E: Data, ~R: Data, ~feed: E -> Bytes() -> R -> R, ~take: R -> R & Bytes(),
+  +e: E, g: L.Got(World), r: R, takes: List<&2, Nat>, got: Bytes(), fins: Nat, +held: Bytes(),
+  eof: Bool) ->
+  {sb.fins(R, Bs.pull.got(~E, ~R, ~feed, ~take, World, Snk, e, g, r, Snk{takes, got, fins},
+    held, eof)) == fins : Nat}:
+  (s, res) = g
+  match res:
+    case Fail{er}:
+      wl.cut_fins(R, s, r, takes, got, fins, held, eof, er)
+    case Done{may}:
+      match may:
+        case None{}:
+          {==}
+        case Some{+bs}:
+          wl.bytes_fins(~E, ~R, ~feed, ~take, e, s, r, takes, got, fins, held, eof,
+            String.is_empty(bs), bs)
+
+def wl.room_fins(~E: Data, ~R: Data, ~feed: E -> Bytes() -> R -> R, ~take: R -> R & Bytes(),
+  +e: E, +ms: U32, s: World, r: R, takes: List<&2, Nat>, got: Bytes(), fins: Nat,
+  +held: Bytes(), room: Bool) ->
+  {sb.fins(R, Bs.pull.room(~Id, ~Id.pure, ~Id.bind, ~World, ~w.rx, ~E, ~R, ~feed, ~take, ~Snk,
+    e, ms, s, r, Snk{takes, got, fins}, held, False{}, room)) == fins : Nat}:
+  match room:
+    case False{}:
+      {==}
+    case True{}:
+      wl.got_fins(~E, ~R, ~feed, ~take, e, w.rx(s, Bs.chunk(), ms), r, takes, got, fins, held,
+        False{})
+
+def wl.go_fins(~E: Data, ~R: Data, ~feed: E -> Bytes() -> R -> R, ~take: R -> R & Bytes(),
+  +e: E, +win: Nat, +ms: U32, st: Bs.Stage, eof: Bool, s: World, r: R, takes: List<&2, Nat>,
+  got: Bytes(), fins: Nat, +h: Char, +t: Bytes()) ->
+  {sb.fins(R, Bs.pull.go(~Id, ~Id.pure, ~Id.bind, ~World, ~w.rx, ~E, ~R, ~feed, ~take, ~Snk,
+    ~k.fin, e, win, ms, st, eof, s, r, Snk{takes, got, fins}, SCon{h, t})) == fins : Nat}:
+  match st eof:
+    case Bs.Refused{} _:
+      {==}
+    case Bs.Ended{} _:
+      {==}
+    case Bs.Closing{} True{}:
+      {==}
+    case Bs.Going{} True{}:
+      {==}
+    case Bs.Closing{} False{}:
+      wl.room_fins(~E, ~R, ~feed, ~take, e, ms, s, r, takes, got, fins, SCon{h, t},
+        Nat.is_lt(Bytes.len(SCon{h, t}), win))
+    case Bs.Going{} False{}:
+      wl.room_fins(~E, ~R, ~feed, ~take, e, ms, s, r, takes, got, fins, SCon{h, t},
+        Nat.is_lt(Bytes.len(SCon{h, t}), win))
+
+law stream_fin_held:
+  for ~E: Data
+  for ~R: Data
+  for ~feed: E -> Bytes() -> R -> R
+  for ~take: R -> R & Bytes()
+  for ~look: R -> Bs.Stage
+  for +e: E
+  for +win: Nat
+  for +ms: U32
+  for s: World
+  for +r: R
+  for takes: List<&2, Nat>
+  for got: Bytes()
+  for fins: Nat
+  for +h: Char
+  for +t: Bytes()
+  for st: Bs.Stage
+  for eof: Bool
+  for es: {look(r) == st : Bs.Stage}
+  {sb.fins(R, sb.pull(~E, ~R, ~feed, ~take, ~look, e, win, ms,
+    Bs.Bq{s, r, Snk{takes, got, fins}, SCon{h, t}, eof})) == fins : Nat}
+
+def stream_fin_held(E, R, feed, take, look, e, win, ms, s, r, takes, got, fins, h, t, st, eof, es):
+  %Equal.sym(Bs.Stage, look(r), st, es) :
+    {sb.fins(R, Bs.pull.go(~Id, ~Id.pure, ~Id.bind, ~World, ~w.rx, ~E, ~R, ~feed, ~take, ~Snk,
+      ~k.fin, e, win, ms, _, eof, s, r, Snk{takes, got, fins}, SCon{h, t})) == fins : Nat}
+  wl.go_fins(~E, ~R, ~feed, ~take, e, win, ms, st, eof, s, r, takes, got, fins, h, t)
+
+# LAW: a read never brings more body than it brought bytes. When the
+# framer holds more body after a read than the read had bytes (no
+# framer on the kit does; a faulty one might), the stream ends there,
+# holding what it held, rather than grow past its window.
+law wl.fed_over:
+  for -R: Data
+  for s: World
+  for q: R & Bytes()
+  for k: Snk
+  for +held: Bytes()
+  for +n: Nat
+  for over: {Nat.is_le(Bytes.len(sb.qb(R, q)), n) == False{} : Bool}
+  {Bs.pull.fed(World, R, Snk, s, q, k, held, False{}, n) ==
+    (Bs.Bq{s, sb.qs(R, q), k, held, False{}}, Some{Bs.BOver{}}) : Bs.Turn(World, R, Snk)}
+
+def wl.fed_over(R, s, q, k, held, n, over):
+  (r, +x) = q
+  %Equal.sym(Bool, Nat.is_le(Bytes.len(x), n), False{}, over) :
+    {Bs.pull.fits(World, R, Snk, s, r, k, held, x, False{}, _) ==
+      (Bs.Bq{s, r, k, held, False{}}, Some{Bs.BOver{}}) : Bs.Turn(World, R, Snk)}
+  {==}
+
+law stream_over:
+  for ~E: Data
+  for ~R: Data
+  for ~feed: E -> Bytes() -> R -> R
+  for ~take: R -> R & Bytes()
+  for +e: E
+  for +ms: U32
+  for +r: R
+  for k: Snk
+  for +held: Bytes()
+  for +wait: Nat
+  for +h: Char
+  for +t: Bytes()
+  for rd: List<&2, Rd>
+  for wr: List<&2, Wr>
+  for eager: Bool
+  for +now: Nat
+  for fs: List<&2, Fil>
+  for out: Bytes()
+  for ew: {Nat.is_lt(wait, U32.to_nat(ms)) == True{} : Bool}
+  for q: R & Bytes()
+  for eq: {take(feed(e, SCon{h, t}, r)) == q : R & Bytes()}
+  for over: {Nat.is_le(Bytes.len(sb.qb(R, q)), Bytes.len(SCon{h, t})) == False{} : Bool}
+  {Bs.pull.room(~Id, ~Id.pure, ~Id.bind, ~World, ~w.rx, ~E, ~R, ~feed, ~take, ~Snk, e, ms,
+      World{Con{Give{wait, SCon{h, t}}, rd}, wr, eager, now, fs, out}, r, k, held, False{}, True{}) ==
+    (Bs.Bq{World{rd, wr, eager, Nat.add(now, wait), fs, out}, sb.qs(R, q), k, held, False{}},
+      Some{Bs.BOver{}}) : Bs.Turn(World, R, Snk)}
+
+def stream_over(E, R, feed, take, e, ms, r, k, held, wait, h, t, rd, wr, eager, now, fs, out, ew, q,
+  eq, over):
+  %Equal.sym(Bool, Nat.is_lt(wait, U32.to_nat(ms)), True{}, ew) :
+    {Bs.pull.got(~E, ~R, ~feed, ~take, World, Snk, e,
+      w.rx.give(rd, wait, SCon{h, t}, ms, wr, eager, now, fs, out, _), r, k, held, False{}) ==
+      (Bs.Bq{World{rd, wr, eager, Nat.add(now, wait), fs, out}, sb.qs(R, q), k, held, False{}},
+        Some{Bs.BOver{}}) : Bs.Turn(World, R, Snk)}
+  %Equal.sym(R & Bytes(), take(feed(e, SCon{h, t}, r)), q, eq) :
+    {Bs.pull.fed(World, R, Snk, World{rd, wr, eager, Nat.add(now, wait), fs, out}, _, k, held,
+      False{}, Bytes.len(SCon{h, t})) ==
+      (Bs.Bq{World{rd, wr, eager, Nat.add(now, wait), fs, out}, sb.qs(R, q), k, held, False{}},
+        Some{Bs.BOver{}}) : Bs.Turn(World, R, Snk)}
+  wl.fed_over(R, World{rd, wr, eager, Nat.add(now, wait), fs, out}, q, k, held,
+    Bytes.len(SCon{h, t}), over)

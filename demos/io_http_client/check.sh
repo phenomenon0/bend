@@ -19,6 +19,13 @@ expect() {
 
 mkdir -p "$D/www"; echo "hello from the engine" > "$D/www/index.html"
 python3 -c "open('$D/www/big.bin','wb').write(bytes(i % 251 for i in range(300000)))"
+python3 -c "open('$D/www/text.txt','w').write(''.join('%07d streamed\\n' % i for i in range(20000)))"
+# a streamed body written out as it came must be the file, byte for byte
+same() {
+  local name=$1 want=$2; shift 2
+  if "$HC" "$@" 2>/dev/null | cmp -s - "$want"; then echo "PASS $name"
+  else echo "FAIL $name: the streamed body is not the file"; fail=1; fi
+}
 openssl req -x509 -newkey rsa:2048 -keyout "$D/key.pem" -out "$D/cert.pem" -days 2 -nodes \
   -subj /CN=localhost -addext subjectAltName=DNS:localhost 2>/dev/null
 
@@ -38,12 +45,18 @@ expect engine.tls.twice 'again, on the same connection:' "$T/" --ca "$D/cert.pem
 expect engine.tls.untrusted 'TLS: .*\(13\)' "$T/"
 expect engine.tls.misnamed 'TLS: .*\(13\)' "https://127.0.0.1:$((P + 1))/" --ca "$D/cert.pem"
 expect engine.refused 'Connection refused' "http://127.0.0.1:$((P + 3))/"
+expect engine.stream '^status 200, streamed 300000 bytes, interim \[ \], reusable$' "$E/big.bin" --stream
+expect engine.stream.twice 'again, on the same connection:' "$E/big.bin" --stream --twice
+expect engine.stream.head '^status 200, streamed 0 bytes' "$E/big.bin" --stream --head
+expect engine.stream.tls '^status 200, streamed 300000 bytes' "$T/big.bin" --stream --ca "$D/cert.pem"
+same engine.stream.body "$D/www/text.txt" "$E/text.txt" --stream --body
+same engine.stream.tls.body "$D/www/text.txt" "$T/text.txt" --stream --body --ca "$D/cert.pem"
 
 NGINX=$(command -v nginx || ls /usr/sbin/nginx 2>/dev/null)
 if [ -n "$NGINX" ]; then
   mkdir -p "$D/ngx/logs" "$D/ngx/www/close" "$D/ngx/www/ssi"; echo "nginx says hi" > "$D/ngx/www/index.html"
   printf 'one <!--# echo var="ssi_x" default="two" --> three\n' > "$D/ngx/www/ssi/index.html"
-  cp "$D/ngx/www/index.html" "$D/ngx/www/close/"; cp "$D/www/big.bin" "$D/ngx/www/"
+  cp "$D/ngx/www/index.html" "$D/ngx/www/close/"; cp "$D/www/big.bin" "$D/www/text.txt" "$D/ngx/www/"
   cat > "$D/ngx/nginx.conf" <<EOF
 worker_processes 1;
 pid $D/ngx/nginx.pid;
@@ -78,6 +91,10 @@ EOF
   expect nginx.close "not reusable$" "$N/close/index.html" --twice
   expect nginx.close.new "again, on a new connection" "$N/close/index.html" --twice
   expect nginx.tls '^status 200, body 14 bytes' "$S/" --ca "$D/cert.pem" --twice
+  expect nginx.stream '^status 200, streamed 300000 bytes, interim \[ \], reusable$' "$N/big.bin" --stream
+  expect nginx.stream.chunked '^status 200, streamed 14 bytes, interim \[ \], reusable$' "$N/ssi/" --stream
+  expect nginx.stream.close 'streamed 14 bytes, interim \[ \], not reusable$' "$N/close/index.html" --stream
+  same nginx.stream.body "$D/www/text.txt" "$N/text.txt" --stream --body
 else
   echo "SKIP nginx: not installed"
 fi

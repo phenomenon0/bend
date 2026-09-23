@@ -33,7 +33,7 @@ jobs:
       - name: the laws hold
         run: |
           for f in demos/io_http_engine/PROOF.bend demos/io_resp/PROOF.bend power/csv_proof.bend \
-            demos/io_http2/PROOF.bend wire/http1/PROOF.bend wire/client.bend wire/pool.bend; do
+            demos/io_http2/PROOF.bend wire/http1/PROOF.bend wire/client.bend wire/pool.bend wire/world.bend; do
             out=$(bun bend2/main.ts "$f"); echo "$out"
             [ "$out" = "All terms check." ] || { echo "$f: not a clean proof"; exit 1; }
           done
@@ -45,7 +45,7 @@ jobs:
           cargo build --release --manifest-path kernel/Cargo.toml
           bash kernel/tests/run.sh
           for f in demos/io_http_engine/PROOF.bend demos/io_resp/PROOF.bend power/csv_proof.bend \
-            demos/io_http2/PROOF.bend wire/http1/PROOF.bend wire/client.bend wire/pool.bend; do
+            demos/io_http2/PROOF.bend wire/http1/PROOF.bend wire/client.bend wire/pool.bend wire/world.bend; do
             bun bend2/main.ts "$f" --export proof.core
             kernel/target/release/bend-kernel -q proof.core || { echo "$f: the kernel refuses it"; exit 1; }
           done
@@ -67,8 +67,11 @@ jobs:
         run: python3 wire/http1/mutants.py
       # each of the client's and the pool's mutants reuses a connection it
       # must not, reads past the deadline or the head's cap, or hands out
-      # a pooled connection it must not, and their laws must refuse it
-      - name: the client's and the pool's laws are not vacuous
+      # a pooled connection it must not; each of the body stream's reads
+      # with its window full, waits on a stalled consumer, reorders, drops
+      # or trusts too much of a body, or tells its end early or twice; and
+      # their laws must refuse it
+      - name: the client's, the pool's and the stream's laws are not vacuous
         run: python3 wire/client_mutants.py
       - name: the server builds
         run: |
@@ -124,7 +127,8 @@ jobs:
       # the client on bend-wire (wire/client.bend): its demo fetches from
       # the engine, plain and over TLS (a pinned CA, an untrusted one, a
       # name not on the certificate), and from nginx: a file, a large
-      # one, HEAD, a chunked page, Connection: close, keep-alive reuse
+      # one, HEAD, a chunked page, Connection: close, keep-alive reuse;
+      # and again with the body streamed (wire/stream.bend)
       - name: the client fetches from the engine and from nginx
         run: |
           sudo apt-get install -y -qq nginx || true

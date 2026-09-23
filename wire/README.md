@@ -24,6 +24,9 @@ one-line instance.
                         in, under budgets, and whether to reuse; its laws
     wire/pool.bend      idle connections to an upstream, bounded, probed
                         as they are taken; its laws
+    wire/stream.bend    a body as a stream: chunks handed to a consumer
+                        as they arrive, under a window; its laws are in
+                        world.bend
 
 Its users: `demos/io_http_engine` (HTTP/1.1, WebSocket, SSE, files),
 `demos/io_resp` (RESP, below) and `power/csv.bend` (the reader kit only).
@@ -134,6 +137,40 @@ to the socket (Linux and macOS sendfile), under TLS the effect writes it
 through the session a 64 KiB block at a time; either way the
 connection holds none of the file itself, and a body that comes up
 short (the file shrank) fails, ending the connection.
+
+## Bodies as streams
+
+`wire/stream.bend` delivers a body a read at a time to a consumer that
+may be slower than the peer -- an upstream socket, a file, a planner --
+with backpressure. It is written over its effects and its framer like
+the loop: `~rx` the timed read; `~feed`, `~take`, `~look` the framer (a
+reader on the kit with the kit's take, and its word on the body: more to
+come, whole, running to the close, refused); `~give` and `~fin` the
+consumer (offered every byte held, it answers how many it took from the
+front; told once that the body is over). A turn is a pass (offer what is
+held) and a pull (read, feed, take, hold): the socket is read only while
+fewer than `win` bytes are held.
+
+**Laws** (`wire/world.bend`, for every framer, with a scripted peer and
+a scripted consumer): `stream_pass` (a pass only moves bytes: what the
+consumer took followed by what is held is what it was, the socket
+untouched, no end told), `stream_stall` (a consumer that takes none of
+a full window ends the stream with no read), `stream_full` (a full
+window is never read into), `stream_pull` (a read's body joins the end
+of what is held, exactly the bytes the framer took), `stream_over` (a
+read that would bring more body than bytes ends the stream instead),
+`stream_window` (so what is held stays under the window plus one read),
+`stream_fin_held` and `stream_fin_last` (the end is told only with
+nothing held and the body over, once, and the stream ends with it).
+With the kit's `drain_reads` they say the chunks a consumer is handed,
+in order, are the body the reader frames, whatever the cuts.
+`client_mutants.py` breaks the stream eight ways, each refused.
+
+The client streams a response with `fetch.stream` (the head capped as
+`fetch` caps it, the body to the consumer); `demos/io_http_client
+--stream` fetches a 100 MB file from nginx in 10 MB of RSS, where
+gathering a 15 MB one takes 35 MB. For a request body, a server hands
+the stream a reader entered at the body (`R.body.len`, `R.body.chunked`).
 
 ## A protocol on the kit: RESP
 

@@ -34,6 +34,7 @@ import ./loop.bend as L
 import ./effects.bend as Fx
 import ./world.bend as W
 import ./http1/resp.bend as R
+import ./stream.bend as Bs
 
 # What an exchange spends
 # =======================
@@ -64,7 +65,8 @@ def chunk() -> U32:
 # Why there is no response: the request did not go out; a read failed;
 # the deadline passed (or a read waited its step out); the head passed
 # its cap; the response was refused (malformed, or framed two ways); the
-# peer closed before the response was whole; the reads ran out.
+# peer closed before the response was whole; the reads ran out; a
+# streamed body's consumer stopped taking it.
 type Why is Data:
   CSend{code: U32}
   CRecv{code: U32}
@@ -73,6 +75,7 @@ type Why is Data:
   CFrame{}
   CEof{}
   CFuel{}
+  CStall{}
 
 # The response: the interim statuses, the final response, what came
 # after it on the connection, and whether the connection may carry
@@ -261,6 +264,151 @@ def fetch(+e: R.Ask, +b: Budget, req: Bytes(), s: Socket) -> IO(Out(Socket)):
   exchange(~(A => IO(A)), ~IO.pure, ~IO.bind, ~Socket, ~net.rx, ~TCP.send_buf_poll, ~Fx.net.now,
     e, b, req, s)
 
+# Streaming the body
+# ==================
+#
+# fetch.stream is fetch with the body handed to a consumer as it
+# arrives rather than gathered: the response is read through the same
+# reader by wire/stream.bend, with a window of win bytes -- the socket
+# is not read while the consumer has that much or more still to take --
+# so a body of any size costs the window and one read. The head is
+# capped as fetch caps it: the framer counts what it is fed while a head
+# is in progress, and refuses past budget.head. Every read has the step
+# as its deadline; there is no deadline on the whole, a body being as
+# long as it is. What comes back is the consumer, and the response
+# (its body empty: the consumer has it) with what came after it and
+# whether the connection may carry another request, as fetch decides.
+
+# the framer: the response reader, what it was fed while a head was in
+# progress, and the cap on that
+type Hd is Data:
+  Hd{p: R.P, n: Nat, cap: Nat}
+
+def hd.new(+b: Budget) -> Hd:
+  Hd{R.p.new(), 0n, U32.to_nat(budget.head(b))}
+
+def hd.feed.go(+e: R.Ask, +bs: Bytes(), h: Hd) -> Hd:
+  match h:
+    case Hd{+p, +n, cap}:
+      Hd{R.feed_buf(e, bs, p), Bool.pick(Nat, R.mid(p), Nat.add(n, Bytes.len(bs)), n), cap}
+
+def hd.feed(e: R.Ask, bs: Bytes(), h: Hd) -> Hd:
+  hd.feed.go(e, bs, h)
+
+def hd.took(q: R.P & Bytes(), n: Nat, cap: Nat) -> Hd & Bytes():
+  (p, x) = q
+  (Hd{p, n, cap}, x)
+
+def hd.take(h: Hd) -> Hd & Bytes():
+  match h:
+    case Hd{p, n, cap}:
+      hd.took(R.take(p), n, cap)
+
+def hd.stage(over: Bool, lk: R.Look) -> Bs.Stage:
+  match over:
+    case True{}:
+      Bs.Refused{}
+    case False{}:
+      match lk:
+        case R.Look{i, end}:
+          match end:
+            case R.Open{}:
+              Bs.Going{}
+            case R.Refused{}:
+              Bs.Refused{}
+            case R.Final{r, rest}:
+              Bs.Ended{}
+            case R.Closing{r}:
+              Bs.Closing{}
+
+def hd.look(h: Hd) -> Bs.Stage:
+  match h:
+    case Hd{+p, +n, +cap}:
+      hd.stage(Nat.is_lt(cap, n), R.look(p))
+
+# how a stream ended, as fetch would say it: a response and what follows
+# it, or why there is none
+def stream.done(+over: Bool, lk: R.Look) -> Result<&2, &2, Why, Got>:
+  match over:
+    case True{}:
+      Fail{CHead{}}
+    case False{}:
+      match lk:
+        case R.Look{i, end}:
+          match end:
+            case R.Final{+r, rest}:
+              final(i, r, rest)
+            case R.Closing{r}:
+              Done{Got{i, r, "", False{}}}
+            case R.Open{}:
+              Fail{CEof{}}
+            case R.Refused{}:
+              Fail{CFrame{}}
+
+def stream.whole(h: Hd) -> Result<&2, &2, Why, Got>:
+  match h:
+    case Hd{+p, +n, +cap}:
+      stream.done(Nat.is_lt(cap, n), R.look(p))
+
+def stream.bad(h: Hd) -> Result<&2, &2, Why, Got>:
+  match h:
+    case Hd{p, +n, +cap}:
+      Bool.pick(Result<&2, &2, Why, Got>, Nat.is_lt(cap, n), Fail{CHead{}}, Fail{CFrame{}})
+
+def stream.why(h: Hd, w: Bs.Why) -> Result<&2, &2, Why, Got>:
+  match w:
+    case Bs.BDone{}:
+      stream.whole(h)
+    case Bs.BStall{}:
+      Fail{CStall{}}
+    case Bs.BBad{}:
+      stream.bad(h)
+    case Bs.BCut{code}:
+      Fail{CRecv{code}}
+    case Bs.BTime{}:
+      Fail{CTime{}}
+    case Bs.BEof{}:
+      Fail{CEof{}}
+    case Bs.BOver{}:
+      Fail{CFrame{}}
+    case Bs.BFuel{}:
+      Fail{CFuel{}}
+
+def stream.out(~K: Type, q: Bs.Bq<Socket, Hd, K> & Bs.Why) -> Socket & K & Result<&2, &2, Why, Got>:
+  (bq, w) = q
+  match bq:
+    case Bs.Bq{s, h, k, held, eof}:
+      (s, (k, stream.why(h, w)))
+
+# a stream's turns: a read or a pass each, and a read brings a byte at
+# least or ends it
+def stream.fuel(+e: R.Ask, +b: Budget) -> Nat:
+  Nat.double(rd.fuel(e, b))
+
+def stream.sent(
+  ~K: Type, ~give: K -> Bytes() -> IO(K & Nat), ~fin: K -> IO(K), +e: R.Ask, +b: Budget,
+  +win: Nat, m: L.Put(Socket), k: K
+) -> IO(Socket & K & Result<&2, &2, Why, Got>):
+  (s, r) = m
+  match r:
+    case Fail{er}:
+      (code, msg) = er
+      IO.pure(Socket & K & Result<&2, &2, Why, Got>, (s, (k, Fail{CSend{code}})))
+    case Done{u}:
+      IO.bind(Bs.Bq<Socket, Hd, K> & Bs.Why, Socket & K & Result<&2, &2, Why, Got>,
+        Bs.run(~(A => IO(A)), ~IO.pure, ~IO.bind, ~Socket, ~TCP.poll_buf, ~R.Ask, ~Hd, ~hd.feed,
+          ~hd.take, ~hd.look, ~K, ~give, ~fin, e, win, budget.step(b), stream.fuel(e, b),
+          Bs.Bq{s, hd.new(b), k, "", False{}}),
+        q => IO.pure(Socket & K & Result<&2, &2, Why, Got>, stream.out(~K, q)))
+
+# One exchange with the body streamed to the consumer k.
+def fetch.stream(
+  ~K: Type, ~give: K -> Bytes() -> IO(K & Nat), ~fin: K -> IO(K), +e: R.Ask, +b: Budget,
+  +win: Nat, req: Bytes(), s: Socket, k: K
+) -> IO(Socket & K & Result<&2, &2, Why, Got>):
+  IO.bind(L.Put(Socket), Socket & K & Result<&2, &2, Why, Got>,
+    TCP.send_buf_poll(s, req, budget.step(b)), m => stream.sent(~K, ~give, ~fin, e, b, win, m, k))
+
 # A request head, for a client that has nothing else to say: the method
 # and target, Host, and the fields given (each a whole line, CRLF and
 # all); the body, if any, after it.
@@ -283,6 +431,8 @@ def why.show(w: Why) -> String:
       "the peer closed before the response was whole"
     case CFuel{}:
       "the reads ran out"
+    case CStall{}:
+      "the body's consumer stopped taking it"
 
 # The model
 # =========
