@@ -320,7 +320,9 @@ law refuse_after_one:
 # ==============
 #
 # The laws above hold the reader to the RFC one rule and one vector at
-# a time. These hold it to the reference for every input at once.
+# a time. These hold it to spec.bend's frame() -- a reading of a whole
+# input written from RFC 9112 a line at a time, sharing no code with
+# the reader -- for every input at once.
 
 # LAW: the reader's classes and lowercasing are the reference's on every
 # U32, not only on the 256 bytes cls_is_spec runs.
@@ -331,6 +333,90 @@ law cls_every:
 law lower_every:
   for +c: U32
   {Eng.lower(c) == Spec.lower(c) : U32}
+
+# The reader seen from outside: the requests it has completed, oldest
+# first, and whether it is reading, has refused, or has handed what
+# follows an upgrade to the frame reader.
+type Look is Data:
+  Reading{}
+  Refusing{}
+  Handing{}
+
+def look.st(st: Eng.St) -> Look:
+  match st:
+    case Eng.Bad{}:
+      Refusing{}
+    case Eng.Rest{b}:
+      Handing{}
+    case _:
+      Reading{}
+
+def look(p: Eng.P) -> List<&2, Eng.Req> & Look:
+  match p:
+    case Eng.P{st, pd, out}:
+      (List.reverse(&2, Eng.Req, out), look.st(st))
+
+# A reader agrees with a framing when it has completed exactly the
+# framing's requests, in order, and then: where the framing is open, it
+# is still reading and is exactly the state a fresh reader holding those
+# requests reaches on the bytes since the last of them; where the
+# framing refuses, it has refused; where the last request upgraded, it
+# holds exactly the bytes that followed that request.
+def agree.end(-p: Eng.P, +rs: List<&2, Eng.Req>, e: Spec.End) -> Type:
+  match e:
+    case Spec.Open{rest}:
+      {look(p) == (rs, Reading{}) : List<&2, Eng.Req> & Look} &
+        {p == Eng.feed(rest, Eng.P{Eng.Pre{}, Eng.pend.new(), List.reverse(&2, Eng.Req, rs)}) : Eng.P}
+    case Spec.Refused{}:
+      {look(p) == (rs, Refusing{}) : List<&2, Eng.Req> & Look}
+    case Spec.Upgraded{b}:
+      {p == Eng.P{Eng.Rest{b}, Eng.pend.new(), List.reverse(&2, Eng.Req, rs)} : Eng.P}
+
+def agree(-p: Eng.P, f: Spec.Frames) -> Type:
+  match f:
+    case Spec.Frames{rs, e}:
+      agree.end(p, rs, e)
+
+# LAW: the reader is the framing. For every input, a fresh reader fed it
+# agrees with frame() of it: the same requests at the same byte
+# boundaries, a refusal exactly where the framing refuses, and nothing
+# but the framing's own leftover in its pending state.
+law frame_sim:
+  for +bs: List<&2, U32>
+  agree(Eng.feed(bs, Eng.p.new()), Spec.frame(bs))
+
+# LAW: the same for the walk the server runs, over one read ...
+law frame_sim_buf:
+  for +b: Bytes()
+  agree(Eng.feed_buf(b, Eng.p.new()), Spec.frame(Bytes.to_list(b)))
+
+# ... and over a connection's reads however TCP cut them: the reader
+# fed each read in turn agrees with frame() of them all, joined.
+def reads(rs: List<&2, Bytes()>, p: Eng.P) -> Eng.P:
+  match rs:
+    case Nil{}:
+      p
+    case Con{r, t}:
+      reads(t, Eng.feed_buf(r, p))
+
+law frame_sim_reads:
+  for +rs: List<&2, Bytes()>
+  agree(reads(rs, Eng.p.new()), Spec.frame(Bytes.to_list(Bytes.concat(rs))))
+
+# LAW: and frame() itself, on three vectors: a request served with the
+# next one begun, one that upgrades, and a folded line refused.
+law frame_get:
+  {Spec.frame(Eng.bytes("GET /health HTTP/1.1\r\nHost: x\r\n\r\nGET /ec")) ==
+    Spec.Frames{[Eng.Req{Eng.MGet{}, "/health", "", False{}, False{}, ""}],
+      Spec.Open{Eng.bytes("GET /ec")}} : Spec.Frames}
+
+law frame_upgrade:
+  {Spec.frame(Eng.bytes("GET /ws HTTP/1.1\r\nHost: x\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: k\r\n\r\nab")) ==
+    Spec.Frames{[Eng.Req{Eng.MGet{}, "/ws", "", False{}, True{}, "k"}], Spec.Upgraded{"ab"}} : Spec.Frames}
+
+law frame_refuse_fold:
+  {Spec.frame(Eng.bytes("GET / HTTP/1.1\r\nHost: x\r\n Content-Length: 5\r\n\r\nhello")) ==
+    Spec.Frames{Nil{}, Spec.Refused{}} : Spec.Frames}
 
 # LAW: a query is no part of the path a target routes by.
 law path_query:

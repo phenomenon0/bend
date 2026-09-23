@@ -1075,7 +1075,6 @@ def conn_bad(
 def Laws.conn_refuses(c, t, a, b, pd, out, e):
   conn_bad(Eng.cls(c), c, t, a, b, pd, out, e)
 
-
 def Laws.parse_get():
   {==}
 
@@ -5012,3 +5011,2954 @@ def Laws.cls_every(c):
 
 def Laws.lower_every(c):
   Equal.sym(U32, Spec.lower(c), Eng.lower(c), br.lower(c))
+
+# The reader is the framing
+# =========================
+#
+# frame_sim: for every input, the reader fed it agrees with spec.bend's
+# frame() of it. The proof is a simulation. frame() is a walk that
+# gathers a line's bytes and reads the line whole at its CR; the reader
+# steps each byte. REL (below) says where the reader is, given where
+# the walk is, and a byte moves both so that REL holds after it (STEP);
+# at the input's end REL gives the agreement (END); induction on the
+# input does the rest (walk.lem).
+#
+# Inside a line, REL says only that the reader is a line-start reader
+# fed the line so far. What that reader is, the spec's view of the same
+# bytes says: line.req and line.field prove, for every line, that the
+# reader's state is the one the view names -- a method, target or
+# version being read; a name; a value in the state its field reads it
+# in -- or refused. They go token by token: a span of bytes a token may
+# hold is one the reader stays on (RS), and the byte that stops the span
+# is stepped as the spec reads it. At the CR, the view says what the
+# line means and the reader's pending fields change the same way; the
+# two sides are compared through PV, which forgets only how the reader
+# stores "no upgrade field seen".
+#
+# Every byte is classified twice, once by each side; br.cls and br.low
+# (generated: a set bit past the low eight makes every comparison with a
+# byte GT, and the low eight are 256 closed cases) say the two agree on
+# every U32.
+
+# The engine seen through the spec
+# --------------------------------
+
+def br.lows(s: Bytes()) -> {Spec.lows(s) == Eng.lows(s) : Bytes()}:
+  match s:
+    case SNil{}:
+      {==}
+    case SCon{Chr{c}, t}:
+      %br.low(c) : {SCon{Chr{Spec.lower(c)}, Spec.lows(t)} == SCon{_, String.to_lower(t)} : Bytes()}
+      %br.lows(t) : {SCon{Chr{Spec.lower(c)}, Spec.lows(t)} == SCon{Chr{Spec.lower(c)}, _} : Bytes()}
+      {==}
+
+# the step of a reader, with the class of its byte given
+def SK(p: Eng.P, k: Eng.Cls, c: U32) -> Eng.P:
+  match p:
+    case Eng.P{st, pd, out}:
+      Eng.step.at(st, k, c, pd, out)
+
+def stepc(p: Eng.P, +c: U32) -> {SK(p, Spec.cls(c), c) == Eng.step(p, c) : Eng.P}:
+  match p:
+    case Eng.P{st, pd, out}:
+      %br.cls(c) : {Eng.step.at(st, Spec.cls(c), c, pd, out) == Eng.step.at(st, _, c, pd, out) : Eng.P}
+      {==}
+
+def feedc(+c: U32, -t: List<&2, U32>, p: Eng.P) ->
+  {Eng.feed(t, SK(p, Spec.cls(c), c)) == Eng.feed(Con{c, t}, p) : Eng.P}:
+  Equal.cong(Eng.P, Eng.P, x => Eng.feed(t, x), SK(p, Spec.cls(c), c), Eng.step(p, c), stepc(p, c))
+
+def eqs(+a: Bytes(), +b: Bytes()) -> {Spec.eq(a, b) == Eng.bytes.eq(a, b) : Bool}:
+  Equal.sym(Bool, Eng.bytes.eq(a, b), Spec.eq(a, b), eq_is_spec(a, b))
+
+# a refused reader: whatever it held pending, it is Bad with its
+# requests
+def kill(p: Eng.P) -> Eng.P:
+  match p:
+    case Eng.P{st, pd, out}:
+      Eng.P{st, Eng.pend.new(), out}
+
+def Dead(-p: Eng.P, -out: List<&2, Eng.Req>) -> Data:
+  {kill(p) == Eng.P{Eng.Bad{}, Eng.pend.new(), out} : Eng.P}
+
+def st.of(p: Eng.P) -> Eng.St:
+  match p:
+    case Eng.P{st, pd, out}:
+      st
+
+def out.of(p: Eng.P) -> List<&2, Eng.Req>:
+  match p:
+    case Eng.P{st, pd, out}:
+      out
+
+def dead.step(p: Eng.P, -k: Eng.Cls, -c: U32, -out: List<&2, Eng.Req>) ->
+  Dead(p, out) -> Dead(SK(p, k, c), out):
+  match p:
+    case Eng.P{st, pd, o}:
+      +d =>
+        %Equal.sym(Eng.St, st, Eng.Bad{},
+          Equal.cong(Eng.P, Eng.St, x => st.of(x), Eng.P{st, Eng.pend.new(), o},
+            Eng.P{Eng.Bad{}, Eng.pend.new(), out}, d)) :
+          {kill(Eng.step.at(_, k, c, pd, o)) == Eng.P{Eng.Bad{}, Eng.pend.new(), out} : Eng.P}
+        %Equal.sym(List<&2, Eng.Req>, o, out,
+          Equal.cong(Eng.P, List<&2, Eng.Req>, x => out.of(x), Eng.P{st, Eng.pend.new(), o},
+            Eng.P{Eng.Bad{}, Eng.pend.new(), out}, d)) :
+          {kill(Eng.step.at(Eng.Bad{}, k, c, pd, _)) == Eng.P{Eng.Bad{}, Eng.pend.new(), out} : Eng.P}
+        {==}
+
+def dead.byte(p: Eng.P, -c: U32, -out: List<&2, Eng.Req>) -> Dead(p, out) -> Dead(Eng.step(p, c), out):
+  match p:
+    case Eng.P{st, pd, o}:
+      dead.step(Eng.P{st, pd, o}, Eng.cls(c), c, out)
+
+def dead.feed(xs: List<&2, U32>, +p: Eng.P, -out: List<&2, Eng.Req>) ->
+  Dead(p, out) -> Dead(Eng.feed(xs, p), out):
+  match xs:
+    case Nil{}:
+      d => d
+    case Con{c, t}:
+      d => dead.feed(t, Eng.step(p, c), out)(dead.byte(p, c, out)(d))
+
+def dead.bad(xs: List<&2, U32>, pd: Eng.Pend, out: List<&2, Eng.Req>) ->
+  Dead(Eng.feed(xs, Eng.P{Eng.Bad{}, pd, out}), out):
+  dead.feed(xs, Eng.P{Eng.Bad{}, pd, out}, out)({==})
+
+# a line holds no CR and no LF: they end it
+def notcrlf(k: Eng.Cls) -> Bool:
+  match k:
+    case Eng.KCr{}:
+      False{}
+    case Eng.KLf{}:
+      False{}
+    case _:
+      True{}
+
+def Plain(xs: List<&2, U32>) -> Type:
+  match xs:
+    case Nil{}:
+      Unit
+    case Con{c, t}:
+      {notcrlf(Spec.cls(c)) == True{} : Bool} & Plain(t)
+
+def plain.snoc.con(-x: U32, -t: List<&2, U32>, -c: U32,
+  pl: {notcrlf(Spec.cls(x)) == True{} : Bool} & Plain(t), ih: Plain(t) -> Plain(Spec.snoc(t, c))) ->
+  {notcrlf(Spec.cls(x)) == True{} : Bool} & Plain(Spec.snoc(t, c)):
+  (a, b) = pl
+  (a, ih(b))
+
+def plain.snoc(xs: List<&2, U32>, -c: U32, nc: {notcrlf(Spec.cls(c)) == True{} : Bool}) ->
+  Plain(xs) -> Plain(Spec.snoc(xs, c)):
+  match xs:
+    case Nil{}:
+      pl => (nc, Unit{})
+    case Con{x, t}:
+      pl => plain.snoc.con(x, t, c, pl, plain.snoc(t, c, nc))
+
+# a list read as bytes, grown by one
+def fl.snoc(xs: List<&2, U32>, -c: U32) ->
+  {Bytes.from_list(Spec.snoc(xs, c)) == Eng.push(Bytes.from_list(xs), c) : Bytes()}:
+  match xs:
+    case Nil{}:
+      {==}
+    case Con{x, t}:
+      Equal.cong(Bytes(), Bytes(), y => SCon{Chr{x}, y}, Bytes.from_list(Spec.snoc(t, c)),
+        Eng.push(Bytes.from_list(t), c), fl.snoc(t, c))
+
+def lb.snoc(xs: List<&2, U32>, -c: U32) ->
+  {Spec.lows(Bytes.from_list(Spec.snoc(xs, c))) ==
+    Eng.push(Spec.lows(Bytes.from_list(xs)), Spec.lower(c)) : Bytes()}:
+  match xs:
+    case Nil{}:
+      {==}
+    case Con{x, t}:
+      Equal.cong(Bytes(), Bytes(), y => SCon{Chr{Spec.lower(x)}, y},
+        Spec.lows(Bytes.from_list(Spec.snoc(t, c))),
+        Eng.push(Spec.lows(Bytes.from_list(t)), Spec.lower(c)), lb.snoc(t, c))
+
+# a run of a token, stepped: where the reader is while it reads one
+type Sel is Data:
+  SelR{sel: Eng.Run}
+  SelL0{}
+  SelLt{v: U32}
+  SelK0{}
+  SelLv{}
+
+def put(s: Sel, acc: Bytes()) -> Eng.St:
+  match s:
+    case SelR{sel}:
+      Eng.st.put(sel, acc)
+    case SelL0{}:
+      Eng.InL0{}
+    case SelLt{v}:
+      Eng.InLt{v}
+    case SelK0{}:
+      Eng.InLk0{}
+    case SelLv{}:
+      Eng.InLv{acc}
+
+def tokof(s: Sel) -> Spec.Tok:
+  match s:
+    case SelR{Eng.RM{}}:
+      Spec.TMeth{}
+    case SelR{Eng.RT{}}:
+      Spec.TTarget{}
+    case SelR{Eng.RV{}}:
+      Spec.TVer{}
+    case SelR{Eng.RN{}}:
+      Spec.TName{}
+    case SelR{Eng.RK{}}:
+      Spec.TVal{}
+    case SelR{Eng.RX{}}:
+      Spec.TVal{}
+    case SelL0{}:
+      Spec.TOws{}
+    case SelLt{v}:
+      Spec.TOws{}
+    case SelK0{}:
+      Spec.TOws{}
+    case SelLv{}:
+      Spec.TVal{}
+
+# a byte a token holds is one the reader stays on, adding it
+def SS(-s: Sel, -k: Eng.Cls, -c: U32, -acc: Bytes(), -pd: Eng.Pend, -out: List<&2, Eng.Req>) -> Type:
+  {Eng.P{put(s, Eng.push(acc, c)), pd, out} == Eng.step.at(put(s, acc), k, c, pd, out) : Eng.P}
+
+def stay(s: Sel, k: Eng.Cls, -c: U32, -acc: Bytes(), -pd: Eng.Pend, -out: List<&2, Eng.Req>) ->
+  {Spec.allows(tokof(s), k) == True{} : Bool} -> SS(s, k, c, acc, pd, out):
+  match s k:
+    case SelR{Eng.RM{}} Eng.KSp{}:
+      e => no(SS(SelR{Eng.RM{}}, Eng.KSp{}, c, acc, pd, out), e)
+    case SelR{Eng.RM{}} Eng.KHt{}:
+      e => no(SS(SelR{Eng.RM{}}, Eng.KHt{}, c, acc, pd, out), e)
+    case SelR{Eng.RM{}} Eng.KCr{}:
+      e => no(SS(SelR{Eng.RM{}}, Eng.KCr{}, c, acc, pd, out), e)
+    case SelR{Eng.RM{}} Eng.KLf{}:
+      e => no(SS(SelR{Eng.RM{}}, Eng.KLf{}, c, acc, pd, out), e)
+    case SelR{Eng.RM{}} Eng.KCo{}:
+      e => no(SS(SelR{Eng.RM{}}, Eng.KCo{}, c, acc, pd, out), e)
+    case SelR{Eng.RM{}} Eng.KCm{}:
+      e => no(SS(SelR{Eng.RM{}}, Eng.KCm{}, c, acc, pd, out), e)
+    case SelR{Eng.RM{}} Eng.KDg{}:
+      e => {==}
+    case SelR{Eng.RM{}} Eng.KTk{}:
+      e => {==}
+    case SelR{Eng.RM{}} Eng.KVc{}:
+      e => no(SS(SelR{Eng.RM{}}, Eng.KVc{}, c, acc, pd, out), e)
+    case SelR{Eng.RM{}} Eng.KCt{}:
+      e => no(SS(SelR{Eng.RM{}}, Eng.KCt{}, c, acc, pd, out), e)
+    case SelR{Eng.RT{}} Eng.KSp{}:
+      e => no(SS(SelR{Eng.RT{}}, Eng.KSp{}, c, acc, pd, out), e)
+    case SelR{Eng.RT{}} Eng.KHt{}:
+      e => no(SS(SelR{Eng.RT{}}, Eng.KHt{}, c, acc, pd, out), e)
+    case SelR{Eng.RT{}} Eng.KCr{}:
+      e => no(SS(SelR{Eng.RT{}}, Eng.KCr{}, c, acc, pd, out), e)
+    case SelR{Eng.RT{}} Eng.KLf{}:
+      e => no(SS(SelR{Eng.RT{}}, Eng.KLf{}, c, acc, pd, out), e)
+    case SelR{Eng.RT{}} Eng.KCo{}:
+      e => {==}
+    case SelR{Eng.RT{}} Eng.KCm{}:
+      e => {==}
+    case SelR{Eng.RT{}} Eng.KDg{}:
+      e => {==}
+    case SelR{Eng.RT{}} Eng.KTk{}:
+      e => {==}
+    case SelR{Eng.RT{}} Eng.KVc{}:
+      e => {==}
+    case SelR{Eng.RT{}} Eng.KCt{}:
+      e => no(SS(SelR{Eng.RT{}}, Eng.KCt{}, c, acc, pd, out), e)
+    case SelR{Eng.RV{}} Eng.KSp{}:
+      e => no(SS(SelR{Eng.RV{}}, Eng.KSp{}, c, acc, pd, out), e)
+    case SelR{Eng.RV{}} Eng.KHt{}:
+      e => no(SS(SelR{Eng.RV{}}, Eng.KHt{}, c, acc, pd, out), e)
+    case SelR{Eng.RV{}} Eng.KCr{}:
+      e => no(SS(SelR{Eng.RV{}}, Eng.KCr{}, c, acc, pd, out), e)
+    case SelR{Eng.RV{}} Eng.KLf{}:
+      e => no(SS(SelR{Eng.RV{}}, Eng.KLf{}, c, acc, pd, out), e)
+    case SelR{Eng.RV{}} Eng.KCo{}:
+      e => no(SS(SelR{Eng.RV{}}, Eng.KCo{}, c, acc, pd, out), e)
+    case SelR{Eng.RV{}} Eng.KCm{}:
+      e => no(SS(SelR{Eng.RV{}}, Eng.KCm{}, c, acc, pd, out), e)
+    case SelR{Eng.RV{}} Eng.KDg{}:
+      e => {==}
+    case SelR{Eng.RV{}} Eng.KTk{}:
+      e => {==}
+    case SelR{Eng.RV{}} Eng.KVc{}:
+      e => {==}
+    case SelR{Eng.RV{}} Eng.KCt{}:
+      e => no(SS(SelR{Eng.RV{}}, Eng.KCt{}, c, acc, pd, out), e)
+    case SelR{Eng.RN{}} Eng.KSp{}:
+      e => no(SS(SelR{Eng.RN{}}, Eng.KSp{}, c, acc, pd, out), e)
+    case SelR{Eng.RN{}} Eng.KHt{}:
+      e => no(SS(SelR{Eng.RN{}}, Eng.KHt{}, c, acc, pd, out), e)
+    case SelR{Eng.RN{}} Eng.KCr{}:
+      e => no(SS(SelR{Eng.RN{}}, Eng.KCr{}, c, acc, pd, out), e)
+    case SelR{Eng.RN{}} Eng.KLf{}:
+      e => no(SS(SelR{Eng.RN{}}, Eng.KLf{}, c, acc, pd, out), e)
+    case SelR{Eng.RN{}} Eng.KCo{}:
+      e => no(SS(SelR{Eng.RN{}}, Eng.KCo{}, c, acc, pd, out), e)
+    case SelR{Eng.RN{}} Eng.KCm{}:
+      e => no(SS(SelR{Eng.RN{}}, Eng.KCm{}, c, acc, pd, out), e)
+    case SelR{Eng.RN{}} Eng.KDg{}:
+      e => {==}
+    case SelR{Eng.RN{}} Eng.KTk{}:
+      e => {==}
+    case SelR{Eng.RN{}} Eng.KVc{}:
+      e => no(SS(SelR{Eng.RN{}}, Eng.KVc{}, c, acc, pd, out), e)
+    case SelR{Eng.RN{}} Eng.KCt{}:
+      e => no(SS(SelR{Eng.RN{}}, Eng.KCt{}, c, acc, pd, out), e)
+    case SelR{Eng.RK{}} Eng.KSp{}:
+      e => {==}
+    case SelR{Eng.RK{}} Eng.KHt{}:
+      e => {==}
+    case SelR{Eng.RK{}} Eng.KCr{}:
+      e => no(SS(SelR{Eng.RK{}}, Eng.KCr{}, c, acc, pd, out), e)
+    case SelR{Eng.RK{}} Eng.KLf{}:
+      e => no(SS(SelR{Eng.RK{}}, Eng.KLf{}, c, acc, pd, out), e)
+    case SelR{Eng.RK{}} Eng.KCo{}:
+      e => {==}
+    case SelR{Eng.RK{}} Eng.KCm{}:
+      e => {==}
+    case SelR{Eng.RK{}} Eng.KDg{}:
+      e => {==}
+    case SelR{Eng.RK{}} Eng.KTk{}:
+      e => {==}
+    case SelR{Eng.RK{}} Eng.KVc{}:
+      e => {==}
+    case SelR{Eng.RK{}} Eng.KCt{}:
+      e => no(SS(SelR{Eng.RK{}}, Eng.KCt{}, c, acc, pd, out), e)
+    case SelR{Eng.RX{}} Eng.KSp{}:
+      e => {==}
+    case SelR{Eng.RX{}} Eng.KHt{}:
+      e => {==}
+    case SelR{Eng.RX{}} Eng.KCr{}:
+      e => no(SS(SelR{Eng.RX{}}, Eng.KCr{}, c, acc, pd, out), e)
+    case SelR{Eng.RX{}} Eng.KLf{}:
+      e => no(SS(SelR{Eng.RX{}}, Eng.KLf{}, c, acc, pd, out), e)
+    case SelR{Eng.RX{}} Eng.KCo{}:
+      e => {==}
+    case SelR{Eng.RX{}} Eng.KCm{}:
+      e => {==}
+    case SelR{Eng.RX{}} Eng.KDg{}:
+      e => {==}
+    case SelR{Eng.RX{}} Eng.KTk{}:
+      e => {==}
+    case SelR{Eng.RX{}} Eng.KVc{}:
+      e => {==}
+    case SelR{Eng.RX{}} Eng.KCt{}:
+      e => no(SS(SelR{Eng.RX{}}, Eng.KCt{}, c, acc, pd, out), e)
+    case SelL0{} Eng.KSp{}:
+      e => {==}
+    case SelL0{} Eng.KHt{}:
+      e => {==}
+    case SelL0{} Eng.KCr{}:
+      e => no(SS(SelL0{}, Eng.KCr{}, c, acc, pd, out), e)
+    case SelL0{} Eng.KLf{}:
+      e => no(SS(SelL0{}, Eng.KLf{}, c, acc, pd, out), e)
+    case SelL0{} Eng.KCo{}:
+      e => no(SS(SelL0{}, Eng.KCo{}, c, acc, pd, out), e)
+    case SelL0{} Eng.KCm{}:
+      e => no(SS(SelL0{}, Eng.KCm{}, c, acc, pd, out), e)
+    case SelL0{} Eng.KDg{}:
+      e => no(SS(SelL0{}, Eng.KDg{}, c, acc, pd, out), e)
+    case SelL0{} Eng.KTk{}:
+      e => no(SS(SelL0{}, Eng.KTk{}, c, acc, pd, out), e)
+    case SelL0{} Eng.KVc{}:
+      e => no(SS(SelL0{}, Eng.KVc{}, c, acc, pd, out), e)
+    case SelL0{} Eng.KCt{}:
+      e => no(SS(SelL0{}, Eng.KCt{}, c, acc, pd, out), e)
+    case SelLt{v} Eng.KSp{}:
+      e => {==}
+    case SelLt{v} Eng.KHt{}:
+      e => {==}
+    case SelLt{v} Eng.KCr{}:
+      e => no(SS(SelLt{v}, Eng.KCr{}, c, acc, pd, out), e)
+    case SelLt{v} Eng.KLf{}:
+      e => no(SS(SelLt{v}, Eng.KLf{}, c, acc, pd, out), e)
+    case SelLt{v} Eng.KCo{}:
+      e => no(SS(SelLt{v}, Eng.KCo{}, c, acc, pd, out), e)
+    case SelLt{v} Eng.KCm{}:
+      e => no(SS(SelLt{v}, Eng.KCm{}, c, acc, pd, out), e)
+    case SelLt{v} Eng.KDg{}:
+      e => no(SS(SelLt{v}, Eng.KDg{}, c, acc, pd, out), e)
+    case SelLt{v} Eng.KTk{}:
+      e => no(SS(SelLt{v}, Eng.KTk{}, c, acc, pd, out), e)
+    case SelLt{v} Eng.KVc{}:
+      e => no(SS(SelLt{v}, Eng.KVc{}, c, acc, pd, out), e)
+    case SelLt{v} Eng.KCt{}:
+      e => no(SS(SelLt{v}, Eng.KCt{}, c, acc, pd, out), e)
+    case SelK0{} Eng.KSp{}:
+      e => {==}
+    case SelK0{} Eng.KHt{}:
+      e => {==}
+    case SelK0{} Eng.KCr{}:
+      e => no(SS(SelK0{}, Eng.KCr{}, c, acc, pd, out), e)
+    case SelK0{} Eng.KLf{}:
+      e => no(SS(SelK0{}, Eng.KLf{}, c, acc, pd, out), e)
+    case SelK0{} Eng.KCo{}:
+      e => no(SS(SelK0{}, Eng.KCo{}, c, acc, pd, out), e)
+    case SelK0{} Eng.KCm{}:
+      e => no(SS(SelK0{}, Eng.KCm{}, c, acc, pd, out), e)
+    case SelK0{} Eng.KDg{}:
+      e => no(SS(SelK0{}, Eng.KDg{}, c, acc, pd, out), e)
+    case SelK0{} Eng.KTk{}:
+      e => no(SS(SelK0{}, Eng.KTk{}, c, acc, pd, out), e)
+    case SelK0{} Eng.KVc{}:
+      e => no(SS(SelK0{}, Eng.KVc{}, c, acc, pd, out), e)
+    case SelK0{} Eng.KCt{}:
+      e => no(SS(SelK0{}, Eng.KCt{}, c, acc, pd, out), e)
+    case SelLv{} Eng.KSp{}:
+      e => {==}
+    case SelLv{} Eng.KHt{}:
+      e => {==}
+    case SelLv{} Eng.KCr{}:
+      e => no(SS(SelLv{}, Eng.KCr{}, c, acc, pd, out), e)
+    case SelLv{} Eng.KLf{}:
+      e => no(SS(SelLv{}, Eng.KLf{}, c, acc, pd, out), e)
+    case SelLv{} Eng.KCo{}:
+      e => {==}
+    case SelLv{} Eng.KCm{}:
+      e => {==}
+    case SelLv{} Eng.KDg{}:
+      e => {==}
+    case SelLv{} Eng.KTk{}:
+      e => {==}
+    case SelLv{} Eng.KVc{}:
+      e => {==}
+    case SelLv{} Eng.KCt{}:
+      e => no(SS(SelLv{}, Eng.KCt{}, c, acc, pd, out), e)
+
+# where the reader is after the run a span took: the run's state with
+# the run added, and, when a byte stopped it, that byte stepped and what
+# follows it walked
+def RES.at(stop: Spec.Stop, s: Sel, acc: Bytes(), pd: Eng.Pend, out: List<&2, Eng.Req>) -> Eng.P:
+  match stop:
+    case Spec.SEnd{}:
+      Eng.P{put(s, acc), pd, out}
+    case Spec.SAt{k, c, rest}:
+      Eng.feed(rest, Eng.step.at(put(s, acc), k, c, pd, out))
+
+def RES(sp: Spec.Span, s: Sel, acc: Bytes(), pd: Eng.Pend, out: List<&2, Eng.Req>) -> Eng.P:
+  match sp:
+    case Spec.Span{run, stop}:
+      RES.at(stop, s, Bytes.append(acc, Bytes.from_list(run)), pd, out)
+
+def respush(-c: U32, sp: Spec.Span, -s: Sel, acc: Bytes(), -pd: Eng.Pend, -out: List<&2, Eng.Req>) ->
+  {RES(sp, s, Eng.push(acc, c), pd, out) == RES(Spec.span.push(c, sp), s, acc, pd, out) : Eng.P}:
+  match sp:
+    case Spec.Span{r, st}:
+      %push_app(acc, c, Bytes.from_list(r)) :
+        {RES.at(st, s, Bytes.append(Eng.push(acc, c), Bytes.from_list(r)), pd, out) ==
+          RES.at(st, s, _, pd, out) : Eng.P}
+      {==}
+
+def RSG(-x: List<&2, U32>, -s: Sel, -acc: Bytes(), -pd: Eng.Pend, -out: List<&2, Eng.Req>) -> Type:
+  {RES(Spec.span(tokof(s), x), s, acc, pd, out) == Eng.feed(x, Eng.P{put(s, acc), pd, out}) : Eng.P}
+
+def RS.ok(+s: Sel, +k: Eng.Cls, +c: U32, +t: List<&2, U32>, +acc: Bytes(), +pd: Eng.Pend,
+  +out: List<&2, Eng.Req>, ok: Bool, ih: RSG(t, s, Eng.push(acc, c), pd, out)) ->
+  {Spec.allows(tokof(s), k) == ok : Bool} ->
+  {RES(Spec.span.pick(ok, k, c, t, Spec.span(tokof(s), t)), s, acc, pd, out) ==
+    Eng.feed(t, Eng.step.at(put(s, acc), k, c, pd, out)) : Eng.P}:
+  match ok:
+    case True{}:
+      e =>
+        %stay(s, k, c, acc, pd, out)(e) :
+          {RES(Spec.span.push(c, Spec.span(tokof(s), t)), s, acc, pd, out) == Eng.feed(t, _) : Eng.P}
+        %respush(c, Spec.span(tokof(s), t), s, acc, pd, out) :
+          {_ == Eng.feed(t, Eng.P{put(s, Eng.push(acc, c)), pd, out}) : Eng.P}
+        ih
+    case False{}:
+      e =>
+        %Equal.sym(Bytes(), Bytes.append(acc, ""), acc, app_nil(acc)) :
+          {Eng.feed(t, Eng.step.at(put(s, _), k, c, pd, out)) ==
+            Eng.feed(t, Eng.step.at(put(s, acc), k, c, pd, out)) : Eng.P}
+        {==}
+
+# a span, stepped: the reader walks the run a byte at a time, staying
+# on it, and steps the byte that stopped it
+def RS(x: List<&2, U32>, +s: Sel, +acc: Bytes(), +pd: Eng.Pend, +out: List<&2, Eng.Req>) ->
+  RSG(x, s, acc, pd, out):
+  match x:
+    case Nil{}:
+      %Equal.sym(Bytes(), Bytes.append(acc, ""), acc, app_nil(acc)) :
+        {Eng.P{put(s, _), pd, out} == Eng.P{put(s, acc), pd, out} : Eng.P}
+      {==}
+    case Con{+c, +t}:
+      %feedc(c, t, Eng.P{put(s, acc), pd, out}) :
+        {RES(Spec.span(tokof(s), Con{c, t}), s, acc, pd, out) == _ : Eng.P}
+      RS.ok(s, Spec.cls(c), c, t, acc, pd, out, Spec.allows(tokof(s), Spec.cls(c)),
+        RS(t, s, Eng.push(acc, c), pd, out))({==})
+
+# anything, from True == False
+def no2(-g: Type, e: {True{} == False{} : Bool}) -> g:
+  %e : BD(_, Unit, g)
+  Unit{}
+
+# what a span stopped at: a byte its token does not hold, and, in a
+# line, no CR or LF, with the rest of the line after it
+def SW.at(-t: Spec.Tok, stop: Spec.Stop) -> Type:
+  match stop:
+    case Spec.SEnd{}:
+      Unit
+    case Spec.SAt{+k, c, rest}:
+      {Spec.allows(t, k) == False{} : Bool} & ({notcrlf(k) == True{} : Bool} & Plain(rest))
+
+def SW(-t: Spec.Tok, sp: Spec.Span) -> Type:
+  match sp:
+    case Spec.Span{r, stop}:
+      SW.at(t, stop)
+
+def sw.push(-t: Spec.Tok, -c: U32, sp: Spec.Span) -> SW(t, sp) -> SW(t, Spec.span.push(c, sp)):
+  match sp:
+    case Spec.Span{r, stop}:
+      h => h
+
+def span.sw.ok(+t: Spec.Tok, +c: U32, +u: List<&2, U32>, ok: Bool,
+  ih: Plain(u) -> SW(t, Spec.span(t, u))) ->
+  {Spec.allows(t, Spec.cls(c)) == ok : Bool} -> {notcrlf(Spec.cls(c)) == True{} : Bool} -> Plain(u) ->
+  SW(t, Spec.span.pick(ok, Spec.cls(c), c, u, Spec.span(t, u))):
+  match ok:
+    case True{}:
+      e => nc => pu => sw.push(t, c, Spec.span(t, u))(ih(pu))
+    case False{}:
+      e => nc => pu => (e, (nc, pu))
+
+def span.sw.con(+t: Spec.Tok, +c: U32, +u: List<&2, U32>,
+  pl: {notcrlf(Spec.cls(c)) == True{} : Bool} & Plain(u), ih: Plain(u) -> SW(t, Spec.span(t, u))) ->
+  SW(t, Spec.span(t, Con{c, u})):
+  (nc, pu) = pl
+  span.sw.ok(t, c, u, Spec.allows(t, Spec.cls(c)), ih)({==})(nc)(pu)
+
+def span.sw(+t: Spec.Tok, x: List<&2, U32>) -> Plain(x) -> SW(t, Spec.span(t, x)):
+  match x:
+    case Nil{}:
+      pl => Unit{}
+    case Con{+c, +u}:
+      pl => span.sw.con(t, c, u, pl, span.sw(t, u))
+
+# The request line, seen
+# ----------------------
+#
+# The reader's state after as much of a request line as has come, from
+# a reader between requests, is fixed by the spec's view of that much:
+# a method, a target or a version being read, with the method and the
+# target, once closed, in the pending message -- or refused.
+
+def pd1(m: List<&2, U32>) -> Eng.Pend:
+  Eng.pend.meth(Eng.pend.new(), Eng.meth.of(Bytes.from_list(m)))
+
+def pd2(m: List<&2, U32>, t: List<&2, U32>) -> Eng.Pend:
+  Eng.pend.path(pd1(m), Bytes.from_list(t))
+
+def LR.req(-p: Eng.P, v: Spec.RLine, -out: List<&2, Eng.Req>) -> Type:
+  match v:
+    case Spec.RNone{}:
+      {p == Eng.P{Eng.Pre{}, Eng.pend.new(), out} : Eng.P}
+    case Spec.RMeth{m}:
+      {p == Eng.P{Eng.InM{Bytes.from_list(m)}, Eng.pend.new(), out} : Eng.P}
+    case Spec.RTarget{m, t}:
+      {p == Eng.P{Eng.InT{Bytes.from_list(t)}, pd1(m), out} : Eng.P}
+    case Spec.RVer{m, t, v}:
+      {p == Eng.P{Eng.InV{Bytes.from_list(v)}, pd2(m, t), out} : Eng.P}
+    case Spec.RBad{}:
+      Dead(p, out)
+
+# the version
+def G.ver(+k: Eng.Cls, +c: U32, +rest: List<&2, U32>, +m: List<&2, U32>, +t: List<&2, U32>,
+  +v: List<&2, U32>, +out: List<&2, Eng.Req>) -> Type:
+  Dead(Eng.feed(rest, Eng.step.at(Eng.InV{Bytes.from_list(v)}, k, c, pd2(m, t), out)), out)
+
+def K.ver.at(+k: Eng.Cls, +c: U32, +rest: List<&2, U32>, +m: List<&2, U32>, +t: List<&2, U32>,
+  +v: List<&2, U32>, +out: List<&2, Eng.Req>, mx: {Spec.allows(Spec.TVer{}, k) == False{} : Bool},
+  nc: {notcrlf(k) == True{} : Bool}) -> G.ver(k, c, rest, m, t, v, out):
+  match k:
+    case Eng.KSp{}:
+      dead.bad(rest, pd2(m, t), out)
+    case Eng.KHt{}:
+      dead.bad(rest, pd2(m, t), out)
+    case Eng.KCr{}:
+      no(G.ver(Eng.KCr{}, c, rest, m, t, v, out), nc)
+    case Eng.KLf{}:
+      dead.bad(rest, pd2(m, t), out)
+    case Eng.KCo{}:
+      dead.bad(rest, pd2(m, t), out)
+    case Eng.KCm{}:
+      dead.bad(rest, pd2(m, t), out)
+    case Eng.KDg{}:
+      no2(G.ver(Eng.KDg{}, c, rest, m, t, v, out), mx)
+    case Eng.KTk{}:
+      no2(G.ver(Eng.KTk{}, c, rest, m, t, v, out), mx)
+    case Eng.KVc{}:
+      no2(G.ver(Eng.KVc{}, c, rest, m, t, v, out), mx)
+    case Eng.KCt{}:
+      dead.bad(rest, pd2(m, t), out)
+
+def K.ver.sat(+k: Eng.Cls, +c: U32, +rest: List<&2, U32>, +m: List<&2, U32>, +t: List<&2, U32>,
+  +v: List<&2, U32>, +out: List<&2, Eng.Req>,
+  sw: {Spec.allows(Spec.TVer{}, k) == False{} : Bool} & ({notcrlf(k) == True{} : Bool} & Plain(rest))) ->
+  G.ver(k, c, rest, m, t, v, out):
+  (mx, np) = sw
+  (nc, pr) = np
+  K.ver.at(k, c, rest, m, t, v, out, mx, nc)
+
+def K.ver.stop(+m: List<&2, U32>, +t: List<&2, U32>, +v: List<&2, U32>, stop: Spec.Stop,
+  +out: List<&2, Eng.Req>) -> SW.at(Spec.TVer{}, stop) ->
+  LR.req(RES.at(stop, SelR{Eng.RV{}}, Bytes.from_list(v), pd2(m, t), out),
+    Spec.req.ver(m, t, Spec.Span{v, stop}), out):
+  match stop:
+    case Spec.SEnd{}:
+      sw => {==}
+    case Spec.SAt{k, c, rest}:
+      sw => K.ver.sat(k, c, rest, m, t, v, out, sw)
+
+def K.ver(+m: List<&2, U32>, +t: List<&2, U32>, sp: Spec.Span, +out: List<&2, Eng.Req>) ->
+  SW(Spec.TVer{}, sp) -> LR.req(RES(sp, SelR{Eng.RV{}}, "", pd2(m, t), out), Spec.req.ver(m, t, sp), out):
+  match sp:
+    case Spec.Span{v, stop}:
+      K.ver.stop(m, t, v, stop, out)
+
+# the target
+def K.target.sp(+m: List<&2, U32>, t: List<&2, U32>, +rest: List<&2, U32>, +out: List<&2, Eng.Req>) ->
+  Plain(rest) -> LR.req(Eng.feed(rest, Eng.step.target(Bytes.from_list(t), pd1(m), out)),
+    Spec.req.target.sp(m, t, rest), out):
+  match t:
+    case Nil{}:
+      pl => dead.bad(rest, pd1(m), out)
+    case Con{+h, +r}:
+      pl =>
+        %RS(rest, SelR{Eng.RV{}}, "", pd2(m, Con{h, r}), out) :
+          LR.req(_, Spec.req.ver(m, Con{h, r}, Spec.span(Spec.TVer{}, rest)), out)
+        K.ver(m, Con{h, r}, Spec.span(Spec.TVer{}, rest), out)(span.sw(Spec.TVer{}, rest)(pl))
+
+def G.tgt(+k: Eng.Cls, +c: U32, +rest: List<&2, U32>, +m: List<&2, U32>, +t: List<&2, U32>,
+  +out: List<&2, Eng.Req>) -> Type:
+  LR.req(Eng.feed(rest, Eng.step.at(Eng.InT{Bytes.from_list(t)}, k, c, pd1(m), out)),
+    Spec.req.target(m, Spec.Span{t, Spec.SAt{k, c, rest}}), out)
+
+def K.target.at(+k: Eng.Cls, +c: U32, +rest: List<&2, U32>, +m: List<&2, U32>, +t: List<&2, U32>,
+  +out: List<&2, Eng.Req>, mx: {Spec.allows(Spec.TTarget{}, k) == False{} : Bool},
+  pr: Plain(rest)) -> G.tgt(k, c, rest, m, t, out):
+  match k:
+    case Eng.KSp{}:
+      K.target.sp(m, t, rest, out)(pr)
+    case Eng.KHt{}:
+      dead.bad(rest, pd1(m), out)
+    case Eng.KCr{}:
+      dead.bad(rest, pd1(m), out)
+    case Eng.KLf{}:
+      dead.bad(rest, pd1(m), out)
+    case Eng.KCo{}:
+      no2(G.tgt(Eng.KCo{}, c, rest, m, t, out), mx)
+    case Eng.KCm{}:
+      no2(G.tgt(Eng.KCm{}, c, rest, m, t, out), mx)
+    case Eng.KDg{}:
+      no2(G.tgt(Eng.KDg{}, c, rest, m, t, out), mx)
+    case Eng.KTk{}:
+      no2(G.tgt(Eng.KTk{}, c, rest, m, t, out), mx)
+    case Eng.KVc{}:
+      no2(G.tgt(Eng.KVc{}, c, rest, m, t, out), mx)
+    case Eng.KCt{}:
+      dead.bad(rest, pd1(m), out)
+
+def K.target.sat(+k: Eng.Cls, +c: U32, +rest: List<&2, U32>, +m: List<&2, U32>, +t: List<&2, U32>,
+  +out: List<&2, Eng.Req>,
+  sw: {Spec.allows(Spec.TTarget{}, k) == False{} : Bool} & ({notcrlf(k) == True{} : Bool} & Plain(rest))) ->
+  G.tgt(k, c, rest, m, t, out):
+  (mx, np) = sw
+  (nc, pr) = np
+  K.target.at(k, c, rest, m, t, out, mx, pr)
+
+def K.target.stop(+m: List<&2, U32>, +t: List<&2, U32>, stop: Spec.Stop, +out: List<&2, Eng.Req>) ->
+  SW.at(Spec.TTarget{}, stop) ->
+  LR.req(RES.at(stop, SelR{Eng.RT{}}, Bytes.from_list(t), pd1(m), out),
+    Spec.req.target(m, Spec.Span{t, stop}), out):
+  match stop:
+    case Spec.SEnd{}:
+      sw => {==}
+    case Spec.SAt{k, c, rest}:
+      sw => K.target.sat(k, c, rest, m, t, out, sw)
+
+def K.target(+m: List<&2, U32>, sp: Spec.Span, +out: List<&2, Eng.Req>) ->
+  SW(Spec.TTarget{}, sp) -> LR.req(RES(sp, SelR{Eng.RT{}}, "", pd1(m), out), Spec.req.target(m, sp), out):
+  match sp:
+    case Spec.Span{t, stop}:
+      K.target.stop(m, t, stop, out)
+
+# the method
+def G.meth(+k: Eng.Cls, +d: U32, +rest: List<&2, U32>, +c: U32, +r: List<&2, U32>,
+  +out: List<&2, Eng.Req>) -> Type:
+  LR.req(Eng.feed(rest, Eng.step.at(Eng.InM{Bytes.from_list(Con{c, r})}, k, d, Eng.pend.new(), out)),
+    Spec.req.meth(Spec.Span{Con{c, r}, Spec.SAt{k, d, rest}}), out)
+
+def K.meth.at(+k: Eng.Cls, +d: U32, +rest: List<&2, U32>, +c: U32, +r: List<&2, U32>,
+  +out: List<&2, Eng.Req>, mx: {Spec.allows(Spec.TMeth{}, k) == False{} : Bool},
+  pr: Plain(rest)) -> G.meth(k, d, rest, c, r, out):
+  match k:
+    case Eng.KSp{}:
+      %RS(rest, SelR{Eng.RT{}}, "", pd1(Con{c, r}), out) :
+        LR.req(_, Spec.req.target(Con{c, r}, Spec.span(Spec.TTarget{}, rest)), out)
+      K.target(Con{c, r}, Spec.span(Spec.TTarget{}, rest), out)(span.sw(Spec.TTarget{}, rest)(pr))
+    case Eng.KHt{}:
+      dead.bad(rest, Eng.pend.new(), out)
+    case Eng.KCr{}:
+      dead.bad(rest, Eng.pend.new(), out)
+    case Eng.KLf{}:
+      dead.bad(rest, Eng.pend.new(), out)
+    case Eng.KCo{}:
+      dead.bad(rest, Eng.pend.new(), out)
+    case Eng.KCm{}:
+      dead.bad(rest, Eng.pend.new(), out)
+    case Eng.KDg{}:
+      no2(G.meth(Eng.KDg{}, d, rest, c, r, out), mx)
+    case Eng.KTk{}:
+      no2(G.meth(Eng.KTk{}, d, rest, c, r, out), mx)
+    case Eng.KVc{}:
+      dead.bad(rest, Eng.pend.new(), out)
+    case Eng.KCt{}:
+      dead.bad(rest, Eng.pend.new(), out)
+
+def K.meth.sat(+k: Eng.Cls, +d: U32, +rest: List<&2, U32>, +c: U32, +r: List<&2, U32>,
+  +out: List<&2, Eng.Req>,
+  sw: {Spec.allows(Spec.TMeth{}, k) == False{} : Bool} & ({notcrlf(k) == True{} : Bool} & Plain(rest))) ->
+  G.meth(k, d, rest, c, r, out):
+  (mx, np) = sw
+  (nc, pr) = np
+  K.meth.at(k, d, rest, c, r, out, mx, pr)
+
+def K.meth.stop(+c: U32, +r: List<&2, U32>, stop: Spec.Stop, +out: List<&2, Eng.Req>) ->
+  SW.at(Spec.TMeth{}, stop) ->
+  LR.req(RES.at(stop, SelR{Eng.RM{}}, Bytes.from_list(Con{c, r}), Eng.pend.new(), out),
+    Spec.req.meth(Spec.Span{Con{c, r}, stop}), out):
+  match stop:
+    case Spec.SEnd{}:
+      sw => {==}
+    case Spec.SAt{k, d, rest}:
+      sw => K.meth.sat(k, d, rest, c, r, out, sw)
+
+def K.meth(+c: U32, sp: Spec.Span, +out: List<&2, Eng.Req>) ->
+  SW(Spec.TMeth{}, sp) ->
+  LR.req(RES(sp, SelR{Eng.RM{}}, Eng.one(c), Eng.pend.new(), out), Spec.req.meth(Spec.span.push(c, sp)), out):
+  match sp:
+    case Spec.Span{r, stop}:
+      K.meth.stop(c, r, stop, out)
+
+# the first byte of a request line
+def G.req1(+k: Eng.Cls, +c: U32, +t: List<&2, U32>, +out: List<&2, Eng.Req>) -> Type:
+  LR.req(Eng.feed(t, Eng.step.at(Eng.Pre{}, k, c, Eng.pend.new(), out)),
+    Spec.req.meth(Spec.span.pick(Spec.allows(Spec.TMeth{}, k), k, c, t, Spec.span(Spec.TMeth{}, t))), out)
+
+def line.req.first(+k: Eng.Cls, +c: U32, +t: List<&2, U32>, +out: List<&2, Eng.Req>,
+  nc: {notcrlf(k) == True{} : Bool}, pt: Plain(t)) -> G.req1(k, c, t, out):
+  match k:
+    case Eng.KTk{}:
+      %RS(t, SelR{Eng.RM{}}, Eng.one(c), Eng.pend.new(), out) :
+        LR.req(_, Spec.req.meth(Spec.span.push(c, Spec.span(Spec.TMeth{}, t))), out)
+      K.meth(c, Spec.span(Spec.TMeth{}, t), out)(span.sw(Spec.TMeth{}, t)(pt))
+    case Eng.KDg{}:
+      %RS(t, SelR{Eng.RM{}}, Eng.one(c), Eng.pend.new(), out) :
+        LR.req(_, Spec.req.meth(Spec.span.push(c, Spec.span(Spec.TMeth{}, t))), out)
+      K.meth(c, Spec.span(Spec.TMeth{}, t), out)(span.sw(Spec.TMeth{}, t)(pt))
+    case Eng.KCr{}:
+      no(G.req1(Eng.KCr{}, c, t, out), nc)
+    case Eng.KSp{}:
+      dead.bad(t, Eng.pend.new(), out)
+    case Eng.KHt{}:
+      dead.bad(t, Eng.pend.new(), out)
+    case Eng.KLf{}:
+      dead.bad(t, Eng.pend.new(), out)
+    case Eng.KCo{}:
+      dead.bad(t, Eng.pend.new(), out)
+    case Eng.KCm{}:
+      dead.bad(t, Eng.pend.new(), out)
+    case Eng.KVc{}:
+      dead.bad(t, Eng.pend.new(), out)
+    case Eng.KCt{}:
+      dead.bad(t, Eng.pend.new(), out)
+
+def line.req.con(+c: U32, +t: List<&2, U32>, +out: List<&2, Eng.Req>,
+  pl: {notcrlf(Spec.cls(c)) == True{} : Bool} & Plain(t)) ->
+  LR.req(Eng.feed(Con{c, t}, Eng.P{Eng.Pre{}, Eng.pend.new(), out}), Spec.req.view(Con{c, t}), out):
+  (nc, pt) = pl
+  %feedc(c, t, Eng.P{Eng.Pre{}, Eng.pend.new(), out}) : LR.req(_, Spec.req.view(Con{c, t}), out)
+  line.req.first(Spec.cls(c), c, t, out, nc, pt)
+
+# LEMMA: a request line, read as far as it has come
+def line.req(cur: List<&2, U32>, +out: List<&2, Eng.Req>) -> Plain(cur) ->
+  LR.req(Eng.feed(cur, Eng.P{Eng.Pre{}, Eng.pend.new(), out}), Spec.req.view(cur), out):
+  match cur:
+    case Nil{}:
+      pl => {==}
+    case Con{+c, +t}:
+      pl => line.req.con(c, t, out, pl)
+
+# The field lines, seen
+# ---------------------
+#
+# The same for a field line, from a reader at the start of one with the
+# fields pd pending: a name being read, or a value, in the state its
+# field is read in -- the digits of a length read so far, a list's
+# member being read and whether a member so far said close, upgrade or
+# websocket, a key, a version -- or refused.
+
+def lowb(cur: List<&2, U32>) -> Bytes():
+  Spec.lows(Bytes.from_list(cur))
+
+def LR.len(-p: Eng.P, -n: U32, ws: Bool, -pd: Eng.Pend, -out: List<&2, Eng.Req>) -> Type:
+  match ws:
+    case True{}:
+      {p == Eng.P{Eng.InLt{n}, pd, out} : Eng.P}
+    case False{}:
+      {p == Eng.P{Eng.InL{n}, pd, out} : Eng.P}
+
+def LR.val(-p: Eng.P, val: Spec.Val, -pd: Eng.Pend, -out: List<&2, Eng.Req>) -> Type:
+  match val:
+    case Spec.VLen0{}:
+      {p == Eng.P{Eng.InL0{}, pd, out} : Eng.P}
+    case Spec.VLen{n, ws}:
+      LR.len(p, n, ws, pd, out)
+    case Spec.VConn{d, c}:
+      {p == Eng.P{Eng.InLc{lowb(c), Spec.named("close", d), Spec.named("upgrade", d)}, pd, out} : Eng.P}
+    case Spec.VUp{d, c}:
+      {p == Eng.P{Eng.InLu{lowb(c), Spec.named("websocket", d)}, pd, out} : Eng.P}
+    case Spec.VKey0{}:
+      {p == Eng.P{Eng.InLk0{}, pd, out} : Eng.P}
+    case Spec.VKey{k}:
+      {p == Eng.P{Eng.InLk{Bytes.from_list(k)}, pd, out} : Eng.P}
+    case Spec.VVer{v}:
+      {p == Eng.P{Eng.InLv{Bytes.from_list(v)}, pd, out} : Eng.P}
+    case Spec.VHost{}:
+      {p == Eng.P{Eng.InLx{}, Eng.pend.host(pd), out} : Eng.P}
+    case Spec.VSkip{}:
+      {p == Eng.P{Eng.InLx{}, pd, out} : Eng.P}
+
+def LR.field(-p: Eng.P, v: Spec.FLine, -pd: Eng.Pend, -out: List<&2, Eng.Req>) -> Type:
+  match v:
+    case Spec.FEmpty{}:
+      {p == Eng.P{Eng.Lin{}, pd, out} : Eng.P}
+    case Spec.FName{n}:
+      {p == Eng.P{Eng.InN{Bytes.from_list(n)}, pd, out} : Eng.P}
+    case Spec.FVal{val}:
+      LR.val(p, val, pd, out)
+    case Spec.FBad{}:
+      Dead(p, out)
+
+# a value only checked: Host, or any field this engine does not act on
+def G.host(+k: Eng.Cls, +c: U32, +rest: List<&2, U32>, +pd: Eng.Pend, +out: List<&2, Eng.Req>) -> Type:
+  Dead(Eng.feed(rest, Eng.step.at(Eng.InLx{}, k, c, Eng.pend.host(pd), out)), out)
+
+def K.host.at(+k: Eng.Cls, +c: U32, +rest: List<&2, U32>, +pd: Eng.Pend, +out: List<&2, Eng.Req>,
+  mx: {Spec.allows(Spec.TVal{}, k) == False{} : Bool}, nc: {notcrlf(k) == True{} : Bool}) ->
+  G.host(k, c, rest, pd, out):
+  match k:
+    case Eng.KCr{}:
+      no(G.host(Eng.KCr{}, c, rest, pd, out), nc)
+    case Eng.KLf{}:
+      dead.bad(rest, Eng.pend.host(pd), out)
+    case Eng.KCt{}:
+      dead.bad(rest, Eng.pend.host(pd), out)
+    case Eng.KSp{}:
+      no2(G.host(Eng.KSp{}, c, rest, pd, out), mx)
+    case Eng.KHt{}:
+      no2(G.host(Eng.KHt{}, c, rest, pd, out), mx)
+    case Eng.KCo{}:
+      no2(G.host(Eng.KCo{}, c, rest, pd, out), mx)
+    case Eng.KCm{}:
+      no2(G.host(Eng.KCm{}, c, rest, pd, out), mx)
+    case Eng.KDg{}:
+      no2(G.host(Eng.KDg{}, c, rest, pd, out), mx)
+    case Eng.KTk{}:
+      no2(G.host(Eng.KTk{}, c, rest, pd, out), mx)
+    case Eng.KVc{}:
+      no2(G.host(Eng.KVc{}, c, rest, pd, out), mx)
+
+def K.host.sat(+k: Eng.Cls, +c: U32, +rest: List<&2, U32>, +pd: Eng.Pend, +out: List<&2, Eng.Req>,
+  sw: {Spec.allows(Spec.TVal{}, k) == False{} : Bool} & ({notcrlf(k) == True{} : Bool} & Plain(rest))) ->
+  G.host(k, c, rest, pd, out):
+  (mx, np) = sw
+  (nc, pr) = np
+  K.host.at(k, c, rest, pd, out, mx, nc)
+
+def K.host(sp: Spec.Span, +pd: Eng.Pend, +out: List<&2, Eng.Req>) -> SW(Spec.TVal{}, sp) ->
+  LR.field(RES(sp, SelR{Eng.RX{}}, "", Eng.pend.host(pd), out), Spec.skip.view(Spec.VHost{}, sp), pd, out):
+  match sp:
+    case Spec.Span{r, Spec.SEnd{}}:
+      sw => {==}
+    case Spec.Span{r, Spec.SAt{k, c, rest}}:
+      sw => K.host.sat(k, c, rest, pd, out, sw)
+
+def G.other(+k: Eng.Cls, +c: U32, +rest: List<&2, U32>, +pd: Eng.Pend, +out: List<&2, Eng.Req>) -> Type:
+  Dead(Eng.feed(rest, Eng.step.at(Eng.InLx{}, k, c, pd, out)), out)
+
+def K.other.at(+k: Eng.Cls, +c: U32, +rest: List<&2, U32>, +pd: Eng.Pend, +out: List<&2, Eng.Req>,
+  mx: {Spec.allows(Spec.TVal{}, k) == False{} : Bool}, nc: {notcrlf(k) == True{} : Bool}) ->
+  G.other(k, c, rest, pd, out):
+  match k:
+    case Eng.KCr{}:
+      no(G.other(Eng.KCr{}, c, rest, pd, out), nc)
+    case Eng.KLf{}:
+      dead.bad(rest, pd, out)
+    case Eng.KCt{}:
+      dead.bad(rest, pd, out)
+    case Eng.KSp{}:
+      no2(G.other(Eng.KSp{}, c, rest, pd, out), mx)
+    case Eng.KHt{}:
+      no2(G.other(Eng.KHt{}, c, rest, pd, out), mx)
+    case Eng.KCo{}:
+      no2(G.other(Eng.KCo{}, c, rest, pd, out), mx)
+    case Eng.KCm{}:
+      no2(G.other(Eng.KCm{}, c, rest, pd, out), mx)
+    case Eng.KDg{}:
+      no2(G.other(Eng.KDg{}, c, rest, pd, out), mx)
+    case Eng.KTk{}:
+      no2(G.other(Eng.KTk{}, c, rest, pd, out), mx)
+    case Eng.KVc{}:
+      no2(G.other(Eng.KVc{}, c, rest, pd, out), mx)
+
+def K.other.sat(+k: Eng.Cls, +c: U32, +rest: List<&2, U32>, +pd: Eng.Pend, +out: List<&2, Eng.Req>,
+  sw: {Spec.allows(Spec.TVal{}, k) == False{} : Bool} & ({notcrlf(k) == True{} : Bool} & Plain(rest))) ->
+  G.other(k, c, rest, pd, out):
+  (mx, np) = sw
+  (nc, pr) = np
+  K.other.at(k, c, rest, pd, out, mx, nc)
+
+def K.other(sp: Spec.Span, +pd: Eng.Pend, +out: List<&2, Eng.Req>) -> SW(Spec.TVal{}, sp) ->
+  LR.field(RES(sp, SelR{Eng.RX{}}, "", pd, out), Spec.skip.view(Spec.VSkip{}, sp), pd, out):
+  match sp:
+    case Spec.Span{r, Spec.SEnd{}}:
+      sw => {==}
+    case Spec.Span{r, Spec.SAt{k, c, rest}}:
+      sw => K.other.sat(k, c, rest, pd, out, sw)
+
+# a version
+def G.vv(+k: Eng.Cls, +c: U32, +rest: List<&2, U32>, +v: List<&2, U32>, +pd: Eng.Pend,
+  +out: List<&2, Eng.Req>) -> Type:
+  Dead(Eng.feed(rest, Eng.step.at(Eng.InLv{Bytes.from_list(v)}, k, c, pd, out)), out)
+
+def K.vv.at(+k: Eng.Cls, +c: U32, +rest: List<&2, U32>, +v: List<&2, U32>, +pd: Eng.Pend,
+  +out: List<&2, Eng.Req>, mx: {Spec.allows(Spec.TVal{}, k) == False{} : Bool},
+  nc: {notcrlf(k) == True{} : Bool}) -> G.vv(k, c, rest, v, pd, out):
+  match k:
+    case Eng.KCr{}:
+      no(G.vv(Eng.KCr{}, c, rest, v, pd, out), nc)
+    case Eng.KLf{}:
+      dead.bad(rest, pd, out)
+    case Eng.KCt{}:
+      dead.bad(rest, pd, out)
+    case Eng.KSp{}:
+      no2(G.vv(Eng.KSp{}, c, rest, v, pd, out), mx)
+    case Eng.KHt{}:
+      no2(G.vv(Eng.KHt{}, c, rest, v, pd, out), mx)
+    case Eng.KCo{}:
+      no2(G.vv(Eng.KCo{}, c, rest, v, pd, out), mx)
+    case Eng.KCm{}:
+      no2(G.vv(Eng.KCm{}, c, rest, v, pd, out), mx)
+    case Eng.KDg{}:
+      no2(G.vv(Eng.KDg{}, c, rest, v, pd, out), mx)
+    case Eng.KTk{}:
+      no2(G.vv(Eng.KTk{}, c, rest, v, pd, out), mx)
+    case Eng.KVc{}:
+      no2(G.vv(Eng.KVc{}, c, rest, v, pd, out), mx)
+
+def K.vv.sat(+k: Eng.Cls, +c: U32, +rest: List<&2, U32>, +v: List<&2, U32>, +pd: Eng.Pend,
+  +out: List<&2, Eng.Req>,
+  sw: {Spec.allows(Spec.TVal{}, k) == False{} : Bool} & ({notcrlf(k) == True{} : Bool} & Plain(rest))) ->
+  G.vv(k, c, rest, v, pd, out):
+  (mx, np) = sw
+  (nc, pr) = np
+  K.vv.at(k, c, rest, v, pd, out, mx, nc)
+
+def K.vv(sp: Spec.Span, +pd: Eng.Pend, +out: List<&2, Eng.Req>) -> SW(Spec.TVal{}, sp) ->
+  LR.field(RES(sp, SelLv{}, "", pd, out), Spec.ver.view(sp), pd, out):
+  match sp:
+    case Spec.Span{v, Spec.SEnd{}}:
+      sw => {==}
+    case Spec.Span{v, Spec.SAt{k, c, rest}}:
+      sw => K.vv.sat(k, c, rest, v, pd, out, sw)
+
+# a key: the rest of it, from its first byte
+def G.keym(+k: Eng.Cls, +d: U32, +rest: List<&2, U32>, +c: U32, +r: List<&2, U32>, +pd: Eng.Pend,
+  +out: List<&2, Eng.Req>) -> Type:
+  Dead(Eng.feed(rest, Eng.step.at(Eng.InLk{Bytes.from_list(Con{c, r})}, k, d, pd, out)), out)
+
+def K.keym.at(+k: Eng.Cls, +d: U32, +rest: List<&2, U32>, +c: U32, +r: List<&2, U32>, +pd: Eng.Pend,
+  +out: List<&2, Eng.Req>, mx: {Spec.allows(Spec.TVal{}, k) == False{} : Bool},
+  nc: {notcrlf(k) == True{} : Bool}) -> G.keym(k, d, rest, c, r, pd, out):
+  match k:
+    case Eng.KCr{}:
+      no(G.keym(Eng.KCr{}, d, rest, c, r, pd, out), nc)
+    case Eng.KLf{}:
+      dead.bad(rest, pd, out)
+    case Eng.KCt{}:
+      dead.bad(rest, pd, out)
+    case Eng.KSp{}:
+      no2(G.keym(Eng.KSp{}, d, rest, c, r, pd, out), mx)
+    case Eng.KHt{}:
+      no2(G.keym(Eng.KHt{}, d, rest, c, r, pd, out), mx)
+    case Eng.KCo{}:
+      no2(G.keym(Eng.KCo{}, d, rest, c, r, pd, out), mx)
+    case Eng.KCm{}:
+      no2(G.keym(Eng.KCm{}, d, rest, c, r, pd, out), mx)
+    case Eng.KDg{}:
+      no2(G.keym(Eng.KDg{}, d, rest, c, r, pd, out), mx)
+    case Eng.KTk{}:
+      no2(G.keym(Eng.KTk{}, d, rest, c, r, pd, out), mx)
+    case Eng.KVc{}:
+      no2(G.keym(Eng.KVc{}, d, rest, c, r, pd, out), mx)
+
+def K.keym.sat(+k: Eng.Cls, +d: U32, +rest: List<&2, U32>, +c: U32, +r: List<&2, U32>, +pd: Eng.Pend,
+  +out: List<&2, Eng.Req>,
+  sw: {Spec.allows(Spec.TVal{}, k) == False{} : Bool} & ({notcrlf(k) == True{} : Bool} & Plain(rest))) ->
+  G.keym(k, d, rest, c, r, pd, out):
+  (mx, np) = sw
+  (nc, pr) = np
+  K.keym.at(k, d, rest, c, r, pd, out, mx, nc)
+
+def K.keym(+c: U32, sp: Spec.Span, +pd: Eng.Pend, +out: List<&2, Eng.Req>) -> SW(Spec.TVal{}, sp) ->
+  LR.field(RES(sp, SelR{Eng.RK{}}, Eng.one(c), pd, out), Spec.key.more(c, sp), pd, out):
+  match sp:
+    case Spec.Span{r, Spec.SEnd{}}:
+      sw => {==}
+    case Spec.Span{r, Spec.SAt{k, d, rest}}:
+      sw => K.keym.sat(k, d, rest, c, r, pd, out, sw)
+
+# a key: whitespace, then its first byte
+def G.key(+k: Eng.Cls, +c: U32, +rest: List<&2, U32>, +pd: Eng.Pend, +out: List<&2, Eng.Req>) -> Type:
+  LR.field(Eng.feed(rest, Eng.step.at(Eng.InLk0{}, k, c, pd, out)),
+    Spec.key.first(Spec.allows(Spec.TVal{}, k), c, rest), pd, out)
+
+def K.key.in(+c: U32, +rest: List<&2, U32>, +pd: Eng.Pend, +out: List<&2, Eng.Req>, pr: Plain(rest)) ->
+  LR.field(Eng.feed(rest, Eng.P{Eng.InLk{Eng.one(c)}, pd, out}),
+    Spec.key.more(c, Spec.span(Spec.TVal{}, rest)), pd, out):
+  %RS(rest, SelR{Eng.RK{}}, Eng.one(c), pd, out) :
+    LR.field(_, Spec.key.more(c, Spec.span(Spec.TVal{}, rest)), pd, out)
+  K.keym(c, Spec.span(Spec.TVal{}, rest), pd, out)(span.sw(Spec.TVal{}, rest)(pr))
+
+def K.key.at(+k: Eng.Cls, +c: U32, +rest: List<&2, U32>, +pd: Eng.Pend, +out: List<&2, Eng.Req>,
+  mx: {Spec.allows(Spec.TOws{}, k) == False{} : Bool}, nc: {notcrlf(k) == True{} : Bool},
+  pr: Plain(rest)) -> G.key(k, c, rest, pd, out):
+  match k:
+    case Eng.KSp{}:
+      no2(G.key(Eng.KSp{}, c, rest, pd, out), mx)
+    case Eng.KHt{}:
+      no2(G.key(Eng.KHt{}, c, rest, pd, out), mx)
+    case Eng.KCr{}:
+      no(G.key(Eng.KCr{}, c, rest, pd, out), nc)
+    case Eng.KLf{}:
+      dead.bad(rest, pd, out)
+    case Eng.KCt{}:
+      dead.bad(rest, pd, out)
+    case Eng.KCo{}:
+      K.key.in(c, rest, pd, out, pr)
+    case Eng.KCm{}:
+      K.key.in(c, rest, pd, out, pr)
+    case Eng.KDg{}:
+      K.key.in(c, rest, pd, out, pr)
+    case Eng.KTk{}:
+      K.key.in(c, rest, pd, out, pr)
+    case Eng.KVc{}:
+      K.key.in(c, rest, pd, out, pr)
+
+def K.key.sat(+k: Eng.Cls, +c: U32, +rest: List<&2, U32>, +pd: Eng.Pend, +out: List<&2, Eng.Req>,
+  sw: {Spec.allows(Spec.TOws{}, k) == False{} : Bool} & ({notcrlf(k) == True{} : Bool} & Plain(rest))) ->
+  G.key(k, c, rest, pd, out):
+  (mx, np) = sw
+  (nc, pr) = np
+  K.key.at(k, c, rest, pd, out, mx, nc, pr)
+
+def K.key(sp: Spec.Span, +pd: Eng.Pend, +out: List<&2, Eng.Req>) -> SW(Spec.TOws{}, sp) ->
+  LR.field(RES(sp, SelK0{}, "", pd, out), Spec.key.view(sp), pd, out):
+  match sp:
+    case Spec.Span{w, Spec.SEnd{}}:
+      sw => {==}
+    case Spec.Span{w, Spec.SAt{k, c, rest}}:
+      sw => K.key.sat(k, c, rest, pd, out, sw)
+
+# a length: whitespace after its digits
+def G.lws(+k: Eng.Cls, +c: U32, +rest: List<&2, U32>, +v: U32, +pd: Eng.Pend,
+  +out: List<&2, Eng.Req>) -> Type:
+  Dead(Eng.feed(rest, Eng.step.at(Eng.InLt{v}, k, c, pd, out)), out)
+
+def K.lws.at(+k: Eng.Cls, +c: U32, +rest: List<&2, U32>, +v: U32, +pd: Eng.Pend,
+  +out: List<&2, Eng.Req>, mx: {Spec.allows(Spec.TOws{}, k) == False{} : Bool},
+  nc: {notcrlf(k) == True{} : Bool}) -> G.lws(k, c, rest, v, pd, out):
+  match k:
+    case Eng.KSp{}:
+      no2(G.lws(Eng.KSp{}, c, rest, v, pd, out), mx)
+    case Eng.KHt{}:
+      no2(G.lws(Eng.KHt{}, c, rest, v, pd, out), mx)
+    case Eng.KCr{}:
+      no(G.lws(Eng.KCr{}, c, rest, v, pd, out), nc)
+    case Eng.KLf{}:
+      dead.bad(rest, pd, out)
+    case Eng.KCo{}:
+      dead.bad(rest, pd, out)
+    case Eng.KCm{}:
+      dead.bad(rest, pd, out)
+    case Eng.KDg{}:
+      dead.bad(rest, pd, out)
+    case Eng.KTk{}:
+      dead.bad(rest, pd, out)
+    case Eng.KVc{}:
+      dead.bad(rest, pd, out)
+    case Eng.KCt{}:
+      dead.bad(rest, pd, out)
+
+def K.lws.sat(+k: Eng.Cls, +c: U32, +rest: List<&2, U32>, +v: U32, +pd: Eng.Pend,
+  +out: List<&2, Eng.Req>,
+  sw: {Spec.allows(Spec.TOws{}, k) == False{} : Bool} & ({notcrlf(k) == True{} : Bool} & Plain(rest))) ->
+  G.lws(k, c, rest, v, pd, out):
+  (mx, np) = sw
+  (nc, pr) = np
+  K.lws.at(k, c, rest, v, pd, out, mx, nc)
+
+def K.lws(+v: U32, sp: Spec.Span, +pd: Eng.Pend, +out: List<&2, Eng.Req>) -> SW(Spec.TOws{}, sp) ->
+  LR.field(RES(sp, SelLt{v}, "", pd, out), Spec.len.ws(v, sp), pd, out):
+  match sp:
+    case Spec.Span{w, Spec.SEnd{}}:
+      sw => {==}
+    case Spec.Span{w, Spec.SAt{k, c, rest}}:
+      sw => K.lws.sat(k, c, rest, v, pd, out, sw)
+
+# a length: its digits
+def DG(+x: List<&2, U32>, +v: U32, +pd: Eng.Pend, +out: List<&2, Eng.Req>) -> Type:
+  LR.field(Eng.feed(x, Eng.P{Eng.InL{v}, pd, out}), Spec.len.num(Spec.dec(x, v)), pd, out)
+
+def K.dig1(b: Bool, +n: U32, +t: List<&2, U32>, +pd: Eng.Pend, +out: List<&2, Eng.Req>,
+  ih: DG(t, n, pd, out)) ->
+  LR.field(Eng.feed(t, Eng.step.digit.go(n, pd, out, b)), Spec.len.num(Spec.dec.big(b, Spec.dec(t, n))), pd, out):
+  match b:
+    case True{}:
+      dead.bad(t, pd, out)
+    case False{}:
+      ih
+
+def G.dig(+k: Eng.Cls, +c: U32, +t: List<&2, U32>, +v: U32, +pd: Eng.Pend, +out: List<&2, Eng.Req>) -> Type:
+  LR.field(Eng.feed(t, Eng.step.at(Eng.InL{v}, k, c, pd, out)),
+    Spec.len.num(Spec.dec.pick(Spec.is.digit(k), k, c, t, v, Spec.dec(t, Spec.len.digit(v, c)))), pd, out)
+
+def DIG.k(+k: Eng.Cls, +c: U32, +t: List<&2, U32>, +v: U32, +pd: Eng.Pend, +out: List<&2, Eng.Req>,
+  nc: {notcrlf(k) == True{} : Bool}, pt: Plain(t), ih: Plain(t) -> DG(t, Spec.len.digit(v, c), pd, out)) ->
+  G.dig(k, c, t, v, pd, out):
+  match k:
+    case Eng.KDg{}:
+      K.dig1(U32.is_lt(1048576, Spec.len.digit(v, c)), Spec.len.digit(v, c), t, pd, out, ih(pt))
+    case Eng.KSp{}:
+      %RS(t, SelLt{v}, "", pd, out) : LR.field(_, Spec.len.ws(v, Spec.span(Spec.TOws{}, t)), pd, out)
+      K.lws(v, Spec.span(Spec.TOws{}, t), pd, out)(span.sw(Spec.TOws{}, t)(pt))
+    case Eng.KHt{}:
+      %RS(t, SelLt{v}, "", pd, out) : LR.field(_, Spec.len.ws(v, Spec.span(Spec.TOws{}, t)), pd, out)
+      K.lws(v, Spec.span(Spec.TOws{}, t), pd, out)(span.sw(Spec.TOws{}, t)(pt))
+    case Eng.KCr{}:
+      no(G.dig(Eng.KCr{}, c, t, v, pd, out), nc)
+    case Eng.KLf{}:
+      dead.bad(t, pd, out)
+    case Eng.KCo{}:
+      dead.bad(t, pd, out)
+    case Eng.KCm{}:
+      dead.bad(t, pd, out)
+    case Eng.KTk{}:
+      dead.bad(t, pd, out)
+    case Eng.KVc{}:
+      dead.bad(t, pd, out)
+    case Eng.KCt{}:
+      dead.bad(t, pd, out)
+
+def DIG.con(+c: U32, +t: List<&2, U32>, +v: U32, +pd: Eng.Pend, +out: List<&2, Eng.Req>,
+  pl: {notcrlf(Spec.cls(c)) == True{} : Bool} & Plain(t), ih: Plain(t) -> DG(t, Spec.len.digit(v, c), pd, out)) ->
+  DG(Con{c, t}, v, pd, out):
+  (nc, pt) = pl
+  %feedc(c, t, Eng.P{Eng.InL{v}, pd, out}) : LR.field(_, Spec.len.num(Spec.dec(Con{c, t}, v)), pd, out)
+  DIG.k(Spec.cls(c), c, t, v, pd, out, nc, pt, ih)
+
+def DIG(x: List<&2, U32>, +v: U32, +pd: Eng.Pend, +out: List<&2, Eng.Req>) -> Plain(x) -> DG(x, v, pd, out):
+  match x:
+    case Nil{}:
+      pl => {==}
+    case Con{+c, +t}:
+      pl => DIG.con(c, t, v, pd, out, pl, DIG(t, Spec.len.digit(v, c), pd, out))
+
+# a length: whitespace, then its first digit
+def G.len(+k: Eng.Cls, +c: U32, +rest: List<&2, U32>, +w: List<&2, U32>, +pd: Eng.Pend,
+  +out: List<&2, Eng.Req>) -> Type:
+  LR.field(Eng.feed(rest, Eng.step.at(Eng.InL0{}, k, c, pd, out)),
+    Spec.len.view(Spec.Span{w, Spec.SAt{k, c, rest}}), pd, out)
+
+def K.len.at(+k: Eng.Cls, +c: U32, +rest: List<&2, U32>, +w: List<&2, U32>, +pd: Eng.Pend,
+  +out: List<&2, Eng.Req>, mx: {Spec.allows(Spec.TOws{}, k) == False{} : Bool},
+  pr: Plain(rest)) -> G.len(k, c, rest, w, pd, out):
+  match k:
+    case Eng.KDg{}:
+      K.dig1(U32.is_lt(1048576, Spec.len.digit(0, c)), Spec.len.digit(0, c), rest, pd, out,
+        DIG(rest, Spec.len.digit(0, c), pd, out)(pr))
+    case Eng.KSp{}:
+      no2(G.len(Eng.KSp{}, c, rest, w, pd, out), mx)
+    case Eng.KHt{}:
+      no2(G.len(Eng.KHt{}, c, rest, w, pd, out), mx)
+    case Eng.KCr{}:
+      dead.bad(rest, pd, out)
+    case Eng.KLf{}:
+      dead.bad(rest, pd, out)
+    case Eng.KCo{}:
+      dead.bad(rest, pd, out)
+    case Eng.KCm{}:
+      dead.bad(rest, pd, out)
+    case Eng.KTk{}:
+      dead.bad(rest, pd, out)
+    case Eng.KVc{}:
+      dead.bad(rest, pd, out)
+    case Eng.KCt{}:
+      dead.bad(rest, pd, out)
+
+def K.len.sat(+k: Eng.Cls, +c: U32, +rest: List<&2, U32>, +w: List<&2, U32>, +pd: Eng.Pend,
+  +out: List<&2, Eng.Req>,
+  sw: {Spec.allows(Spec.TOws{}, k) == False{} : Bool} & ({notcrlf(k) == True{} : Bool} & Plain(rest))) ->
+  G.len(k, c, rest, w, pd, out):
+  (mx, np) = sw
+  (nc, pr) = np
+  K.len.at(k, c, rest, w, pd, out, mx, pr)
+
+def K.len(sp: Spec.Span, +pd: Eng.Pend, +out: List<&2, Eng.Req>) -> SW(Spec.TOws{}, sp) ->
+  LR.field(RES(sp, SelL0{}, "", pd, out), Spec.len.view(sp), pd, out):
+  match sp:
+    case Spec.Span{w, Spec.SEnd{}}:
+      sw => {==}
+    case Spec.Span{w, Spec.SAt{k, c, rest}}:
+      sw => K.len.sat(k, c, rest, w, pd, out, sw)
+
+# a list: a byte no value holds spoils it for good
+def membad(x: List<&2, U32>, +done: List<&2, List<&2, U32>>, +cur: List<&2, U32>) ->
+  {Spec.LBad{} == Spec.members(x, False{}, done, cur) : Spec.Mem}:
+  match x:
+    case Nil{}:
+      {==}
+    case Con{+c, t}:
+      membad(t, Spec.mem.done(Spec.mem.sep(Spec.cls(c)), done, cur),
+        Spec.mem.cur(Spec.mem.sep(Spec.cls(c)), cur, c))
+
+# a Connection list
+def MC(+x: List<&2, U32>, +done: List<&2, List<&2, U32>>, +cur: List<&2, U32>, +pd: Eng.Pend,
+  +out: List<&2, Eng.Req>) -> Type:
+  LR.field(Eng.feed(x, Eng.P{Eng.InLc{lowb(cur), Spec.named("close", done), Spec.named("upgrade", done)}, pd, out}),
+    Spec.list.view(True{}, Spec.members(x, True{}, done, cur)), pd, out)
+
+def G.memc(+k: Eng.Cls, +c: U32, +t: List<&2, U32>, +done: List<&2, List<&2, U32>>,
+  +cur: List<&2, U32>, +pd: Eng.Pend, +out: List<&2, Eng.Req>) -> Type:
+  LR.field(Eng.feed(t, Eng.step.at(Eng.InLc{lowb(cur), Spec.named("close", done), Spec.named("upgrade", done)},
+      k, c, pd, out)),
+    Spec.list.view(True{}, Spec.members(t, Spec.allows(Spec.TVal{}, k), Spec.mem.done(Spec.mem.sep(k), done, cur),
+      Spec.mem.cur(Spec.mem.sep(k), cur, c))), pd, out)
+
+def MEMc.sep(+c: U32, +t: List<&2, U32>, +done: List<&2, List<&2, U32>>, +cur: List<&2, U32>,
+  +pd: Eng.Pend, +out: List<&2, Eng.Req>, pt: Plain(t), ih: Plain(t) -> MC(t, Con{cur, done}, Nil{}, pd, out)) ->
+  LR.field(Eng.feed(t, Eng.P{Eng.tok.conn(lowb(cur), Spec.named("close", done), Spec.named("upgrade", done)), pd, out}),
+    Spec.list.view(True{}, Spec.members(t, True{}, Con{cur, done}, Nil{})), pd, out):
+  %eqs(lowb(cur), "close") :
+    LR.field(Eng.feed(t, Eng.P{Eng.InLc{"", Spec.named("close", done) || _,
+      Spec.named("upgrade", done) || Eng.bytes.eq(lowb(cur), "upgrade")}, pd, out}),
+      Spec.list.view(True{}, Spec.members(t, True{}, Con{cur, done}, Nil{})), pd, out)
+  %eqs(lowb(cur), "upgrade") :
+    LR.field(Eng.feed(t, Eng.P{Eng.InLc{"", Spec.named("close", done) || Spec.eq(lowb(cur), "close"),
+      Spec.named("upgrade", done) || _}, pd, out}),
+      Spec.list.view(True{}, Spec.members(t, True{}, Con{cur, done}, Nil{})), pd, out)
+  ih(pt)
+
+def MEMc.in(+c: U32, +t: List<&2, U32>, +done: List<&2, List<&2, U32>>, +cur: List<&2, U32>,
+  +pd: Eng.Pend, +out: List<&2, Eng.Req>, pt: Plain(t), ih: Plain(t) -> MC(t, done, Spec.snoc(cur, c), pd, out)) ->
+  LR.field(Eng.feed(t, Eng.P{Eng.InLc{Eng.push(lowb(cur), Eng.lower(c)), Spec.named("close", done),
+      Spec.named("upgrade", done)}, pd, out}),
+    Spec.list.view(True{}, Spec.members(t, True{}, done, Spec.snoc(cur, c))), pd, out):
+  %br.lower(c) :
+    LR.field(Eng.feed(t, Eng.P{Eng.InLc{Eng.push(lowb(cur), _), Spec.named("close", done),
+      Spec.named("upgrade", done)}, pd, out}),
+      Spec.list.view(True{}, Spec.members(t, True{}, done, Spec.snoc(cur, c))), pd, out)
+  %lb.snoc(cur, c) :
+    LR.field(Eng.feed(t, Eng.P{Eng.InLc{_, Spec.named("close", done), Spec.named("upgrade", done)}, pd, out}),
+      Spec.list.view(True{}, Spec.members(t, True{}, done, Spec.snoc(cur, c))), pd, out)
+  ih(pt)
+
+def MEMc.k(+k: Eng.Cls, +c: U32, +t: List<&2, U32>, +done: List<&2, List<&2, U32>>,
+  +cur: List<&2, U32>, +pd: Eng.Pend, +out: List<&2, Eng.Req>, nc: {notcrlf(k) == True{} : Bool},
+  pt: Plain(t),
+  ih: Plain(t) -> MC(t, Spec.mem.done(Spec.mem.sep(k), done, cur), Spec.mem.cur(Spec.mem.sep(k), cur, c), pd, out)) ->
+  G.memc(k, c, t, done, cur, pd, out):
+  match k:
+    case Eng.KSp{}:
+      MEMc.sep(c, t, done, cur, pd, out, pt, ih)
+    case Eng.KHt{}:
+      MEMc.sep(c, t, done, cur, pd, out, pt, ih)
+    case Eng.KCm{}:
+      MEMc.sep(c, t, done, cur, pd, out, pt, ih)
+    case Eng.KCr{}:
+      no(G.memc(Eng.KCr{}, c, t, done, cur, pd, out), nc)
+    case Eng.KLf{}:
+      no(G.memc(Eng.KLf{}, c, t, done, cur, pd, out), nc)
+    case Eng.KCt{}:
+      %membad(t, done, Spec.snoc(cur, c)) :
+        LR.field(Eng.feed(t, Eng.P{Eng.Bad{}, pd, out}), Spec.list.view(True{}, _), pd, out)
+      dead.bad(t, pd, out)
+    case Eng.KCo{}:
+      MEMc.in(c, t, done, cur, pd, out, pt, ih)
+    case Eng.KDg{}:
+      MEMc.in(c, t, done, cur, pd, out, pt, ih)
+    case Eng.KTk{}:
+      MEMc.in(c, t, done, cur, pd, out, pt, ih)
+    case Eng.KVc{}:
+      MEMc.in(c, t, done, cur, pd, out, pt, ih)
+
+def MEMc.con(+c: U32, +t: List<&2, U32>, +done: List<&2, List<&2, U32>>, +cur: List<&2, U32>,
+  +pd: Eng.Pend, +out: List<&2, Eng.Req>, pl: {notcrlf(Spec.cls(c)) == True{} : Bool} & Plain(t),
+  ih: Plain(t) -> MC(t, Spec.mem.done(Spec.mem.sep(Spec.cls(c)), done, cur),
+    Spec.mem.cur(Spec.mem.sep(Spec.cls(c)), cur, c), pd, out)) ->
+  MC(Con{c, t}, done, cur, pd, out):
+  (nc, pt) = pl
+  %feedc(c, t, Eng.P{Eng.InLc{lowb(cur), Spec.named("close", done), Spec.named("upgrade", done)}, pd, out}) :
+    LR.field(_, Spec.list.view(True{}, Spec.members(Con{c, t}, True{}, done, cur)), pd, out)
+  MEMc.k(Spec.cls(c), c, t, done, cur, pd, out, nc, pt, ih)
+
+def MEMc(x: List<&2, U32>, +done: List<&2, List<&2, U32>>, +cur: List<&2, U32>, +pd: Eng.Pend,
+  +out: List<&2, Eng.Req>) -> Plain(x) -> MC(x, done, cur, pd, out):
+  match x:
+    case Nil{}:
+      pl => {==}
+    case Con{+c, +t}:
+      pl => MEMc.con(c, t, done, cur, pd, out, pl,
+        MEMc(t, Spec.mem.done(Spec.mem.sep(Spec.cls(c)), done, cur),
+          Spec.mem.cur(Spec.mem.sep(Spec.cls(c)), cur, c), pd, out))
+
+# an Upgrade list
+def MU(+x: List<&2, U32>, +done: List<&2, List<&2, U32>>, +cur: List<&2, U32>, +pd: Eng.Pend,
+  +out: List<&2, Eng.Req>) -> Type:
+  LR.field(Eng.feed(x, Eng.P{Eng.InLu{lowb(cur), Spec.named("websocket", done)}, pd, out}),
+    Spec.list.view(False{}, Spec.members(x, True{}, done, cur)), pd, out)
+
+def G.memu(+k: Eng.Cls, +c: U32, +t: List<&2, U32>, +done: List<&2, List<&2, U32>>,
+  +cur: List<&2, U32>, +pd: Eng.Pend, +out: List<&2, Eng.Req>) -> Type:
+  LR.field(Eng.feed(t, Eng.step.at(Eng.InLu{lowb(cur), Spec.named("websocket", done)}, k, c, pd, out)),
+    Spec.list.view(False{}, Spec.members(t, Spec.allows(Spec.TVal{}, k), Spec.mem.done(Spec.mem.sep(k), done, cur),
+      Spec.mem.cur(Spec.mem.sep(k), cur, c))), pd, out)
+
+def MEMu.sep(+c: U32, +t: List<&2, U32>, +done: List<&2, List<&2, U32>>, +cur: List<&2, U32>,
+  +pd: Eng.Pend, +out: List<&2, Eng.Req>, pt: Plain(t), ih: Plain(t) -> MU(t, Con{cur, done}, Nil{}, pd, out)) ->
+  LR.field(Eng.feed(t, Eng.P{Eng.tok.up(lowb(cur), Spec.named("websocket", done)), pd, out}),
+    Spec.list.view(False{}, Spec.members(t, True{}, Con{cur, done}, Nil{})), pd, out):
+  %eqs(lowb(cur), "websocket") :
+    LR.field(Eng.feed(t, Eng.P{Eng.InLu{"", Spec.named("websocket", done) || _}, pd, out}),
+      Spec.list.view(False{}, Spec.members(t, True{}, Con{cur, done}, Nil{})), pd, out)
+  ih(pt)
+
+def MEMu.in(+c: U32, +t: List<&2, U32>, +done: List<&2, List<&2, U32>>, +cur: List<&2, U32>,
+  +pd: Eng.Pend, +out: List<&2, Eng.Req>, pt: Plain(t), ih: Plain(t) -> MU(t, done, Spec.snoc(cur, c), pd, out)) ->
+  LR.field(Eng.feed(t, Eng.P{Eng.InLu{Eng.push(lowb(cur), Eng.lower(c)), Spec.named("websocket", done)}, pd, out}),
+    Spec.list.view(False{}, Spec.members(t, True{}, done, Spec.snoc(cur, c))), pd, out):
+  %br.lower(c) :
+    LR.field(Eng.feed(t, Eng.P{Eng.InLu{Eng.push(lowb(cur), _), Spec.named("websocket", done)}, pd, out}),
+      Spec.list.view(False{}, Spec.members(t, True{}, done, Spec.snoc(cur, c))), pd, out)
+  %lb.snoc(cur, c) :
+    LR.field(Eng.feed(t, Eng.P{Eng.InLu{_, Spec.named("websocket", done)}, pd, out}),
+      Spec.list.view(False{}, Spec.members(t, True{}, done, Spec.snoc(cur, c))), pd, out)
+  ih(pt)
+
+def MEMu.k(+k: Eng.Cls, +c: U32, +t: List<&2, U32>, +done: List<&2, List<&2, U32>>,
+  +cur: List<&2, U32>, +pd: Eng.Pend, +out: List<&2, Eng.Req>, nc: {notcrlf(k) == True{} : Bool},
+  pt: Plain(t),
+  ih: Plain(t) -> MU(t, Spec.mem.done(Spec.mem.sep(k), done, cur), Spec.mem.cur(Spec.mem.sep(k), cur, c), pd, out)) ->
+  G.memu(k, c, t, done, cur, pd, out):
+  match k:
+    case Eng.KSp{}:
+      MEMu.sep(c, t, done, cur, pd, out, pt, ih)
+    case Eng.KHt{}:
+      MEMu.sep(c, t, done, cur, pd, out, pt, ih)
+    case Eng.KCm{}:
+      MEMu.sep(c, t, done, cur, pd, out, pt, ih)
+    case Eng.KCr{}:
+      no(G.memu(Eng.KCr{}, c, t, done, cur, pd, out), nc)
+    case Eng.KLf{}:
+      no(G.memu(Eng.KLf{}, c, t, done, cur, pd, out), nc)
+    case Eng.KCt{}:
+      %membad(t, done, Spec.snoc(cur, c)) :
+        LR.field(Eng.feed(t, Eng.P{Eng.Bad{}, pd, out}), Spec.list.view(False{}, _), pd, out)
+      dead.bad(t, pd, out)
+    case Eng.KCo{}:
+      MEMu.in(c, t, done, cur, pd, out, pt, ih)
+    case Eng.KDg{}:
+      MEMu.in(c, t, done, cur, pd, out, pt, ih)
+    case Eng.KTk{}:
+      MEMu.in(c, t, done, cur, pd, out, pt, ih)
+    case Eng.KVc{}:
+      MEMu.in(c, t, done, cur, pd, out, pt, ih)
+
+def MEMu.con(+c: U32, +t: List<&2, U32>, +done: List<&2, List<&2, U32>>, +cur: List<&2, U32>,
+  +pd: Eng.Pend, +out: List<&2, Eng.Req>, pl: {notcrlf(Spec.cls(c)) == True{} : Bool} & Plain(t),
+  ih: Plain(t) -> MU(t, Spec.mem.done(Spec.mem.sep(Spec.cls(c)), done, cur),
+    Spec.mem.cur(Spec.mem.sep(Spec.cls(c)), cur, c), pd, out)) ->
+  MU(Con{c, t}, done, cur, pd, out):
+  (nc, pt) = pl
+  %feedc(c, t, Eng.P{Eng.InLu{lowb(cur), Spec.named("websocket", done)}, pd, out}) :
+    LR.field(_, Spec.list.view(False{}, Spec.members(Con{c, t}, True{}, done, cur)), pd, out)
+  MEMu.k(Spec.cls(c), c, t, done, cur, pd, out, nc, pt, ih)
+
+def MEMu(x: List<&2, U32>, +done: List<&2, List<&2, U32>>, +cur: List<&2, U32>, +pd: Eng.Pend,
+  +out: List<&2, Eng.Req>) -> Plain(x) -> MU(x, done, cur, pd, out):
+  match x:
+    case Nil{}:
+      pl => {==}
+    case Con{+c, +t}:
+      pl => MEMu.con(c, t, done, cur, pd, out, pl,
+        MEMu(t, Spec.mem.done(Spec.mem.sep(Spec.cls(c)), done, cur),
+          Spec.mem.cur(Spec.mem.sep(Spec.cls(c)), cur, c), pd, out))
+
+# a field, by its name: the value read the way the name says
+def fbb(+k: Bytes()) -> {Spec.field(k) == Eng.fld.of(k) : Eng.Fld}:
+  Equal.sym(Eng.Fld, Eng.fld.of(k), Spec.field(k), scan_is(Eng.fld.table(), k, None{}))
+
+def K.of(f: Eng.Fld, +v: List<&2, U32>, +pd: Eng.Pend, +out: List<&2, Eng.Req>) -> Plain(v) ->
+  LR.field(Eng.feed(v, Eng.step.name(f, pd, out)), Spec.field.of(f, v), pd, out):
+  match f:
+    case Eng.FTe{}:
+      pl => dead.bad(v, pd, out)
+    case Eng.FCl{}:
+      pl =>
+        %RS(v, SelL0{}, "", pd, out) : LR.field(_, Spec.len.view(Spec.span(Spec.TOws{}, v)), pd, out)
+        K.len(Spec.span(Spec.TOws{}, v), pd, out)(span.sw(Spec.TOws{}, v)(pl))
+    case Eng.FConn{}:
+      pl => MEMc(v, Nil{}, Nil{}, pd, out)(pl)
+    case Eng.FUp{}:
+      pl => MEMu(v, Nil{}, Nil{}, pd, out)(pl)
+    case Eng.FKey{}:
+      pl =>
+        %RS(v, SelK0{}, "", pd, out) : LR.field(_, Spec.key.view(Spec.span(Spec.TOws{}, v)), pd, out)
+        K.key(Spec.span(Spec.TOws{}, v), pd, out)(span.sw(Spec.TOws{}, v)(pl))
+    case Eng.FHost{}:
+      pl =>
+        %RS(v, SelR{Eng.RX{}}, "", Eng.pend.host(pd), out) :
+          LR.field(_, Spec.skip.view(Spec.VHost{}, Spec.span(Spec.TVal{}, v)), pd, out)
+        K.host(Spec.span(Spec.TVal{}, v), pd, out)(span.sw(Spec.TVal{}, v)(pl))
+    case Eng.FVer{}:
+      pl =>
+        %RS(v, SelLv{}, "", pd, out) : LR.field(_, Spec.ver.view(Spec.span(Spec.TVal{}, v)), pd, out)
+        K.vv(Spec.span(Spec.TVal{}, v), pd, out)(span.sw(Spec.TVal{}, v)(pl))
+    case Eng.FOther{}:
+      pl =>
+        %RS(v, SelR{Eng.RX{}}, "", pd, out) :
+          LR.field(_, Spec.skip.view(Spec.VSkip{}, Spec.span(Spec.TVal{}, v)), pd, out)
+        K.other(Spec.span(Spec.TVal{}, v), pd, out)(span.sw(Spec.TVal{}, v)(pl))
+
+# a name
+def G.name(+k: Eng.Cls, +d: U32, +v: List<&2, U32>, +c: U32, +r: List<&2, U32>, +pd: Eng.Pend,
+  +out: List<&2, Eng.Req>) -> Type:
+  LR.field(Eng.feed(v, Eng.step.at(Eng.InN{Bytes.from_list(Con{c, r})}, k, d, pd, out)),
+    Spec.field.name(Spec.Span{Con{c, r}, Spec.SAt{k, d, v}}), pd, out)
+
+def K.name.colon(+v: List<&2, U32>, +c: U32, +r: List<&2, U32>, +pd: Eng.Pend, +out: List<&2, Eng.Req>,
+  pr: Plain(v)) ->
+  LR.field(Eng.feed(v, Eng.step.name(Eng.fld.of(Eng.lows(Bytes.from_list(Con{c, r}))), pd, out)),
+    Spec.field.of(Spec.field(Spec.lows(Bytes.from_list(Con{c, r}))), v), pd, out):
+  %br.lows(Bytes.from_list(Con{c, r})) :
+    LR.field(Eng.feed(v, Eng.step.name(Eng.fld.of(_), pd, out)),
+      Spec.field.of(Spec.field(Spec.lows(Bytes.from_list(Con{c, r}))), v), pd, out)
+  %fbb(Spec.lows(Bytes.from_list(Con{c, r}))) :
+    LR.field(Eng.feed(v, Eng.step.name(_, pd, out)),
+      Spec.field.of(Spec.field(Spec.lows(Bytes.from_list(Con{c, r}))), v), pd, out)
+  K.of(Spec.field(Spec.lows(Bytes.from_list(Con{c, r}))), v, pd, out)(pr)
+
+def K.name.at(+k: Eng.Cls, +d: U32, +v: List<&2, U32>, +c: U32, +r: List<&2, U32>, +pd: Eng.Pend,
+  +out: List<&2, Eng.Req>, mx: {Spec.allows(Spec.TName{}, k) == False{} : Bool}, pr: Plain(v)) ->
+  G.name(k, d, v, c, r, pd, out):
+  match k:
+    case Eng.KCo{}:
+      K.name.colon(v, c, r, pd, out, pr)
+    case Eng.KDg{}:
+      no2(G.name(Eng.KDg{}, d, v, c, r, pd, out), mx)
+    case Eng.KTk{}:
+      no2(G.name(Eng.KTk{}, d, v, c, r, pd, out), mx)
+    case Eng.KSp{}:
+      dead.bad(v, pd, out)
+    case Eng.KHt{}:
+      dead.bad(v, pd, out)
+    case Eng.KCr{}:
+      dead.bad(v, pd, out)
+    case Eng.KLf{}:
+      dead.bad(v, pd, out)
+    case Eng.KCm{}:
+      dead.bad(v, pd, out)
+    case Eng.KVc{}:
+      dead.bad(v, pd, out)
+    case Eng.KCt{}:
+      dead.bad(v, pd, out)
+
+def K.name.sat(+k: Eng.Cls, +d: U32, +v: List<&2, U32>, +c: U32, +r: List<&2, U32>, +pd: Eng.Pend,
+  +out: List<&2, Eng.Req>,
+  sw: {Spec.allows(Spec.TName{}, k) == False{} : Bool} & ({notcrlf(k) == True{} : Bool} & Plain(v))) ->
+  G.name(k, d, v, c, r, pd, out):
+  (mx, np) = sw
+  (nc, pr) = np
+  K.name.at(k, d, v, c, r, pd, out, mx, pr)
+
+def K.name.stop(+c: U32, +r: List<&2, U32>, stop: Spec.Stop, +pd: Eng.Pend, +out: List<&2, Eng.Req>) ->
+  SW.at(Spec.TName{}, stop) ->
+  LR.field(RES.at(stop, SelR{Eng.RN{}}, Bytes.from_list(Con{c, r}), pd, out),
+    Spec.field.name(Spec.Span{Con{c, r}, stop}), pd, out):
+  match stop:
+    case Spec.SEnd{}:
+      sw => {==}
+    case Spec.SAt{k, d, v}:
+      sw => K.name.sat(k, d, v, c, r, pd, out, sw)
+
+def K.name(+c: U32, sp: Spec.Span, +pd: Eng.Pend, +out: List<&2, Eng.Req>) -> SW(Spec.TName{}, sp) ->
+  LR.field(RES(sp, SelR{Eng.RN{}}, Eng.one(c), pd, out), Spec.field.name(Spec.span.push(c, sp)), pd, out):
+  match sp:
+    case Spec.Span{r, stop}:
+      K.name.stop(c, r, stop, pd, out)
+
+# the first byte of a field line
+def G.fl1(+k: Eng.Cls, +c: U32, +t: List<&2, U32>, +pd: Eng.Pend, +out: List<&2, Eng.Req>) -> Type:
+  LR.field(Eng.feed(t, Eng.step.at(Eng.Lin{}, k, c, pd, out)),
+    Spec.field.name(Spec.span.pick(Spec.allows(Spec.TName{}, k), k, c, t, Spec.span(Spec.TName{}, t))), pd, out)
+
+def line.field.first(+k: Eng.Cls, +c: U32, +t: List<&2, U32>, +pd: Eng.Pend, +out: List<&2, Eng.Req>,
+  nc: {notcrlf(k) == True{} : Bool}, pt: Plain(t)) -> G.fl1(k, c, t, pd, out):
+  match k:
+    case Eng.KTk{}:
+      %RS(t, SelR{Eng.RN{}}, Eng.one(c), pd, out) :
+        LR.field(_, Spec.field.name(Spec.span.push(c, Spec.span(Spec.TName{}, t))), pd, out)
+      K.name(c, Spec.span(Spec.TName{}, t), pd, out)(span.sw(Spec.TName{}, t)(pt))
+    case Eng.KDg{}:
+      %RS(t, SelR{Eng.RN{}}, Eng.one(c), pd, out) :
+        LR.field(_, Spec.field.name(Spec.span.push(c, Spec.span(Spec.TName{}, t))), pd, out)
+      K.name(c, Spec.span(Spec.TName{}, t), pd, out)(span.sw(Spec.TName{}, t)(pt))
+    case Eng.KCr{}:
+      no(G.fl1(Eng.KCr{}, c, t, pd, out), nc)
+    case Eng.KSp{}:
+      dead.bad(t, pd, out)
+    case Eng.KHt{}:
+      dead.bad(t, pd, out)
+    case Eng.KLf{}:
+      dead.bad(t, pd, out)
+    case Eng.KCo{}:
+      dead.bad(t, pd, out)
+    case Eng.KCm{}:
+      dead.bad(t, pd, out)
+    case Eng.KVc{}:
+      dead.bad(t, pd, out)
+    case Eng.KCt{}:
+      dead.bad(t, pd, out)
+
+def line.field.con(+c: U32, +t: List<&2, U32>, +pd: Eng.Pend, +out: List<&2, Eng.Req>,
+  pl: {notcrlf(Spec.cls(c)) == True{} : Bool} & Plain(t)) ->
+  LR.field(Eng.feed(Con{c, t}, Eng.P{Eng.Lin{}, pd, out}), Spec.field.view(Con{c, t}), pd, out):
+  (nc, pt) = pl
+  %feedc(c, t, Eng.P{Eng.Lin{}, pd, out}) : LR.field(_, Spec.field.view(Con{c, t}), pd, out)
+  line.field.first(Spec.cls(c), c, t, pd, out, nc, pt)
+
+# LEMMA: a field line, read as far as it has come
+def line.field(cur: List<&2, U32>, +pd: Eng.Pend, +out: List<&2, Eng.Req>) -> Plain(cur) ->
+  LR.field(Eng.feed(cur, Eng.P{Eng.Lin{}, pd, out}), Spec.field.view(cur), pd, out):
+  match cur:
+    case Nil{}:
+      pl => {==}
+    case Con{+c, +t}:
+      pl => line.field.con(c, t, pd, out, pl)
+
+# The head, seen
+# --------------
+#
+# What the reader holds pending and what the spec's head has said are
+# the same message when they look the same through PV: the method, the
+# target, the length, close, the Host count (none, one, more) and the
+# four things an upgrade needs. A reader that never saw an upgrade field
+# holds none of them, which looks like an empty key and three falses.
+
+type PV is Data:
+  PV{meth: Eng.Meth, path: Bytes(), cl: Eng.Cl, close: Bool, host: Eng.Hosts, key: Bytes(),
+    up: Bool, cu: Bool, vb: Bool}
+
+def pv.ws(m: Eng.Meth, p: Bytes(), cl: Eng.Cl, close: Bool, host: Eng.Hosts, ws: Eng.Up) -> PV:
+  match ws:
+    case Eng.Plain{}:
+      PV{m, p, cl, close, host, "", False{}, False{}, False{}}
+    case Eng.Asks{k, u, c, v}:
+      PV{m, p, cl, close, host, k, u, c, v}
+
+def pv(pd: Eng.Pend) -> PV:
+  match pd:
+    case Eng.Pend{m, p, cl, close, host, ws}:
+      pv.ws(m, p, cl, close, host, ws)
+
+def hsat(n: Nat) -> Eng.Hosts:
+  match n:
+    case 0n:
+      Eng.H0{}
+    case 1n+p:
+      match p:
+        case 0n:
+          Eng.H1{}
+        case 1n+q:
+          Eng.H2{}
+
+def clv(l: Maybe<&2, U32>) -> Eng.Cl:
+  match l:
+    case None{}:
+      Eng.NoCl{}
+    case Some{n}:
+      Eng.Has{n}
+
+def hv(h: Spec.Head) -> PV:
+  match h:
+    case Spec.Head{m, t, l, cl, hs, k, u, c, v}:
+      PV{m, Bytes.from_list(t), clv(l), cl, hsat(hs), Bytes.from_list(k), u, c, v}
+
+def PR(-pd: Eng.Pend, -h: Spec.Head) -> Data:
+  {pv(pd) == hv(h) : PV}
+
+# a change seen the same on both sides is the same change
+def pr.by(-f: PV -> PV, -pd: Eng.Pend, -pd2: Eng.Pend, -h: Spec.Head, -h2: Spec.Head,
+  e1: {pv(pd2) == f(pv(pd)) : PV}, e2: {f(hv(h)) == hv(h2) : PV}, pr: PR(pd, h)) -> PR(pd2, h2):
+  Equal.trans(PV, pv(pd2), f(pv(pd)), hv(h2), e1,
+    Equal.trans(PV, f(pv(pd)), f(hv(h)), hv(h2), Equal.cong(PV, PV, f, pv(pd), hv(h), pr), e2))
+
+def pv.conn(x: PV, a: Bool, b: Bool) -> PV:
+  match x:
+    case PV{m, p, cl, close, host, k, u, c, v}:
+      PV{m, p, cl, close || a, host, k, u, c || b, v}
+
+def pv.up(x: PV, w: Bool) -> PV:
+  match x:
+    case PV{m, p, cl, close, host, k, u, c, v}:
+      PV{m, p, cl, close, host, k, u || w, c, v}
+
+def pv.key(x: PV, kb: Bytes()) -> PV:
+  match x:
+    case PV{m, p, cl, close, host, k, u, c, v}:
+      PV{m, p, cl, close, host, kb, u, c, v}
+
+def pv.ver(x: PV, ok: Bool) -> PV:
+  match x:
+    case PV{m, p, cl, close, host, k, u, c, v}:
+      PV{m, p, cl, close, host, k, u, c, v || Bool.not(ok)}
+
+def pv.host(x: PV) -> PV:
+  match x:
+    case PV{m, p, cl, close, host, k, u, c, v}:
+      PV{m, p, cl, close, Eng.hosts.more(host), k, u, c, v}
+
+def pv.cl(x: PV, l: Eng.Cl) -> PV:
+  match x:
+    case PV{m, p, cl, close, host, k, u, c, v}:
+      PV{m, p, l, close, host, k, u, c, v}
+
+# the engine's side of each change
+def e.conn(pd: Eng.Pend, +a: Bool, +b: Bool) -> {pv(Eng.pend.conn(pd, a, b)) == pv.conn(pv(pd), a, b) : PV}:
+  match pd:
+    case Eng.Pend{m, p, cl, close, host, ws}:
+      match ws b:
+        case Eng.Plain{} False{}:
+          {==}
+        case Eng.Plain{} True{}:
+          {==}
+        case Eng.Asks{k, u, c, v} w:
+          {==}
+
+def e.up(pd: Eng.Pend, +w: Bool) -> {pv(Eng.pend.up(pd, w)) == pv.up(pv(pd), w) : PV}:
+  match pd:
+    case Eng.Pend{m, p, cl, close, host, ws}:
+      match ws w:
+        case Eng.Plain{} False{}:
+          {==}
+        case Eng.Plain{} True{}:
+          {==}
+        case Eng.Asks{k, u, c, v} x:
+          {==}
+
+def e.key(pd: Eng.Pend, +kb: Bytes()) -> {pv(Eng.pend.key(pd, kb)) == pv.key(pv(pd), kb) : PV}:
+  match pd:
+    case Eng.Pend{m, p, cl, close, host, ws}:
+      match ws:
+        case Eng.Plain{}:
+          {==}
+        case Eng.Asks{k, u, c, v}:
+          {==}
+
+def e.ver(pd: Eng.Pend, +ok: Bool) -> {pv(Eng.pend.ver(pd, ok)) == pv.ver(pv(pd), ok) : PV}:
+  match pd:
+    case Eng.Pend{m, p, cl, close, host, ws}:
+      match ws ok:
+        case Eng.Plain{} True{}:
+          {==}
+        case Eng.Plain{} False{}:
+          {==}
+        case Eng.Asks{k, u, c, v} x:
+          {==}
+
+def e.host(pd: Eng.Pend) -> {pv(Eng.pend.host(pd)) == pv.host(pv(pd)) : PV}:
+  match pd:
+    case Eng.Pend{m, p, cl, close, host, ws}:
+      match ws:
+        case Eng.Plain{}:
+          {==}
+        case Eng.Asks{k, u, c, v}:
+          {==}
+
+# and the spec's
+def s.conn(h: Spec.Head, -a: Bool, -b: Bool) -> {pv.conn(hv(h), a, b) == hv(Spec.head.conn(h, a, b)) : PV}:
+  match h:
+    case Spec.Head{m, t, l, cl, hs, k, u, c, v}:
+      {==}
+
+def s.up(h: Spec.Head, -w: Bool) -> {pv.up(hv(h), w) == hv(Spec.head.up(h, w)) : PV}:
+  match h:
+    case Spec.Head{m, t, l, cl, hs, k, u, c, v}:
+      {==}
+
+def s.key(h: Spec.Head, -kl: List<&2, U32>) ->
+  {pv.key(hv(h), Bytes.from_list(kl)) == hv(Spec.head.key(h, kl)) : PV}:
+  match h:
+    case Spec.Head{m, t, l, cl, hs, k, u, c, v}:
+      {==}
+
+def s.ver(h: Spec.Head, -ok: Bool) -> {pv.ver(hv(h), ok) == hv(Spec.head.ver(h, ok)) : PV}:
+  match h:
+    case Spec.Head{m, t, l, cl, hs, k, u, c, v}:
+      {==}
+
+def s.host(h: Spec.Head) -> {pv.host(hv(h)) == hv(Spec.head.host(h)) : PV}:
+  match h:
+    case Spec.Head{m, t, l, cl, hs, k, u, c, v}:
+      match hs:
+        case 0n:
+          {==}
+        case 1n+p:
+          match p:
+            case 0n:
+              {==}
+            case 1n+q:
+              {==}
+
+def pr.conn(+pd: Eng.Pend, +h: Spec.Head, +a: Bool, +b: Bool, pr: PR(pd, h)) ->
+  PR(Eng.pend.conn(pd, a, b), Spec.head.conn(h, a, b)):
+  pr.by(x => pv.conn(x, a, b), pd, Eng.pend.conn(pd, a, b), h, Spec.head.conn(h, a, b),
+    e.conn(pd, a, b), s.conn(h, a, b), pr)
+
+def pr.up(+pd: Eng.Pend, +h: Spec.Head, +w: Bool, pr: PR(pd, h)) ->
+  PR(Eng.pend.up(pd, w), Spec.head.up(h, w)):
+  pr.by(x => pv.up(x, w), pd, Eng.pend.up(pd, w), h, Spec.head.up(h, w), e.up(pd, w), s.up(h, w), pr)
+
+def pr.key(+pd: Eng.Pend, +h: Spec.Head, +kl: List<&2, U32>, pr: PR(pd, h)) ->
+  PR(Eng.pend.key(pd, Bytes.from_list(kl)), Spec.head.key(h, kl)):
+  pr.by(x => pv.key(x, Bytes.from_list(kl)), pd, Eng.pend.key(pd, Bytes.from_list(kl)), h,
+    Spec.head.key(h, kl), e.key(pd, Bytes.from_list(kl)), s.key(h, kl), pr)
+
+def pr.ver(+pd: Eng.Pend, +h: Spec.Head, +ok: Bool, pr: PR(pd, h)) ->
+  PR(Eng.pend.ver(pd, ok), Spec.head.ver(h, ok)):
+  pr.by(x => pv.ver(x, ok), pd, Eng.pend.ver(pd, ok), h, Spec.head.ver(h, ok), e.ver(pd, ok), s.ver(h, ok), pr)
+
+def pr.host(+pd: Eng.Pend, +h: Spec.Head, pr: PR(pd, h)) -> PR(Eng.pend.host(pd), Spec.head.host(h)):
+  pr.by(x => pv.host(x), pd, Eng.pend.host(pd), h, Spec.head.host(h), e.host(pd), s.host(h), pr)
+
+# the method, by its bytes, on both sides
+def meth.pick.is(a: Bool, b: Bool) -> {Spec.meth.pick(a, b) == Eng.meth.pick(a, b) : Eng.Meth}:
+  match a b:
+    case True{} x:
+      {==}
+    case False{} True{}:
+      {==}
+    case False{} False{}:
+      {==}
+
+def meth.is(+m: Bytes()) -> {Spec.method(m) == Eng.meth.of(m) : Eng.Meth}:
+  %eqs(m, "GET") : {Spec.method(m) == Eng.meth.pick(_, Eng.bytes.eq(m, "HEAD")) : Eng.Meth}
+  %eqs(m, "HEAD") : {Spec.method(m) == Eng.meth.pick(Spec.eq(m, "GET"), _) : Eng.Meth}
+  meth.pick.is(Spec.eq(m, "GET"), Spec.eq(m, "HEAD"))
+
+# a request line's head, on both sides
+def pr.new(+m: List<&2, U32>, +t: List<&2, U32>) -> PR(pd2(m, t), Spec.head.new(m, t)):
+  %meth.is(Bytes.from_list(m)) :
+    {PV{_, Bytes.from_list(t), Eng.NoCl{}, False{}, Eng.H0{}, "", False{}, False{}, False{}} ==
+      PV{Spec.method(Bytes.from_list(m)), Bytes.from_list(t), Eng.NoCl{}, False{}, Eng.H0{}, "", False{},
+        False{}, False{}} : PV}
+  {==}
+
+# whitespace cut from either end, on both sides
+def tl.pick(w: Bool, +c: U32, +t: List<&2, U32>, -rl: List<&2, U32>, -rb: Bytes(),
+  ih: {Bytes.from_list(rl) == rb : Bytes()}) ->
+  {Bytes.from_list(Spec.trim.lead.pick(w, c, t, rl)) == Eng.trim.lead.pick(w, c, Bytes.from_list(t), rb) : Bytes()}:
+  match w:
+    case True{}:
+      ih
+    case False{}:
+      {==}
+
+def ows.is(k: Eng.Cls) -> {Spec.ows(k) == Eng.ows(k) : Bool}:
+  match k:
+    case Eng.KSp{}:
+      {==}
+    case Eng.KHt{}:
+      {==}
+    case Eng.KCr{}:
+      {==}
+    case Eng.KLf{}:
+      {==}
+    case Eng.KCo{}:
+      {==}
+    case Eng.KCm{}:
+      {==}
+    case Eng.KDg{}:
+      {==}
+    case Eng.KTk{}:
+      {==}
+    case Eng.KVc{}:
+      {==}
+    case Eng.KCt{}:
+      {==}
+
+def tl(x: List<&2, U32>) -> {Bytes.from_list(Spec.trim.lead(x)) == Eng.trim.lead(Bytes.from_list(x)) : Bytes()}:
+  match x:
+    case Nil{}:
+      {==}
+    case Con{+c, +t}:
+      %br.cls(c) :
+        {Bytes.from_list(Spec.trim.lead(Con{c, t})) ==
+          Eng.trim.lead.pick(Eng.ows(_), c, Bytes.from_list(t), Eng.trim.lead(Bytes.from_list(t))) : Bytes()}
+      %ows.is(Spec.cls(c)) :
+        {Bytes.from_list(Spec.trim.lead(Con{c, t})) ==
+          Eng.trim.lead.pick(_, c, Bytes.from_list(t), Eng.trim.lead(Bytes.from_list(t))) : Bytes()}
+      tl.pick(Spec.ows(Spec.cls(c)), c, t, Spec.trim.lead(t), Eng.trim.lead(Bytes.from_list(t)), tl(t))
+
+def te.pick(w: Bool, +c: U32, r: List<&2, U32>) ->
+  {Bytes.from_list(Spec.trim.end.pick(w, c, r)) == Eng.trim.end.pick(w, c, Bytes.from_list(r)) : Bytes()}:
+  match w r:
+    case True{} Nil{}:
+      {==}
+    case True{} Con{h, t}:
+      {==}
+    case False{} Nil{}:
+      {==}
+    case False{} Con{h, t}:
+      {==}
+
+def te(x: List<&2, U32>) -> {Bytes.from_list(Spec.trim.end(x)) == Eng.trim.end(Bytes.from_list(x)) : Bytes()}:
+  match x:
+    case Nil{}:
+      {==}
+    case Con{+c, +t}:
+      %br.cls(c) :
+        {Bytes.from_list(Spec.trim.end(Con{c, t})) ==
+          Eng.trim.end.pick(Eng.ows(_), c, Eng.trim.end(Bytes.from_list(t))) : Bytes()}
+      %ows.is(Spec.cls(c)) :
+        {Bytes.from_list(Spec.trim.end(Con{c, t})) ==
+          Eng.trim.end.pick(_, c, Eng.trim.end(Bytes.from_list(t))) : Bytes()}
+      %te(t) :
+        {Bytes.from_list(Spec.trim.end(Con{c, t})) ==
+          Eng.trim.end.pick(Spec.ows(Spec.cls(c)), c, _) : Bytes()}
+      te.pick(Spec.ows(Spec.cls(c)), c, Spec.trim.end(t))
+
+def trim.is(+x: List<&2, U32>) ->
+  {Bytes.from_list(Spec.trim(x)) == Eng.trim(Bytes.from_list(x)) : Bytes()}:
+  %tl(x) : {Bytes.from_list(Spec.trim(x)) == Eng.trim.end(_) : Bytes()}
+  te(Spec.trim.lead(x))
+
+# The walk, seen
+# --------------
+#
+# The abstraction relation. REL(p, w, pd) holds when the reader p is
+# where the spec's walk w says it is:
+#   in a request line cur      p is a fresh reader fed cur
+#   at the CR of an empty line  p is at that CR
+#   in a field line cur of h   p is a reader at a line's start, with pd
+#                              pending, fed cur; pd looks like h
+#   at a line's CR, or the     p is at that CR, with pd pending;
+#   head's                     pd looks like h
+#   in a body                  p counts the same bytes down, holding the
+#                              same body so far
+#   after an upgrade           p keeps the same bytes, in order
+#   refused                    p is Bad, with the same requests
+# and, but for the last two, p is a fresh reader with the requests done
+# fed the bytes since the last one (BND): the reader restarts exactly
+# where the spec says a request ends.
+
+def BND(-p: Eng.P, -since: List<&2, U32>, -out: List<&2, Eng.Req>) -> Data:
+  {p == Eng.feed(since, Eng.P{Eng.Pre{}, Eng.pend.new(), out}) : Eng.P}
+
+def REL.m(-p: Eng.P, mode: Spec.Mode, -out: List<&2, Eng.Req>, -since: List<&2, U32>, -pd: Eng.Pend) -> Type:
+  match mode:
+    case Spec.MReq{+cur}:
+      {p == Eng.feed(cur, Eng.P{Eng.Pre{}, Eng.pend.new(), out}) : Eng.P} & (Plain(cur) & BND(p, since, out))
+    case Spec.MBlank{}:
+      {p == Eng.P{Eng.PreLf{}, Eng.pend.new(), out} : Eng.P} & BND(p, since, out)
+    case Spec.MField{h, +cur}:
+      PR(pd, h) & ({p == Eng.feed(cur, Eng.P{Eng.Lin{}, pd, out}) : Eng.P} & (Plain(cur) & BND(p, since, out)))
+    case Spec.MEol{h}:
+      PR(pd, h) & ({p == Eng.P{Eng.CrM{}, pd, out} : Eng.P} & BND(p, since, out))
+    case Spec.MEoh{h}:
+      PR(pd, h) & ({p == Eng.P{Eng.CrL{}, pd, out} : Eng.P} & BND(p, since, out))
+    case Spec.MBody{h, more, got}:
+      PR(pd, h) & ({p == Eng.P{Eng.Bod{more, Bytes.from_list(got)}, pd, out} : Eng.P} & BND(p, since, out))
+    case Spec.MUp{got}:
+      {p == Eng.P{Eng.Rest{Bytes.from_list(got)}, Eng.pend.new(), out} : Eng.P}
+    case Spec.MBad{}:
+      Dead(p, out)
+
+def REL(-p: Eng.P, w: Spec.W, -pd: Eng.Pend) -> Type:
+  match w:
+    case Spec.W{mode, out, since}:
+      REL.m(p, mode, out, since, pd)
+
+# some pending fields the relation holds with
+def SR(-p: Eng.P, w: Spec.W) -> Type:
+  &pd2: Eng.Pend -> REL(p, w, pd2)
+
+# a step, and a byte of known class
+def cstep(-p: Eng.P, -q: Eng.P, -c: U32, e: {p == q : Eng.P}) -> {Eng.step(p, c) == Eng.step(q, c) : Eng.P}:
+  Equal.cong(Eng.P, Eng.P, x => Eng.step(x, c), p, q, e)
+
+def fsnoc(xs: List<&2, U32>, +c: U32, +q: Eng.P) ->
+  {Eng.step(Eng.feed(xs, q), c) == Eng.feed(Spec.snoc(xs, c), q) : Eng.P}:
+  match xs:
+    case Nil{}:
+      {==}
+    case Con{x, t}:
+      fsnoc(t, c, Eng.step(q, x))
+
+def adv(-p: Eng.P, +xs: List<&2, U32>, +c: U32, +q: Eng.P, e: {p == Eng.feed(xs, q) : Eng.P}) ->
+  {Eng.step(p, c) == Eng.feed(Spec.snoc(xs, c), q) : Eng.P}:
+  Equal.trans(Eng.P, Eng.step(p, c), Eng.step(Eng.feed(xs, q), c), Eng.feed(Spec.snoc(xs, c), q),
+    cstep(p, Eng.feed(xs, q), c, e), fsnoc(xs, c, q))
+
+def stepk(q: Eng.P, +c: U32, -k: Eng.Cls, ek: {Spec.cls(c) == k : Eng.Cls}) ->
+  {SK(q, k, c) == Eng.step(q, c) : Eng.P}:
+  match q:
+    case Eng.P{st, pd, out}:
+      %ek : {Eng.step.at(st, _, c, pd, out) == Eng.step(Eng.P{st, pd, out}, c) : Eng.P}
+      stepc(Eng.P{st, pd, out}, c)
+
+def atk(-p: Eng.P, +x: Eng.P, +c: U32, -k: Eng.Cls, ek: {Spec.cls(c) == k : Eng.Cls}, e: {p == x : Eng.P}) ->
+  {Eng.step(p, c) == SK(x, k, c) : Eng.P}:
+  Equal.trans(Eng.P, Eng.step(p, c), Eng.step(x, c), SK(x, k, c), cstep(p, x, c, e),
+    Equal.sym(Eng.P, SK(x, k, c), Eng.step(x, c), stepk(x, c, k, ek)))
+
+def deadvia(-p2: Eng.P, -q: Eng.P, -out: List<&2, Eng.Req>, e: {p2 == q : Eng.P}, d: Dead(q, out)) ->
+  Dead(p2, out):
+  %Equal.sym(Eng.P, p2, q, e) : Dead(_, out)
+  d
+
+def dq(-q: Eng.P, -x: Eng.P, -k: Eng.Cls, -c: U32, -out: List<&2, Eng.Req>, e: {q == x : Eng.P},
+  d: Dead(SK(x, k, c), out)) -> Dead(SK(q, k, c), out):
+  %Equal.sym(Eng.P, q, x, e) : Dead(SK(_, k, c), out)
+  d
+
+def skq(-q: Eng.P, -x: Eng.P, -k: Eng.Cls, -c: U32, e: {q == x : Eng.P}) -> {SK(q, k, c) == SK(x, k, c) : Eng.P}:
+  Equal.cong(Eng.P, Eng.P, y => SK(y, k, c), q, x, e)
+
+def ncof(-c: U32, -k: Eng.Cls, ek: {Spec.cls(c) == k : Eng.Cls}) ->
+  {notcrlf(k) == True{} : Bool} -> {notcrlf(Spec.cls(c)) == True{} : Bool}:
+  n =>
+    %Equal.sym(Eng.Cls, Spec.cls(c), k, ek) : {notcrlf(_) == True{} : Bool}
+    n
+
+def bnd.step(-p: Eng.P, +c: U32, +since: List<&2, U32>, +out: List<&2, Eng.Req>, bnd: BND(p, since, out)) ->
+  BND(Eng.step(p, c), Spec.snoc(since, c), out):
+  adv(p, since, c, Eng.P{Eng.Pre{}, Eng.pend.new(), out}, bnd)
+
+# a request, completed: the reader emits what the spec does
+def reqof(x: PV, body: Bytes()) -> Eng.Req:
+  match x:
+    case PV{m, p, cl, close, host, k, u, c, v}:
+      Eng.pend.req.go(m, p, body, close, Eng.up.asked(Eng.Asks{k, u, c, v}))
+
+def e.req(pd: Eng.Pend, -body: Bytes()) -> {Eng.pend.req(pd, body) == reqof(pv(pd), body) : Eng.Req}:
+  match pd:
+    case Eng.Pend{m, p, cl, close, host, ws}:
+      match ws:
+        case Eng.Plain{}:
+          {==}
+        case Eng.Asks{k, u, c, v}:
+          {==}
+
+def s.req(h: Spec.Head, -b: List<&2, U32>) ->
+  {Spec.req(h, b) == reqof(hv(h), Bytes.from_list(b)) : Eng.Req}:
+  match h:
+    case Spec.Head{m, t, l, cl, hs, k, u, c, v}:
+      match k:
+        case Nil{}:
+          {==}
+        case Con{x, r}:
+          {==}
+
+def REQ(+pd: Eng.Pend, +h: Spec.Head, +b: List<&2, U32>, pr: PR(pd, h)) ->
+  {Spec.req(h, b) == Eng.pend.req(pd, Bytes.from_list(b)) : Eng.Req}:
+  Equal.trans(Eng.Req, Spec.req(h, b), reqof(hv(h), Bytes.from_list(b)), Eng.pend.req(pd, Bytes.from_list(b)),
+    s.req(h, b),
+    Equal.trans(Eng.Req, reqof(hv(h), Bytes.from_list(b)), reqof(pv(pd), Bytes.from_list(b)),
+      Eng.pend.req(pd, Bytes.from_list(b)),
+      Equal.cong(PV, Eng.Req, x => reqof(x, Bytes.from_list(b)), hv(h), pv(pd), Equal.sym(PV, pv(pd), hv(h), pr)),
+      Equal.sym(Eng.Req, Eng.pend.req(pd, Bytes.from_list(b)), reqof(pv(pd), Bytes.from_list(b)),
+        e.req(pd, Bytes.from_list(b)))))
+
+def EMIT.ws(ws: Bool, -p2: Eng.P, +m: Eng.Meth, +pa: Bytes(), +bd: Bytes(), +cl: Bool, +key: Bytes(),
+  +out: List<&2, Eng.Req>, +pd: Eng.Pend,
+  e: {p2 == Eng.emit.go(Eng.Req{m, pa, bd, cl, ws, key}, out) : Eng.P}) ->
+  SR(p2, Spec.emit.go(Eng.Req{m, pa, bd, cl, ws, key}, out)):
+  match ws:
+    case True{}:
+      (pd, e)
+    case False{}:
+      +e2 = e
+      (pd, (e2, (Unit{}, e2)))
+
+def EMIT(+pd: Eng.Pend, h: Spec.Head, +b: List<&2, U32>, +out: List<&2, Eng.Req>, -p2: Eng.P,
+  e: {p2 == Eng.emit(pd, Bytes.from_list(b), out) : Eng.P}, pr: PR(pd, h)) -> SR(p2, Spec.emit(h, b, out)):
+  match h:
+    case Spec.Head{+hm, +ht, +l, +hc, +hs, +hk, +hu, +hcu, +hvb}:
+      EMIT.ws(hu && hcu && Spec.has(hk) && Bool.not(hvb), p2, hm, Bytes.from_list(ht), Bytes.from_list(b),
+        hc, Bytes.from_list(hk), out, pd,
+        Equal.trans(Eng.P, p2, Eng.emit(pd, Bytes.from_list(b), out),
+          Eng.emit.go(Spec.req(Spec.Head{hm, ht, l, hc, hs, hk, hu, hcu, hvb}, b), out), e,
+          Equal.cong(Eng.Req, Eng.P, x => Eng.emit.go(x, out), Eng.pend.req(pd, Bytes.from_list(b)),
+            Spec.req(Spec.Head{hm, ht, l, hc, hs, hk, hu, hcu, hvb}, b),
+            Equal.sym(Eng.Req, Spec.req(Spec.Head{hm, ht, l, hc, hs, hk, hu, hcu, hvb}, b),
+              Eng.pend.req(pd, Bytes.from_list(b)), REQ(pd, Spec.Head{hm, ht, l, hc, hs, hk, hu, hcu, hvb}, b, pr)))))
+
+# One byte
+# --------
+
+# the request line's CR
+def CR.ver(b: Bool, -p: Eng.P, +m: List<&2, U32>, +t: List<&2, U32>, +out: List<&2, Eng.Req>,
+  +since: List<&2, U32>, +c: U32, +pd: Eng.Pend,
+  e: {Eng.step(p, c) == Eng.step.ver(b, pd2(m, t), out) : Eng.P},
+  bnd: BND(Eng.step(p, c), Spec.snoc(since, c), out)) ->
+  SR(Eng.step(p, c), Spec.req.ok(b, m, t, out, Spec.snoc(since, c))):
+  match b:
+    case True{}:
+      (pd2(m, t), (pr.new(m, t), (e, bnd)))
+    case False{}:
+      (pd, deadvia(Eng.step(p, c), Eng.P{Eng.Bad{}, pd2(m, t), out}, out, e, {==}))
+
+def CR.req(v: Spec.RLine, +q: Eng.P, +c: U32, -p: Eng.P, +pd: Eng.Pend, +out: List<&2, Eng.Req>,
+  +since: List<&2, U32>, lr: LR.req(q, v, out), e0: {Eng.step(p, c) == SK(q, Eng.KCr{}, c) : Eng.P},
+  bnd: BND(Eng.step(p, c), Spec.snoc(since, c), out)) ->
+  SR(Eng.step(p, c), Spec.req.cr(v, out, Spec.snoc(since, c))):
+  match v:
+    case Spec.RNone{}:
+      (pd, (Equal.trans(Eng.P, Eng.step(p, c), SK(q, Eng.KCr{}, c), Eng.P{Eng.PreLf{}, Eng.pend.new(), out}, e0,
+        skq(q, Eng.P{Eng.Pre{}, Eng.pend.new(), out}, Eng.KCr{}, c, lr)), bnd))
+    case Spec.RMeth{m}:
+      (pd, deadvia(Eng.step(p, c), SK(q, Eng.KCr{}, c), out, e0,
+        dq(q, Eng.P{Eng.InM{Bytes.from_list(m)}, Eng.pend.new(), out}, Eng.KCr{}, c, out, lr, {==})))
+    case Spec.RTarget{m, t}:
+      (pd, deadvia(Eng.step(p, c), SK(q, Eng.KCr{}, c), out, e0,
+        dq(q, Eng.P{Eng.InT{Bytes.from_list(t)}, pd1(m), out}, Eng.KCr{}, c, out, lr, {==})))
+    case Spec.RVer{+m, +t, +v}:
+      CR.ver(Spec.eq(Bytes.from_list(v), "HTTP/1.1"), p, m, t, out, since, c, pd,
+        Equal.trans(Eng.P, Eng.step(p, c),
+          Eng.step.ver(Eng.bytes.eq(Bytes.from_list(v), "HTTP/1.1"), pd2(m, t), out),
+          Eng.step.ver(Spec.eq(Bytes.from_list(v), "HTTP/1.1"), pd2(m, t), out),
+          Equal.trans(Eng.P, Eng.step(p, c), SK(q, Eng.KCr{}, c),
+            Eng.step.ver(Eng.bytes.eq(Bytes.from_list(v), "HTTP/1.1"), pd2(m, t), out), e0,
+            skq(q, Eng.P{Eng.InV{Bytes.from_list(v)}, pd2(m, t), out}, Eng.KCr{}, c, lr)),
+          Equal.cong(Bool, Eng.P, x => Eng.step.ver(x, pd2(m, t), out),
+            Eng.bytes.eq(Bytes.from_list(v), "HTTP/1.1"), Spec.eq(Bytes.from_list(v), "HTTP/1.1"),
+            eq_is_spec(Bytes.from_list(v), "HTTP/1.1"))),
+        bnd)
+    case Spec.RBad{}:
+      (pd, deadvia(Eng.step(p, c), SK(q, Eng.KCr{}, c), out, e0, dead.step(q, Eng.KCr{}, c, out)(lr)))
+
+def LF.req(v: Spec.RLine, +q: Eng.P, +c: U32, -p: Eng.P, +out: List<&2, Eng.Req>, lr: LR.req(q, v, out),
+  e0: {Eng.step(p, c) == SK(q, Eng.KLf{}, c) : Eng.P}) -> Dead(Eng.step(p, c), out):
+  match v:
+    case Spec.RNone{}:
+      deadvia(Eng.step(p, c), SK(q, Eng.KLf{}, c), out, e0,
+        dq(q, Eng.P{Eng.Pre{}, Eng.pend.new(), out}, Eng.KLf{}, c, out, lr, {==}))
+    case Spec.RMeth{m}:
+      deadvia(Eng.step(p, c), SK(q, Eng.KLf{}, c), out, e0,
+        dq(q, Eng.P{Eng.InM{Bytes.from_list(m)}, Eng.pend.new(), out}, Eng.KLf{}, c, out, lr, {==}))
+    case Spec.RTarget{m, t}:
+      deadvia(Eng.step(p, c), SK(q, Eng.KLf{}, c), out, e0,
+        dq(q, Eng.P{Eng.InT{Bytes.from_list(t)}, pd1(m), out}, Eng.KLf{}, c, out, lr, {==}))
+    case Spec.RVer{m, t, v}:
+      deadvia(Eng.step(p, c), SK(q, Eng.KLf{}, c), out, e0,
+        dq(q, Eng.P{Eng.InV{Bytes.from_list(v)}, pd2(m, t), out}, Eng.KLf{}, c, out, lr, {==}))
+    case Spec.RBad{}:
+      deadvia(Eng.step(p, c), SK(q, Eng.KLf{}, c), out, e0, dead.step(q, Eng.KLf{}, c, out)(lr))
+
+def STEP.req.k(+k: Eng.Cls, +c: U32, +cur: List<&2, U32>, -p: Eng.P, +pd: Eng.Pend, +out: List<&2, Eng.Req>,
+  +since: List<&2, U32>, ek: {Spec.cls(c) == k : Eng.Cls},
+  e1: {p == Eng.feed(cur, Eng.P{Eng.Pre{}, Eng.pend.new(), out}) : Eng.P}, pl: Plain(cur),
+  bnd: BND(p, since, out)) ->
+  SR(Eng.step(p, c), Spec.req.byte(k, c, cur, out, Spec.snoc(since, c))):
+  match k:
+    case Eng.KCr{}:
+      CR.req(Spec.req.view(cur), Eng.feed(cur, Eng.P{Eng.Pre{}, Eng.pend.new(), out}), c, p, pd, out, since,
+        line.req(cur, out)(pl), atk(p, Eng.feed(cur, Eng.P{Eng.Pre{}, Eng.pend.new(), out}), c, Eng.KCr{}, ek, e1),
+        bnd.step(p, c, since, out, bnd))
+    case Eng.KLf{}:
+      (pd, LF.req(Spec.req.view(cur), Eng.feed(cur, Eng.P{Eng.Pre{}, Eng.pend.new(), out}), c, p, out,
+        line.req(cur, out)(pl), atk(p, Eng.feed(cur, Eng.P{Eng.Pre{}, Eng.pend.new(), out}), c, Eng.KLf{}, ek, e1)))
+    case Eng.KSp{}:
+      (pd, (adv(p, cur, c, Eng.P{Eng.Pre{}, Eng.pend.new(), out}, e1),
+        (plain.snoc(cur, c, ncof(c, Eng.KSp{}, ek)({==}))(pl), bnd.step(p, c, since, out, bnd))))
+    case Eng.KHt{}:
+      (pd, (adv(p, cur, c, Eng.P{Eng.Pre{}, Eng.pend.new(), out}, e1),
+        (plain.snoc(cur, c, ncof(c, Eng.KHt{}, ek)({==}))(pl), bnd.step(p, c, since, out, bnd))))
+    case Eng.KCo{}:
+      (pd, (adv(p, cur, c, Eng.P{Eng.Pre{}, Eng.pend.new(), out}, e1),
+        (plain.snoc(cur, c, ncof(c, Eng.KCo{}, ek)({==}))(pl), bnd.step(p, c, since, out, bnd))))
+    case Eng.KCm{}:
+      (pd, (adv(p, cur, c, Eng.P{Eng.Pre{}, Eng.pend.new(), out}, e1),
+        (plain.snoc(cur, c, ncof(c, Eng.KCm{}, ek)({==}))(pl), bnd.step(p, c, since, out, bnd))))
+    case Eng.KDg{}:
+      (pd, (adv(p, cur, c, Eng.P{Eng.Pre{}, Eng.pend.new(), out}, e1),
+        (plain.snoc(cur, c, ncof(c, Eng.KDg{}, ek)({==}))(pl), bnd.step(p, c, since, out, bnd))))
+    case Eng.KTk{}:
+      (pd, (adv(p, cur, c, Eng.P{Eng.Pre{}, Eng.pend.new(), out}, e1),
+        (plain.snoc(cur, c, ncof(c, Eng.KTk{}, ek)({==}))(pl), bnd.step(p, c, since, out, bnd))))
+    case Eng.KVc{}:
+      (pd, (adv(p, cur, c, Eng.P{Eng.Pre{}, Eng.pend.new(), out}, e1),
+        (plain.snoc(cur, c, ncof(c, Eng.KVc{}, ek)({==}))(pl), bnd.step(p, c, since, out, bnd))))
+    case Eng.KCt{}:
+      (pd, (adv(p, cur, c, Eng.P{Eng.Pre{}, Eng.pend.new(), out}, e1),
+        (plain.snoc(cur, c, ncof(c, Eng.KCt{}, ek)({==}))(pl), bnd.step(p, c, since, out, bnd))))
+
+# an empty line's CR, and a line's CR in a head
+def STEP.blank.k(+k: Eng.Cls, +c: U32, -p: Eng.P, +pd: Eng.Pend, +out: List<&2, Eng.Req>,
+  +since: List<&2, U32>, ek: {Spec.cls(c) == k : Eng.Cls},
+  e1: {p == Eng.P{Eng.PreLf{}, Eng.pend.new(), out} : Eng.P}, bnd: BND(p, since, out)) ->
+  SR(Eng.step(p, c), Spec.blank.byte(k, out, Spec.snoc(since, c))):
+  match k:
+    case Eng.KLf{}:
+      (pd, (atk(p, Eng.P{Eng.PreLf{}, Eng.pend.new(), out}, c, Eng.KLf{}, ek, e1),
+        (Unit{}, bnd.step(p, c, since, out, bnd))))
+    case Eng.KSp{}:
+      (pd, deadvia(Eng.step(p, c), SK(Eng.P{Eng.PreLf{}, Eng.pend.new(), out}, Eng.KSp{}, c), out,
+        atk(p, Eng.P{Eng.PreLf{}, Eng.pend.new(), out}, c, Eng.KSp{}, ek, e1), {==}))
+    case Eng.KHt{}:
+      (pd, deadvia(Eng.step(p, c), SK(Eng.P{Eng.PreLf{}, Eng.pend.new(), out}, Eng.KHt{}, c), out,
+        atk(p, Eng.P{Eng.PreLf{}, Eng.pend.new(), out}, c, Eng.KHt{}, ek, e1), {==}))
+    case Eng.KCr{}:
+      (pd, deadvia(Eng.step(p, c), SK(Eng.P{Eng.PreLf{}, Eng.pend.new(), out}, Eng.KCr{}, c), out,
+        atk(p, Eng.P{Eng.PreLf{}, Eng.pend.new(), out}, c, Eng.KCr{}, ek, e1), {==}))
+    case Eng.KCo{}:
+      (pd, deadvia(Eng.step(p, c), SK(Eng.P{Eng.PreLf{}, Eng.pend.new(), out}, Eng.KCo{}, c), out,
+        atk(p, Eng.P{Eng.PreLf{}, Eng.pend.new(), out}, c, Eng.KCo{}, ek, e1), {==}))
+    case Eng.KCm{}:
+      (pd, deadvia(Eng.step(p, c), SK(Eng.P{Eng.PreLf{}, Eng.pend.new(), out}, Eng.KCm{}, c), out,
+        atk(p, Eng.P{Eng.PreLf{}, Eng.pend.new(), out}, c, Eng.KCm{}, ek, e1), {==}))
+    case Eng.KDg{}:
+      (pd, deadvia(Eng.step(p, c), SK(Eng.P{Eng.PreLf{}, Eng.pend.new(), out}, Eng.KDg{}, c), out,
+        atk(p, Eng.P{Eng.PreLf{}, Eng.pend.new(), out}, c, Eng.KDg{}, ek, e1), {==}))
+    case Eng.KTk{}:
+      (pd, deadvia(Eng.step(p, c), SK(Eng.P{Eng.PreLf{}, Eng.pend.new(), out}, Eng.KTk{}, c), out,
+        atk(p, Eng.P{Eng.PreLf{}, Eng.pend.new(), out}, c, Eng.KTk{}, ek, e1), {==}))
+    case Eng.KVc{}:
+      (pd, deadvia(Eng.step(p, c), SK(Eng.P{Eng.PreLf{}, Eng.pend.new(), out}, Eng.KVc{}, c), out,
+        atk(p, Eng.P{Eng.PreLf{}, Eng.pend.new(), out}, c, Eng.KVc{}, ek, e1), {==}))
+    case Eng.KCt{}:
+      (pd, deadvia(Eng.step(p, c), SK(Eng.P{Eng.PreLf{}, Eng.pend.new(), out}, Eng.KCt{}, c), out,
+        atk(p, Eng.P{Eng.PreLf{}, Eng.pend.new(), out}, c, Eng.KCt{}, ek, e1), {==}))
+
+def STEP.eol.k(+k: Eng.Cls, +c: U32, +h: Spec.Head, -p: Eng.P, +pd: Eng.Pend, +out: List<&2, Eng.Req>,
+  +since: List<&2, U32>, ek: {Spec.cls(c) == k : Eng.Cls}, pr: PR(pd, h),
+  e1: {p == Eng.P{Eng.CrM{}, pd, out} : Eng.P}, bnd: BND(p, since, out)) ->
+  SR(Eng.step(p, c), Spec.eol.byte(k, h, out, Spec.snoc(since, c))):
+  match k:
+    case Eng.KLf{}:
+      (pd, (pr, (atk(p, Eng.P{Eng.CrM{}, pd, out}, c, Eng.KLf{}, ek, e1),
+        (Unit{}, bnd.step(p, c, since, out, bnd)))))
+    case Eng.KSp{}:
+      (pd, deadvia(Eng.step(p, c), SK(Eng.P{Eng.CrM{}, pd, out}, Eng.KSp{}, c), out,
+        atk(p, Eng.P{Eng.CrM{}, pd, out}, c, Eng.KSp{}, ek, e1), {==}))
+    case Eng.KHt{}:
+      (pd, deadvia(Eng.step(p, c), SK(Eng.P{Eng.CrM{}, pd, out}, Eng.KHt{}, c), out,
+        atk(p, Eng.P{Eng.CrM{}, pd, out}, c, Eng.KHt{}, ek, e1), {==}))
+    case Eng.KCr{}:
+      (pd, deadvia(Eng.step(p, c), SK(Eng.P{Eng.CrM{}, pd, out}, Eng.KCr{}, c), out,
+        atk(p, Eng.P{Eng.CrM{}, pd, out}, c, Eng.KCr{}, ek, e1), {==}))
+    case Eng.KCo{}:
+      (pd, deadvia(Eng.step(p, c), SK(Eng.P{Eng.CrM{}, pd, out}, Eng.KCo{}, c), out,
+        atk(p, Eng.P{Eng.CrM{}, pd, out}, c, Eng.KCo{}, ek, e1), {==}))
+    case Eng.KCm{}:
+      (pd, deadvia(Eng.step(p, c), SK(Eng.P{Eng.CrM{}, pd, out}, Eng.KCm{}, c), out,
+        atk(p, Eng.P{Eng.CrM{}, pd, out}, c, Eng.KCm{}, ek, e1), {==}))
+    case Eng.KDg{}:
+      (pd, deadvia(Eng.step(p, c), SK(Eng.P{Eng.CrM{}, pd, out}, Eng.KDg{}, c), out,
+        atk(p, Eng.P{Eng.CrM{}, pd, out}, c, Eng.KDg{}, ek, e1), {==}))
+    case Eng.KTk{}:
+      (pd, deadvia(Eng.step(p, c), SK(Eng.P{Eng.CrM{}, pd, out}, Eng.KTk{}, c), out,
+        atk(p, Eng.P{Eng.CrM{}, pd, out}, c, Eng.KTk{}, ek, e1), {==}))
+    case Eng.KVc{}:
+      (pd, deadvia(Eng.step(p, c), SK(Eng.P{Eng.CrM{}, pd, out}, Eng.KVc{}, c), out,
+        atk(p, Eng.P{Eng.CrM{}, pd, out}, c, Eng.KVc{}, ek, e1), {==}))
+    case Eng.KCt{}:
+      (pd, deadvia(Eng.step(p, c), SK(Eng.P{Eng.CrM{}, pd, out}, Eng.KCt{}, c), out,
+        atk(p, Eng.P{Eng.CrM{}, pd, out}, c, Eng.KCt{}, ek, e1), {==}))
+
+# a field line's CR: a length
+def PVcl(x: PV) -> Eng.Cl:
+  match x:
+    case PV{m, p, cl, close, host, k, u, c, v}:
+      cl
+
+def PVhost(x: PV) -> Eng.Hosts:
+  match x:
+    case PV{m, p, cl, close, host, k, u, c, v}:
+      host
+
+def pvws.cl(-m: Eng.Meth, -pa: Bytes(), -cl: Eng.Cl, -cls: Bool, -host: Eng.Hosts, ws: Eng.Up) ->
+  {cl == PVcl(pv.ws(m, pa, cl, cls, host, ws)) : Eng.Cl}:
+  match ws:
+    case Eng.Plain{}:
+      {==}
+    case Eng.Asks{k, u, c, v}:
+      {==}
+
+def pvws.host(-m: Eng.Meth, -pa: Bytes(), -cl: Eng.Cl, -cls: Bool, -host: Eng.Hosts, ws: Eng.Up) ->
+  {host == PVhost(pv.ws(m, pa, cl, cls, host, ws)) : Eng.Hosts}:
+  match ws:
+    case Eng.Plain{}:
+      {==}
+    case Eng.Asks{k, u, c, v}:
+      {==}
+
+def pvws.set(-m: Eng.Meth, -pa: Bytes(), -cl: Eng.Cl, -cls: Bool, -host: Eng.Hosts, ws: Eng.Up, -l: Eng.Cl) ->
+  {pv.ws(m, pa, l, cls, host, ws) == pv.cl(pv.ws(m, pa, cl, cls, host, ws), l) : PV}:
+  match ws:
+    case Eng.Plain{}:
+      {==}
+    case Eng.Asks{k, u, c, v}:
+      {==}
+
+# the pending fields and the head agree on the length and the Host count
+def ecl(+m: Eng.Meth, +pa: Bytes(), +cl: Eng.Cl, +cls: Bool, +host: Eng.Hosts, +ws: Eng.Up, -x: PV,
+  pr: {pv.ws(m, pa, cl, cls, host, ws) == x : PV}) -> {cl == PVcl(x) : Eng.Cl}:
+  Equal.trans(Eng.Cl, cl, PVcl(pv.ws(m, pa, cl, cls, host, ws)), PVcl(x), pvws.cl(m, pa, cl, cls, host, ws),
+    Equal.cong(PV, Eng.Cl, y => PVcl(y), pv.ws(m, pa, cl, cls, host, ws), x, pr))
+
+def ehost(+m: Eng.Meth, +pa: Bytes(), +cl: Eng.Cl, +cls: Bool, +host: Eng.Hosts, +ws: Eng.Up, -x: PV,
+  pr: {pv.ws(m, pa, cl, cls, host, ws) == x : PV}) -> {host == PVhost(x) : Eng.Hosts}:
+  Equal.trans(Eng.Hosts, host, PVhost(pv.ws(m, pa, cl, cls, host, ws)), PVhost(x),
+    pvws.host(m, pa, cl, cls, host, ws),
+    Equal.cong(PV, Eng.Hosts, y => PVhost(y), pv.ws(m, pa, cl, cls, host, ws), x, pr))
+
+# the pending fields with the length set, and the head with it set
+def pr.cl(+m: Eng.Meth, +pa: Bytes(), +cl: Eng.Cl, +cls: Bool, +host: Eng.Hosts, +ws: Eng.Up,
+  +hm: Eng.Meth, +ht: List<&2, U32>, +l: Maybe<&2, U32>, +hc: Bool, +hs: Nat, +hk: List<&2, U32>,
+  +hu: Bool, +hcu: Bool, +hvb: Bool, +w: U32,
+  pr: PR(Eng.Pend{m, pa, cl, cls, host, ws}, Spec.Head{hm, ht, l, hc, hs, hk, hu, hcu, hvb})) ->
+  PR(Eng.Pend{m, pa, Eng.Has{w}, cls, host, ws}, Spec.Head{hm, ht, Some{w}, hc, hs, hk, hu, hcu, hvb}):
+  pr.by(x => pv.cl(x, Eng.Has{w}), Eng.Pend{m, pa, cl, cls, host, ws}, Eng.Pend{m, pa, Eng.Has{w}, cls, host, ws},
+    Spec.Head{hm, ht, l, hc, hs, hk, hu, hcu, hvb}, Spec.Head{hm, ht, Some{w}, hc, hs, hk, hu, hcu, hvb},
+    pvws.set(m, pa, cl, cls, host, ws, Eng.Has{w}), {==}, pr)
+
+def CR.dup(b: Bool, -p: Eng.P, +c: U32, +pd2: Eng.Pend, +h2: Spec.Head, +out: List<&2, Eng.Req>,
+  +since: List<&2, U32>, e: {Eng.step(p, c) == Eng.step.clen.dup(pd2, out, b) : Eng.P},
+  bnd: BND(Eng.step(p, c), Spec.snoc(since, c), out), pr: PR(pd2, h2)) ->
+  SR(Eng.step(p, c), Spec.field.next(Spec.head.len.at(b, h2), out, Spec.snoc(since, c))):
+  match b:
+    case True{}:
+      (pd2, (pr, (e, bnd)))
+    case False{}:
+      (pd2, deadvia(Eng.step(p, c), Eng.P{Eng.Bad{}, pd2, out}, out, e, {==}))
+
+def CR.clen.l(l: Maybe<&2, U32>, +n: U32, +m: Eng.Meth, +pa: Bytes(), +cl: Eng.Cl, +cls: Bool,
+  +host: Eng.Hosts, +ws: Eng.Up, +hm: Eng.Meth, +ht: List<&2, U32>, +hc: Bool, +hs: Nat,
+  +hk: List<&2, U32>, +hu: Bool, +hcu: Bool, +hvb: Bool, -p: Eng.P, +c: U32, +out: List<&2, Eng.Req>,
+  +since: List<&2, U32>,
+  e: {Eng.step(p, c) == Eng.step.clen.go(m, pa, clv(l), cls, host, ws, n, out) : Eng.P},
+  bnd: BND(Eng.step(p, c), Spec.snoc(since, c), out),
+  pr: PR(Eng.Pend{m, pa, cl, cls, host, ws}, Spec.Head{hm, ht, l, hc, hs, hk, hu, hcu, hvb})) ->
+  SR(Eng.step(p, c), Spec.field.next(Spec.head.len(Spec.Head{hm, ht, l, hc, hs, hk, hu, hcu, hvb}, n), out,
+    Spec.snoc(since, c))):
+  match l:
+    case None{}:
+      (Eng.Pend{m, pa, Eng.Has{n}, cls, host, ws},
+        (pr.cl(m, pa, cl, cls, host, ws, hm, ht, None{}, hc, hs, hk, hu, hcu, hvb, n, pr), (e, bnd)))
+    case Some{+w}:
+      CR.dup(U32.is_eq(n, w), p, c, Eng.Pend{m, pa, Eng.Has{w}, cls, host, ws},
+        Spec.Head{hm, ht, Some{w}, hc, hs, hk, hu, hcu, hvb}, out, since, e, bnd,
+        pr.cl(m, pa, cl, cls, host, ws, hm, ht, Some{w}, hc, hs, hk, hu, hcu, hvb, w, pr))
+
+def CR.clen(+n: U32, pd: Eng.Pend, h: Spec.Head, -p: Eng.P, +c: U32, +out: List<&2, Eng.Req>,
+  +since: List<&2, U32>, e: {Eng.step(p, c) == Eng.step.clen(n, pd, out) : Eng.P},
+  bnd: BND(Eng.step(p, c), Spec.snoc(since, c), out), pr: PR(pd, h)) ->
+  SR(Eng.step(p, c), Spec.field.next(Spec.head.len(h, n), out, Spec.snoc(since, c))):
+  match pd:
+    case Eng.Pend{+m, +pa, +cl, +cls, +host, +ws}:
+      match h:
+        case Spec.Head{+hm, +ht, +l, +hc, +hs, +hk, +hu, +hcu, +hvb}:
+          +pr2 = pr
+          CR.clen.l(l, n, m, pa, cl, cls, host, ws, hm, ht, hc, hs, hk, hu, hcu, hvb, p, c, out, since,
+            Equal.trans(Eng.P, Eng.step(p, c), Eng.step.clen.go(m, pa, cl, cls, host, ws, n, out),
+              Eng.step.clen.go(m, pa, clv(l), cls, host, ws, n, out), e,
+              Equal.cong(Eng.Cl, Eng.P, x => Eng.step.clen.go(m, pa, x, cls, host, ws, n, out), cl, clv(l),
+                ecl(m, pa, cl, cls, host, ws, hv(Spec.Head{hm, ht, l, hc, hs, hk, hu, hcu, hvb}), pr2))),
+            bnd, pr2)
+
+# a field line's CR: the whole line read
+def conn.eq(+pd: Eng.Pend, +out: List<&2, Eng.Req>, +cur: List<&2, U32>, +d: List<&2, List<&2, U32>>) ->
+  {Eng.step.conn(lowb(cur), Spec.named("close", d), Spec.named("upgrade", d), pd, out) ==
+    Eng.P{Eng.CrM{}, Eng.pend.conn(pd, Spec.named("close", Con{cur, d}), Spec.named("upgrade", Con{cur, d})), out} :
+    Eng.P}:
+  %eqs(lowb(cur), "close") :
+    {Eng.P{Eng.CrM{}, Eng.pend.conn(pd, Spec.named("close", d) || _,
+      Spec.named("upgrade", d) || Eng.bytes.eq(lowb(cur), "upgrade")), out} ==
+      Eng.P{Eng.CrM{}, Eng.pend.conn(pd, Spec.named("close", Con{cur, d}), Spec.named("upgrade", Con{cur, d})), out} :
+      Eng.P}
+  %eqs(lowb(cur), "upgrade") :
+    {Eng.P{Eng.CrM{}, Eng.pend.conn(pd, Spec.named("close", Con{cur, d}), Spec.named("upgrade", d) || _), out} ==
+      Eng.P{Eng.CrM{}, Eng.pend.conn(pd, Spec.named("close", Con{cur, d}), Spec.named("upgrade", Con{cur, d})), out} :
+      Eng.P}
+  {==}
+
+def up.eq(+pd: Eng.Pend, +out: List<&2, Eng.Req>, +cur: List<&2, U32>, +d: List<&2, List<&2, U32>>) ->
+  {Eng.step.upv(lowb(cur), Spec.named("websocket", d), pd, out) ==
+    Eng.P{Eng.CrM{}, Eng.pend.up(pd, Spec.named("websocket", Con{cur, d})), out} : Eng.P}:
+  %eqs(lowb(cur), "websocket") :
+    {Eng.P{Eng.CrM{}, Eng.pend.up(pd, Spec.named("websocket", d) || _), out} ==
+      Eng.P{Eng.CrM{}, Eng.pend.up(pd, Spec.named("websocket", Con{cur, d})), out} : Eng.P}
+  {==}
+
+def key.eq(+pd: Eng.Pend, +out: List<&2, Eng.Req>, +k: List<&2, U32>) ->
+  {Eng.step.key(Bytes.from_list(k), pd, out) ==
+    Eng.P{Eng.CrM{}, Eng.pend.key(pd, Bytes.from_list(Spec.trim(k))), out} : Eng.P}:
+  %trim.is(k) :
+    {Eng.P{Eng.CrM{}, Eng.pend.key(pd, _), out} ==
+      Eng.P{Eng.CrM{}, Eng.pend.key(pd, Bytes.from_list(Spec.trim(k))), out} : Eng.P}
+  {==}
+
+def ver.eq(+pd: Eng.Pend, +out: List<&2, Eng.Req>, +v: List<&2, U32>) ->
+  {Eng.step.wsv(Bytes.from_list(v), pd, out) ==
+    Eng.P{Eng.CrM{}, Eng.pend.ver(pd, Spec.eq(Bytes.from_list(Spec.trim(v)), "13")), out} : Eng.P}:
+  %trim.is(v) :
+    {Eng.P{Eng.CrM{}, Eng.pend.ver(pd, Eng.bytes.eq(_, "13")), out} ==
+      Eng.P{Eng.CrM{}, Eng.pend.ver(pd, Spec.eq(Bytes.from_list(Spec.trim(v)), "13")), out} : Eng.P}
+  %eqs(Bytes.from_list(Spec.trim(v)), "13") :
+    {Eng.P{Eng.CrM{}, Eng.pend.ver(pd, _), out} ==
+      Eng.P{Eng.CrM{}, Eng.pend.ver(pd, Spec.eq(Bytes.from_list(Spec.trim(v)), "13")), out} : Eng.P}
+  {==}
+
+def CR.len(ws: Bool, +n: U32, +q: Eng.P, +c: U32, +h: Spec.Head, -p: Eng.P, +pd: Eng.Pend,
+  +out: List<&2, Eng.Req>, +since: List<&2, U32>, lr: LR.len(q, n, ws, pd, out),
+  e0: {Eng.step(p, c) == SK(q, Eng.KCr{}, c) : Eng.P}, bnd: BND(Eng.step(p, c), Spec.snoc(since, c), out),
+  pr: PR(pd, h)) ->
+  SR(Eng.step(p, c), Spec.field.next(Spec.head.len(h, n), out, Spec.snoc(since, c))):
+  match ws:
+    case True{}:
+      CR.clen(n, pd, h, p, c, out, since,
+        Equal.trans(Eng.P, Eng.step(p, c), SK(q, Eng.KCr{}, c), Eng.step.clen(n, pd, out), e0,
+          skq(q, Eng.P{Eng.InLt{n}, pd, out}, Eng.KCr{}, c, lr)), bnd, pr)
+    case False{}:
+      CR.clen(n, pd, h, p, c, out, since,
+        Equal.trans(Eng.P, Eng.step(p, c), SK(q, Eng.KCr{}, c), Eng.step.clen(n, pd, out), e0,
+          skq(q, Eng.P{Eng.InL{n}, pd, out}, Eng.KCr{}, c, lr)), bnd, pr)
+
+def CR.val(val: Spec.Val, +q: Eng.P, +c: U32, +h: Spec.Head, -p: Eng.P, +pd: Eng.Pend,
+  +out: List<&2, Eng.Req>, +since: List<&2, U32>, lr: LR.val(q, val, pd, out),
+  e0: {Eng.step(p, c) == SK(q, Eng.KCr{}, c) : Eng.P}, bnd: BND(Eng.step(p, c), Spec.snoc(since, c), out),
+  pr: PR(pd, h)) ->
+  SR(Eng.step(p, c), Spec.field.next(Spec.field.done(h, val), out, Spec.snoc(since, c))):
+  match val:
+    case Spec.VLen0{}:
+      (pd, deadvia(Eng.step(p, c), SK(q, Eng.KCr{}, c), out, e0,
+        dq(q, Eng.P{Eng.InL0{}, pd, out}, Eng.KCr{}, c, out, lr, {==})))
+    case Spec.VLen{n, ws}:
+      CR.len(ws, n, q, c, h, p, pd, out, since, lr, e0, bnd, pr)
+    case Spec.VConn{+d, +cur}:
+      (Eng.pend.conn(pd, Spec.named("close", Con{cur, d}), Spec.named("upgrade", Con{cur, d})),
+        (pr.conn(pd, h, Spec.named("close", Con{cur, d}), Spec.named("upgrade", Con{cur, d}), pr),
+          (Equal.trans(Eng.P, Eng.step(p, c), SK(q, Eng.KCr{}, c),
+            Eng.P{Eng.CrM{}, Eng.pend.conn(pd, Spec.named("close", Con{cur, d}), Spec.named("upgrade", Con{cur, d})), out},
+            e0,
+            Equal.trans(Eng.P, SK(q, Eng.KCr{}, c),
+              Eng.step.conn(lowb(cur), Spec.named("close", d), Spec.named("upgrade", d), pd, out),
+              Eng.P{Eng.CrM{}, Eng.pend.conn(pd, Spec.named("close", Con{cur, d}), Spec.named("upgrade", Con{cur, d})), out},
+              skq(q, Eng.P{Eng.InLc{lowb(cur), Spec.named("close", d), Spec.named("upgrade", d)}, pd, out},
+                Eng.KCr{}, c, lr),
+              conn.eq(pd, out, cur, d))),
+          bnd)))
+    case Spec.VUp{+d, +cur}:
+      (Eng.pend.up(pd, Spec.named("websocket", Con{cur, d})),
+        (pr.up(pd, h, Spec.named("websocket", Con{cur, d}), pr),
+          (Equal.trans(Eng.P, Eng.step(p, c), SK(q, Eng.KCr{}, c),
+            Eng.P{Eng.CrM{}, Eng.pend.up(pd, Spec.named("websocket", Con{cur, d})), out},
+            e0,
+            Equal.trans(Eng.P, SK(q, Eng.KCr{}, c),
+              Eng.step.upv(lowb(cur), Spec.named("websocket", d), pd, out),
+              Eng.P{Eng.CrM{}, Eng.pend.up(pd, Spec.named("websocket", Con{cur, d})), out},
+              skq(q, Eng.P{Eng.InLu{lowb(cur), Spec.named("websocket", d)}, pd, out}, Eng.KCr{}, c, lr),
+              up.eq(pd, out, cur, d))),
+          bnd)))
+    case Spec.VKey0{}:
+      (Eng.pend.key(pd, Bytes.from_list(Nil{})),
+        (pr.key(pd, h, Nil{}, pr),
+          (Equal.trans(Eng.P, Eng.step(p, c), SK(q, Eng.KCr{}, c),
+            Eng.P{Eng.CrM{}, Eng.pend.key(pd, Bytes.from_list(Nil{})), out}, e0,
+            skq(q, Eng.P{Eng.InLk0{}, pd, out}, Eng.KCr{}, c, lr)), bnd)))
+    case Spec.VKey{+k}:
+      (Eng.pend.key(pd, Bytes.from_list(Spec.trim(k))),
+        (pr.key(pd, h, Spec.trim(k), pr),
+          (Equal.trans(Eng.P, Eng.step(p, c), SK(q, Eng.KCr{}, c),
+            Eng.P{Eng.CrM{}, Eng.pend.key(pd, Bytes.from_list(Spec.trim(k))), out}, e0,
+            Equal.trans(Eng.P, SK(q, Eng.KCr{}, c), Eng.step.key(Bytes.from_list(k), pd, out),
+              Eng.P{Eng.CrM{}, Eng.pend.key(pd, Bytes.from_list(Spec.trim(k))), out},
+              skq(q, Eng.P{Eng.InLk{Bytes.from_list(k)}, pd, out}, Eng.KCr{}, c, lr),
+              key.eq(pd, out, k))), bnd)))
+    case Spec.VVer{+v}:
+      (Eng.pend.ver(pd, Spec.eq(Bytes.from_list(Spec.trim(v)), "13")),
+        (pr.ver(pd, h, Spec.eq(Bytes.from_list(Spec.trim(v)), "13"), pr),
+          (Equal.trans(Eng.P, Eng.step(p, c), SK(q, Eng.KCr{}, c),
+            Eng.P{Eng.CrM{}, Eng.pend.ver(pd, Spec.eq(Bytes.from_list(Spec.trim(v)), "13")), out}, e0,
+            Equal.trans(Eng.P, SK(q, Eng.KCr{}, c), Eng.step.wsv(Bytes.from_list(v), pd, out),
+              Eng.P{Eng.CrM{}, Eng.pend.ver(pd, Spec.eq(Bytes.from_list(Spec.trim(v)), "13")), out},
+              skq(q, Eng.P{Eng.InLv{Bytes.from_list(v)}, pd, out}, Eng.KCr{}, c, lr),
+              ver.eq(pd, out, v))), bnd)))
+    case Spec.VHost{}:
+      (Eng.pend.host(pd),
+        (pr.host(pd, h, pr),
+          (Equal.trans(Eng.P, Eng.step(p, c), SK(q, Eng.KCr{}, c),
+            Eng.P{Eng.CrM{}, Eng.pend.host(pd), out}, e0,
+            skq(q, Eng.P{Eng.InLx{}, Eng.pend.host(pd), out}, Eng.KCr{}, c, lr)), bnd)))
+    case Spec.VSkip{}:
+      (pd, (pr, (Equal.trans(Eng.P, Eng.step(p, c), SK(q, Eng.KCr{}, c), Eng.P{Eng.CrM{}, pd, out}, e0,
+        skq(q, Eng.P{Eng.InLx{}, pd, out}, Eng.KCr{}, c, lr)), bnd)))
+
+def CR.field(v: Spec.FLine, +q: Eng.P, +c: U32, +h: Spec.Head, -p: Eng.P, +pd: Eng.Pend,
+  +out: List<&2, Eng.Req>, +since: List<&2, U32>, lr: LR.field(q, v, pd, out),
+  e0: {Eng.step(p, c) == SK(q, Eng.KCr{}, c) : Eng.P}, bnd: BND(Eng.step(p, c), Spec.snoc(since, c), out),
+  pr: PR(pd, h)) ->
+  SR(Eng.step(p, c), Spec.field.cr(h, v, out, Spec.snoc(since, c))):
+  match v:
+    case Spec.FEmpty{}:
+      (pd, (pr, (Equal.trans(Eng.P, Eng.step(p, c), SK(q, Eng.KCr{}, c), Eng.P{Eng.CrL{}, pd, out}, e0,
+        skq(q, Eng.P{Eng.Lin{}, pd, out}, Eng.KCr{}, c, lr)), bnd)))
+    case Spec.FName{n}:
+      (pd, deadvia(Eng.step(p, c), SK(q, Eng.KCr{}, c), out, e0,
+        dq(q, Eng.P{Eng.InN{Bytes.from_list(n)}, pd, out}, Eng.KCr{}, c, out, lr, {==})))
+    case Spec.FVal{val}:
+      CR.val(val, q, c, h, p, pd, out, since, lr, e0, bnd, pr)
+    case Spec.FBad{}:
+      (pd, deadvia(Eng.step(p, c), SK(q, Eng.KCr{}, c), out, e0, dead.step(q, Eng.KCr{}, c, out)(lr)))
+
+# a bare LF inside a field line
+def LF.len(ws: Bool, +n: U32, +q: Eng.P, +c: U32, -p: Eng.P, +pd: Eng.Pend, +out: List<&2, Eng.Req>,
+  lr: LR.len(q, n, ws, pd, out), e0: {Eng.step(p, c) == SK(q, Eng.KLf{}, c) : Eng.P}) -> Dead(Eng.step(p, c), out):
+  match ws:
+    case True{}:
+      deadvia(Eng.step(p, c), SK(q, Eng.KLf{}, c), out, e0,
+        dq(q, Eng.P{Eng.InLt{n}, pd, out}, Eng.KLf{}, c, out, lr, {==}))
+    case False{}:
+      deadvia(Eng.step(p, c), SK(q, Eng.KLf{}, c), out, e0,
+        dq(q, Eng.P{Eng.InL{n}, pd, out}, Eng.KLf{}, c, out, lr, {==}))
+
+def LF.val(val: Spec.Val, +q: Eng.P, +c: U32, -p: Eng.P, +pd: Eng.Pend, +out: List<&2, Eng.Req>,
+  lr: LR.val(q, val, pd, out), e0: {Eng.step(p, c) == SK(q, Eng.KLf{}, c) : Eng.P}) -> Dead(Eng.step(p, c), out):
+  match val:
+    case Spec.VLen0{}:
+      deadvia(Eng.step(p, c), SK(q, Eng.KLf{}, c), out, e0,
+        dq(q, Eng.P{Eng.InL0{}, pd, out}, Eng.KLf{}, c, out, lr, {==}))
+    case Spec.VLen{n, ws}:
+      LF.len(ws, n, q, c, p, pd, out, lr, e0)
+    case Spec.VConn{d, cur}:
+      deadvia(Eng.step(p, c), SK(q, Eng.KLf{}, c), out, e0,
+        dq(q, Eng.P{Eng.InLc{lowb(cur), Spec.named("close", d), Spec.named("upgrade", d)}, pd, out},
+          Eng.KLf{}, c, out, lr, {==}))
+    case Spec.VUp{d, cur}:
+      deadvia(Eng.step(p, c), SK(q, Eng.KLf{}, c), out, e0,
+        dq(q, Eng.P{Eng.InLu{lowb(cur), Spec.named("websocket", d)}, pd, out}, Eng.KLf{}, c, out, lr, {==}))
+    case Spec.VKey0{}:
+      deadvia(Eng.step(p, c), SK(q, Eng.KLf{}, c), out, e0,
+        dq(q, Eng.P{Eng.InLk0{}, pd, out}, Eng.KLf{}, c, out, lr, {==}))
+    case Spec.VKey{k}:
+      deadvia(Eng.step(p, c), SK(q, Eng.KLf{}, c), out, e0,
+        dq(q, Eng.P{Eng.InLk{Bytes.from_list(k)}, pd, out}, Eng.KLf{}, c, out, lr, {==}))
+    case Spec.VVer{v}:
+      deadvia(Eng.step(p, c), SK(q, Eng.KLf{}, c), out, e0,
+        dq(q, Eng.P{Eng.InLv{Bytes.from_list(v)}, pd, out}, Eng.KLf{}, c, out, lr, {==}))
+    case Spec.VHost{}:
+      deadvia(Eng.step(p, c), SK(q, Eng.KLf{}, c), out, e0,
+        dq(q, Eng.P{Eng.InLx{}, Eng.pend.host(pd), out}, Eng.KLf{}, c, out, lr, {==}))
+    case Spec.VSkip{}:
+      deadvia(Eng.step(p, c), SK(q, Eng.KLf{}, c), out, e0,
+        dq(q, Eng.P{Eng.InLx{}, pd, out}, Eng.KLf{}, c, out, lr, {==}))
+
+def LF.field(v: Spec.FLine, +q: Eng.P, +c: U32, -p: Eng.P, +pd: Eng.Pend, +out: List<&2, Eng.Req>,
+  lr: LR.field(q, v, pd, out), e0: {Eng.step(p, c) == SK(q, Eng.KLf{}, c) : Eng.P}) -> Dead(Eng.step(p, c), out):
+  match v:
+    case Spec.FEmpty{}:
+      deadvia(Eng.step(p, c), SK(q, Eng.KLf{}, c), out, e0,
+        dq(q, Eng.P{Eng.Lin{}, pd, out}, Eng.KLf{}, c, out, lr, {==}))
+    case Spec.FName{n}:
+      deadvia(Eng.step(p, c), SK(q, Eng.KLf{}, c), out, e0,
+        dq(q, Eng.P{Eng.InN{Bytes.from_list(n)}, pd, out}, Eng.KLf{}, c, out, lr, {==}))
+    case Spec.FVal{val}:
+      LF.val(val, q, c, p, pd, out, lr, e0)
+    case Spec.FBad{}:
+      deadvia(Eng.step(p, c), SK(q, Eng.KLf{}, c), out, e0, dead.step(q, Eng.KLf{}, c, out)(lr))
+
+def STEP.field.k(+k: Eng.Cls, +c: U32, +h: Spec.Head, +cur: List<&2, U32>, -p: Eng.P, +pd: Eng.Pend,
+  +out: List<&2, Eng.Req>, +since: List<&2, U32>, ek: {Spec.cls(c) == k : Eng.Cls}, pr: PR(pd, h),
+  e1: {p == Eng.feed(cur, Eng.P{Eng.Lin{}, pd, out}) : Eng.P}, pl: Plain(cur), bnd: BND(p, since, out)) ->
+  SR(Eng.step(p, c), Spec.field.byte(k, c, h, cur, out, Spec.snoc(since, c))):
+  match k:
+    case Eng.KCr{}:
+      CR.field(Spec.field.view(cur), Eng.feed(cur, Eng.P{Eng.Lin{}, pd, out}), c, h, p, pd, out, since,
+        line.field(cur, pd, out)(pl), atk(p, Eng.feed(cur, Eng.P{Eng.Lin{}, pd, out}), c, Eng.KCr{}, ek, e1),
+        bnd.step(p, c, since, out, bnd), pr)
+    case Eng.KLf{}:
+      (pd, LF.field(Spec.field.view(cur), Eng.feed(cur, Eng.P{Eng.Lin{}, pd, out}), c, p, pd, out,
+        line.field(cur, pd, out)(pl), atk(p, Eng.feed(cur, Eng.P{Eng.Lin{}, pd, out}), c, Eng.KLf{}, ek, e1)))
+    case Eng.KSp{}:
+      (pd, (pr, (adv(p, cur, c, Eng.P{Eng.Lin{}, pd, out}, e1),
+        (plain.snoc(cur, c, ncof(c, Eng.KSp{}, ek)({==}))(pl), bnd.step(p, c, since, out, bnd)))))
+    case Eng.KHt{}:
+      (pd, (pr, (adv(p, cur, c, Eng.P{Eng.Lin{}, pd, out}, e1),
+        (plain.snoc(cur, c, ncof(c, Eng.KHt{}, ek)({==}))(pl), bnd.step(p, c, since, out, bnd)))))
+    case Eng.KCo{}:
+      (pd, (pr, (adv(p, cur, c, Eng.P{Eng.Lin{}, pd, out}, e1),
+        (plain.snoc(cur, c, ncof(c, Eng.KCo{}, ek)({==}))(pl), bnd.step(p, c, since, out, bnd)))))
+    case Eng.KCm{}:
+      (pd, (pr, (adv(p, cur, c, Eng.P{Eng.Lin{}, pd, out}, e1),
+        (plain.snoc(cur, c, ncof(c, Eng.KCm{}, ek)({==}))(pl), bnd.step(p, c, since, out, bnd)))))
+    case Eng.KDg{}:
+      (pd, (pr, (adv(p, cur, c, Eng.P{Eng.Lin{}, pd, out}, e1),
+        (plain.snoc(cur, c, ncof(c, Eng.KDg{}, ek)({==}))(pl), bnd.step(p, c, since, out, bnd)))))
+    case Eng.KTk{}:
+      (pd, (pr, (adv(p, cur, c, Eng.P{Eng.Lin{}, pd, out}, e1),
+        (plain.snoc(cur, c, ncof(c, Eng.KTk{}, ek)({==}))(pl), bnd.step(p, c, since, out, bnd)))))
+    case Eng.KVc{}:
+      (pd, (pr, (adv(p, cur, c, Eng.P{Eng.Lin{}, pd, out}, e1),
+        (plain.snoc(cur, c, ncof(c, Eng.KVc{}, ek)({==}))(pl), bnd.step(p, c, since, out, bnd)))))
+    case Eng.KCt{}:
+      (pd, (pr, (adv(p, cur, c, Eng.P{Eng.Lin{}, pd, out}, e1),
+        (plain.snoc(cur, c, ncof(c, Eng.KCt{}, ek)({==}))(pl), bnd.step(p, c, since, out, bnd)))))
+
+# the head's end
+def HEAD.z(z: Bool, +n: U32, +pd: Eng.Pend, +h: Spec.Head, -p: Eng.P, +c: U32, +out: List<&2, Eng.Req>,
+  +since: List<&2, U32>, e: {Eng.step(p, c) == Eng.step.head.len(pd, n, out, z) : Eng.P},
+  bnd: BND(Eng.step(p, c), Spec.snoc(since, c), out), pr: PR(pd, h)) ->
+  SR(Eng.step(p, c), Spec.head.body(z, n, h, out, Spec.snoc(since, c))):
+  match z:
+    case True{}:
+      EMIT(pd, h, Nil{}, out, Eng.step(p, c), e, pr)
+    case False{}:
+      (pd, (pr, (e, bnd)))
+
+def HEAD.one(l: Maybe<&2, U32>, +m: Eng.Meth, +pa: Bytes(), +cls: Bool, +host: Eng.Hosts,
+  +ws: Eng.Up, +cl: Eng.Cl, +hm: Eng.Meth, +ht: List<&2, U32>, +hc: Bool, +hk: List<&2, U32>, +hu: Bool,
+  +hcu: Bool, +hvb: Bool, -p: Eng.P, +c: U32, +out: List<&2, Eng.Req>, +since: List<&2, U32>,
+  e: {Eng.step(p, c) == Eng.step.head.at(Eng.Pend{m, pa, cl, cls, host, ws}, clv(l), Eng.H1{}, out) : Eng.P},
+  bnd: BND(Eng.step(p, c), Spec.snoc(since, c), out),
+  pr: PR(Eng.Pend{m, pa, cl, cls, host, ws}, Spec.Head{hm, ht, l, hc, 1n, hk, hu, hcu, hvb})) ->
+  SR(Eng.step(p, c), Spec.head.at(True{}, l, Spec.Head{hm, ht, l, hc, 1n, hk, hu, hcu, hvb}, out,
+    Spec.snoc(since, c))):
+  match l:
+    case None{}:
+      EMIT(Eng.Pend{m, pa, cl, cls, host, ws}, Spec.Head{hm, ht, None{}, hc, 1n, hk, hu, hcu, hvb}, Nil{}, out,
+        Eng.step(p, c), e, pr)
+    case Some{+n}:
+      HEAD.z(U32.is_zero(n), n, Eng.Pend{m, pa, cl, cls, host, ws}, Spec.Head{hm, ht, Some{n}, hc, 1n, hk, hu, hcu, hvb},
+        p, c, out, since, e, bnd, pr)
+
+def HEAD.none(l: Maybe<&2, U32>, +m: Eng.Meth, +pa: Bytes(), +cls: Bool, +host: Eng.Hosts, +ws: Eng.Up,
+  +cl: Eng.Cl, -p: Eng.P, +c: U32, +out: List<&2, Eng.Req>, -hh: Eng.Hosts,
+  e: {Eng.step(p, c) == Eng.step.head.at(Eng.Pend{m, pa, cl, cls, host, ws}, clv(l), hh, out) : Eng.P},
+  nb: {Eng.step.head.at(Eng.Pend{m, pa, cl, cls, host, ws}, clv(l), hh, out) ==
+    Eng.P{Eng.Bad{}, Eng.Pend{m, pa, cl, cls, host, ws}, out} : Eng.P}) -> Dead(Eng.step(p, c), out):
+  deadvia(Eng.step(p, c), Eng.P{Eng.Bad{}, Eng.Pend{m, pa, cl, cls, host, ws}, out}, out,
+    Equal.trans(Eng.P, Eng.step(p, c), Eng.step.head.at(Eng.Pend{m, pa, cl, cls, host, ws}, clv(l), hh, out),
+      Eng.P{Eng.Bad{}, Eng.Pend{m, pa, cl, cls, host, ws}, out}, e, nb), {==})
+
+def hbad0(l: Maybe<&2, U32>, -pd: Eng.Pend, -out: List<&2, Eng.Req>) ->
+  {Eng.step.head.at(pd, clv(l), Eng.H0{}, out) == Eng.P{Eng.Bad{}, pd, out} : Eng.P}:
+  match l:
+    case None{}:
+      {==}
+    case Some{n}:
+      {==}
+
+def hbad2(l: Maybe<&2, U32>, -pd: Eng.Pend, -out: List<&2, Eng.Req>) ->
+  {Eng.step.head.at(pd, clv(l), Eng.H2{}, out) == Eng.P{Eng.Bad{}, pd, out} : Eng.P}:
+  match l:
+    case None{}:
+      {==}
+    case Some{n}:
+      {==}
+
+def HEAD.l(hs: Nat, +l: Maybe<&2, U32>, +m: Eng.Meth, +pa: Bytes(), +cls: Bool, +host: Eng.Hosts,
+  +ws: Eng.Up, +cl: Eng.Cl, +hm: Eng.Meth, +ht: List<&2, U32>, +hc: Bool, +hk: List<&2, U32>, +hu: Bool,
+  +hcu: Bool, +hvb: Bool, -p: Eng.P, +c: U32, +out: List<&2, Eng.Req>, +since: List<&2, U32>,
+  e: {Eng.step(p, c) == Eng.step.head.at(Eng.Pend{m, pa, cl, cls, host, ws}, clv(l), hsat(hs), out) : Eng.P},
+  bnd: BND(Eng.step(p, c), Spec.snoc(since, c), out),
+  pr: PR(Eng.Pend{m, pa, cl, cls, host, ws}, Spec.Head{hm, ht, l, hc, hs, hk, hu, hcu, hvb})) ->
+  SR(Eng.step(p, c), Spec.head.at(Spec.head.one(hs), l, Spec.Head{hm, ht, l, hc, hs, hk, hu, hcu, hvb}, out,
+    Spec.snoc(since, c))):
+  match hs:
+    case 0n:
+      (Eng.pend.new(), HEAD.none(l, m, pa, cls, host, ws, cl, p, c, out, Eng.H0{}, e,
+        hbad0(l, Eng.Pend{m, pa, cl, cls, host, ws}, out)))
+    case 1n+q:
+      match q:
+        case 0n:
+          HEAD.one(l, m, pa, cls, host, ws, cl, hm, ht, hc, hk, hu, hcu, hvb, p, c, out, since, e, bnd, pr)
+        case 1n+r:
+          (Eng.pend.new(), HEAD.none(l, m, pa, cls, host, ws, cl, p, c, out, Eng.H2{}, e,
+            hbad2(l, Eng.Pend{m, pa, cl, cls, host, ws}, out)))
+
+def HEAD(pd: Eng.Pend, h: Spec.Head, -p: Eng.P, +c: U32, +out: List<&2, Eng.Req>, +since: List<&2, U32>,
+  e: {Eng.step(p, c) == Eng.step.head(pd, out) : Eng.P}, bnd: BND(Eng.step(p, c), Spec.snoc(since, c), out),
+  pr: PR(pd, h)) -> SR(Eng.step(p, c), Spec.head.done(h, out, Spec.snoc(since, c))):
+  match pd:
+    case Eng.Pend{+m, +pa, +cl, +cls, +host, +ws}:
+      match h:
+        case Spec.Head{+hm, +ht, +l, +hc, +hs, +hk, +hu, +hcu, +hvb}:
+          +pr2 = pr
+          HEAD.l(hs, l, m, pa, cls, host, ws, cl, hm, ht, hc, hk, hu, hcu, hvb, p, c, out, since,
+            Equal.trans(Eng.P, Eng.step(p, c), Eng.step.head.at(Eng.Pend{m, pa, cl, cls, host, ws}, cl, host, out),
+              Eng.step.head.at(Eng.Pend{m, pa, cl, cls, host, ws}, clv(l), hsat(hs), out), e,
+              Equal.trans(Eng.P, Eng.step.head.at(Eng.Pend{m, pa, cl, cls, host, ws}, cl, host, out),
+                Eng.step.head.at(Eng.Pend{m, pa, cl, cls, host, ws}, clv(l), host, out),
+                Eng.step.head.at(Eng.Pend{m, pa, cl, cls, host, ws}, clv(l), hsat(hs), out),
+                Equal.cong(Eng.Cl, Eng.P, x => Eng.step.head.at(Eng.Pend{m, pa, cl, cls, host, ws}, x, host, out),
+                  cl, clv(l), ecl(m, pa, cl, cls, host, ws, hv(Spec.Head{hm, ht, l, hc, hs, hk, hu, hcu, hvb}), pr2)),
+                Equal.cong(Eng.Hosts, Eng.P,
+                  x => Eng.step.head.at(Eng.Pend{m, pa, cl, cls, host, ws}, clv(l), x, out),
+                  host, hsat(hs), ehost(m, pa, cl, cls, host, ws, hv(Spec.Head{hm, ht, l, hc, hs, hk, hu, hcu, hvb}), pr2)))),
+            bnd, pr2)
+
+def STEP.eoh.k(+k: Eng.Cls, +c: U32, +h: Spec.Head, -p: Eng.P, +pd: Eng.Pend, +out: List<&2, Eng.Req>,
+  +since: List<&2, U32>, ek: {Spec.cls(c) == k : Eng.Cls}, pr: PR(pd, h),
+  e1: {p == Eng.P{Eng.CrL{}, pd, out} : Eng.P}, bnd: BND(p, since, out)) ->
+  SR(Eng.step(p, c), Spec.eoh.byte(k, h, out, Spec.snoc(since, c))):
+  match k:
+    case Eng.KLf{}:
+      HEAD(pd, h, p, c, out, since, atk(p, Eng.P{Eng.CrL{}, pd, out}, c, Eng.KLf{}, ek, e1),
+        bnd.step(p, c, since, out, bnd), pr)
+    case Eng.KSp{}:
+      (pd, deadvia(Eng.step(p, c), SK(Eng.P{Eng.CrL{}, pd, out}, Eng.KSp{}, c), out,
+        atk(p, Eng.P{Eng.CrL{}, pd, out}, c, Eng.KSp{}, ek, e1), {==}))
+    case Eng.KHt{}:
+      (pd, deadvia(Eng.step(p, c), SK(Eng.P{Eng.CrL{}, pd, out}, Eng.KHt{}, c), out,
+        atk(p, Eng.P{Eng.CrL{}, pd, out}, c, Eng.KHt{}, ek, e1), {==}))
+    case Eng.KCr{}:
+      (pd, deadvia(Eng.step(p, c), SK(Eng.P{Eng.CrL{}, pd, out}, Eng.KCr{}, c), out,
+        atk(p, Eng.P{Eng.CrL{}, pd, out}, c, Eng.KCr{}, ek, e1), {==}))
+    case Eng.KCo{}:
+      (pd, deadvia(Eng.step(p, c), SK(Eng.P{Eng.CrL{}, pd, out}, Eng.KCo{}, c), out,
+        atk(p, Eng.P{Eng.CrL{}, pd, out}, c, Eng.KCo{}, ek, e1), {==}))
+    case Eng.KCm{}:
+      (pd, deadvia(Eng.step(p, c), SK(Eng.P{Eng.CrL{}, pd, out}, Eng.KCm{}, c), out,
+        atk(p, Eng.P{Eng.CrL{}, pd, out}, c, Eng.KCm{}, ek, e1), {==}))
+    case Eng.KDg{}:
+      (pd, deadvia(Eng.step(p, c), SK(Eng.P{Eng.CrL{}, pd, out}, Eng.KDg{}, c), out,
+        atk(p, Eng.P{Eng.CrL{}, pd, out}, c, Eng.KDg{}, ek, e1), {==}))
+    case Eng.KTk{}:
+      (pd, deadvia(Eng.step(p, c), SK(Eng.P{Eng.CrL{}, pd, out}, Eng.KTk{}, c), out,
+        atk(p, Eng.P{Eng.CrL{}, pd, out}, c, Eng.KTk{}, ek, e1), {==}))
+    case Eng.KVc{}:
+      (pd, deadvia(Eng.step(p, c), SK(Eng.P{Eng.CrL{}, pd, out}, Eng.KVc{}, c), out,
+        atk(p, Eng.P{Eng.CrL{}, pd, out}, c, Eng.KVc{}, ek, e1), {==}))
+    case Eng.KCt{}:
+      (pd, deadvia(Eng.step(p, c), SK(Eng.P{Eng.CrL{}, pd, out}, Eng.KCt{}, c), out,
+        atk(p, Eng.P{Eng.CrL{}, pd, out}, c, Eng.KCt{}, ek, e1), {==}))
+
+# a body byte, and a byte after an upgrade
+def STEP.body(more: Nat, +c: U32, +h: Spec.Head, +got: List<&2, U32>, -p: Eng.P, +pd: Eng.Pend,
+  +out: List<&2, Eng.Req>, +since: List<&2, U32>, pr: PR(pd, h),
+  e1: {p == Eng.P{Eng.Bod{more, Bytes.from_list(got)}, pd, out} : Eng.P}, bnd: BND(p, since, out)) ->
+  SR(Eng.step(p, c), Spec.body.byte(more, c, h, got, out, Spec.snoc(since, c))):
+  match more:
+    case 0n:
+      EMIT(pd, h, Spec.snoc(got, c), out, Eng.step(p, c),
+        Equal.trans(Eng.P, Eng.step(p, c), Eng.emit(pd, Eng.push(Bytes.from_list(got), c), out),
+          Eng.emit(pd, Bytes.from_list(Spec.snoc(got, c)), out),
+          cstep(p, Eng.P{Eng.Bod{0n, Bytes.from_list(got)}, pd, out}, c, e1),
+          Equal.cong(Bytes(), Eng.P, x => Eng.emit(pd, x, out), Eng.push(Bytes.from_list(got), c),
+            Bytes.from_list(Spec.snoc(got, c)),
+            Equal.sym(Bytes(), Bytes.from_list(Spec.snoc(got, c)), Eng.push(Bytes.from_list(got), c),
+              fl.snoc(got, c)))),
+        pr)
+    case 1n+q:
+      +e2 = e1
+      (pd, (pr, (Equal.trans(Eng.P, Eng.step(p, c), Eng.P{Eng.Bod{q, Eng.push(Bytes.from_list(got), c)}, pd, out},
+        Eng.P{Eng.Bod{q, Bytes.from_list(Spec.snoc(got, c))}, pd, out},
+        cstep(p, Eng.P{Eng.Bod{1n+q, Bytes.from_list(got)}, pd, out}, c, e2),
+        Equal.cong(Bytes(), Eng.P, x => Eng.P{Eng.Bod{q, x}, pd, out}, Eng.push(Bytes.from_list(got), c),
+          Bytes.from_list(Spec.snoc(got, c)),
+          Equal.sym(Bytes(), Bytes.from_list(Spec.snoc(got, c)), Eng.push(Bytes.from_list(got), c),
+            fl.snoc(got, c)))),
+        bnd.step(p, c, since, out, bnd))))
+
+def STEP.up(+c: U32, +got: List<&2, U32>, -p: Eng.P, +out: List<&2, Eng.Req>,
+  e1: {p == Eng.P{Eng.Rest{Bytes.from_list(got)}, Eng.pend.new(), out} : Eng.P}) ->
+  {Eng.step(p, c) == Eng.P{Eng.Rest{Bytes.from_list(Spec.snoc(got, c))}, Eng.pend.new(), out} : Eng.P}:
+  Equal.trans(Eng.P, Eng.step(p, c), Eng.P{Eng.Rest{Eng.push(Bytes.from_list(got), c)}, Eng.pend.new(), out},
+    Eng.P{Eng.Rest{Bytes.from_list(Spec.snoc(got, c))}, Eng.pend.new(), out},
+    cstep(p, Eng.P{Eng.Rest{Bytes.from_list(got)}, Eng.pend.new(), out}, c, e1),
+    Equal.cong(Bytes(), Eng.P, x => Eng.P{Eng.Rest{x}, Eng.pend.new(), out}, Eng.push(Bytes.from_list(got), c),
+      Bytes.from_list(Spec.snoc(got, c)),
+      Equal.sym(Bytes(), Bytes.from_list(Spec.snoc(got, c)), Eng.push(Bytes.from_list(got), c), fl.snoc(got, c))))
+
+# LEMMA: one byte moves the reader and the spec's walk together
+def STEP.m(mode: Spec.Mode, +c: U32, +p: Eng.P, +pd: Eng.Pend, +out: List<&2, Eng.Req>, +since: List<&2, U32>,
+  r: REL.m(p, mode, out, since, pd)) ->
+  SR(Eng.step(p, c), Spec.next.at(mode, Spec.cls(c), c, out, Spec.snoc(since, c))):
+  match mode:
+    case Spec.MReq{+cur}:
+      (e1, r2) = r
+      (pl, bnd) = r2
+      STEP.req.k(Spec.cls(c), c, cur, p, pd, out, since, {==}, e1, pl, bnd)
+    case Spec.MBlank{}:
+      (e1, bnd) = r
+      STEP.blank.k(Spec.cls(c), c, p, pd, out, since, {==}, e1, bnd)
+    case Spec.MField{+h, +cur}:
+      (pr, r2) = r
+      (e1, r3) = r2
+      (pl, bnd) = r3
+      STEP.field.k(Spec.cls(c), c, h, cur, p, pd, out, since, {==}, pr, e1, pl, bnd)
+    case Spec.MEol{+h}:
+      (pr, r2) = r
+      (e1, bnd) = r2
+      STEP.eol.k(Spec.cls(c), c, h, p, pd, out, since, {==}, pr, e1, bnd)
+    case Spec.MEoh{+h}:
+      (pr, r2) = r
+      (e1, bnd) = r2
+      STEP.eoh.k(Spec.cls(c), c, h, p, pd, out, since, {==}, pr, e1, bnd)
+    case Spec.MBody{+h, more, +got}:
+      (pr, r2) = r
+      (e1, bnd) = r2
+      STEP.body(more, c, h, got, p, pd, out, since, pr, e1, bnd)
+    case Spec.MUp{+got}:
+      (pd, STEP.up(c, got, p, out, r))
+    case Spec.MBad{}:
+      (pd, dead.byte(p, c, out)(r))
+
+def STEP(w: Spec.W, +c: U32, +p: Eng.P, +pd: Eng.Pend, r: REL(p, w, pd)) ->
+  SR(Eng.step(p, c), Spec.next(w, c)):
+  match w:
+    case Spec.W{mode, +out, +since}:
+      STEP.m(mode, c, p, pd, out, since, r)
+
+# The end
+# -------
+
+def rr(xs: List<&2, Eng.Req>, -acc: List<&2, Eng.Req>) ->
+  {List.reverse.go(&2, Eng.Req, List.reverse.go(&2, Eng.Req, xs, acc), Nil{}) ==
+    List.reverse.go(&2, Eng.Req, acc, xs) : List<&2, Eng.Req>}:
+  match xs:
+    case Nil{}:
+      {==}
+    case Con{h, t}:
+      rr(t, Con{h, acc})
+
+def rev.rev(xs: List<&2, Eng.Req>) ->
+  {xs == List.reverse(&2, Eng.Req, List.reverse(&2, Eng.Req, xs)) : List<&2, Eng.Req>}:
+  Equal.sym(List<&2, Eng.Req>, List.reverse(&2, Eng.Req, List.reverse(&2, Eng.Req, xs)), xs, rr(xs, Nil{}))
+
+def look.kill(p: Eng.P) -> {Laws.look(p) == Laws.look(kill(p)) : List<&2, Eng.Req> & Laws.Look}:
+  match p:
+    case Eng.P{st, pd, out}:
+      {==}
+
+def REFUSED(+p: Eng.P, +out: List<&2, Eng.Req>, d: Dead(p, out)) ->
+  Laws.agree.end(p, List.reverse(&2, Eng.Req, out), Spec.Refused{}):
+  Equal.trans(List<&2, Eng.Req> & Laws.Look, Laws.look(p), Laws.look(kill(p)), Laws.look(Eng.P{Eng.Bad{}, Eng.pend.new(), out}),
+    look.kill(p), Equal.cong(Eng.P, List<&2, Eng.Req> & Laws.Look, x => Laws.look(x), kill(p),
+      Eng.P{Eng.Bad{}, Eng.pend.new(), out}, d))
+
+def rev.open(-p: Eng.P, +out: List<&2, Eng.Req>, -since: List<&2, U32>, bnd: BND(p, since, out)) ->
+  {p == Eng.feed(since, Eng.P{Eng.Pre{}, Eng.pend.new(),
+    List.reverse(&2, Eng.Req, List.reverse(&2, Eng.Req, out))}) : Eng.P}:
+  %rev.rev(out) : {p == Eng.feed(since, Eng.P{Eng.Pre{}, Eng.pend.new(), _}) : Eng.P}
+  bnd
+
+def OPEN(-p: Eng.P, -x: Eng.P, +out: List<&2, Eng.Req>, +since: List<&2, U32>, e: {p == x : Eng.P},
+  lk: {Laws.look(x) == (List.reverse(&2, Eng.Req, out), Laws.Reading{}) : List<&2, Eng.Req> & Laws.Look},
+  bnd: BND(p, since, out)) -> Laws.agree.end(p, List.reverse(&2, Eng.Req, out), Spec.Open{since}):
+  (Equal.trans(List<&2, Eng.Req> & Laws.Look, Laws.look(p), Laws.look(x), (List.reverse(&2, Eng.Req, out), Laws.Reading{}),
+    Equal.cong(Eng.P, List<&2, Eng.Req> & Laws.Look, y => Laws.look(y), p, x, e), lk),
+   rev.open(p, out, since, bnd))
+
+def END.req(v: Spec.RLine, +q: Eng.P, +p: Eng.P, +out: List<&2, Eng.Req>, +since: List<&2, U32>,
+  lr: LR.req(q, v, out), e1: {p == q : Eng.P}, bnd: BND(p, since, out)) ->
+  Laws.agree.end(p, List.reverse(&2, Eng.Req, out), Spec.req.end(v, since)):
+  match v:
+    case Spec.RNone{}:
+      OPEN(p, Eng.P{Eng.Pre{}, Eng.pend.new(), out}, out, since,
+        Equal.trans(Eng.P, p, q, Eng.P{Eng.Pre{}, Eng.pend.new(), out}, e1, lr), {==}, bnd)
+    case Spec.RMeth{m}:
+      OPEN(p, Eng.P{Eng.InM{Bytes.from_list(m)}, Eng.pend.new(), out}, out, since,
+        Equal.trans(Eng.P, p, q, Eng.P{Eng.InM{Bytes.from_list(m)}, Eng.pend.new(), out}, e1, lr), {==}, bnd)
+    case Spec.RTarget{m, t}:
+      OPEN(p, Eng.P{Eng.InT{Bytes.from_list(t)}, pd1(m), out}, out, since,
+        Equal.trans(Eng.P, p, q, Eng.P{Eng.InT{Bytes.from_list(t)}, pd1(m), out}, e1, lr), {==}, bnd)
+    case Spec.RVer{m, t, v}:
+      OPEN(p, Eng.P{Eng.InV{Bytes.from_list(v)}, pd2(m, t), out}, out, since,
+        Equal.trans(Eng.P, p, q, Eng.P{Eng.InV{Bytes.from_list(v)}, pd2(m, t), out}, e1, lr), {==}, bnd)
+    case Spec.RBad{}:
+      REFUSED(p, out, deadvia(p, q, out, e1, lr))
+
+def END.len(ws: Bool, +n: U32, +q: Eng.P, +p: Eng.P, +pd: Eng.Pend, +out: List<&2, Eng.Req>,
+  +since: List<&2, U32>, lr: LR.len(q, n, ws, pd, out), e1: {p == q : Eng.P}, bnd: BND(p, since, out)) ->
+  Laws.agree.end(p, List.reverse(&2, Eng.Req, out), Spec.Open{since}):
+  match ws:
+    case True{}:
+      OPEN(p, Eng.P{Eng.InLt{n}, pd, out}, out, since, Equal.trans(Eng.P, p, q, Eng.P{Eng.InLt{n}, pd, out}, e1, lr),
+        {==}, bnd)
+    case False{}:
+      OPEN(p, Eng.P{Eng.InL{n}, pd, out}, out, since, Equal.trans(Eng.P, p, q, Eng.P{Eng.InL{n}, pd, out}, e1, lr),
+        {==}, bnd)
+
+def END.val(val: Spec.Val, +q: Eng.P, +p: Eng.P, +pd: Eng.Pend, +out: List<&2, Eng.Req>,
+  +since: List<&2, U32>, lr: LR.val(q, val, pd, out), e1: {p == q : Eng.P}, bnd: BND(p, since, out)) ->
+  Laws.agree.end(p, List.reverse(&2, Eng.Req, out), Spec.Open{since}):
+  match val:
+    case Spec.VLen0{}:
+      OPEN(p, Eng.P{Eng.InL0{}, pd, out}, out, since, Equal.trans(Eng.P, p, q, Eng.P{Eng.InL0{}, pd, out}, e1, lr),
+        {==}, bnd)
+    case Spec.VLen{n, ws}:
+      END.len(ws, n, q, p, pd, out, since, lr, e1, bnd)
+    case Spec.VConn{d, cur}:
+      OPEN(p, Eng.P{Eng.InLc{lowb(cur), Spec.named("close", d), Spec.named("upgrade", d)}, pd, out}, out, since,
+        Equal.trans(Eng.P, p, q, Eng.P{Eng.InLc{lowb(cur), Spec.named("close", d), Spec.named("upgrade", d)}, pd, out},
+          e1, lr), {==}, bnd)
+    case Spec.VUp{d, cur}:
+      OPEN(p, Eng.P{Eng.InLu{lowb(cur), Spec.named("websocket", d)}, pd, out}, out, since,
+        Equal.trans(Eng.P, p, q, Eng.P{Eng.InLu{lowb(cur), Spec.named("websocket", d)}, pd, out}, e1, lr), {==}, bnd)
+    case Spec.VKey0{}:
+      OPEN(p, Eng.P{Eng.InLk0{}, pd, out}, out, since, Equal.trans(Eng.P, p, q, Eng.P{Eng.InLk0{}, pd, out}, e1, lr),
+        {==}, bnd)
+    case Spec.VKey{k}:
+      OPEN(p, Eng.P{Eng.InLk{Bytes.from_list(k)}, pd, out}, out, since,
+        Equal.trans(Eng.P, p, q, Eng.P{Eng.InLk{Bytes.from_list(k)}, pd, out}, e1, lr), {==}, bnd)
+    case Spec.VVer{v}:
+      OPEN(p, Eng.P{Eng.InLv{Bytes.from_list(v)}, pd, out}, out, since,
+        Equal.trans(Eng.P, p, q, Eng.P{Eng.InLv{Bytes.from_list(v)}, pd, out}, e1, lr), {==}, bnd)
+    case Spec.VHost{}:
+      OPEN(p, Eng.P{Eng.InLx{}, Eng.pend.host(pd), out}, out, since,
+        Equal.trans(Eng.P, p, q, Eng.P{Eng.InLx{}, Eng.pend.host(pd), out}, e1, lr), {==}, bnd)
+    case Spec.VSkip{}:
+      OPEN(p, Eng.P{Eng.InLx{}, pd, out}, out, since, Equal.trans(Eng.P, p, q, Eng.P{Eng.InLx{}, pd, out}, e1, lr),
+        {==}, bnd)
+
+def END.field(v: Spec.FLine, +q: Eng.P, +p: Eng.P, +pd: Eng.Pend, +out: List<&2, Eng.Req>,
+  +since: List<&2, U32>, lr: LR.field(q, v, pd, out), e1: {p == q : Eng.P}, bnd: BND(p, since, out)) ->
+  Laws.agree.end(p, List.reverse(&2, Eng.Req, out), Spec.field.end(v, since)):
+  match v:
+    case Spec.FEmpty{}:
+      OPEN(p, Eng.P{Eng.Lin{}, pd, out}, out, since, Equal.trans(Eng.P, p, q, Eng.P{Eng.Lin{}, pd, out}, e1, lr),
+        {==}, bnd)
+    case Spec.FName{n}:
+      OPEN(p, Eng.P{Eng.InN{Bytes.from_list(n)}, pd, out}, out, since,
+        Equal.trans(Eng.P, p, q, Eng.P{Eng.InN{Bytes.from_list(n)}, pd, out}, e1, lr), {==}, bnd)
+    case Spec.FVal{val}:
+      END.val(val, q, p, pd, out, since, lr, e1, bnd)
+    case Spec.FBad{}:
+      REFUSED(p, out, deadvia(p, q, out, e1, lr))
+
+# LEMMA: wherever the walk ends, the reader agrees with the framing
+def END.m(mode: Spec.Mode, +p: Eng.P, +pd: Eng.Pend, +out: List<&2, Eng.Req>, +since: List<&2, U32>,
+  r: REL.m(p, mode, out, since, pd)) ->
+  Laws.agree.end(p, List.reverse(&2, Eng.Req, out), Spec.finish.end(mode, since)):
+  match mode:
+    case Spec.MReq{+cur}:
+      (e1, r2) = r
+      (pl, bnd) = r2
+      END.req(Spec.req.view(cur), Eng.feed(cur, Eng.P{Eng.Pre{}, Eng.pend.new(), out}), p, out, since,
+        line.req(cur, out)(pl), e1, bnd)
+    case Spec.MBlank{}:
+      (e1, bnd) = r
+      OPEN(p, Eng.P{Eng.PreLf{}, Eng.pend.new(), out}, out, since, e1, {==}, bnd)
+    case Spec.MField{h, +cur}:
+      (pr, r2) = r
+      (e1, r3) = r2
+      (pl, bnd) = r3
+      END.field(Spec.field.view(cur), Eng.feed(cur, Eng.P{Eng.Lin{}, pd, out}), p, pd, out, since,
+        line.field(cur, pd, out)(pl), e1, bnd)
+    case Spec.MEol{h}:
+      (pr, r2) = r
+      (e1, bnd) = r2
+      OPEN(p, Eng.P{Eng.CrM{}, pd, out}, out, since, e1, {==}, bnd)
+    case Spec.MEoh{h}:
+      (pr, r2) = r
+      (e1, bnd) = r2
+      OPEN(p, Eng.P{Eng.CrL{}, pd, out}, out, since, e1, {==}, bnd)
+    case Spec.MBody{h, more, got}:
+      (pr, r2) = r
+      (e1, bnd) = r2
+      OPEN(p, Eng.P{Eng.Bod{more, Bytes.from_list(got)}, pd, out}, out, since, e1, {==}, bnd)
+    case Spec.MUp{got}:
+      %rev.rev(out) : {p == Eng.P{Eng.Rest{Bytes.from_list(got)}, Eng.pend.new(), _} : Eng.P}
+      r
+    case Spec.MBad{}:
+      REFUSED(p, out, r)
+
+def END(w: Spec.W, +p: Eng.P, +pd: Eng.Pend, r: REL(p, w, pd)) -> Laws.agree(p, Spec.finish(w)):
+  match w:
+    case Spec.W{mode, +out, +since}:
+      END.m(mode, p, pd, out, since, r)
+
+# the walk: induction on the input, one byte at a time
+def walk.lem(bs: List<&2, U32>, +w: Spec.W, +p: Eng.P, s: SR(p, w)) ->
+  Laws.agree(Eng.feed(bs, p), Spec.finish(Spec.walk(bs, w))):
+  match bs:
+    case Nil{}:
+      (pd, r) = s
+      END(w, p, pd, r)
+    case Con{+c, t}:
+      (pd, r) = s
+      walk.lem(t, Spec.next(w, c), Eng.step(p, c), STEP(w, c, p, pd, r))
+
+# THEOREM: for every input, the reader agrees with the framing
+def frame.sim(bs: List<&2, U32>) -> Laws.agree(Eng.feed(bs, Eng.p.new()), Spec.frame(bs)):
+  walk.lem(bs, Spec.W{Spec.MReq{Nil{}}, Nil{}, Nil{}}, Eng.p.new(), (Eng.pend.new(), ({==}, (Unit{}, {==}))))
+
+# The laws, whole
+# ---------------
+
+def Laws.frame_sim(bs):
+  frame.sim(bs)
+
+def Laws.frame_sim_buf(b):
+  %Equal.sym(Eng.P, Eng.feed_buf(b, Eng.p.new()), Eng.feed(Bytes.to_list(b), Eng.p.new()),
+    Laws.feed_buf_is_feed(b, Eng.p.new())) : Laws.agree(_, Spec.frame(Bytes.to_list(b)))
+  frame.sim(Bytes.to_list(b))
+
+# reads fed one after another are their bytes fed at once
+def reads.is(rs: List<&2, Bytes()>, +p: Eng.P) ->
+  {Laws.reads(rs, p) == Eng.feed(Bytes.to_list(Bytes.concat(rs)), p) : Eng.P}:
+  match rs:
+    case Nil{}:
+      {==}
+    case Con{+r, +t}:
+      Equal.trans(Eng.P, Laws.reads(t, Eng.feed_buf(r, p)),
+        Eng.feed(Bytes.to_list(Bytes.concat(t)), Eng.feed_buf(r, p)),
+        Eng.feed(Bytes.to_list(Bytes.append(r, Bytes.concat(t))), p),
+        reads.is(t, Eng.feed_buf(r, p)),
+        Equal.trans(Eng.P, Eng.feed(Bytes.to_list(Bytes.concat(t)), Eng.feed_buf(r, p)),
+          Eng.feed(Bytes.to_list(Bytes.concat(t)), Eng.feed(Bytes.to_list(r), p)),
+          Eng.feed(Bytes.to_list(Bytes.append(r, Bytes.concat(t))), p),
+          Equal.cong(Eng.P, Eng.P, x => Eng.feed(Bytes.to_list(Bytes.concat(t)), x), Eng.feed_buf(r, p),
+            Eng.feed(Bytes.to_list(r), p), Laws.feed_buf_is_feed(r, p)),
+          Equal.trans(Eng.P, Eng.feed(Bytes.to_list(Bytes.concat(t)), Eng.feed(Bytes.to_list(r), p)),
+            Eng.feed(List.append(&2, U32, Bytes.to_list(r), Bytes.to_list(Bytes.concat(t))), p),
+            Eng.feed(Bytes.to_list(Bytes.append(r, Bytes.concat(t))), p),
+            Equal.sym(Eng.P, Eng.feed(List.append(&2, U32, Bytes.to_list(r), Bytes.to_list(Bytes.concat(t))), p),
+              Eng.feed(Bytes.to_list(Bytes.concat(t)), Eng.feed(Bytes.to_list(r), p)),
+              Laws.feed_split(Bytes.to_list(r), Bytes.to_list(Bytes.concat(t)), p)),
+            Equal.cong(List<&2, U32>, Eng.P, x => Eng.feed(x, p),
+              List.append(&2, U32, Bytes.to_list(r), Bytes.to_list(Bytes.concat(t))),
+              Bytes.to_list(Bytes.append(r, Bytes.concat(t))),
+              Equal.sym(List<&2, U32>, Bytes.to_list(Bytes.append(r, Bytes.concat(t))),
+                List.append(&2, U32, Bytes.to_list(r), Bytes.to_list(Bytes.concat(t))),
+                Bytes.to_list_append(r, Bytes.concat(t)))))))
+
+def Laws.frame_sim_reads(rs):
+  %Equal.sym(Eng.P, Laws.reads(rs, Eng.p.new()), Eng.feed(Bytes.to_list(Bytes.concat(rs)), Eng.p.new()),
+    reads.is(rs, Eng.p.new())) : Laws.agree(_, Spec.frame(Bytes.to_list(Bytes.concat(rs))))
+  frame.sim(Bytes.to_list(Bytes.concat(rs)))
+
+def Laws.frame_get():
+  {==}
+
+def Laws.frame_upgrade():
+  {==}
+
+def Laws.frame_refuse_fold():
+  {==}
