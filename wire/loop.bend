@@ -24,7 +24,10 @@
 #   ~nap               sleep, beside the socket
 #   ~say               a log line
 #   ~fopen ~fsize ~fread ~fsend ~fclose   a file under a root: read and
-#                      sent when small, sent by the kernel when not
+#                      sent when small, sent by the kernel when not (the
+#                      real ones: File.get_under opens, fstats and reads
+#                      a small file in one effect, so its size, read and
+#                      close are pure; wire/effects.bend's Fh)
 #
 # The protocol:
 #
@@ -75,10 +78,10 @@ def Put(S):
   S & Result<&1, &1, U32 & String, Unit>
 
 # One piece of a reply: bytes as they are, a file to write when the
-# reply is written (the root, the path under it, the type, and whether
-# only the head is wanted), a note for the access log that the next
-# piece completes, or a mark that the next reply is the connection's
-# last.
+# reply is written (the root, the path under it, as bytes that go to the
+# effect as they are, what ~fhead makes its head from, and whether only
+# the head is wanted), a note for the access log that the next piece
+# completes, or a mark that the next reply is the connection's last.
 type Seg is Data:
   Raw{bs: Bytes()}
   Page{root: Bytes(), path: Bytes(), ct: Bytes(), head: Bool}

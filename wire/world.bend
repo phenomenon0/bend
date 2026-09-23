@@ -24,10 +24,11 @@
 #
 # The model is only as good as the contracts: what it assumes of each
 # effect is written below as a relation on what the effect answers
-# (rx.ok, tx.ok, lsn.ok, fopen.ok, fread.ok, fsend.ok; cx.ok and tls.ok
-# for the client's connects, idle.ok for its pool's probe), the model is
-# proved to keep them (rx_model, tx_stalled, tx_served, fread_model,
-# fsend_model, fsend_stalled), and
+# (rx.ok, tx.ok, lsn.ok, fopen.ok, fget.ok, fread.ok, fsend.ok; cx.ok
+# and tls.ok for the client's connects, idle.ok for its pool's probe),
+# the model is proved to keep them (rx_model, tx_stalled, tx_served,
+# fread_model, fsend_model, fsend_stalled; File.get_under's memo:
+# memo_bounded, memo_answers, memo_keeps), and
 # wire/conform.bend drives each real effect through the same cases and
 # checks the same relations against what it observes. That is the
 # bridge; what is left trusted is that the effects keep their contract

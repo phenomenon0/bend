@@ -9,7 +9,7 @@
 #
 # What the model in wire/world.bend assumes of each effect is its
 # contract, stated there as a relation (rx.ok, tx.ok, lsn.ok, fopen.ok,
-# fread.ok, fsend.ok) and beside each effect in bend2/base.bend;
+# fget.ok, fread.ok, fsend.ok) and beside each effect in bend2/base.bend;
 # wire/conform.bend drives the effects below through the contracts'
 # cases and judges them by those very relations.
 import Base

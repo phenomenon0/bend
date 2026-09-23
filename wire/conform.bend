@@ -3,8 +3,8 @@
 # world.bend states, as relations, what the model of the socket world
 # assumes of each effect the loops use (rx.ok for TCP.poll_buf, tx.ok
 # for TCP.send_buf_poll, lsn.ok for TCP.accept_poll, fopen.ok for
-# File.open_under, fread.ok for File.read_buf, fsend.ok for
-# File.sendfile), and proves the model keeps them (rx_model,
+# File.open_under, fget.ok for File.get_under, fread.ok for
+# File.read_buf, fsend.ok for File.sendfile), and proves the model keeps them (rx_model,
 # tx_stalled, tx_served, fread_model, fsend_model, fsend_stalled). This
 # program drives each real effect through its contract's cases -- a
 # read that waits out its time, one that parks and wakes, one asked for
@@ -13,7 +13,9 @@
 # reset; a sendfile of 16 MiB through the same crawl, one of a part of
 # a file, one past a file's end, one to a peer that stopped reading;
 # accepts with no descriptor left; a plain file, a missing one, a link,
-# a directory, a climb; a file read in short blocks to its end -- and
+# a link to a directory, a directory, a climb; a file read in short
+# blocks to its end; the same names through File.get_under, with a large
+# file, a dotfile, and a file rewritten while its memo holds it -- and
 # judges what it observes with those same defs. conform.c is the peer: it starts this program under a low
 # descriptor limit, plays each case's peer in the same order, and checks
 # what it sees from its side.
