@@ -2090,3 +2090,1121 @@ def Laws.hop_by_hop_removed_rsp(via, ns, len, fs):
     clean.app(~Laws.is.via, ns, X.rends(ns, len, fs), [X.Field{"via", via}])) : {_ == True{} : Bool}
   and.true(Laws.clean(~Laws.is.via, ns, X.rends(ns, len, fs)), Laws.clean(~Laws.is.via, ns, [X.Field{"via", via}]),
     rends.clean(~Laws.is.via, ns, len, fs), {==})
+
+# Reading it back
+# ===============
+#
+# no_smuggle: the upstream, reading what the proxy sent by spec.bend's
+# frame(), reads one request for each one forwarded -- its method,
+# target and body -- and nothing more. A forwarded request passed valid
+# (core.bend), and what valid checks is what spec.bend's walk needs to
+# read each line of it as the line it is: bytes a line may hold
+# (gathered, no CR or LF among them), a request line split at its two
+# spaces, a field line at its colon with a name no framing reads, and a
+# Content-Length read back as the body's length.
+
+# no CR and no LF: a line's bytes
+def ncl(k: Eng.Cls) -> Bool:
+  match k:
+    case Eng.KCr{}:
+      False{}
+    case Eng.KLf{}:
+      False{}
+    case _:
+      True{}
+
+def PL(xs: List<&2, U32>) -> Type:
+  match xs:
+    case Nil{}:
+      Unit
+    case Con{x, t}:
+      {ncl(Spec.cls(x)) == True{} : Bool} & PL(t)
+
+# every byte one a token may hold
+def AA(t: Spec.Tok, xs: List<&2, U32>) -> Type:
+  match xs:
+    case Nil{}:
+      Unit
+    case Con{x, r}:
+      {Spec.allows(t, Spec.cls(x)) == True{} : Bool} & AA(t, r)
+
+# no token holds a CR or an LF
+def allows.ncl(t: Spec.Tok, k: Eng.Cls, h: {Spec.allows(t, k) == True{} : Bool}) -> {ncl(k) == True{} : Bool}:
+  match t k:
+    case Spec.TMeth{} Eng.KSp{}:
+      no({ncl(Eng.KSp{}) == True{} : Bool}, h)
+    case Spec.TMeth{} Eng.KHt{}:
+      no({ncl(Eng.KHt{}) == True{} : Bool}, h)
+    case Spec.TMeth{} Eng.KCr{}:
+      no({ncl(Eng.KCr{}) == True{} : Bool}, h)
+    case Spec.TMeth{} Eng.KLf{}:
+      no({ncl(Eng.KLf{}) == True{} : Bool}, h)
+    case Spec.TMeth{} Eng.KCo{}:
+      no({ncl(Eng.KCo{}) == True{} : Bool}, h)
+    case Spec.TMeth{} Eng.KCm{}:
+      no({ncl(Eng.KCm{}) == True{} : Bool}, h)
+    case Spec.TMeth{} Eng.KDg{}:
+      {==}
+    case Spec.TMeth{} Eng.KTk{}:
+      {==}
+    case Spec.TMeth{} Eng.KVc{}:
+      no({ncl(Eng.KVc{}) == True{} : Bool}, h)
+    case Spec.TMeth{} Eng.KCt{}:
+      no({ncl(Eng.KCt{}) == True{} : Bool}, h)
+    case Spec.TTarget{} Eng.KSp{}:
+      no({ncl(Eng.KSp{}) == True{} : Bool}, h)
+    case Spec.TTarget{} Eng.KHt{}:
+      no({ncl(Eng.KHt{}) == True{} : Bool}, h)
+    case Spec.TTarget{} Eng.KCr{}:
+      no({ncl(Eng.KCr{}) == True{} : Bool}, h)
+    case Spec.TTarget{} Eng.KLf{}:
+      no({ncl(Eng.KLf{}) == True{} : Bool}, h)
+    case Spec.TTarget{} Eng.KCo{}:
+      {==}
+    case Spec.TTarget{} Eng.KCm{}:
+      {==}
+    case Spec.TTarget{} Eng.KDg{}:
+      {==}
+    case Spec.TTarget{} Eng.KTk{}:
+      {==}
+    case Spec.TTarget{} Eng.KVc{}:
+      {==}
+    case Spec.TTarget{} Eng.KCt{}:
+      no({ncl(Eng.KCt{}) == True{} : Bool}, h)
+    case Spec.TVer{} Eng.KSp{}:
+      no({ncl(Eng.KSp{}) == True{} : Bool}, h)
+    case Spec.TVer{} Eng.KHt{}:
+      no({ncl(Eng.KHt{}) == True{} : Bool}, h)
+    case Spec.TVer{} Eng.KCr{}:
+      no({ncl(Eng.KCr{}) == True{} : Bool}, h)
+    case Spec.TVer{} Eng.KLf{}:
+      no({ncl(Eng.KLf{}) == True{} : Bool}, h)
+    case Spec.TVer{} Eng.KCo{}:
+      no({ncl(Eng.KCo{}) == True{} : Bool}, h)
+    case Spec.TVer{} Eng.KCm{}:
+      no({ncl(Eng.KCm{}) == True{} : Bool}, h)
+    case Spec.TVer{} Eng.KDg{}:
+      {==}
+    case Spec.TVer{} Eng.KTk{}:
+      {==}
+    case Spec.TVer{} Eng.KVc{}:
+      {==}
+    case Spec.TVer{} Eng.KCt{}:
+      no({ncl(Eng.KCt{}) == True{} : Bool}, h)
+    case Spec.TName{} Eng.KSp{}:
+      no({ncl(Eng.KSp{}) == True{} : Bool}, h)
+    case Spec.TName{} Eng.KHt{}:
+      no({ncl(Eng.KHt{}) == True{} : Bool}, h)
+    case Spec.TName{} Eng.KCr{}:
+      no({ncl(Eng.KCr{}) == True{} : Bool}, h)
+    case Spec.TName{} Eng.KLf{}:
+      no({ncl(Eng.KLf{}) == True{} : Bool}, h)
+    case Spec.TName{} Eng.KCo{}:
+      no({ncl(Eng.KCo{}) == True{} : Bool}, h)
+    case Spec.TName{} Eng.KCm{}:
+      no({ncl(Eng.KCm{}) == True{} : Bool}, h)
+    case Spec.TName{} Eng.KDg{}:
+      {==}
+    case Spec.TName{} Eng.KTk{}:
+      {==}
+    case Spec.TName{} Eng.KVc{}:
+      no({ncl(Eng.KVc{}) == True{} : Bool}, h)
+    case Spec.TName{} Eng.KCt{}:
+      no({ncl(Eng.KCt{}) == True{} : Bool}, h)
+    case Spec.TOws{} Eng.KSp{}:
+      {==}
+    case Spec.TOws{} Eng.KHt{}:
+      {==}
+    case Spec.TOws{} Eng.KCr{}:
+      no({ncl(Eng.KCr{}) == True{} : Bool}, h)
+    case Spec.TOws{} Eng.KLf{}:
+      no({ncl(Eng.KLf{}) == True{} : Bool}, h)
+    case Spec.TOws{} Eng.KCo{}:
+      no({ncl(Eng.KCo{}) == True{} : Bool}, h)
+    case Spec.TOws{} Eng.KCm{}:
+      no({ncl(Eng.KCm{}) == True{} : Bool}, h)
+    case Spec.TOws{} Eng.KDg{}:
+      no({ncl(Eng.KDg{}) == True{} : Bool}, h)
+    case Spec.TOws{} Eng.KTk{}:
+      no({ncl(Eng.KTk{}) == True{} : Bool}, h)
+    case Spec.TOws{} Eng.KVc{}:
+      no({ncl(Eng.KVc{}) == True{} : Bool}, h)
+    case Spec.TOws{} Eng.KCt{}:
+      no({ncl(Eng.KCt{}) == True{} : Bool}, h)
+    case Spec.TVal{} Eng.KSp{}:
+      {==}
+    case Spec.TVal{} Eng.KHt{}:
+      {==}
+    case Spec.TVal{} Eng.KCr{}:
+      no({ncl(Eng.KCr{}) == True{} : Bool}, h)
+    case Spec.TVal{} Eng.KLf{}:
+      no({ncl(Eng.KLf{}) == True{} : Bool}, h)
+    case Spec.TVal{} Eng.KCo{}:
+      {==}
+    case Spec.TVal{} Eng.KCm{}:
+      {==}
+    case Spec.TVal{} Eng.KDg{}:
+      {==}
+    case Spec.TVal{} Eng.KTk{}:
+      {==}
+    case Spec.TVal{} Eng.KVc{}:
+      {==}
+    case Spec.TVal{} Eng.KCt{}:
+      no({ncl(Eng.KCt{}) == True{} : Bool}, h)
+
+def aa.pl(+t: Spec.Tok, xs: List<&2, U32>, h: AA(t, xs)) -> PL(xs):
+  match xs:
+    case Nil{}:
+      Unit{}
+    case Con{+x, r}:
+      (h1, h2) = h
+      (allows.ncl(t, Spec.cls(x), h1), aa.pl(t, r, h2))
+
+def pl.app(a: List<&2, U32>, -b: List<&2, U32>, pa: PL(a), pb: PL(b)) -> PL(List.append(&2, U32, a, b)):
+  match a:
+    case Nil{}:
+      pb
+    case Con{x, t}:
+      (h1, h2) = pa
+      (h1, pl.app(t, b, h2, pb))
+
+def and.split(a: Bool, -b: Bool, h: {(a && b) == True{} : Bool}) -> {a == True{} : Bool} & {b == True{} : Bool}:
+  match a:
+    case True{}:
+      ({==}, h)
+    case False{}:
+      no({False{} == True{} : Bool} & {b == True{} : Bool}, h)
+
+# the proxy's check, byte by byte, as spec.bend's classes
+def aa.of.at(+t: Spec.Tok, +c: U32, -r: Bytes(),
+  h: {Spec.allows(t, Eng.cls(c)) == True{} : Bool} & {X.ok.all(t, r) == True{} : Bool},
+  ih: {X.ok.all(t, r) == True{} : Bool} -> AA(t, Bytes.to_list(r))) ->
+  AA(t, Con{c, Bytes.to_list(r)}):
+  (h1, h2) = h
+  (%EL.cls_every(c) : {Spec.allows(t, _) == True{} : Bool}
+   h1, ih(h2))
+
+def aa.of(+t: Spec.Tok, s: Bytes(), h: {X.ok.all(t, s) == True{} : Bool}) -> AA(t, Bytes.to_list(s)):
+  match s:
+    case SNil{}:
+      Unit{}
+    case SCon{Chr{+c}, r}:
+      aa.of.at(t, c, r, and.split(Spec.allows(t, Eng.cls(c)), X.ok.all(t, r), h), h2 => aa.of(t, r, h2))
+
+# a span over bytes its token holds, stopped by one it does not
+def span.to(+t: Spec.Tok, xs: List<&2, U32>, +c: U32, +rest: List<&2, U32>, h: AA(t, xs),
+  hc: {Spec.allows(t, Spec.cls(c)) == False{} : Bool}) ->
+  {Spec.span(t, List.append(&2, U32, xs, Con{c, rest})) == Spec.Span{xs, Spec.SAt{Spec.cls(c), c, rest}} : Spec.Span}:
+  match xs:
+    case Nil{}:
+      %Equal.sym(Bool, Spec.allows(t, Spec.cls(c)), False{}, hc) :
+        {Spec.span.pick(_, Spec.cls(c), c, rest, Spec.span(t, rest)) == Spec.Span{Nil{}, Spec.SAt{Spec.cls(c), c, rest}} :
+          Spec.Span}
+      {==}
+    case Con{+x, +r}:
+      (h1, h2) = h
+      %Equal.sym(Bool, Spec.allows(t, Spec.cls(x)), True{}, h1) :
+        {Spec.span.pick(_, Spec.cls(x), x, List.append(&2, U32, r, Con{c, rest}),
+          Spec.span(t, List.append(&2, U32, r, Con{c, rest}))) ==
+          Spec.Span{Con{x, r}, Spec.SAt{Spec.cls(c), c, rest}} : Spec.Span}
+      %Equal.sym(Spec.Span, Spec.span(t, List.append(&2, U32, r, Con{c, rest})), Spec.Span{r, Spec.SAt{Spec.cls(c), c, rest}},
+        span.to(t, r, c, rest, h2, hc)) : {Spec.span.push(x, _) == Spec.Span{Con{x, r}, Spec.SAt{Spec.cls(c), c, rest}} :
+        Spec.Span}
+      {==}
+
+# and a span over bytes its token all holds, to the end
+def span.all(+t: Spec.Tok, xs: List<&2, U32>, h: AA(t, xs)) -> {Spec.span(t, xs) == Spec.Span{xs, Spec.SEnd{}} : Spec.Span}:
+  match xs:
+    case Nil{}:
+      {==}
+    case Con{+x, +r}:
+      (h1, h2) = h
+      %Equal.sym(Bool, Spec.allows(t, Spec.cls(x)), True{}, h1) :
+        {Spec.span.pick(_, Spec.cls(x), x, r, Spec.span(t, r)) == Spec.Span{Con{x, r}, Spec.SEnd{}} : Spec.Span}
+      %Equal.sym(Spec.Span, Spec.span(t, r), Spec.Span{r, Spec.SEnd{}}, span.all(t, r, h2)) : {Spec.span.push(x, _) == Spec.Span{Con{x, r}, Spec.SEnd{}} : Spec.Span}
+      {==}
+
+# a line's byte is gathered
+def req.plain(k: Eng.Cls, -x: U32, -cur: List<&2, U32>, -o: List<&2, Eng.Req>, -s: List<&2, U32>,
+  h: {ncl(k) == True{} : Bool}) ->
+  {Spec.req.byte(k, x, cur, o, s) == Spec.W{Spec.MReq{Spec.snoc(cur, x)}, o, s} : Spec.W}:
+  match k:
+    case Eng.KSp{}:
+      {==}
+    case Eng.KHt{}:
+      {==}
+    case Eng.KCr{}:
+      no({Spec.req.byte(Eng.KCr{}, x, cur, o, s) == Spec.W{Spec.MReq{Spec.snoc(cur, x)}, o, s} : Spec.W}, h)
+    case Eng.KLf{}:
+      no({Spec.req.byte(Eng.KLf{}, x, cur, o, s) == Spec.W{Spec.MReq{Spec.snoc(cur, x)}, o, s} : Spec.W}, h)
+    case Eng.KCo{}:
+      {==}
+    case Eng.KCm{}:
+      {==}
+    case Eng.KDg{}:
+      {==}
+    case Eng.KTk{}:
+      {==}
+    case Eng.KVc{}:
+      {==}
+    case Eng.KCt{}:
+      {==}
+
+def field.plain(k: Eng.Cls, -x: U32, -hd: Spec.Head, -cur: List<&2, U32>, -o: List<&2, Eng.Req>, -s: List<&2, U32>,
+  h: {ncl(k) == True{} : Bool}) ->
+  {Spec.field.byte(k, x, hd, cur, o, s) == Spec.W{Spec.MField{hd, Spec.snoc(cur, x)}, o, s} : Spec.W}:
+  match k:
+    case Eng.KSp{}:
+      {==}
+    case Eng.KHt{}:
+      {==}
+    case Eng.KCr{}:
+      no({Spec.field.byte(Eng.KCr{}, x, hd, cur, o, s) == Spec.W{Spec.MField{hd, Spec.snoc(cur, x)}, o, s} : Spec.W}, h)
+    case Eng.KLf{}:
+      no({Spec.field.byte(Eng.KLf{}, x, hd, cur, o, s) == Spec.W{Spec.MField{hd, Spec.snoc(cur, x)}, o, s} : Spec.W}, h)
+    case Eng.KCo{}:
+      {==}
+    case Eng.KCm{}:
+      {==}
+    case Eng.KDg{}:
+      {==}
+    case Eng.KTk{}:
+      {==}
+    case Eng.KVc{}:
+      {==}
+    case Eng.KCt{}:
+      {==}
+
+def snoc.app(+a: List<&2, U32>, +x: U32, +t: List<&2, U32>) ->
+  {List.append(&2, U32, Spec.snoc(a, x), t) == List.append(&2, U32, a, Con{x, t}) : List<&2, U32>}:
+  app.assoc(U32, a, Con{x, Nil{}}, t)
+
+# LEMMA: a request line's bytes are gathered
+def gather.req(xs: List<&2, U32>, +rest: List<&2, U32>, +cur: List<&2, U32>, +o: List<&2, Eng.Req>,
+  +s: List<&2, U32>, pl: PL(xs)) ->
+  {Spec.walk(List.append(&2, U32, xs, rest), Spec.W{Spec.MReq{cur}, o, s}) ==
+    Spec.walk(rest, Spec.W{Spec.MReq{List.append(&2, U32, cur, xs)}, o, List.append(&2, U32, s, xs)}) : Spec.W}:
+  match xs:
+    case Nil{}:
+      %Equal.sym(List<&2, U32>, List.append(&2, U32, cur, Nil{}), cur, app.nil(U32, cur)) : {Spec.walk(rest, Spec.W{Spec.MReq{cur}, o, s}) ==
+        Spec.walk(rest, Spec.W{Spec.MReq{_}, o, List.append(&2, U32, s, Nil{})}) : Spec.W}
+      %Equal.sym(List<&2, U32>, List.append(&2, U32, s, Nil{}), s, app.nil(U32, s)) : {Spec.walk(rest, Spec.W{Spec.MReq{cur}, o, s}) ==
+        Spec.walk(rest, Spec.W{Spec.MReq{cur}, o, _}) : Spec.W}
+      {==}
+    case Con{+x, +t}:
+      (h1, h2) = pl
+      %Equal.sym(Spec.W, Spec.req.byte(Spec.cls(x), x, cur, o, Spec.snoc(s, x)),
+        Spec.W{Spec.MReq{Spec.snoc(cur, x)}, o, Spec.snoc(s, x)}, req.plain(Spec.cls(x), x, cur, o, Spec.snoc(s, x), h1)) :
+        {Spec.walk(List.append(&2, U32, t, rest), _) ==
+          Spec.walk(rest, Spec.W{Spec.MReq{List.append(&2, U32, cur, Con{x, t})}, o, List.append(&2, U32, s, Con{x, t})}) :
+          Spec.W}
+      %Equal.sym(Spec.W, Spec.walk(List.append(&2, U32, t, rest), Spec.W{Spec.MReq{Spec.snoc(cur, x)}, o, Spec.snoc(s, x)}),
+        Spec.walk(rest, Spec.W{Spec.MReq{List.append(&2, U32, Spec.snoc(cur, x), t)}, o, List.append(&2, U32, Spec.snoc(s, x), t)}),
+        gather.req(t, rest, Spec.snoc(cur, x), o, Spec.snoc(s, x), h2)) : {_ ==
+          Spec.walk(rest, Spec.W{Spec.MReq{List.append(&2, U32, cur, Con{x, t})}, o, List.append(&2, U32, s, Con{x, t})}) :
+          Spec.W}
+      %Equal.sym(List<&2, U32>, List.append(&2, U32, Spec.snoc(cur, x), t), List.append(&2, U32, cur, Con{x, t}),
+        snoc.app(cur, x, t)) : {Spec.walk(rest, Spec.W{Spec.MReq{_}, o, List.append(&2, U32, Spec.snoc(s, x), t)}) ==
+          Spec.walk(rest, Spec.W{Spec.MReq{List.append(&2, U32, cur, Con{x, t})}, o, List.append(&2, U32, s, Con{x, t})}) :
+          Spec.W}
+      %Equal.sym(List<&2, U32>, List.append(&2, U32, Spec.snoc(s, x), t), List.append(&2, U32, s, Con{x, t}),
+        snoc.app(s, x, t)) : {Spec.walk(rest, Spec.W{Spec.MReq{List.append(&2, U32, cur, Con{x, t})}, o, _}) ==
+          Spec.walk(rest, Spec.W{Spec.MReq{List.append(&2, U32, cur, Con{x, t})}, o, List.append(&2, U32, s, Con{x, t})}) :
+          Spec.W}
+      {==}
+
+# LEMMA: and a field line's
+def gather.field(xs: List<&2, U32>, +rest: List<&2, U32>, +hd: Spec.Head, +cur: List<&2, U32>, +o: List<&2, Eng.Req>,
+  +s: List<&2, U32>, pl: PL(xs)) ->
+  {Spec.walk(List.append(&2, U32, xs, rest), Spec.W{Spec.MField{hd, cur}, o, s}) ==
+    Spec.walk(rest, Spec.W{Spec.MField{hd, List.append(&2, U32, cur, xs)}, o, List.append(&2, U32, s, xs)}) : Spec.W}:
+  match xs:
+    case Nil{}:
+      %Equal.sym(List<&2, U32>, List.append(&2, U32, cur, Nil{}), cur, app.nil(U32, cur)) : {Spec.walk(rest, Spec.W{Spec.MField{hd, cur}, o, s}) ==
+        Spec.walk(rest, Spec.W{Spec.MField{hd, _}, o, List.append(&2, U32, s, Nil{})}) : Spec.W}
+      %Equal.sym(List<&2, U32>, List.append(&2, U32, s, Nil{}), s, app.nil(U32, s)) : {Spec.walk(rest, Spec.W{Spec.MField{hd, cur}, o, s}) ==
+        Spec.walk(rest, Spec.W{Spec.MField{hd, cur}, o, _}) : Spec.W}
+      {==}
+    case Con{+x, +t}:
+      (h1, h2) = pl
+      %Equal.sym(Spec.W, Spec.field.byte(Spec.cls(x), x, hd, cur, o, Spec.snoc(s, x)),
+        Spec.W{Spec.MField{hd, Spec.snoc(cur, x)}, o, Spec.snoc(s, x)}, field.plain(Spec.cls(x), x, hd, cur, o, Spec.snoc(s, x), h1)) :
+        {Spec.walk(List.append(&2, U32, t, rest), _) ==
+          Spec.walk(rest, Spec.W{Spec.MField{hd, List.append(&2, U32, cur, Con{x, t})}, o, List.append(&2, U32, s, Con{x, t})}) :
+          Spec.W}
+      %Equal.sym(Spec.W, Spec.walk(List.append(&2, U32, t, rest), Spec.W{Spec.MField{hd, Spec.snoc(cur, x)}, o, Spec.snoc(s, x)}),
+        Spec.walk(rest, Spec.W{Spec.MField{hd, List.append(&2, U32, Spec.snoc(cur, x), t)}, o, List.append(&2, U32, Spec.snoc(s, x), t)}),
+        gather.field(t, rest, hd, Spec.snoc(cur, x), o, Spec.snoc(s, x), h2)) : {_ ==
+          Spec.walk(rest, Spec.W{Spec.MField{hd, List.append(&2, U32, cur, Con{x, t})}, o, List.append(&2, U32, s, Con{x, t})}) :
+          Spec.W}
+      %Equal.sym(List<&2, U32>, List.append(&2, U32, Spec.snoc(cur, x), t), List.append(&2, U32, cur, Con{x, t}),
+        snoc.app(cur, x, t)) : {Spec.walk(rest, Spec.W{Spec.MField{hd, _}, o, List.append(&2, U32, Spec.snoc(s, x), t)}) ==
+          Spec.walk(rest, Spec.W{Spec.MField{hd, List.append(&2, U32, cur, Con{x, t})}, o, List.append(&2, U32, s, Con{x, t})}) :
+          Spec.W}
+      %Equal.sym(List<&2, U32>, List.append(&2, U32, Spec.snoc(s, x), t), List.append(&2, U32, s, Con{x, t}),
+        snoc.app(s, x, t)) : {Spec.walk(rest, Spec.W{Spec.MField{hd, List.append(&2, U32, cur, Con{x, t})}, o, _}) ==
+          Spec.walk(rest, Spec.W{Spec.MField{hd, List.append(&2, U32, cur, Con{x, t})}, o, List.append(&2, U32, s, Con{x, t})}) :
+          Spec.W}
+      {==}
+
+# What the proxy sends, as a list of bytes
+# ----------------------------------------
+
+def tl.app(+a: Bytes(), +b: Bytes()) ->
+  {Bytes.to_list(Bytes.append(a, b)) == List.append(&2, U32, Bytes.to_list(a), Bytes.to_list(b)) : List<&2, U32>}:
+  Bytes.to_list_append(a, b)
+
+def RLl(+meth: Bytes(), +target: Bytes()) -> List<&2, U32>:
+  List.append(&2, U32, Bytes.to_list(meth), Con{32, List.append(&2, U32, Bytes.to_list(target), Bytes.to_list(" HTTP/1.1"))})
+
+def FLl(f: X.Field) -> List<&2, U32>:
+  match f:
+    case X.Field{n, v}:
+      List.append(&2, U32, Bytes.to_list(n), Con{58, Con{32, Bytes.to_list(v)}})
+
+def FLSl(fs: List<&2, X.Field>) -> List<&2, U32>:
+  match fs:
+    case Nil{}:
+      Nil{}
+    case Con{f, t}:
+      List.append(&2, U32, FLl(f), Con{13, Con{10, FLSl(t)}})
+
+def rl.list(+meth: Bytes(), +target: Bytes()) -> {Bytes.to_list(X.rl.ser(meth, target)) == RLl(meth, target) : List<&2, U32>}:
+  %Equal.sym(List<&2, U32>, Bytes.to_list(X.rl.ser(meth, target)),
+    List.append(&2, U32, Bytes.to_list(meth), Bytes.to_list(Bytes.append(" ", Bytes.append(target, " HTTP/1.1")))),
+    tl.app(meth, Bytes.append(" ", Bytes.append(target, " HTTP/1.1")))) :
+    {_ == RLl(meth, target) : List<&2, U32>}
+  %Equal.sym(List<&2, U32>, Bytes.to_list(Bytes.append(target, " HTTP/1.1")),
+    List.append(&2, U32, Bytes.to_list(target), Bytes.to_list(" HTTP/1.1")), tl.app(target, " HTTP/1.1")) :
+    {List.append(&2, U32, Bytes.to_list(meth), Con{32, _}) == RLl(meth, target) : List<&2, U32>}
+  {==}
+
+def fl.list(f: X.Field) -> {Bytes.to_list(X.fl.ser(f)) == FLl(f) : List<&2, U32>}:
+  match f:
+    case X.Field{+n, +v}:
+      %Equal.sym(List<&2, U32>, Bytes.to_list(Bytes.append(n, Bytes.append(": ", v))),
+        List.append(&2, U32, Bytes.to_list(n), Bytes.to_list(Bytes.append(": ", v))), tl.app(n, Bytes.append(": ", v))) :
+        {_ == FLl(X.Field{n, v}) : List<&2, U32>}
+      {==}
+
+def fls.list(fs: List<&2, X.Field>) -> {Bytes.to_list(X.fls.ser(fs)) == FLSl(fs) : List<&2, U32>}:
+  match fs:
+    case Nil{}:
+      {==}
+    case Con{+f, +t}:
+      %Equal.sym(List<&2, U32>, Bytes.to_list(X.fls.ser(Con{f, t})),
+        List.append(&2, U32, Bytes.to_list(X.fl.ser(f)), Bytes.to_list(Bytes.append("\r\n", X.fls.ser(t)))),
+        tl.app(X.fl.ser(f), Bytes.append("\r\n", X.fls.ser(t)))) :
+        {_ == FLSl(Con{f, t}) : List<&2, U32>}
+      %Equal.sym(List<&2, U32>, Bytes.to_list(X.fl.ser(f)), FLl(f), fl.list(f)) :
+        {List.append(&2, U32, _, Con{13, Con{10, Bytes.to_list(X.fls.ser(t))}}) == FLSl(Con{f, t}) : List<&2, U32>}
+      %Equal.sym(List<&2, U32>, Bytes.to_list(X.fls.ser(t)), FLSl(t), fls.list(t)) :
+        {List.append(&2, U32, FLl(f), Con{13, Con{10, _}}) == FLSl(Con{f, t}) : List<&2, U32>}
+      {==}
+
+def fls.app(a: List<&2, X.Field>, +b: List<&2, X.Field>) ->
+  {FLSl(List.append(&2, X.Field, a, b)) == List.append(&2, U32, FLSl(a), FLSl(b)) : List<&2, U32>}:
+  match a:
+    case Nil{}:
+      {==}
+    case Con{+f, +t}:
+      %Equal.sym(List<&2, U32>, FLSl(List.append(&2, X.Field, t, b)), List.append(&2, U32, FLSl(t), FLSl(b)),
+        fls.app(t, b)) :
+        {List.append(&2, U32, FLl(f), Con{13, Con{10, _}}) ==
+          List.append(&2, U32, List.append(&2, U32, FLl(f), Con{13, Con{10, FLSl(t)}}), FLSl(b)) : List<&2, U32>}
+      Equal.sym(List<&2, U32>, List.append(&2, U32, List.append(&2, U32, FLl(f), Con{13, Con{10, FLSl(t)}}), FLSl(b)),
+        List.append(&2, U32, FLl(f), Con{13, Con{10, List.append(&2, U32, FLSl(t), FLSl(b))}}),
+        app.assoc(U32, FLl(f), Con{13, Con{10, FLSl(t)}}, FLSl(b)))
+
+def SERl(m: X.Msg) -> List<&2, U32>:
+  match m:
+    case X.Msg{+meth, +target, +host, fs, +body, +framed}:
+      List.append(&2, U32, RLl(meth, target),
+        Con{13, Con{10, List.append(&2, U32, FLSl(X.allf(host, fs, framed, body)), Con{13, Con{10, Bytes.to_list(body)}})}})
+
+def ser.list(m: X.Msg) -> {Bytes.to_list(X.ser(m)) == SERl(m) : List<&2, U32>}:
+  match m:
+    case X.Msg{+meth, +target, +host, +fs, +body, +framed}:
+      +fls = X.fls.ser(X.allf(host, fs, framed, body))
+      %Equal.sym(List<&2, U32>,
+        Bytes.to_list(Bytes.append(X.rl.ser(meth, target), Bytes.append("\r\n", Bytes.append(fls, Bytes.append("\r\n", body))))),
+        List.append(&2, U32, Bytes.to_list(X.rl.ser(meth, target)),
+          Bytes.to_list(Bytes.append("\r\n", Bytes.append(fls, Bytes.append("\r\n", body))))),
+        tl.app(X.rl.ser(meth, target), Bytes.append("\r\n", Bytes.append(fls, Bytes.append("\r\n", body))))) :
+        {_ == SERl(X.Msg{meth, target, host, fs, body, framed}) : List<&2, U32>}
+      %Equal.sym(List<&2, U32>, Bytes.to_list(X.rl.ser(meth, target)), RLl(meth, target), rl.list(meth, target)) :
+        {List.append(&2, U32, _, Con{13, Con{10, Bytes.to_list(Bytes.append(fls, Bytes.append("\r\n", body)))}}) ==
+          SERl(X.Msg{meth, target, host, fs, body, framed}) : List<&2, U32>}
+      %Equal.sym(List<&2, U32>, Bytes.to_list(Bytes.append(fls, Bytes.append("\r\n", body))),
+        List.append(&2, U32, Bytes.to_list(fls), Bytes.to_list(Bytes.append("\r\n", body))),
+        tl.app(fls, Bytes.append("\r\n", body))) :
+        {List.append(&2, U32, RLl(meth, target), Con{13, Con{10, _}}) == SERl(X.Msg{meth, target, host, fs, body, framed}) :
+          List<&2, U32>}
+      %Equal.sym(List<&2, U32>, Bytes.to_list(fls), FLSl(X.allf(host, fs, framed, body)), fls.list(X.allf(host, fs, framed, body))) :
+        {List.append(&2, U32, RLl(meth, target), Con{13, Con{10, List.append(&2, U32, _, Con{13, Con{10, Bytes.to_list(body)}})}}) ==
+          SERl(X.Msg{meth, target, host, fs, body, framed}) : List<&2, U32>}
+      {==}
+
+# The lines read back
+# -------------------
+
+def lit.ver() -> List<&2, U32>:
+  Bytes.to_list("HTTP/1.1")
+
+def not.full(-s: Bytes(), h: {X.full(s) == True{} : Bool}) -> Type:
+  Unit
+
+# a request line: split at its two spaces into the method and target
+def view.req(meth: Bytes(), target: Bytes(), am: AA(Spec.TMeth{}, Bytes.to_list(meth)),
+  at: AA(Spec.TTarget{}, Bytes.to_list(target)), nm: {X.full(meth) == True{} : Bool},
+  nt: {X.full(target) == True{} : Bool}) ->
+  {Spec.req.view(RLl(meth, target)) == Spec.RVer{Bytes.to_list(meth), Bytes.to_list(target), lit.ver()} : Spec.RLine}:
+  match meth target:
+    case SNil{} _:
+      no({Spec.req.view(RLl(SNil{}, target)) == Spec.RVer{Nil{}, Bytes.to_list(target), lit.ver()} : Spec.RLine}, nm)
+    case SCon{Chr{m0}, mr} SNil{}:
+      no({Spec.req.view(RLl(SCon{Chr{m0}, mr}, SNil{})) == Spec.RVer{Bytes.to_list(SCon{Chr{m0}, mr}), Nil{}, lit.ver()} :
+        Spec.RLine}, nt)
+    case SCon{Chr{+m0}, +mr} SCon{Chr{+t0}, +tr}:
+      %Equal.sym(Spec.Span, Spec.span(Spec.TMeth{}, List.append(&2, U32, Con{m0, Bytes.to_list(mr)},
+          Con{32, List.append(&2, U32, Con{t0, Bytes.to_list(tr)}, Bytes.to_list(" HTTP/1.1"))})),
+        Spec.Span{Con{m0, Bytes.to_list(mr)}, Spec.SAt{Spec.cls(32), 32,
+          List.append(&2, U32, Con{t0, Bytes.to_list(tr)}, Bytes.to_list(" HTTP/1.1"))}},
+        span.to(Spec.TMeth{}, Con{m0, Bytes.to_list(mr)}, 32,
+          List.append(&2, U32, Con{t0, Bytes.to_list(tr)}, Bytes.to_list(" HTTP/1.1")), am, {==})) :
+        {Spec.req.meth(_) == Spec.RVer{Con{m0, Bytes.to_list(mr)}, Con{t0, Bytes.to_list(tr)}, lit.ver()} : Spec.RLine}
+      %Equal.sym(Spec.Span, Spec.span(Spec.TTarget{}, List.append(&2, U32, Con{t0, Bytes.to_list(tr)}, Con{32, lit.ver()})),
+        Spec.Span{Con{t0, Bytes.to_list(tr)}, Spec.SAt{Spec.cls(32), 32, lit.ver()}},
+        span.to(Spec.TTarget{}, Con{t0, Bytes.to_list(tr)}, 32, lit.ver(), at, {==})) :
+        {Spec.req.target(Con{m0, Bytes.to_list(mr)}, _) ==
+          Spec.RVer{Con{m0, Bytes.to_list(mr)}, Con{t0, Bytes.to_list(tr)}, lit.ver()} : Spec.RLine}
+      {==}
+
+def pl.ver() -> PL(Bytes.to_list(" HTTP/1.1")):
+  ({==}, ({==}, ({==}, ({==}, ({==}, ({==}, ({==}, ({==}, ({==}, Unit{})))))))))
+
+# LEMMA: the request line is read, and the fields begin
+def line.req(+meth: Bytes(), +target: Bytes(), +rest: List<&2, U32>, +o: List<&2, Eng.Req>, +s: List<&2, U32>,
+  +hm: {X.ok.all(Spec.TMeth{}, meth) == True{} : Bool}, +ht: {X.ok.all(Spec.TTarget{}, target) == True{} : Bool},
+  nm: {X.full(meth) == True{} : Bool}, nt: {X.full(target) == True{} : Bool}) ->
+  {Spec.walk(List.append(&2, U32, RLl(meth, target), Con{13, Con{10, rest}}), Spec.W{Spec.MReq{Nil{}}, o, s}) ==
+    Spec.walk(rest, Spec.W{Spec.MField{Spec.head.new(Bytes.to_list(meth), Bytes.to_list(target), False{}), Nil{}}, o,
+      Spec.snoc(Spec.snoc(List.append(&2, U32, s, RLl(meth, target)), 13), 10)}) : Spec.W}:
+  +h0 = Spec.head.new(Bytes.to_list(meth), Bytes.to_list(target), False{})
+  +s1 = List.append(&2, U32, s, RLl(meth, target))
+  %Equal.sym(Spec.W, Spec.walk(List.append(&2, U32, RLl(meth, target), Con{13, Con{10, rest}}), Spec.W{Spec.MReq{Nil{}}, o, s}),
+    Spec.walk(Con{13, Con{10, rest}}, Spec.W{Spec.MReq{RLl(meth, target)}, o, s1}),
+    gather.req(RLl(meth, target), Con{13, Con{10, rest}}, Nil{}, o, s,
+      pl.app(Bytes.to_list(meth), Con{32, List.append(&2, U32, Bytes.to_list(target), Bytes.to_list(" HTTP/1.1"))},
+        aa.pl(Spec.TMeth{}, Bytes.to_list(meth), aa.of(Spec.TMeth{}, meth, hm)),
+        ({==}, pl.app(Bytes.to_list(target), Bytes.to_list(" HTTP/1.1"), aa.pl(Spec.TTarget{}, Bytes.to_list(target), aa.of(Spec.TTarget{}, target, ht)),
+          pl.ver()))))) :
+    {_ == Spec.walk(rest, Spec.W{Spec.MField{h0, Nil{}}, o, Spec.snoc(Spec.snoc(s1, 13), 10)}) : Spec.W}
+  %Equal.sym(Spec.RLine, Spec.req.view(RLl(meth, target)), Spec.RVer{Bytes.to_list(meth), Bytes.to_list(target), lit.ver()},
+    view.req(meth, target, aa.of(Spec.TMeth{}, meth, hm), aa.of(Spec.TTarget{}, target, ht), nm, nt)) :
+    {Spec.walk(rest, Spec.next(Spec.req.cr(_, o, Spec.snoc(s1, 13)), 10)) ==
+      Spec.walk(rest, Spec.W{Spec.MField{h0, Nil{}}, o, Spec.snoc(Spec.snoc(s1, 13), 10)}) : Spec.W}
+  {==}
+
+# LEMMA: a field line is read, what it says taken into the head
+def line.field(+f: X.Field, +rest: List<&2, U32>, +h: Spec.Head, +h2: Spec.Head, +o: List<&2, Eng.Req>,
+  +s: List<&2, U32>, +val: Spec.Val, pl: PL(FLl(f)), hv: {Spec.field.view(FLl(f)) == Spec.FVal{val} : Spec.FLine},
+  hd: {Spec.field.done(h, val) == Some{h2} : Maybe<&2, Spec.Head>}) ->
+  {Spec.walk(List.append(&2, U32, FLl(f), Con{13, Con{10, rest}}), Spec.W{Spec.MField{h, Nil{}}, o, s}) ==
+    Spec.walk(rest, Spec.W{Spec.MField{h2, Nil{}}, o, Spec.snoc(Spec.snoc(List.append(&2, U32, s, FLl(f)), 13), 10)}) :
+    Spec.W}:
+  +s1 = List.append(&2, U32, s, FLl(f))
+  %Equal.sym(Spec.W, Spec.walk(List.append(&2, U32, FLl(f), Con{13, Con{10, rest}}), Spec.W{Spec.MField{h, Nil{}}, o, s}),
+    Spec.walk(Con{13, Con{10, rest}}, Spec.W{Spec.MField{h, FLl(f)}, o, s1}),
+    gather.field(FLl(f), Con{13, Con{10, rest}}, h, Nil{}, o, s, pl)) :
+    {_ == Spec.walk(rest, Spec.W{Spec.MField{h2, Nil{}}, o, Spec.snoc(Spec.snoc(s1, 13), 10)}) : Spec.W}
+  %Equal.sym(Spec.FLine, Spec.field.view(FLl(f)), Spec.FVal{val}, hv) :
+    {Spec.walk(rest, Spec.next(Spec.field.cr(h, _, o, Spec.snoc(s1, 13)), 10)) ==
+      Spec.walk(rest, Spec.W{Spec.MField{h2, Nil{}}, o, Spec.snoc(Spec.snoc(s1, 13), 10)}) : Spec.W}
+  %Equal.sym(Maybe<&2, Spec.Head>, Spec.field.done(h, val), Some{h2}, hd) :
+    {Spec.walk(rest, Spec.next(Spec.field.next(_, o, Spec.snoc(s1, 13)), 10)) ==
+      Spec.walk(rest, Spec.W{Spec.MField{h2, Nil{}}, o, Spec.snoc(Spec.snoc(s1, 13), 10)}) : Spec.W}
+  {==}
+
+def is.other.eq(f: Eng.Fld, h: {X.is.other(f) == True{} : Bool}) -> {f == Eng.FOther{} : Eng.Fld}:
+  match f:
+    case Eng.FTe{}:
+      no({Eng.FTe{} == Eng.FOther{} : Eng.Fld}, h)
+    case Eng.FCl{}:
+      no({Eng.FCl{} == Eng.FOther{} : Eng.Fld}, h)
+    case Eng.FConn{}:
+      no({Eng.FConn{} == Eng.FOther{} : Eng.Fld}, h)
+    case Eng.FUp{}:
+      no({Eng.FUp{} == Eng.FOther{} : Eng.Fld}, h)
+    case Eng.FKey{}:
+      no({Eng.FKey{} == Eng.FOther{} : Eng.Fld}, h)
+    case Eng.FHost{}:
+      no({Eng.FHost{} == Eng.FOther{} : Eng.Fld}, h)
+    case Eng.FVer{}:
+      no({Eng.FVer{} == Eng.FOther{} : Eng.Fld}, h)
+    case Eng.FOther{}:
+      {==}
+
+# a name no framing reads, by spec.bend's lookup
+def name.other(+n: Bytes(), hc: {X.is.other(Eng.fld.of(Eng.lows(n))) == True{} : Bool}) ->
+  {Spec.field(Spec.lows(Bytes.from_list(Bytes.to_list(n)))) == Eng.FOther{} : Eng.Fld}:
+  Equal.trans(Eng.Fld, Spec.field(Spec.lows(Bytes.from_list(Bytes.to_list(n)))), Spec.field(Spec.lows(n)), Eng.FOther{},
+    Equal.cong(Bytes(), Eng.Fld, x => Spec.field(Spec.lows(x)), Bytes.from_list(Bytes.to_list(n)), n, bytes.rt(n)),
+    Equal.trans(Eng.Fld, Spec.field(Spec.lows(n)), Spec.field(Eng.lows(n)), Eng.FOther{},
+      Equal.cong(Bytes(), Eng.Fld, x => Spec.field(x), Spec.lows(n), Eng.lows(n), EP.br.lows(n)),
+      Equal.trans(Eng.Fld, Spec.field(Eng.lows(n)), Eng.fld.of(Eng.lows(n)), Eng.FOther{},
+        Equal.sym(Eng.Fld, Eng.fld.of(Eng.lows(n)), Spec.field(Eng.lows(n)), EL.field_by_bytes(Eng.lows(n))),
+        is.other.eq(Eng.fld.of(Eng.lows(n)), hc))))
+
+# an end-to-end field's line reads as one no framing reads
+def view.other.at(n: Bytes(), +v: Bytes(), hn: {X.full(n) == True{} : Bool}, an: AA(Spec.TName{}, Bytes.to_list(n)),
+  fo: {Spec.field(Spec.lows(Bytes.from_list(Bytes.to_list(n)))) == Eng.FOther{} : Eng.Fld},
+  av: AA(Spec.TVal{}, Bytes.to_list(v))) ->
+  {Spec.field.view(FLl(X.Field{n, v})) == Spec.FVal{Spec.VSkip{}} : Spec.FLine}:
+  match n:
+    case SNil{}:
+      no({Spec.field.view(FLl(X.Field{SNil{}, v})) == Spec.FVal{Spec.VSkip{}} : Spec.FLine}, hn)
+    case SCon{Chr{+n0}, +nr}:
+      %Equal.sym(Spec.Span, Spec.span(Spec.TName{}, List.append(&2, U32, Con{n0, Bytes.to_list(nr)}, Con{58, Con{32, Bytes.to_list(v)}})),
+        Spec.Span{Con{n0, Bytes.to_list(nr)}, Spec.SAt{Spec.cls(58), 58, Con{32, Bytes.to_list(v)}}},
+        span.to(Spec.TName{}, Con{n0, Bytes.to_list(nr)}, 58, Con{32, Bytes.to_list(v)}, an, {==})) :
+        {Spec.field.name(_) == Spec.FVal{Spec.VSkip{}} : Spec.FLine}
+      %Equal.sym(Eng.Fld, Spec.field(Spec.lows(Bytes.from_list(Con{n0, Bytes.to_list(nr)}))), Eng.FOther{}, fo) :
+        {Spec.field.of(_, Con{32, Bytes.to_list(v)}) == Spec.FVal{Spec.VSkip{}} : Spec.FLine}
+      %Equal.sym(Spec.Span, Spec.span(Spec.TVal{}, Bytes.to_list(v)), Spec.Span{Bytes.to_list(v), Spec.SEnd{}},
+        span.all(Spec.TVal{}, Bytes.to_list(v), av)) :
+        {Spec.skip.view(Spec.VSkip{}, Spec.span.push(32, _)) == Spec.FVal{Spec.VSkip{}} : Spec.FLine}
+      {==}
+
+def view.other(+n: Bytes(), +v: Bytes(), hn: {X.full(n) == True{} : Bool}, +ht: {X.ok.all(Spec.TName{}, n) == True{} : Bool},
+  hc: {X.is.other(Eng.fld.of(Eng.lows(n))) == True{} : Bool}, +hv: {X.ok.all(Spec.TVal{}, v) == True{} : Bool}) ->
+  {Spec.field.view(FLl(X.Field{n, v})) == Spec.FVal{Spec.VSkip{}} : Spec.FLine}:
+  view.other.at(n, v, hn, aa.of(Spec.TName{}, n, ht), name.other(n, hc), aa.of(Spec.TVal{}, v, hv))
+
+def pl.other(+n: Bytes(), +v: Bytes(), +ht: {X.ok.all(Spec.TName{}, n) == True{} : Bool},
+  +hv: {X.ok.all(Spec.TVal{}, v) == True{} : Bool}) -> PL(FLl(X.Field{n, v})):
+  pl.app(Bytes.to_list(n), Con{58, Con{32, Bytes.to_list(v)}}, aa.pl(Spec.TName{}, Bytes.to_list(n), aa.of(Spec.TName{}, n, ht)),
+    ({==}, ({==}, aa.pl(Spec.TVal{}, Bytes.to_list(v), aa.of(Spec.TVal{}, v, hv)))))
+
+# the Host line
+def view.host(+hv: Bytes(), +hh: {X.ok.all(Spec.TVal{}, hv) == True{} : Bool}) ->
+  {Spec.field.view(FLl(X.Field{"host", hv})) == Spec.FVal{Spec.VHost{}} : Spec.FLine}:
+  %Equal.sym(Spec.Span, Spec.span(Spec.TVal{}, Bytes.to_list(hv)), Spec.Span{Bytes.to_list(hv), Spec.SEnd{}},
+    span.all(Spec.TVal{}, Bytes.to_list(hv), aa.of(Spec.TVal{}, hv, hh))) :
+    {Spec.skip.view(Spec.VHost{}, Spec.span.push(32, _)) == Spec.FVal{Spec.VHost{}} : Spec.FLine}
+  {==}
+
+def pl.host(+hv: Bytes(), +hh: {X.ok.all(Spec.TVal{}, hv) == True{} : Bool}) -> PL(FLl(X.Field{"host", hv})):
+  ({==}, ({==}, ({==}, ({==}, ({==}, ({==}, aa.pl(Spec.TVal{}, Bytes.to_list(hv), aa.of(Spec.TVal{}, hv, hh))))))))
+
+# the Content-Length line: read as its value is
+def view.cl(+d: Bytes()) ->
+  {Spec.field.view(FLl(X.Field{"content-length", d})) == Spec.len.view(Spec.span(Spec.TOws{}, Con{32, Bytes.to_list(d)})) :
+    Spec.FLine}:
+  {==}
+
+def pl.cl(+d: Bytes(), +hd: {X.ok.all(Spec.TVal{}, d) == True{} : Bool}) -> PL(FLl(X.Field{"content-length", d})):
+  ({==}, ({==}, ({==}, ({==}, ({==}, ({==}, ({==}, ({==}, ({==}, ({==}, ({==}, ({==}, ({==}, ({==}, ({==}, ({==}, 
+    aa.pl(Spec.TVal{}, Bytes.to_list(d), aa.of(Spec.TVal{}, d, hd))))))))))))))))))
+
+# The fields in the middle
+# ------------------------
+
+def SF(fs: List<&2, X.Field>, s: List<&2, U32>) -> List<&2, U32>:
+  match fs:
+    case Nil{}:
+      s
+    case Con{f, t}:
+      SF(t, Spec.snoc(Spec.snoc(List.append(&2, U32, s, FLl(f)), 13), 10))
+
+def split4(a: Bool, b: Bool, c: Bool, -d: Bool, h: {(a && b && c && d) == True{} : Bool}) ->
+  {a == True{} : Bool} & {b == True{} : Bool} & {c == True{} : Bool} & {d == True{} : Bool}:
+  match a b c:
+    case True{} True{} True{}:
+      ({==}, ({==}, ({==}, h)))
+    case False{} _ _:
+      no({False{} == True{} : Bool} & {b == True{} : Bool} & {c == True{} : Bool} & {d == True{} : Bool}, h)
+    case True{} False{} _:
+      no({True{} == True{} : Bool} & {False{} == True{} : Bool} & {c == True{} : Bool} & {d == True{} : Bool}, h)
+    case True{} True{} False{}:
+      no({True{} == True{} : Bool} & {True{} == True{} : Bool} & {False{} == True{} : Bool} & {d == True{} : Bool}, h)
+
+def ok.field.split(+n: Bytes(), +v: Bytes(), h: {X.ok.field(X.Field{n, v}) == True{} : Bool}) ->
+  {X.full(n) == True{} : Bool} & {X.ok.all(Spec.TName{}, n) == True{} : Bool} &
+    {X.is.other(Eng.fld.of(Eng.lows(n))) == True{} : Bool} & {X.ok.all(Spec.TVal{}, v) == True{} : Bool}:
+  split4(X.full(n), X.ok.all(Spec.TName{}, n), X.is.other(Eng.fld.of(Eng.lows(n))), X.ok.all(Spec.TVal{}, v), h)
+
+def line.other(+n: Bytes(), +v: Bytes(), +rest: List<&2, U32>, +h: Spec.Head, +o: List<&2, Eng.Req>, +s: List<&2, U32>,
+  hn: {X.full(n) == True{} : Bool}, +ht: {X.ok.all(Spec.TName{}, n) == True{} : Bool},
+  hc: {X.is.other(Eng.fld.of(Eng.lows(n))) == True{} : Bool}, +hv: {X.ok.all(Spec.TVal{}, v) == True{} : Bool}) ->
+  {Spec.walk(List.append(&2, U32, FLl(X.Field{n, v}), Con{13, Con{10, rest}}), Spec.W{Spec.MField{h, Nil{}}, o, s}) ==
+    Spec.walk(rest, Spec.W{Spec.MField{h, Nil{}}, o, Spec.snoc(Spec.snoc(List.append(&2, U32, s, FLl(X.Field{n, v})), 13), 10)}) :
+    Spec.W}:
+  line.field(X.Field{n, v}, rest, h, h, o, s, Spec.VSkip{}, pl.other(n, v, ht, hv), view.other(n, v, hn, ht, hc, hv), {==})
+
+def line.other4(+n: Bytes(), +v: Bytes(), +rest: List<&2, U32>, +h: Spec.Head, +o: List<&2, Eng.Req>, +s: List<&2, U32>,
+  fk: {X.full(n) == True{} : Bool} & {X.ok.all(Spec.TName{}, n) == True{} : Bool} &
+    {X.is.other(Eng.fld.of(Eng.lows(n))) == True{} : Bool} & {X.ok.all(Spec.TVal{}, v) == True{} : Bool}) ->
+  {Spec.walk(List.append(&2, U32, FLl(X.Field{n, v}), Con{13, Con{10, rest}}), Spec.W{Spec.MField{h, Nil{}}, o, s}) ==
+    Spec.walk(rest, Spec.W{Spec.MField{h, Nil{}}, o, Spec.snoc(Spec.snoc(List.append(&2, U32, s, FLl(X.Field{n, v})), 13), 10)}) :
+    Spec.W}:
+  (hn, r1) = fk
+  (ht, r2) = r1
+  (hc, hv) = r2
+  line.other(n, v, rest, h, o, s, hn, ht, hc, hv)
+
+# LEMMA: the end-to-end fields are read and leave the head as it was
+def fields.con(+n: Bytes(), +v: Bytes(), +t: List<&2, X.Field>, +rest: List<&2, U32>, +h: Spec.Head, +o: List<&2, Eng.Req>,
+  +s: List<&2, U32>, hh: {X.ok.field(X.Field{n, v}) == True{} : Bool} & {X.ok.fields(t) == True{} : Bool},
+  ih: @+s2: List<&2, U32> -> {X.ok.fields(t) == True{} : Bool} ->
+    {Spec.walk(List.append(&2, U32, FLSl(t), rest), Spec.W{Spec.MField{h, Nil{}}, o, s2}) ==
+      Spec.walk(rest, Spec.W{Spec.MField{h, Nil{}}, o, SF(t, s2)}) : Spec.W}) ->
+  {Spec.walk(List.append(&2, U32, FLSl(Con{X.Field{n, v}, t}), rest), Spec.W{Spec.MField{h, Nil{}}, o, s}) ==
+    Spec.walk(rest, Spec.W{Spec.MField{h, Nil{}}, o, SF(Con{X.Field{n, v}, t}, s)}) : Spec.W}:
+  (h1, h2) = hh
+  +s1 = Spec.snoc(Spec.snoc(List.append(&2, U32, s, FLl(X.Field{n, v})), 13), 10)
+  %Equal.sym(List<&2, U32>,
+    List.append(&2, U32, List.append(&2, U32, FLl(X.Field{n, v}), Con{13, Con{10, FLSl(t)}}), rest),
+    List.append(&2, U32, FLl(X.Field{n, v}), Con{13, Con{10, List.append(&2, U32, FLSl(t), rest)}}),
+    app.assoc(U32, FLl(X.Field{n, v}), Con{13, Con{10, FLSl(t)}}, rest)) :
+    {Spec.walk(_, Spec.W{Spec.MField{h, Nil{}}, o, s}) == Spec.walk(rest, Spec.W{Spec.MField{h, Nil{}}, o, SF(t, s1)}) : Spec.W}
+  Equal.trans(Spec.W,
+    Spec.walk(List.append(&2, U32, FLl(X.Field{n, v}), Con{13, Con{10, List.append(&2, U32, FLSl(t), rest)}}),
+      Spec.W{Spec.MField{h, Nil{}}, o, s}),
+    Spec.walk(List.append(&2, U32, FLSl(t), rest), Spec.W{Spec.MField{h, Nil{}}, o, s1}),
+    Spec.walk(rest, Spec.W{Spec.MField{h, Nil{}}, o, SF(t, s1)}),
+    line.other4(n, v, List.append(&2, U32, FLSl(t), rest), h, o, s, ok.field.split(n, v, h1)),
+    ih(s1, h2))
+
+# The body
+# --------
+
+def fields.walk(fs: List<&2, X.Field>, +rest: List<&2, U32>, +h: Spec.Head, +o: List<&2, Eng.Req>, +s: List<&2, U32>,
+  hok: {X.ok.fields(fs) == True{} : Bool}) ->
+  {Spec.walk(List.append(&2, U32, FLSl(fs), rest), Spec.W{Spec.MField{h, Nil{}}, o, s}) ==
+    Spec.walk(rest, Spec.W{Spec.MField{h, Nil{}}, o, SF(fs, s)}) : Spec.W}:
+  match fs:
+    case Nil{}:
+      {==}
+    case Con{f, +t}:
+      match f:
+        case X.Field{+n, +v}:
+          fields.con(n, v, t, rest, h, o, s, and.split(X.ok.field(X.Field{n, v}), X.ok.fields(t), hok),
+            s2 => h2 => fields.walk(t, rest, h, o, s2, h2))
+
+# LEMMA: a body of known length is counted off to its last byte, and the
+# request goes out with it
+def body.walk(t: Bytes(), +c: U32, +h: Spec.Head, +got: List<&2, U32>, +o: List<&2, Eng.Req>, +s: List<&2, U32>) ->
+  {Spec.walk(Con{c, Bytes.to_list(t)}, Spec.W{Spec.MBody{h, Bytes.len(t), got}, o, s}) ==
+    Spec.emit(h, List.append(&2, U32, got, Con{c, Bytes.to_list(t)}), o) : Spec.W}:
+  match t:
+    case SNil{}:
+      {==}
+    case SCon{Chr{+c2}, +t2}:
+      %Equal.sym(Nat, Bytes.len(SCon{Chr{c2}, t2}), 1n+Bytes.len(t2), Bytes.len.shift(t2, 0n)) :
+        {Spec.walk(Con{c, Con{c2, Bytes.to_list(t2)}}, Spec.W{Spec.MBody{h, _, got}, o, s}) ==
+          Spec.emit(h, List.append(&2, U32, got, Con{c, Con{c2, Bytes.to_list(t2)}}), o) : Spec.W}
+      %snoc.app(got, c, Con{c2, Bytes.to_list(t2)}) :
+        {Spec.walk(Con{c2, Bytes.to_list(t2)}, Spec.W{Spec.MBody{h, Bytes.len(t2), Spec.snoc(got, c)}, o, Spec.snoc(s, c)}) ==
+          Spec.emit(h, _, o) : Spec.W}
+      body.walk(t2, c2, h, Spec.snoc(got, c), o, Spec.snoc(s, c))
+
+# The head's end, and the body after it
+# -------------------------------------
+
+def nat.eq(a: Nat, b: Nat, h: {Nat.is_eq(a, b) == True{} : Bool}) -> {a == b : Nat}:
+  match a b:
+    case 0n 0n:
+      {==}
+    case 0n 1n+q:
+      no({0n == 1n+q : Nat}, h)
+    case 1n+p 0n:
+      no({1n+p == 0n : Nat}, h)
+    case 1n+p 1n+q:
+      Equal.cong(Nat, Nat, x => 1n+x, p, q, nat.eq(p, q, h))
+
+# the request spec.bend reads, from the bytes the proxy sent
+def RQ(+meth: Bytes(), +target: Bytes(), +body: Bytes()) -> Eng.Req:
+  Eng.Req{Spec.method(meth), target, body, False{}, False{}, ""}
+
+def rq.rt(+meth: Bytes(), +target: Bytes(), +body: Bytes()) ->
+  {Eng.Req{Spec.method(Bytes.from_list(Bytes.to_list(meth))), Bytes.from_list(Bytes.to_list(target)),
+    Bytes.from_list(Bytes.to_list(body)), False{}, False{}, ""} == RQ(meth, target, body) : Eng.Req}:
+  %Equal.sym(Bytes(), Bytes.from_list(Bytes.to_list(meth)), meth, bytes.rt(meth)) : {Eng.Req{Spec.method(_), Bytes.from_list(Bytes.to_list(target)),
+    Bytes.from_list(Bytes.to_list(body)), False{}, False{}, ""} == RQ(meth, target, body) : Eng.Req}
+  %Equal.sym(Bytes(), Bytes.from_list(Bytes.to_list(target)), target, bytes.rt(target)) : {Eng.Req{Spec.method(meth), _, Bytes.from_list(Bytes.to_list(body)), False{}, False{}, ""} ==
+    RQ(meth, target, body) : Eng.Req}
+  %Equal.sym(Bytes(), Bytes.from_list(Bytes.to_list(body)), body, bytes.rt(body)) : {Eng.Req{Spec.method(meth), target, _, False{}, False{}, ""} == RQ(meth, target, body) : Eng.Req}
+  {==}
+
+def H1(+meth: Bytes(), +target: Bytes()) -> Spec.Head:
+  Spec.head.host(Spec.head.new(Bytes.to_list(meth), Bytes.to_list(target), False{}))
+
+def H2(+meth: Bytes(), +target: Bytes(), +n: U32) -> Spec.Head:
+  Spec.Head{Spec.method(Bytes.from_list(Bytes.to_list(meth))), Bytes.to_list(target), Some{n}, False{}, 1n, Nil{}, False{},
+    False{}, False{}, Eng.Fx{False{}, False{}, False{}}}
+
+def W.done(+meth: Bytes(), +target: Bytes(), +body: Bytes(), o: List<&2, Eng.Req>) -> Spec.W:
+  Spec.W{Spec.MReq{Nil{}}, Con{RQ(meth, target, body), o}, Nil{}}
+
+# no length: the head ends the request, whose body is empty
+def tail.none(+meth: Bytes(), +target: Bytes(), body: Bytes(), +o: List<&2, Eng.Req>, +s: List<&2, U32>,
+  hb: {String.is_empty(body) == True{} : Bool}) ->
+  {Spec.walk(Con{13, Con{10, Bytes.to_list(body)}}, Spec.W{Spec.MField{H1(meth, target), Nil{}}, o, s}) ==
+    W.done(meth, target, body, o) : Spec.W}:
+  match body:
+    case SNil{}:
+      Equal.cong(Eng.Req, Spec.W, r => Spec.W{Spec.MReq{Nil{}}, Con{r, o}, Nil{}},
+        Eng.Req{Spec.method(Bytes.from_list(Bytes.to_list(meth))), Bytes.from_list(Bytes.to_list(target)),
+          Bytes.from_list(Bytes.to_list("")), False{}, False{}, ""}, RQ(meth, target, ""), rq.rt(meth, target, ""))
+    case SCon{c, t}:
+      no({Spec.walk(Con{13, Con{10, Bytes.to_list(SCon{c, t})}}, Spec.W{Spec.MField{H1(meth, target), Nil{}}, o, s}) ==
+        W.done(meth, target, SCon{c, t}, o) : Spec.W}, hb)
+
+def sub0(x: Nat) -> {Nat.sub(x, 0n) == x : Nat}:
+  match x:
+    case 0n:
+      {==}
+    case 1n+p:
+      {==}
+
+def tail.z(z: Bool, +meth: Bytes(), +target: Bytes(), body: Bytes(), +n: U32, +o: List<&2, Eng.Req>, +s: List<&2, U32>,
+  hz: {X.same(z, String.is_empty(body)) == True{} : Bool}, hn: {Nat.is_eq(U32.to_nat(n), Bytes.len(body)) == True{} : Bool}) ->
+  {Spec.walk(Bytes.to_list(body), Spec.head.body(z, n, H2(meth, target, n), o, s)) == W.done(meth, target, body, o) : Spec.W}:
+  match z body:
+    case True{} SNil{}:
+      Equal.cong(Eng.Req, Spec.W, r => Spec.W{Spec.MReq{Nil{}}, Con{r, o}, Nil{}},
+        Eng.Req{Spec.method(Bytes.from_list(Bytes.to_list(meth))), Bytes.from_list(Bytes.to_list(target)),
+          Bytes.from_list(Bytes.to_list("")), False{}, False{}, ""}, RQ(meth, target, ""), rq.rt(meth, target, ""))
+    case True{} SCon{c, t}:
+      no({Spec.walk(Bytes.to_list(SCon{c, t}), Spec.head.body(True{}, n, H2(meth, target, n), o, s)) ==
+        W.done(meth, target, SCon{c, t}, o) : Spec.W}, hz)
+    case False{} SNil{}:
+      no({Spec.walk(Nil{}, Spec.head.body(False{}, n, H2(meth, target, n), o, s)) == W.done(meth, target, SNil{}, o) : Spec.W}, hz)
+    case False{} SCon{Chr{+c}, +t}:
+      %Equal.sym(Nat, U32.to_nat(n), Bytes.len(SCon{Chr{c}, t}), nat.eq(U32.to_nat(n), Bytes.len(SCon{Chr{c}, t}), hn)) :
+        {Spec.walk(Con{c, Bytes.to_list(t)}, Spec.W{Spec.MBody{H2(meth, target, n), Nat.sub(_, 1n), Nil{}}, o, s}) ==
+          W.done(meth, target, SCon{Chr{c}, t}, o) : Spec.W}
+      %Equal.sym(Nat, Bytes.len(SCon{Chr{c}, t}), 1n+Bytes.len(t), Bytes.len.shift(t, 0n)) :
+        {Spec.walk(Con{c, Bytes.to_list(t)}, Spec.W{Spec.MBody{H2(meth, target, n), Nat.sub(_, 1n), Nil{}}, o, s}) ==
+          W.done(meth, target, SCon{Chr{c}, t}, o) : Spec.W}
+      %Equal.sym(Nat, Nat.sub(Bytes.len(t), 0n), Bytes.len(t), sub0(Bytes.len(t))) :
+        {Spec.walk(Con{c, Bytes.to_list(t)}, Spec.W{Spec.MBody{H2(meth, target, n), _, Nil{}}, o, s}) ==
+          W.done(meth, target, SCon{Chr{c}, t}, o) : Spec.W}
+      Equal.trans(Spec.W, Spec.walk(Con{c, Bytes.to_list(t)}, Spec.W{Spec.MBody{H2(meth, target, n), Bytes.len(t), Nil{}}, o, s}),
+        Spec.emit(H2(meth, target, n), Con{c, Bytes.to_list(t)}, o), W.done(meth, target, SCon{Chr{c}, t}, o),
+        body.walk(t, c, H2(meth, target, n), Nil{}, o, s),
+        Equal.cong(Eng.Req, Spec.W, r => Spec.W{Spec.MReq{Nil{}}, Con{r, o}, Nil{}},
+          Eng.Req{Spec.method(Bytes.from_list(Bytes.to_list(meth))), Bytes.from_list(Bytes.to_list(target)),
+            Bytes.from_list(Bytes.to_list(SCon{Chr{c}, t})), False{}, False{}, ""},
+          RQ(meth, target, SCon{Chr{c}, t}), rq.rt(meth, target, SCon{Chr{c}, t})))
+
+# a length: the body counted off by it
+def tail.len(+meth: Bytes(), +target: Bytes(), +body: Bytes(), +n: U32, +o: List<&2, Eng.Req>, +s: List<&2, U32>,
+  hz: {X.same(U32.is_zero(n), String.is_empty(body)) == True{} : Bool},
+  hn: {Nat.is_eq(U32.to_nat(n), Bytes.len(body)) == True{} : Bool}) ->
+  {Spec.walk(Con{13, Con{10, Bytes.to_list(body)}}, Spec.W{Spec.MField{H2(meth, target, n), Nil{}}, o, s}) ==
+    W.done(meth, target, body, o) : Spec.W}:
+  tail.z(U32.is_zero(n), meth, target, body, n, o, Spec.snoc(Spec.snoc(s, 13), 10), hz, hn)
+
+# A request, read back whole
+# --------------------------
+
+def T7(a: Bool, b: Bool, c: Bool, d: Bool, e: Bool, f: Bool, g: Bool) -> Type:
+  {a == True{} : Bool} & {b == True{} : Bool} & {c == True{} : Bool} & {d == True{} : Bool} & {e == True{} : Bool} &
+    {f == True{} : Bool} & {g == True{} : Bool}
+
+def split7(a: Bool, b: Bool, c: Bool, d: Bool, e: Bool, f: Bool, -g: Bool,
+  h: {(a && b && c && d && e && f && g) == True{} : Bool}) -> T7(a, b, c, d, e, f, g):
+  match a:
+    case False{}:
+      no(T7(False{}, b, c, d, e, f, g), h)
+    case True{}:
+      match b:
+        case False{}:
+          no(T7(True{}, False{}, c, d, e, f, g), h)
+        case True{}:
+          match c:
+            case False{}:
+              no(T7(True{}, True{}, False{}, d, e, f, g), h)
+            case True{}:
+              match d:
+                case False{}:
+                  no(T7(True{}, True{}, True{}, False{}, e, f, g), h)
+                case True{}:
+                  match e:
+                    case False{}:
+                      no(T7(True{}, True{}, True{}, True{}, False{}, f, g), h)
+                    case True{}:
+                      match f:
+                        case False{}:
+                          no(T7(True{}, True{}, True{}, True{}, True{}, False{}, g), h)
+                        case True{}:
+                          ({==}, ({==}, ({==}, ({==}, ({==}, ({==}, h))))))
+
+def E.tail(body: Bytes()) -> List<&2, U32>:
+  Con{13, Con{10, Bytes.to_list(body)}}
+
+def mw.cl.len(+meth: Bytes(), +target: Bytes(), +body: Bytes(), +d: Bytes(), +n: U32, +ws: Bool, +o: List<&2, Eng.Req>,
+  +s: List<&2, U32>, +ad: {X.ok.all(Spec.TVal{}, d) == True{} : Bool},
+  hlv: {Spec.len.view(Spec.span(Spec.TOws{}, Con{32, Bytes.to_list(d)})) == Spec.FVal{Spec.VLen{n, ws}} : Spec.FLine},
+  hk: {X.same(U32.is_zero(n), String.is_empty(body)) == True{} : Bool} &
+    {Nat.is_eq(U32.to_nat(n), Bytes.len(body)) == True{} : Bool}) ->
+  {Spec.walk(List.append(&2, U32, FLl(X.Field{"content-length", d}), Con{13, Con{10, E.tail(body)}}),
+    Spec.W{Spec.MField{H1(meth, target), Nil{}}, o, s}) == W.done(meth, target, body, o) : Spec.W}:
+  (hz, hn) = hk
+  Equal.trans(Spec.W,
+    Spec.walk(List.append(&2, U32, FLl(X.Field{"content-length", d}), Con{13, Con{10, E.tail(body)}}),
+      Spec.W{Spec.MField{H1(meth, target), Nil{}}, o, s}),
+    Spec.walk(E.tail(body), Spec.W{Spec.MField{H2(meth, target, n), Nil{}}, o,
+      Spec.snoc(Spec.snoc(List.append(&2, U32, s, FLl(X.Field{"content-length", d})), 13), 10)}),
+    W.done(meth, target, body, o),
+    line.field(X.Field{"content-length", d}, E.tail(body), H1(meth, target), H2(meth, target, n), o, s, Spec.VLen{n, ws},
+      pl.cl(d, ad),
+      Equal.trans(Spec.FLine, Spec.field.view(FLl(X.Field{"content-length", d})),
+        Spec.len.view(Spec.span(Spec.TOws{}, Con{32, Bytes.to_list(d)})), Spec.FVal{Spec.VLen{n, ws}}, view.cl(d), hlv),
+      {==}),
+    tail.len(meth, target, body, n, o, Spec.snoc(Spec.snoc(List.append(&2, U32, s, FLl(X.Field{"content-length", d})), 13), 10),
+      hz, hn))
+
+def mw.cl.val(val: Spec.Val, +meth: Bytes(), +target: Bytes(), +body: Bytes(), +d: Bytes(), +o: List<&2, Eng.Req>,
+  +s: List<&2, U32>, +ad: {X.ok.all(Spec.TVal{}, d) == True{} : Bool},
+  hlv: {Spec.len.view(Spec.span(Spec.TOws{}, Con{32, Bytes.to_list(d)})) == Spec.FVal{val} : Spec.FLine},
+  ak: {X.ok.len.at(Spec.FVal{val}, body) == True{} : Bool}) ->
+  {Spec.walk(List.append(&2, U32, FLl(X.Field{"content-length", d}), Con{13, Con{10, E.tail(body)}}),
+    Spec.W{Spec.MField{H1(meth, target), Nil{}}, o, s}) == W.done(meth, target, body, o) : Spec.W}:
+  match val:
+    case Spec.VLen{+n, +ws}:
+      mw.cl.len(meth, target, body, d, n, ws, o, s, ad, hlv,
+        and.split(X.same(U32.is_zero(n), String.is_empty(body)), Nat.is_eq(U32.to_nat(n), Bytes.len(body)), ak))
+    case Spec.VLen0{}:
+      no({Spec.walk(List.append(&2, U32, FLl(X.Field{"content-length", d}), Con{13, Con{10, E.tail(body)}}),
+        Spec.W{Spec.MField{H1(meth, target), Nil{}}, o, s}) == W.done(meth, target, body, o) : Spec.W}, ak)
+    case Spec.VConn{dn, cu}:
+      no({Spec.walk(List.append(&2, U32, FLl(X.Field{"content-length", d}), Con{13, Con{10, E.tail(body)}}),
+        Spec.W{Spec.MField{H1(meth, target), Nil{}}, o, s}) == W.done(meth, target, body, o) : Spec.W}, ak)
+    case Spec.VUp{dn, cu}:
+      no({Spec.walk(List.append(&2, U32, FLl(X.Field{"content-length", d}), Con{13, Con{10, E.tail(body)}}),
+        Spec.W{Spec.MField{H1(meth, target), Nil{}}, o, s}) == W.done(meth, target, body, o) : Spec.W}, ak)
+    case Spec.VKey0{}:
+      no({Spec.walk(List.append(&2, U32, FLl(X.Field{"content-length", d}), Con{13, Con{10, E.tail(body)}}),
+        Spec.W{Spec.MField{H1(meth, target), Nil{}}, o, s}) == W.done(meth, target, body, o) : Spec.W}, ak)
+    case Spec.VKey{k}:
+      no({Spec.walk(List.append(&2, U32, FLl(X.Field{"content-length", d}), Con{13, Con{10, E.tail(body)}}),
+        Spec.W{Spec.MField{H1(meth, target), Nil{}}, o, s}) == W.done(meth, target, body, o) : Spec.W}, ak)
+    case Spec.VVer{v}:
+      no({Spec.walk(List.append(&2, U32, FLl(X.Field{"content-length", d}), Con{13, Con{10, E.tail(body)}}),
+        Spec.W{Spec.MField{H1(meth, target), Nil{}}, o, s}) == W.done(meth, target, body, o) : Spec.W}, ak)
+    case Spec.VTe0{}:
+      no({Spec.walk(List.append(&2, U32, FLl(X.Field{"content-length", d}), Con{13, Con{10, E.tail(body)}}),
+        Spec.W{Spec.MField{H1(meth, target), Nil{}}, o, s}) == W.done(meth, target, body, o) : Spec.W}, ak)
+    case Spec.VTe{t}:
+      no({Spec.walk(List.append(&2, U32, FLl(X.Field{"content-length", d}), Con{13, Con{10, E.tail(body)}}),
+        Spec.W{Spec.MField{H1(meth, target), Nil{}}, o, s}) == W.done(meth, target, body, o) : Spec.W}, ak)
+    case Spec.VHost{}:
+      no({Spec.walk(List.append(&2, U32, FLl(X.Field{"content-length", d}), Con{13, Con{10, E.tail(body)}}),
+        Spec.W{Spec.MField{H1(meth, target), Nil{}}, o, s}) == W.done(meth, target, body, o) : Spec.W}, ak)
+    case Spec.VSkip{}:
+      no({Spec.walk(List.append(&2, U32, FLl(X.Field{"content-length", d}), Con{13, Con{10, E.tail(body)}}),
+        Spec.W{Spec.MField{H1(meth, target), Nil{}}, o, s}) == W.done(meth, target, body, o) : Spec.W}, ak)
+
+def mw.cl.view(lv: Spec.FLine, +meth: Bytes(), +target: Bytes(), +body: Bytes(), +d: Bytes(), +o: List<&2, Eng.Req>,
+  +s: List<&2, U32>, +ad: {X.ok.all(Spec.TVal{}, d) == True{} : Bool},
+  hlv: {Spec.len.view(Spec.span(Spec.TOws{}, Con{32, Bytes.to_list(d)})) == lv : Spec.FLine},
+  ak: {X.ok.len.at(lv, body) == True{} : Bool}) ->
+  {Spec.walk(List.append(&2, U32, FLl(X.Field{"content-length", d}), Con{13, Con{10, E.tail(body)}}),
+    Spec.W{Spec.MField{H1(meth, target), Nil{}}, o, s}) == W.done(meth, target, body, o) : Spec.W}:
+  match lv:
+    case Spec.FVal{val}:
+      mw.cl.val(val, meth, target, body, d, o, s, ad, hlv, ak)
+    case Spec.FEmpty{}:
+      no({Spec.walk(List.append(&2, U32, FLl(X.Field{"content-length", d}), Con{13, Con{10, E.tail(body)}}),
+        Spec.W{Spec.MField{H1(meth, target), Nil{}}, o, s}) == W.done(meth, target, body, o) : Spec.W}, ak)
+    case Spec.FName{nm}:
+      no({Spec.walk(List.append(&2, U32, FLl(X.Field{"content-length", d}), Con{13, Con{10, E.tail(body)}}),
+        Spec.W{Spec.MField{H1(meth, target), Nil{}}, o, s}) == W.done(meth, target, body, o) : Spec.W}, ak)
+    case Spec.FBad{}:
+      no({Spec.walk(List.append(&2, U32, FLl(X.Field{"content-length", d}), Con{13, Con{10, E.tail(body)}}),
+        Spec.W{Spec.MField{H1(meth, target), Nil{}}, o, s}) == W.done(meth, target, body, o) : Spec.W}, ak)
+
+def mw.cl(+meth: Bytes(), +target: Bytes(), +body: Bytes(), +o: List<&2, Eng.Req>, +s: List<&2, U32>,
+  al: {X.ok.all(Spec.TVal{}, Nat.show(Bytes.len(body))) == True{} : Bool} &
+    {X.ok.len.at(Spec.len.view(Spec.span(Spec.TOws{}, Con{32, Bytes.to_list(Nat.show(Bytes.len(body)))})), body) == True{} :
+      Bool}) ->
+  {Spec.walk(List.append(&2, U32, FLl(X.Field{"content-length", Nat.show(Bytes.len(body))}), Con{13, Con{10, E.tail(body)}}),
+    Spec.W{Spec.MField{H1(meth, target), Nil{}}, o, s}) == W.done(meth, target, body, o) : Spec.W}:
+  (ad, ak) = al
+  mw.cl.view(Spec.len.view(Spec.span(Spec.TOws{}, Con{32, Bytes.to_list(Nat.show(Bytes.len(body)))})), meth, target, body,
+    Nat.show(Bytes.len(body)), o, s, ad, {==}, ak)
+
+# the length, or none
+def mw.len(b: Bool, +meth: Bytes(), +target: Bytes(), +body: Bytes(), +o: List<&2, Eng.Req>, +s: List<&2, U32>,
+  al: {X.ok.len.on(b, body) == True{} : Bool}) ->
+  {Spec.walk(List.append(&2, U32, FLSl(X.clf.at(b, body)), E.tail(body)), Spec.W{Spec.MField{H1(meth, target), Nil{}}, o, s}) ==
+    W.done(meth, target, body, o) : Spec.W}:
+  match b:
+    case False{}:
+      tail.none(meth, target, body, o, s, al)
+    case True{}:
+      %Equal.sym(List<&2, U32>,
+        List.append(&2, U32, List.append(&2, U32, FLl(X.Field{"content-length", Nat.show(Bytes.len(body))}), Con{13, Con{10, Nil{}}}),
+          E.tail(body)),
+        List.append(&2, U32, FLl(X.Field{"content-length", Nat.show(Bytes.len(body))}), Con{13, Con{10, E.tail(body)}}),
+        app.assoc(U32, FLl(X.Field{"content-length", Nat.show(Bytes.len(body))}), Con{13, Con{10, Nil{}}}, E.tail(body))) :
+        {Spec.walk(_, Spec.W{Spec.MField{H1(meth, target), Nil{}}, o, s}) == W.done(meth, target, body, o) : Spec.W}
+      mw.cl(meth, target, body, o, s,
+        and.split(X.ok.all(Spec.TVal{}, Nat.show(Bytes.len(body))),
+          X.ok.len.at(Spec.len.view(Spec.span(Spec.TOws{}, Con{32, Bytes.to_list(Nat.show(Bytes.len(body)))})), body), al))
+
+def WF(+h: Spec.Head, +o: List<&2, Eng.Req>, +s: List<&2, U32>) -> Spec.W:
+  Spec.W{Spec.MField{h, Nil{}}, o, s}
+
+# LEMMA: a request the proxy checked, sent, is read back as itself: its
+# line, its Host, the end-to-end fields that change nothing, its length
+# and its body, and the walk is back where a request begins
+def mw.at(+meth: Bytes(), +target: Bytes(), +host: Bytes(), +fs: List<&2, X.Field>, +body: Bytes(), +framed: Bool,
+  +o: List<&2, Eng.Req>, +s: List<&2, U32>,
+  v: T7(X.full(meth), X.ok.all(Spec.TMeth{}, meth), X.full(target), X.ok.all(Spec.TTarget{}, target),
+    X.ok.all(Spec.TVal{}, host), X.ok.fields(fs), X.ok.len.on(X.clen.on(framed, body), body))) ->
+  {Spec.walk(SERl(X.Msg{meth, target, host, fs, body, framed}), Spec.W{Spec.MReq{Nil{}}, o, s}) ==
+    W.done(meth, target, body, o) : Spec.W}:
+  (nm, v1) = v
+  (hm, v2) = v1
+  (nt, v3) = v2
+  (ht, v4) = v3
+  (+hh, v5) = v4
+  (hfs, hl) = v5
+  +hf : X.Field = X.Field{"host", host}
+  +clf = X.clf.at(X.clen.on(framed, body), body)
+  +tl = E.tail(body)
+  +h0 = Spec.head.new(Bytes.to_list(meth), Bytes.to_list(target), False{})
+  +h1 = H1(meth, target)
+  +s1 = Spec.snoc(Spec.snoc(List.append(&2, U32, s, RLl(meth, target)), 13), 10)
+  +s2 = Spec.snoc(Spec.snoc(List.append(&2, U32, s1, FLl(hf)), 13), 10)
+  +r = List.append(&2, X.Field, fs, clf)
+  Equal.trans(Spec.W, Spec.walk(SERl(X.Msg{meth, target, host, fs, body, framed}), Spec.W{Spec.MReq{Nil{}}, o, s}),
+    Spec.walk(List.append(&2, U32, FLSl(Con{hf, r}), tl), WF(h0, o, s1)),
+    W.done(meth, target, body, o),
+    line.req(meth, target, List.append(&2, U32, FLSl(Con{hf, r}), tl), o, s, hm, ht, nm, nt),
+    Equal.trans(Spec.W, Spec.walk(List.append(&2, U32, FLSl(Con{hf, r}), tl), WF(h0, o, s1)),
+      Spec.walk(List.append(&2, U32, FLl(hf), Con{13, Con{10, List.append(&2, U32, FLSl(r), tl)}}), WF(h0, o, s1)),
+      W.done(meth, target, body, o),
+      Equal.cong(List<&2, U32>, Spec.W, xs => Spec.walk(xs, WF(h0, o, s1)),
+        List.append(&2, U32, List.append(&2, U32, FLl(hf), Con{13, Con{10, FLSl(r)}}), tl),
+        List.append(&2, U32, FLl(hf), Con{13, Con{10, List.append(&2, U32, FLSl(r), tl)}}),
+        app.assoc(U32, FLl(hf), Con{13, Con{10, FLSl(r)}}, tl)),
+      Equal.trans(Spec.W,
+        Spec.walk(List.append(&2, U32, FLl(hf), Con{13, Con{10, List.append(&2, U32, FLSl(r), tl)}}), WF(h0, o, s1)),
+        Spec.walk(List.append(&2, U32, FLSl(r), tl), WF(h1, o, s2)),
+        W.done(meth, target, body, o),
+        line.field(hf, List.append(&2, U32, FLSl(r), tl), h0, h1, o, s1, Spec.VHost{}, pl.host(host, hh),
+          view.host(host, hh), {==}),
+        Equal.trans(Spec.W, Spec.walk(List.append(&2, U32, FLSl(r), tl), WF(h1, o, s2)),
+          Spec.walk(List.append(&2, U32, FLSl(fs), List.append(&2, U32, FLSl(clf), tl)), WF(h1, o, s2)),
+          W.done(meth, target, body, o),
+          Equal.cong(List<&2, U32>, Spec.W, xs => Spec.walk(xs, WF(h1, o, s2)),
+            List.append(&2, U32, FLSl(r), tl), List.append(&2, U32, FLSl(fs), List.append(&2, U32, FLSl(clf), tl)),
+            Equal.trans(List<&2, U32>, List.append(&2, U32, FLSl(r), tl),
+              List.append(&2, U32, List.append(&2, U32, FLSl(fs), FLSl(clf)), tl),
+              List.append(&2, U32, FLSl(fs), List.append(&2, U32, FLSl(clf), tl)),
+              Equal.cong(List<&2, U32>, List<&2, U32>, xs => List.append(&2, U32, xs, tl), FLSl(r),
+                List.append(&2, U32, FLSl(fs), FLSl(clf)), fls.app(fs, clf)),
+              app.assoc(U32, FLSl(fs), FLSl(clf), tl))),
+          Equal.trans(Spec.W, Spec.walk(List.append(&2, U32, FLSl(fs), List.append(&2, U32, FLSl(clf), tl)), WF(h1, o, s2)),
+            Spec.walk(List.append(&2, U32, FLSl(clf), tl), WF(h1, o, SF(fs, s2))),
+            W.done(meth, target, body, o),
+            fields.walk(fs, List.append(&2, U32, FLSl(clf), tl), h1, o, s2, hfs),
+            mw.len(X.clen.on(framed, body), meth, target, body, o, SF(fs, s2), hl))))))
+
+def msg.walk(m: X.Msg, v: {X.valid(m) == True{} : Bool}, +o: List<&2, Eng.Req>, +s: List<&2, U32>) ->
+  {Spec.walk(SERl(m), Spec.W{Spec.MReq{Nil{}}, o, s}) == Spec.W{Spec.MReq{Nil{}}, Con{Laws.spec.req(m), o}, Nil{}} : Spec.W}:
+  match m:
+    case X.Msg{+meth, +target, +host, +fs, +body, +framed}:
+      mw.at(meth, target, host, fs, body, framed, o, s,
+        split7(X.full(meth), X.ok.all(Spec.TMeth{}, meth), X.full(target), X.ok.all(Spec.TTarget{}, target),
+          X.ok.all(Spec.TVal{}, host), X.ok.fields(fs), X.ok.len.on(X.clen.on(framed, body), body), v))
+
+# What goes upstream passed the check
+# -----------------------------------
+
+def OK(mm: Maybe<&2, X.Msg>) -> Type:
+  match mm:
+    case Some{x}:
+      {X.valid(x) == True{} : Bool}
+    case None{}:
+      Unit
+
+def pick.ok(b: Bool, +m: X.Msg, e: {X.valid(m) == b : Bool}) -> OK(Bool.pick(Maybe<&2, X.Msg>, b, Some{m}, None{})):
+  match b:
+    case True{}:
+      e
+    case False{}:
+      Unit{}
+
+def fwd.at.ok(+w: X.Fwd, mh: Maybe<&2, X.Head>, r: Eng.Req) -> OK(X.fwd.at(w, mh, r)):
+  match mh r:
+    case Some{+h} Eng.Req{meth, path, +body, close, ws, key}:
+      pick.ok(X.valid(X.msg.of(w, h, body)), X.msg.of(w, h, body), {==})
+    case None{} _:
+      Unit{}
+
+def fwd.ok(+w: X.Fwd, t: X.Took) -> OK(X.fwd(w, t)):
+  match t:
+    case X.Took{+raw, r}:
+      fwd.at.ok(w, X.head.of(raw), r)
+
+# The whole stream upstream, read back
+# ------------------------------------
+
+def WR(+o: List<&2, Eng.Req>) -> Spec.W:
+  Spec.W{Spec.MReq{Nil{}}, o, Nil{}}
+
+def ns.at(mm: Maybe<&2, X.Msg>, ok: OK(mm), +rest: Bytes(), +rq: List<&2, X.Msg>, +o: List<&2, Eng.Req>,
+  ih: @+o2: List<&2, Eng.Req> -> {Spec.walk(Bytes.to_list(rest), WR(o2)) ==
+    WR(List.reverse.go(&2, Eng.Req, Laws.spec.reqs(rq), o2)) : Spec.W}) ->
+  {Spec.walk(Bytes.to_list(X.wire.at(mm, rest)), WR(o)) ==
+    WR(List.reverse.go(&2, Eng.Req, Laws.spec.reqs(Laws.fwd.msgs.at(mm, rq)), o)) : Spec.W}:
+  match mm:
+    case None{}:
+      {==}
+    case Some{+x}:
+      Equal.trans(Spec.W, Spec.walk(Bytes.to_list(Bytes.append(X.ser(x), rest)), WR(o)),
+        Spec.walk(List.append(&2, U32, SERl(x), Bytes.to_list(rest)), WR(o)),
+        WR(List.reverse.go(&2, Eng.Req, Laws.spec.reqs(rq), Con{Laws.spec.req(x), o})),
+        Equal.cong(List<&2, U32>, Spec.W, xs => Spec.walk(xs, WR(o)), Bytes.to_list(Bytes.append(X.ser(x), rest)),
+          List.append(&2, U32, SERl(x), Bytes.to_list(rest)),
+          Equal.trans(List<&2, U32>, Bytes.to_list(Bytes.append(X.ser(x), rest)),
+            List.append(&2, U32, Bytes.to_list(X.ser(x)), Bytes.to_list(rest)),
+            List.append(&2, U32, SERl(x), Bytes.to_list(rest)),
+            tl.app(X.ser(x), rest),
+            Equal.cong(List<&2, U32>, List<&2, U32>, ys => List.append(&2, U32, ys, Bytes.to_list(rest)),
+              Bytes.to_list(X.ser(x)), SERl(x), ser.list(x)))),
+        Equal.trans(Spec.W, Spec.walk(List.append(&2, U32, SERl(x), Bytes.to_list(rest)), WR(o)),
+          Spec.walk(Bytes.to_list(rest), Spec.walk(SERl(x), WR(o))),
+          WR(List.reverse.go(&2, Eng.Req, Laws.spec.reqs(rq), Con{Laws.spec.req(x), o})),
+          walk.app(SERl(x), Bytes.to_list(rest), WR(o)),
+          Equal.trans(Spec.W, Spec.walk(Bytes.to_list(rest), Spec.walk(SERl(x), WR(o))),
+            Spec.walk(Bytes.to_list(rest), WR(Con{Laws.spec.req(x), o})),
+            WR(List.reverse.go(&2, Eng.Req, Laws.spec.reqs(rq), Con{Laws.spec.req(x), o})),
+            Equal.cong(Spec.W, Spec.W, u => Spec.walk(Bytes.to_list(rest), u), Spec.walk(SERl(x), WR(o)),
+              WR(Con{Laws.spec.req(x), o}), msg.walk(x, ok, o, Nil{})),
+            ih(Con{Laws.spec.req(x), o}))))
+
+def ns.go(+w: X.Fwd, ts: List<&2, X.Took>, +o: List<&2, Eng.Req>) ->
+  {Spec.walk(Bytes.to_list(X.wire(w, ts)), WR(o)) ==
+    WR(List.reverse.go(&2, Eng.Req, Laws.spec.reqs(Laws.fwd.msgs(w, ts)), o)) : Spec.W}:
+  match ts:
+    case Nil{}:
+      {==}
+    case Con{+t, +r}:
+      ns.at(X.fwd(w, t), fwd.ok(w, t), X.wire(w, r), Laws.fwd.msgs(w, r), o, o2 => ns.go(w, r, o2))
+
+def Laws.no_smuggle(w, ts):
+  +xs = Laws.spec.reqs(Laws.fwd.msgs(w, ts))
+  Equal.trans(Spec.Frames, Spec.finish(Spec.walk(Bytes.to_list(X.wire(w, ts)), WR(Nil{}))),
+    Spec.finish(WR(List.reverse(&2, Eng.Req, xs))),
+    Spec.Frames{xs, Spec.Open{Nil{}}},
+    Equal.cong(Spec.W, Spec.Frames, u => Spec.finish(u), Spec.walk(Bytes.to_list(X.wire(w, ts)), WR(Nil{})),
+      WR(List.reverse(&2, Eng.Req, xs)), ns.go(w, ts, Nil{})),
+    Equal.cong(List<&2, Eng.Req>, Spec.Frames, ys => Spec.Frames{ys, Spec.Open{Nil{}}},
+      List.reverse(&2, Eng.Req, List.reverse(&2, Eng.Req, xs)), xs, rev.rev(Eng.Req, xs)))

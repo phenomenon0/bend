@@ -360,12 +360,15 @@ def conn.names(fs: List<&2, Field>) -> List<&2, Bytes()>:
 # =====================
 #
 # What the proxy sends upstream: the method and target as they were
-# read, and fields it chose -- Host first, the end-to-end fields in the
+# read, the Host, the fields it chose -- the end-to-end fields in the
 # order they came, then X-Forwarded-For, -Proto, -Host and Via -- and the
 # body the reader framed, with a Content-Length counted from it when the
 # request had a body's framing (a length or a coding) or has a body.
 type Msg is Data:
-  Msg{meth: Bytes(), target: Bytes(), fields: List<&2, Field>, body: Bytes(), framed: Bool}
+  Msg{meth: Bytes(), target: Bytes(), host: Bytes(), fields: List<&2, Field>, body: Bytes(), framed: Bool}
+
+def full(s: Bytes()) -> Bool:
+  Bool.not(String.is_empty(s))
 
 # What the proxy adds: the Host to send ("" keeps the client's), the
 # scheme the client came in on, the client's address, and this hop's
@@ -465,56 +468,129 @@ def msg.of(+w: Fwd, h: Head, body: Bytes()) -> Msg:
     case Fwd{host, proto, +ip, via} Head{meth, target, v10, +fs}:
       +got = first(values("host", fs), "")
       +xff = values("x-forwarded-for", fs)
-      Msg{meth, target,
-        Con{Field{"host", host.pick(host, got)},
-          List.append(&2, Field, ends(conn.names(fs), fs),
-            [Field{"x-forwarded-for", join(List.append(&2, Bytes(), xff, [ip]))},
-             Field{"x-forwarded-proto", proto},
-             Field{"x-forwarded-host", got},
-             Field{"via", via}])},
+      Msg{meth, target, host.pick(host, got),
+        List.append(&2, Field, ends(conn.names(fs), fs),
+          [Field{"x-forwarded-for", join(List.append(&2, Bytes(), xff, [ip]))},
+           Field{"x-forwarded-proto", proto},
+           Field{"x-forwarded-host", got},
+           Field{"via", via}]),
         body, framed(fs)}
 
 # Writing it
 # ----------
 
-def field.ser(f: Field) -> Bytes():
+# a field line, and the lines of a head, each ended by CR LF
+def fl.ser(f: Field) -> Bytes():
   match f:
     case Field{n, v}:
-      Bytes.concat([n, ": ", v, "\r\n"])
+      Bytes.append(n, Bytes.append(": ", v))
 
-def fields.ser(fs: List<&2, Field>) -> Bytes():
+def fls.ser(fs: List<&2, Field>) -> Bytes():
   match fs:
     case Nil{}:
       ""
     case Con{f, t}:
-      Bytes.append(field.ser(f), fields.ser(t))
+      Bytes.append(fl.ser(f), Bytes.append("\r\n", fls.ser(t)))
 
-def clen.at(on: Bool, +body: Bytes()) -> Bytes():
+# a length is sent when the request had a body's framing or has a body
+def clen.on(framed: Bool, body: Bytes()) -> Bool:
+  framed || full(body)
+
+def clf.at(on: Bool, +body: Bytes()) -> List<&2, Field>:
   match on:
     case True{}:
-      Bytes.concat(["content-length: ", Nat.show(Bytes.len(body)), "\r\n"])
+      [Field{"content-length", Nat.show(Bytes.len(body))}]
     case False{}:
-      ""
+      Nil{}
 
-def clen.ser(framed: Bool, +body: Bytes()) -> Bytes():
-  clen.at(framed || Bool.not(String.is_empty(body)), body)
+# the fields that go upstream: Host, the rest, the length
+def allf(host: Bytes(), fs: List<&2, Field>, +framed: Bool, +body: Bytes()) -> List<&2, Field>:
+  Con{Field{"host", host}, List.append(&2, Field, fs, clf.at(clen.on(framed, body), body))}
+
+def rl.ser(meth: Bytes(), target: Bytes()) -> Bytes():
+  Bytes.append(meth, Bytes.append(" ", Bytes.append(target, " HTTP/1.1")))
 
 # the bytes that go upstream: the request line rebuilt, a field a line,
-# the length, the blank line, the body
+# the blank line, the body
 def ser(m: Msg) -> Bytes():
   match m:
-    case Msg{meth, target, fs, +body, framed}:
-      Bytes.concat([meth, " ", target, " HTTP/1.1\r\n", fields.ser(fs), clen.ser(framed, body), "\r\n",
-        body])
+    case Msg{meth, target, host, fs, +body, +framed}:
+      Bytes.append(rl.ser(meth, target),
+        Bytes.append("\r\n", Bytes.append(fls.ser(allf(host, fs, framed, body)), Bytes.append("\r\n", body))))
+
+# What the upstream's framing needs of a request to read back exactly
+# it (LAWS.bend's no_smuggle), checked before it goes: a method of token
+# bytes, a target with no space or control, field names of token bytes
+# that no framing reads (spec.bend's field() calls every one FOther, so
+# none is a length, a coding, a Connection, an Upgrade, a key or a
+# Host), values with no line end or control, and a Content-Length that
+# spec.bend reads back as the body's length. A request the reader took
+# always passes (its bytes came through the same grammar); a check that
+# failed would send the client a 502 rather than the upstream a request.
+def ok.all(+t: Spec.Tok, s: Bytes()) -> Bool:
+  match s:
+    case SNil{}:
+      True{}
+    case SCon{Chr{+c}, r}:
+      Spec.allows(t, Eng.cls(c)) && ok.all(t, r)
+
+def ok.field(f: Field) -> Bool:
+  match f:
+    case Field{+n, +v}:
+      full(n) && ok.all(Spec.TName{}, n) && is.other(Eng.fld.of(Eng.lows(n))) && ok.all(Spec.TVal{}, v)
+
+def ok.fields(fs: List<&2, Field>) -> Bool:
+  match fs:
+    case Nil{}:
+      True{}
+    case Con{f, t}:
+      ok.field(f) && ok.fields(t)
+
+def same(a: Bool, b: Bool) -> Bool:
+  match a:
+    case True{}:
+      b
+    case False{}:
+      Bool.not(b)
+
+# the length spec.bend reads from a Content-Length's value: the one the
+# body has, zero exactly when it is empty
+def ok.len.at(v: Spec.FLine, +body: Bytes()) -> Bool:
+  match v:
+    case Spec.FVal{val}:
+      match val:
+        case Spec.VLen{+n, ws}:
+          same(U32.is_zero(n), String.is_empty(body)) && Nat.is_eq(U32.to_nat(n), Bytes.len(body))
+        case _:
+          False{}
+    case _:
+      False{}
+
+def ok.len.on(on: Bool, +body: Bytes()) -> Bool:
+  match on:
+    case False{}:
+      String.is_empty(body)
+    case True{}:
+      +d = Nat.show(Bytes.len(body))
+      ok.all(Spec.TVal{}, d) && ok.len.at(Spec.len.view(Spec.span(Spec.TOws{}, Con{32, Bytes.to_list(d)})), body)
+
+def valid(m: Msg) -> Bool:
+  match m:
+    case Msg{+meth, +target, +host, fs, +body, +framed}:
+      full(meth) && ok.all(Spec.TMeth{}, meth) && full(target) && ok.all(Spec.TTarget{}, target)
+        && ok.all(Spec.TVal{}, host) && ok.fields(fs) && ok.len.on(clen.on(framed, body), body)
 
 # What goes upstream for the requests taken: each one's head read again
 # from its bytes and the request rebuilt from it and the framed body; a
 # request whose head does not read again (never, for bytes the reader
 # took) goes nowhere, and neither does any after it.
+def checked(+m: Msg) -> Maybe<&2, Msg>:
+  Bool.pick(Maybe<&2, Msg>, valid(m), Some{m}, None{})
+
 def fwd.at(+w: Fwd, m: Maybe<&2, Head>, r: Eng.Req) -> Maybe<&2, Msg>:
   match m r:
     case Some{h} Eng.Req{meth, path, body, close, ws, key}:
-      Some{msg.of(w, h, body)}
+      checked(msg.of(w, h, body))
     case None{} _:
       None{}
 
@@ -655,21 +731,30 @@ def rsp.of(+via: Bytes(), +head: Bool, +k: Nat, +code: U32, +got: Bytes(), body:
 # the bytes that go back: the status line rebuilt, a field a line, the
 # length counted from the body unless the framing says there is none,
 # and the connection's fate (conn: a Connection value, or "" for none)
-def rclen(bodyless: Bool, +body: Bytes()) -> Bytes():
+def rclf(bodyless: Bool, +body: Bytes()) -> List<&2, Field>:
   match bodyless:
     case True{}:
-      ""
+      Nil{}
     case False{}:
-      Bytes.concat(["content-length: ", Nat.show(Bytes.len(body)), "\r\n"])
+      [Field{"content-length", Nat.show(Bytes.len(body))}]
 
-def rconn(+conn: Bytes()) -> Bytes():
-  Bool.pick(Bytes(), String.is_empty(conn), "", Bytes.concat(["connection: ", conn, "\r\n"]))
+def rconf(+conn: Bytes()) -> List<&2, Field>:
+  Bool.pick(List<&2, Field>, String.is_empty(conn), Nil{}, [Field{"connection", conn}])
+
+# the fields that go back: the upstream's end-to-end ones, the length,
+# the connection's fate
+def rall(fs: List<&2, Field>, +bodyless: Bool, +body: Bytes(), +conn: Bytes()) -> List<&2, Field>:
+  List.append(&2, Field, fs, List.append(&2, Field, rclf(bodyless, body), rconf(conn)))
+
+def sl.ser(code: Bytes(), why: Bytes()) -> Bytes():
+  Bytes.append("HTTP/1.1 ", Bytes.append(code, Bytes.append(" ", why)))
 
 def rser(r: Rsp, +conn: Bytes()) -> Bytes():
   match r:
     case Rsp{code, why, fs, +body, +bodyless}:
-      Bytes.concat(["HTTP/1.1 ", code, " ", why, "\r\n", fields.ser(fs), rclen(bodyless, body), rconn(conn),
-        "\r\n", Bool.pick(Bytes(), bodyless, "", body)])
+      Bytes.append(sl.ser(code, why),
+        Bytes.append("\r\n", Bytes.append(fls.ser(rall(fs, bodyless, body, conn)),
+          Bytes.append("\r\n", Bool.pick(Bytes(), bodyless, "", body)))))
 
 # A reply of the proxy's own, when there is no response to send back:
 # 400 for a request it refused, 431 for a head past its cap, 502 when

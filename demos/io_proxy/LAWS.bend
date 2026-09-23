@@ -301,6 +301,51 @@ law refused_not_forwarded:
   for r: {Spec.frame(Bytes.to_list(Bytes.concat(rs))) == Spec.Frames{Nil{}, Spec.Refused{}} : Spec.Frames}
   {conn.took(reads(rs)) == Nil{} : List<&2, X.Took>}
 
+# Reading it back
+# ===============
+#
+# What spec.bend reads from a request the proxy forwarded: its method,
+# its target and its body, a request that neither closes nor upgrades
+# (the proxy's hop is its own: no Connection, no Upgrade goes up).
+
+def spec.req(m: X.Msg) -> Eng.Req:
+  match m:
+    case X.Msg{meth, target, host, fs, body, framed}:
+      Eng.Req{Spec.method(meth), target, body, False{}, False{}, ""}
+
+def spec.reqs(ms: List<&2, X.Msg>) -> List<&2, Eng.Req>:
+  match ms:
+    case Nil{}:
+      Nil{}
+    case Con{m, t}:
+      Con{spec.req(m), spec.reqs(t)}
+
+# the requests X.wire sends, in order
+def fwd.msgs.at(m: Maybe<&2, X.Msg>, rest: List<&2, X.Msg>) -> List<&2, X.Msg>:
+  match m:
+    case Some{x}:
+      Con{x, rest}
+    case None{}:
+      Nil{}
+
+def fwd.msgs(+w: X.Fwd, ts: List<&2, X.Took>) -> List<&2, X.Msg>:
+  match ts:
+    case Nil{}:
+      Nil{}
+    case Con{t, r}:
+      fwd.msgs.at(X.fwd(w, t), fwd.msgs(w, r))
+
+# LAW: nothing is smuggled. Whatever requests the proxy took, the bytes
+# it sends upstream, framed by spec.bend's frame() -- the upstream's
+# reading, if it reads HTTP/1.1 as the RFC does -- are exactly one
+# request for each one it forwarded, in order, each with the method,
+# target and body it was sent with, and nothing after the last: no
+# request boundary the upstream could draw that the proxy did not.
+law no_smuggle:
+  for +w: X.Fwd
+  for +ts: List<&2, X.Took>
+  {Spec.frame(Bytes.to_list(X.wire(w, ts))) == Spec.Frames{spec.reqs(fwd.msgs(w, ts)), Spec.Open{Nil{}}} : Spec.Frames}
+
 # The hop's fields
 # ================
 
@@ -323,7 +368,7 @@ def clean(~mine: @+n: Bytes() -> Bool, +ns: List<&2, Bytes()>, fs: List<&2, X.Fi
 
 def msg.fields(m: X.Msg) -> List<&2, X.Field>:
   match m:
-    case X.Msg{meth, target, fs, body, framed}:
+    case X.Msg{meth, target, host, fs, body, framed}:
       fs
 
 def head.fields(h: X.Head) -> List<&2, X.Field>:
@@ -334,9 +379,9 @@ def head.fields(h: X.Head) -> List<&2, X.Field>:
 # LAW: no hop-by-hop field is forwarded. Whatever the client sent, the
 # request that goes upstream carries none of Connection, Keep-Alive,
 # Proxy-Connection, TE, Transfer-Encoding, Upgrade, Trailer, nor any
-# field the client's Connection named -- but for the five this proxy
-# writes itself (Host, X-Forwarded-For, -Proto, -Host, Via), whatever a
-# Connection said of them.
+# field the client's Connection named -- but for the four this proxy
+# writes itself (X-Forwarded-For, -Proto, -Host, Via), whatever a
+# Connection said of them (and Host, which has a line of its own).
 law hop_by_hop_removed:
   for +w: X.Fwd
   for +h: X.Head

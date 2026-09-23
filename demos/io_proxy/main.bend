@@ -433,7 +433,7 @@ def serve.msg(+srv: Srv, mm: Maybe<&2, X.Msg>, +v10: Bool, +closing: Bool, cs: S
   match mm:
     case Some{+msg}:
       match msg:
-        case X.Msg{+hm, target, fs, body, framed}:
+        case X.Msg{+hm, target, host, fs, body, framed}:
           IO.bind(Ans, Socket, upstream(srv, Eng.bytes.eq(hm, "HEAD"), idempotent(hm), X.ser(msg)),
             a => answer(srv, closing, v10, a, cs, more))
     case None{}:
