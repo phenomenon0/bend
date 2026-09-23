@@ -3965,20 +3965,281 @@ def and.split(a: Bool, -b: Bool, h: {(a && b) == True{} : Bool}) -> {a == True{}
       no({False{} == True{} : Bool} & {b == True{} : Bool}, h)
 
 # the proxy's check, byte by byte, as spec.bend's classes
-def aa.of.at(+t: Spec.Tok, +c: U32, -r: Bytes(),
-  h: {Spec.allows(t, Eng.cls(c)) == True{} : Bool} & {X.ok.all(t, r) == True{} : Bool},
-  ih: {X.ok.all(t, r) == True{} : Bool} -> AA(t, Bytes.to_list(r))) ->
+def aa.each.at(+t: Spec.Tok, +c: U32, -r: Bytes(),
+  h: {Spec.allows(t, Eng.cls(c)) == True{} : Bool} & {X.ok.each(t, r) == True{} : Bool},
+  ih: {X.ok.each(t, r) == True{} : Bool} -> AA(t, Bytes.to_list(r))) ->
   AA(t, Con{c, Bytes.to_list(r)}):
   (h1, h2) = h
   (%EL.cls_every(c) : {Spec.allows(t, _) == True{} : Bool}
    h1, ih(h2))
 
-def aa.of(+t: Spec.Tok, s: Bytes(), h: {X.ok.all(t, s) == True{} : Bool}) -> AA(t, Bytes.to_list(s)):
+def aa.each(+t: Spec.Tok, s: Bytes(), h: {X.ok.each(t, s) == True{} : Bool}) -> AA(t, Bytes.to_list(s)):
   match s:
     case SNil{}:
       Unit{}
     case SCon{Chr{+c}, r}:
-      aa.of.at(t, c, r, and.split(Spec.allows(t, Eng.cls(c)), X.ok.all(t, r), h), h2 => aa.of(t, r, h2))
+      aa.each.at(t, c, r, and.split(Spec.allows(t, Eng.cls(c)), X.ok.each(t, r), h), h2 => aa.each(t, r, h2))
+
+# the bytes a range covers are ones the token holds
+def e.val.sym(co: Bool, cm: Bool, tk: Bool) ->
+  {Spec.allows(Spec.TVal{}, Eng.cls.sym(co, cm, tk)) == True{} : Bool}:
+  match co cm tk:
+    case True{} True{} True{}:
+      {==}
+    case True{} True{} False{}:
+      {==}
+    case True{} False{} True{}:
+      {==}
+    case True{} False{} False{}:
+      {==}
+    case False{} True{} True{}:
+      {==}
+    case False{} True{} False{}:
+      {==}
+    case False{} False{} True{}:
+      {==}
+    case False{} False{} False{}:
+      {==}
+
+def e.val.vis(+c: U32, al: Bool, dg: Bool) ->
+  {Spec.allows(Spec.TVal{}, Eng.cls.vis(c, al, dg)) == True{} : Bool}:
+  match al dg:
+    case True{} True{}:
+      {==}
+    case True{} False{}:
+      {==}
+    case False{} True{}:
+      {==}
+    case False{} False{}:
+      e.val.sym(U32.is_eq(c, 58), U32.is_eq(c, 44), Eng.tsym(c))
+
+def e.val.go(+c: U32, x: Bool, y: Bool) ->
+  {Bool.and(Bool.not(x), Bool.not(y)) == True{} : Bool} ->
+  {Spec.allows(Spec.TVal{}, Eng.cls.go(c, x, y)) == True{} : Bool}:
+  match x y:
+    case True{} True{}:
+      e => no({Spec.allows(Spec.TVal{}, Eng.cls.go(c, True{}, True{})) == True{} : Bool}, e)
+    case True{} False{}:
+      e => no({Spec.allows(Spec.TVal{}, Eng.cls.go(c, True{}, False{})) == True{} : Bool}, e)
+    case False{} True{}:
+      e => no({Spec.allows(Spec.TVal{}, Eng.cls.go(c, False{}, True{})) == True{} : Bool}, e)
+    case False{} False{}:
+      e => e.val.vis(c, Eng.alpha(c), Eng.digit(c))
+
+def e.val.sp(ht: Bool, cr: Bool, lf: Bool) ->
+  {Spec.allows(Spec.TVal{}, Eng.cls.low(True{}, ht, cr, lf)) == True{} : Bool}:
+  match ht cr lf:
+    case True{} True{} True{}:
+      {==}
+    case True{} True{} False{}:
+      {==}
+    case True{} False{} True{}:
+      {==}
+    case True{} False{} False{}:
+      {==}
+    case False{} True{} True{}:
+      {==}
+    case False{} True{} False{}:
+      {==}
+    case False{} False{} True{}:
+      {==}
+    case False{} False{} False{}:
+      {==}
+
+def e.val.in.at(+c: U32, x: Bool, +e: {Bytes.span.in(c, 32, 127) == True{} : Bool}) ->
+  {U32.is_lt(c, 33) == x : Bool} ->
+  {Spec.allows(Spec.TVal{}, Eng.cls.go(c, x, U32.is_le(127, c))) == True{} : Bool}:
+  match x:
+    case True{}:
+      xe =>
+        %Equal.sym(Bool, U32.is_eq(c, 32), True{},
+          U32.eq_of_lt_succ(c, 32, 33,
+            Bool.and_l(Bool.not(U32.is_lt(c, 32)), Bool.not(U32.is_le(127, c)), e), xe, {==})) :
+          {Spec.allows(Spec.TVal{}, Eng.cls.low(_, U32.is_eq(c, 9), U32.is_eq(c, 13), U32.is_eq(c, 10))) ==
+            True{} : Bool}
+        e.val.sp(U32.is_eq(c, 9), U32.is_eq(c, 13), U32.is_eq(c, 10))
+    case False{}:
+      xe => e.val.go(c, False{}, U32.is_le(127, c))(
+        Bool.and_r(Bool.not(U32.is_lt(c, 32)), Bool.not(U32.is_le(127, c)), e))
+
+def e.val.in(+c: U32, +e: {Bytes.span.in(c, 32, 127) == True{} : Bool}) ->
+  {Spec.allows(Spec.TVal{}, Eng.cls(c)) == True{} : Bool}:
+  e.val.in.at(c, U32.is_lt(c, 33), e)({==})
+
+# a name's small letters: a letter, a token byte
+def e.nm.tk(+c: U32, dg: Bool) ->
+  {Spec.allows(Spec.TName{}, Eng.cls.vis(c, True{}, dg)) == True{} : Bool}:
+  match dg:
+    case True{}:
+      {==}
+    case False{}:
+      {==}
+
+def e.nm.alpha(+c: U32, +e: {Bytes.span.in(c, 97, 123) == True{} : Bool}) ->
+  {Eng.alpha(c) == True{} : Bool}:
+  %Equal.sym(Bool, U32.is_le(97, c), True{}, Bytes.span.in_lo(c, 97, 123, e)) :
+    {Bool.or(Bool.and(U32.is_le(65, c), U32.is_le(c, 90)), Bool.and(_, U32.is_le(c, 122))) ==
+      True{} : Bool}
+  %Equal.sym(Bool, U32.is_le(c, 122), True{},
+    Equal.trans(Bool, U32.is_le(c, 122), U32.is_lt(c, 123), True{},
+      Equal.sym(Bool, U32.is_lt(c, 123), U32.is_le(c, 122), U32.lt_succ(c, 122, 123, {==})),
+      Bytes.span.in_hi(c, 97, 123, e))) :
+    {Bool.or(Bool.and(U32.is_le(65, c), U32.is_le(c, 90)), Bool.and(True{}, _)) == True{} : Bool}
+  Bool.or_true(Bool.and(U32.is_le(65, c), U32.is_le(c, 90)))
+
+def e.nm.in(+c: U32, +e: {Bytes.span.in(c, 97, 123) == True{} : Bool}) ->
+  {Spec.allows(Spec.TName{}, Eng.cls(c)) == True{} : Bool}:
+  +w = Bytes.span.in_widen(c, 97, 123, 33, 127, e, {==}, {==})
+  %Equal.sym(Bool, U32.is_lt(c, 33), False{},
+    Bool.not_true(U32.is_lt(c, 33), Bool.and_l(Bool.not(U32.is_lt(c, 33)), Bool.not(U32.is_le(127, c)), w))) :
+    {Spec.allows(Spec.TName{}, Eng.cls.go(c, _, U32.is_le(127, c))) == True{} : Bool}
+  %Equal.sym(Bool, U32.is_le(127, c), False{},
+    Bool.not_true(U32.is_le(127, c), Bool.and_r(Bool.not(U32.is_lt(c, 33)), Bool.not(U32.is_le(127, c)), w))) :
+    {Spec.allows(Spec.TName{}, Eng.cls.go(c, False{}, _)) == True{} : Bool}
+  %Equal.sym(Bool, Eng.alpha(c), True{}, e.nm.alpha(c, e)) :
+    {Spec.allows(Spec.TName{}, Eng.cls.vis(c, _, Eng.digit(c))) == True{} : Bool}
+  e.nm.tk(c, Eng.digit(c))
+
+# a target's visible ASCII: whatever the byte is past 32 and below 127
+def e.tg.sym(co: Bool, cm: Bool, tk: Bool) ->
+  {Spec.allows(Spec.TTarget{}, Eng.cls.sym(co, cm, tk)) == True{} : Bool}:
+  match co cm tk:
+    case True{} True{} True{}:
+      {==}
+    case True{} True{} False{}:
+      {==}
+    case True{} False{} True{}:
+      {==}
+    case True{} False{} False{}:
+      {==}
+    case False{} True{} True{}:
+      {==}
+    case False{} True{} False{}:
+      {==}
+    case False{} False{} True{}:
+      {==}
+    case False{} False{} False{}:
+      {==}
+
+def e.tg.vis(+c: U32, al: Bool, dg: Bool) ->
+  {Spec.allows(Spec.TTarget{}, Eng.cls.vis(c, al, dg)) == True{} : Bool}:
+  match al dg:
+    case True{} True{}:
+      {==}
+    case True{} False{}:
+      {==}
+    case False{} True{}:
+      {==}
+    case False{} False{}:
+      e.tg.sym(U32.is_eq(c, 58), U32.is_eq(c, 44), Eng.tsym(c))
+
+def e.tg.in(+c: U32, +e: {Bytes.span.in(c, 33, 127) == True{} : Bool}) ->
+  {Spec.allows(Spec.TTarget{}, Eng.cls(c)) == True{} : Bool}:
+  %Equal.sym(Bool, U32.is_lt(c, 33), False{},
+    Bool.not_true(U32.is_lt(c, 33), Bool.and_l(Bool.not(U32.is_lt(c, 33)), Bool.not(U32.is_le(127, c)), e))) :
+    {Spec.allows(Spec.TTarget{}, Eng.cls.go(c, _, U32.is_le(127, c))) == True{} : Bool}
+  %Equal.sym(Bool, U32.is_le(127, c), False{},
+    Bool.not_true(U32.is_le(127, c), Bool.and_r(Bool.not(U32.is_lt(c, 33)), Bool.not(U32.is_le(127, c)), e))) :
+    {Spec.allows(Spec.TTarget{}, Eng.cls.go(c, False{}, _)) == True{} : Bool}
+  e.tg.vis(c, Eng.alpha(c), Eng.digit(c))
+
+# a method's capitals: a letter, a token byte
+def e.mt.tk(+c: U32, dg: Bool) ->
+  {Spec.allows(Spec.TMeth{}, Eng.cls.vis(c, True{}, dg)) == True{} : Bool}:
+  match dg:
+    case True{}:
+      {==}
+    case False{}:
+      {==}
+
+def e.mt.alpha(+c: U32, +e: {Bytes.span.in(c, 65, 91) == True{} : Bool}) -> {Eng.alpha(c) == True{} : Bool}:
+  %Equal.sym(Bool, U32.is_le(65, c), True{}, Bytes.span.in_lo(c, 65, 91, e)) :
+    {Bool.or(Bool.and(_, U32.is_le(c, 90)), Bool.and(U32.is_le(97, c), U32.is_le(c, 122))) == True{} : Bool}
+  %Equal.sym(Bool, U32.is_le(c, 90), True{},
+    Equal.trans(Bool, U32.is_le(c, 90), U32.is_lt(c, 91), True{},
+      Equal.sym(Bool, U32.is_lt(c, 91), U32.is_le(c, 90), U32.lt_succ(c, 90, 91, {==})),
+      Bytes.span.in_hi(c, 65, 91, e))) :
+    {Bool.or(Bool.and(True{}, _), Bool.and(U32.is_le(97, c), U32.is_le(c, 122))) == True{} : Bool}
+  {==}
+
+def e.mt.in(+c: U32, +e: {Bytes.span.in(c, 65, 91) == True{} : Bool}) ->
+  {Spec.allows(Spec.TMeth{}, Eng.cls(c)) == True{} : Bool}:
+  +w = Bytes.span.in_widen(c, 65, 91, 33, 127, e, {==}, {==})
+  %Equal.sym(Bool, U32.is_lt(c, 33), False{},
+    Bool.not_true(U32.is_lt(c, 33), Bool.and_l(Bool.not(U32.is_lt(c, 33)), Bool.not(U32.is_le(127, c)), w))) :
+    {Spec.allows(Spec.TMeth{}, Eng.cls.go(c, _, U32.is_le(127, c))) == True{} : Bool}
+  %Equal.sym(Bool, U32.is_le(127, c), False{},
+    Bool.not_true(U32.is_le(127, c), Bool.and_r(Bool.not(U32.is_lt(c, 33)), Bool.not(U32.is_le(127, c)), w))) :
+    {Spec.allows(Spec.TMeth{}, Eng.cls.go(c, False{}, _)) == True{} : Bool}
+  %Equal.sym(Bool, Eng.alpha(c), True{}, e.mt.alpha(c, e)) :
+    {Spec.allows(Spec.TMeth{}, Eng.cls.vis(c, _, Eng.digit(c))) == True{} : Bool}
+  e.mt.tk(c, Eng.digit(c))
+
+# a string all in a range the token holds holds only bytes it holds
+def aa.conv(-t: Spec.Tok, +c: U32, h: {Spec.allows(t, Eng.cls(c)) == True{} : Bool}) ->
+  {Spec.allows(t, Spec.cls(c)) == True{} : Bool}:
+  %EL.cls_every(c) : {Spec.allows(t, _) == True{} : Bool}
+  h
+
+def aa.len1(-x: Nat, +r: Bytes(), e: {Nat.is_eq(x, String.length.go(r, 1n)) == True{} : Bool}) ->
+  {Nat.is_eq(x, 1n+String.length.go(r, 0n)) == True{} : Bool}:
+  %EP.len_shift(r) : {Nat.is_eq(x, _) == True{} : Bool}
+  e
+
+def aa.go.at(+t: Spec.Tok, +lo: U32, +hi: U32, +c: U32, +r: Bytes(), b: Bool,
+  inr: {Bytes.span.in(c, lo, hi) == True{} : Bool} -> {Spec.allows(t, Eng.cls(c)) == True{} : Bool},
+  ih: {Nat.is_eq(Bytes.span.go(r, lo, hi), String.length.go(r, 0n)) == True{} : Bool} -> AA(t, Bytes.to_list(r)),
+  e: {Nat.is_eq(Bytes.span.at(b, r, lo, hi), 1n+String.length.go(r, 0n)) == True{} : Bool}) ->
+  {Bytes.span.in(c, lo, hi) == b : Bool} -> AA(t, Con{c, Bytes.to_list(r)}):
+  match b:
+    case True{}:
+      eb => (aa.conv(t, c, inr(eb)), ih(e))
+    case False{}:
+      eb => no(AA(t, Con{c, Bytes.to_list(r)}), e)
+
+def aa.go(~t: Spec.Tok, ~lo: U32, ~hi: U32,
+  ~inr: @+c: U32 -> {Bytes.span.in(c, lo, hi) == True{} : Bool} -> {Spec.allows(t, Eng.cls(c)) == True{} : Bool}, s: Bytes(),
+  e: {Nat.is_eq(Bytes.span.go(s, lo, hi), String.length.go(s, 0n)) == True{} : Bool}) -> AA(t, Bytes.to_list(s)):
+  match s:
+    case SNil{}:
+      Unit{}
+    case SCon{Chr{+c}, +r}:
+      aa.go.at(t, lo, hi, c, r, Bytes.span.in(c, lo, hi), inr(c), h2 => aa.go(~t, ~lo, ~hi, ~inr, r, h2),
+        aa.len1(Bytes.span.at(Bytes.span.in(c, lo, hi), r, lo, hi), r, e))({==})
+
+def aa.fast(t: Spec.Tok, +s: Bytes(), e: {X.ok.fast(t, s) == True{} : Bool}) -> AA(t, Bytes.to_list(s)):
+  match t:
+    case Spec.TMeth{}:
+      aa.go(~Spec.TMeth{}, ~65, ~91, ~(c => h => e.mt.in(c, h)), s,
+        %EP.drop0(s) : {Nat.is_eq(Bytes.span.go(_, 65, 91), String.length.go(s, 0n)) == True{} : Bool}
+        e)
+    case Spec.TTarget{}:
+      aa.go(~Spec.TTarget{}, ~33, ~127, ~(c => h => e.tg.in(c, h)), s,
+        %EP.drop0(s) : {Nat.is_eq(Bytes.span.go(_, 33, 127), String.length.go(s, 0n)) == True{} : Bool}
+        e)
+    case Spec.TVer{}:
+      no(AA(Spec.TVer{}, Bytes.to_list(s)), e)
+    case Spec.TName{}:
+      aa.go(~Spec.TName{}, ~97, ~123, ~(c => h => e.nm.in(c, h)), s,
+        %EP.drop0(s) : {Nat.is_eq(Bytes.span.go(_, 97, 123), String.length.go(s, 0n)) == True{} : Bool}
+        e)
+    case Spec.TOws{}:
+      no(AA(Spec.TOws{}, Bytes.to_list(s)), e)
+    case Spec.TVal{}:
+      aa.go(~Spec.TVal{}, ~32, ~127, ~(c => h => e.val.in(c, h)), s,
+        %EP.drop0(s) : {Nat.is_eq(Bytes.span.go(_, 32, 127), String.length.go(s, 0n)) == True{} : Bool}
+        e)
+
+def aa.of.at(fast: Bool, +t: Spec.Tok, +s: Bytes(), ef: {X.ok.fast(t, s) == fast : Bool},
+  h: {X.ok.all.at(fast, t, s) == True{} : Bool}) -> AA(t, Bytes.to_list(s)):
+  match fast:
+    case True{}:
+      aa.fast(t, s, ef)
+    case False{}:
+      aa.each(t, s, h)
+
+def aa.of(+t: Spec.Tok, +s: Bytes(), h: {X.ok.all(t, s) == True{} : Bool}) -> AA(t, Bytes.to_list(s)):
+  aa.of.at(X.ok.fast(t, s), t, s, {==}, h)
 
 # a span over bytes its token holds, stopped by one it does not
 def span.to(+t: Spec.Tok, xs: List<&2, U32>, +c: U32, +rest: List<&2, U32>, h: AA(t, xs),
@@ -5143,19 +5404,194 @@ def rpl.app(a: List<&2, U32>, -b: List<&2, U32>, pa: RPL(a), pb: RPL(b)) -> RPL(
       (h1, h2) = pa
       (h1, rpl.app(t, b, h2, pb))
 
-def raa.of.at(+t: RS.Tok, +c: U32, -r: Bytes(),
-  h: {RS.allows(t, R.cls(c)) == True{} : Bool} & {X.rok.all(t, r) == True{} : Bool},
-  ih: {X.rok.all(t, r) == True{} : Bool} -> RAA(t, Bytes.to_list(r))) ->
+def raa.each.at(+t: RS.Tok, +c: U32, -r: Bytes(),
+  h: {RS.allows(t, R.cls(c)) == True{} : Bool} & {X.rok.each(t, r) == True{} : Bool},
+  ih: {X.rok.each(t, r) == True{} : Bool} -> RAA(t, Bytes.to_list(r))) ->
   RAA(t, Con{c, Bytes.to_list(r)}):
   (h1, h2) = h
   (h1, ih(h2))
 
-def raa.of(+t: RS.Tok, s: Bytes(), h: {X.rok.all(t, s) == True{} : Bool}) -> RAA(t, Bytes.to_list(s)):
+def raa.each(+t: RS.Tok, s: Bytes(), h: {X.rok.each(t, s) == True{} : Bool}) -> RAA(t, Bytes.to_list(s)):
   match s:
     case SNil{}:
       Unit{}
     case SCon{Chr{+c}, r}:
-      raa.of.at(t, c, r, and.split(RS.allows(t, R.cls(c)), X.rok.all(t, r), h), h2 => raa.of(t, r, h2))
+      raa.each.at(t, c, r, and.split(RS.allows(t, R.cls(c)), X.rok.each(t, r), h), h2 => raa.each(t, r, h2))
+
+# the bytes a range covers are ones the token holds
+def r.val.sym(co: Bool, cm: Bool, tk: Bool) ->
+  {RS.allows(RS.TVal{}, R.cls.sym(co, cm, tk)) == True{} : Bool}:
+  match co cm tk:
+    case True{} True{} True{}:
+      {==}
+    case True{} True{} False{}:
+      {==}
+    case True{} False{} True{}:
+      {==}
+    case True{} False{} False{}:
+      {==}
+    case False{} True{} True{}:
+      {==}
+    case False{} True{} False{}:
+      {==}
+    case False{} False{} True{}:
+      {==}
+    case False{} False{} False{}:
+      {==}
+
+def r.val.vis(+c: U32, al: Bool, dg: Bool) ->
+  {RS.allows(RS.TVal{}, R.cls.vis(c, al, dg)) == True{} : Bool}:
+  match al dg:
+    case True{} True{}:
+      {==}
+    case True{} False{}:
+      {==}
+    case False{} True{}:
+      {==}
+    case False{} False{}:
+      r.val.sym(U32.is_eq(c, 58), U32.is_eq(c, 44), R.tsym(c))
+
+def r.val.go(+c: U32, x: Bool, y: Bool) ->
+  {Bool.and(Bool.not(x), Bool.not(y)) == True{} : Bool} ->
+  {RS.allows(RS.TVal{}, R.cls.go(c, x, y)) == True{} : Bool}:
+  match x y:
+    case True{} True{}:
+      e => no({RS.allows(RS.TVal{}, R.cls.go(c, True{}, True{})) == True{} : Bool}, e)
+    case True{} False{}:
+      e => no({RS.allows(RS.TVal{}, R.cls.go(c, True{}, False{})) == True{} : Bool}, e)
+    case False{} True{}:
+      e => no({RS.allows(RS.TVal{}, R.cls.go(c, False{}, True{})) == True{} : Bool}, e)
+    case False{} False{}:
+      e => r.val.vis(c, R.alpha(c), R.digit(c))
+
+def r.val.sp(ht: Bool, cr: Bool, lf: Bool) ->
+  {RS.allows(RS.TVal{}, R.cls.low(True{}, ht, cr, lf)) == True{} : Bool}:
+  match ht cr lf:
+    case True{} True{} True{}:
+      {==}
+    case True{} True{} False{}:
+      {==}
+    case True{} False{} True{}:
+      {==}
+    case True{} False{} False{}:
+      {==}
+    case False{} True{} True{}:
+      {==}
+    case False{} True{} False{}:
+      {==}
+    case False{} False{} True{}:
+      {==}
+    case False{} False{} False{}:
+      {==}
+
+def r.val.in.at(+c: U32, x: Bool, +e: {Bytes.span.in(c, 32, 127) == True{} : Bool}) ->
+  {U32.is_lt(c, 33) == x : Bool} ->
+  {RS.allows(RS.TVal{}, R.cls.go(c, x, U32.is_le(127, c))) == True{} : Bool}:
+  match x:
+    case True{}:
+      xe =>
+        %Equal.sym(Bool, U32.is_eq(c, 32), True{},
+          U32.eq_of_lt_succ(c, 32, 33,
+            Bool.and_l(Bool.not(U32.is_lt(c, 32)), Bool.not(U32.is_le(127, c)), e), xe, {==})) :
+          {RS.allows(RS.TVal{}, R.cls.low(_, U32.is_eq(c, 9), U32.is_eq(c, 13), U32.is_eq(c, 10))) ==
+            True{} : Bool}
+        r.val.sp(U32.is_eq(c, 9), U32.is_eq(c, 13), U32.is_eq(c, 10))
+    case False{}:
+      xe => r.val.go(c, False{}, U32.is_le(127, c))(
+        Bool.and_r(Bool.not(U32.is_lt(c, 32)), Bool.not(U32.is_le(127, c)), e))
+
+def r.val.in(+c: U32, +e: {Bytes.span.in(c, 32, 127) == True{} : Bool}) ->
+  {RS.allows(RS.TVal{}, R.cls(c)) == True{} : Bool}:
+  r.val.in.at(c, U32.is_lt(c, 33), e)({==})
+
+# a name's small letters: a letter, a token byte
+def r.nm.tk(+c: U32, dg: Bool) ->
+  {RS.allows(RS.TName{}, R.cls.vis(c, True{}, dg)) == True{} : Bool}:
+  match dg:
+    case True{}:
+      {==}
+    case False{}:
+      {==}
+
+def r.nm.alpha(+c: U32, +e: {Bytes.span.in(c, 97, 123) == True{} : Bool}) ->
+  {R.alpha(c) == True{} : Bool}:
+  %Equal.sym(Bool, U32.is_le(97, c), True{}, Bytes.span.in_lo(c, 97, 123, e)) :
+    {Bool.or(Bool.and(U32.is_le(65, c), U32.is_le(c, 90)), Bool.and(_, U32.is_le(c, 122))) ==
+      True{} : Bool}
+  %Equal.sym(Bool, U32.is_le(c, 122), True{},
+    Equal.trans(Bool, U32.is_le(c, 122), U32.is_lt(c, 123), True{},
+      Equal.sym(Bool, U32.is_lt(c, 123), U32.is_le(c, 122), U32.lt_succ(c, 122, 123, {==})),
+      Bytes.span.in_hi(c, 97, 123, e))) :
+    {Bool.or(Bool.and(U32.is_le(65, c), U32.is_le(c, 90)), Bool.and(True{}, _)) == True{} : Bool}
+  Bool.or_true(Bool.and(U32.is_le(65, c), U32.is_le(c, 90)))
+
+def r.nm.in(+c: U32, +e: {Bytes.span.in(c, 97, 123) == True{} : Bool}) ->
+  {RS.allows(RS.TName{}, R.cls(c)) == True{} : Bool}:
+  +w = Bytes.span.in_widen(c, 97, 123, 33, 127, e, {==}, {==})
+  %Equal.sym(Bool, U32.is_lt(c, 33), False{},
+    Bool.not_true(U32.is_lt(c, 33), Bool.and_l(Bool.not(U32.is_lt(c, 33)), Bool.not(U32.is_le(127, c)), w))) :
+    {RS.allows(RS.TName{}, R.cls.go(c, _, U32.is_le(127, c))) == True{} : Bool}
+  %Equal.sym(Bool, U32.is_le(127, c), False{},
+    Bool.not_true(U32.is_le(127, c), Bool.and_r(Bool.not(U32.is_lt(c, 33)), Bool.not(U32.is_le(127, c)), w))) :
+    {RS.allows(RS.TName{}, R.cls.go(c, False{}, _)) == True{} : Bool}
+  %Equal.sym(Bool, R.alpha(c), True{}, r.nm.alpha(c, e)) :
+    {RS.allows(RS.TName{}, R.cls.vis(c, _, R.digit(c))) == True{} : Bool}
+  r.nm.tk(c, R.digit(c))
+
+# a string all in a range the token holds holds only bytes it holds
+def raa.len1(-x: Nat, +r: Bytes(), e: {Nat.is_eq(x, String.length.go(r, 1n)) == True{} : Bool}) ->
+  {Nat.is_eq(x, 1n+String.length.go(r, 0n)) == True{} : Bool}:
+  %EP.len_shift(r) : {Nat.is_eq(x, _) == True{} : Bool}
+  e
+
+def raa.go.at(+t: RS.Tok, +lo: U32, +hi: U32, +c: U32, +r: Bytes(), b: Bool,
+  inr: {Bytes.span.in(c, lo, hi) == True{} : Bool} -> {RS.allows(t, R.cls(c)) == True{} : Bool},
+  ih: {Nat.is_eq(Bytes.span.go(r, lo, hi), String.length.go(r, 0n)) == True{} : Bool} -> RAA(t, Bytes.to_list(r)),
+  e: {Nat.is_eq(Bytes.span.at(b, r, lo, hi), 1n+String.length.go(r, 0n)) == True{} : Bool}) ->
+  {Bytes.span.in(c, lo, hi) == b : Bool} -> RAA(t, Con{c, Bytes.to_list(r)}):
+  match b:
+    case True{}:
+      eb => (inr(eb), ih(e))
+    case False{}:
+      eb => no(RAA(t, Con{c, Bytes.to_list(r)}), e)
+
+def raa.go(~t: RS.Tok, ~lo: U32, ~hi: U32,
+  ~inr: @+c: U32 -> {Bytes.span.in(c, lo, hi) == True{} : Bool} -> {RS.allows(t, R.cls(c)) == True{} : Bool}, s: Bytes(),
+  e: {Nat.is_eq(Bytes.span.go(s, lo, hi), String.length.go(s, 0n)) == True{} : Bool}) -> RAA(t, Bytes.to_list(s)):
+  match s:
+    case SNil{}:
+      Unit{}
+    case SCon{Chr{+c}, +r}:
+      raa.go.at(t, lo, hi, c, r, Bytes.span.in(c, lo, hi), inr(c), h2 => raa.go(~t, ~lo, ~hi, ~inr, r, h2),
+        raa.len1(Bytes.span.at(Bytes.span.in(c, lo, hi), r, lo, hi), r, e))({==})
+
+def raa.fast(t: RS.Tok, +s: Bytes(), e: {X.rok.fast(t, s) == True{} : Bool}) -> RAA(t, Bytes.to_list(s)):
+  match t:
+    case RS.TVer{}:
+      no(RAA(RS.TVer{}, Bytes.to_list(s)), e)
+    case RS.TDig{}:
+      no(RAA(RS.TDig{}, Bytes.to_list(s)), e)
+    case RS.TName{}:
+      raa.go(~RS.TName{}, ~97, ~123, ~(c => h => r.nm.in(c, h)), s,
+        %EP.drop0(s) : {Nat.is_eq(Bytes.span.go(_, 97, 123), String.length.go(s, 0n)) == True{} : Bool}
+        e)
+    case RS.TOws{}:
+      no(RAA(RS.TOws{}, Bytes.to_list(s)), e)
+    case RS.TVal{}:
+      raa.go(~RS.TVal{}, ~32, ~127, ~(c => h => r.val.in(c, h)), s,
+        %EP.drop0(s) : {Nat.is_eq(Bytes.span.go(_, 32, 127), String.length.go(s, 0n)) == True{} : Bool}
+        e)
+
+def raa.of.at(fast: Bool, +t: RS.Tok, +s: Bytes(), ef: {X.rok.fast(t, s) == fast : Bool},
+  h: {X.rok.all.at(fast, t, s) == True{} : Bool}) -> RAA(t, Bytes.to_list(s)):
+  match fast:
+    case True{}:
+      raa.fast(t, s, ef)
+    case False{}:
+      raa.each(t, s, h)
+
+def raa.of(+t: RS.Tok, +s: Bytes(), h: {X.rok.all(t, s) == True{} : Bool}) -> RAA(t, Bytes.to_list(s)):
+  raa.of.at(X.rok.fast(t, s), t, s, {==}, h)
 
 def rspan.to(+t: RS.Tok, xs: List<&2, U32>, +c: U32, +rest: List<&2, U32>, h: RAA(t, xs),
   hc: {RS.allows(t, R.cls(c)) == False{} : Bool}) ->

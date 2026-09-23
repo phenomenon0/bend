@@ -322,12 +322,43 @@ def ser(m: Msg) -> Bytes():
 # spec.bend reads back as the body's length. A request the reader took
 # always passes (its bytes came through the same grammar); a check that
 # failed would send the client a 502 rather than the upstream a request.
-def ok.all(+t: Spec.Tok, s: Bytes()) -> Bool:
+# every byte one the token holds, a byte at a time
+def ok.each(+t: Spec.Tok, s: Bytes()) -> Bool:
   match s:
     case SNil{}:
       True{}
     case SCon{Chr{+c}, r}:
-      Spec.allows(t, Eng.cls(c)) && ok.all(t, r)
+      Spec.allows(t, Eng.cls(c)) && ok.each(t, r)
+
+# every byte of s in [lo, hi), by the buffer's own scan
+def all.in(+s: Bytes(), lo: U32, hi: U32) -> Bool:
+  Nat.is_eq(Bytes.span(s, 0n, lo, hi), Bytes.len(s))
+
+# a range of bytes each token holds, taken at once: a method's capitals,
+# a target's visible ASCII, a name's small letters, a value's space and
+# visible ASCII (the common case); the rest is checked a byte at a time
+def ok.fast(t: Spec.Tok, +s: Bytes()) -> Bool:
+  match t:
+    case Spec.TMeth{}:
+      all.in(s, 65, 91)
+    case Spec.TTarget{}:
+      all.in(s, 33, 127)
+    case Spec.TName{}:
+      all.in(s, 97, 123)
+    case Spec.TVal{}:
+      all.in(s, 32, 127)
+    case _:
+      False{}
+
+def ok.all.at(fast: Bool, +t: Spec.Tok, s: Bytes()) -> Bool:
+  match fast:
+    case True{}:
+      True{}
+    case False{}:
+      ok.each(t, s)
+
+def ok.all(+t: Spec.Tok, +s: Bytes()) -> Bool:
+  ok.all.at(ok.fast(t, s), t, s)
 
 def ok.field(f: Wr.Field) -> Bool:
   match f:
@@ -575,12 +606,33 @@ def rsp.fin(+head: Bool, +code: U32, h: RHead, +body: Bytes()) -> Rsp:
 def rask(head: Bool) -> R.Ask:
   R.Ask{head, 268435455}
 
-def rok.all(+t: RS.Tok, s: Bytes()) -> Bool:
+def rok.each(+t: RS.Tok, s: Bytes()) -> Bool:
   match s:
     case SNil{}:
       True{}
     case SCon{Chr{+c}, r}:
-      RS.allows(t, R.cls(c)) && rok.all(t, r)
+      RS.allows(t, R.cls(c)) && rok.each(t, r)
+
+# as for a request: a name's small letters and a value's space and
+# visible ASCII at once
+def rok.fast(t: RS.Tok, +s: Bytes()) -> Bool:
+  match t:
+    case RS.TName{}:
+      all.in(s, 97, 123)
+    case RS.TVal{}:
+      all.in(s, 32, 127)
+    case _:
+      False{}
+
+def rok.all.at(fast: Bool, +t: RS.Tok, s: Bytes()) -> Bool:
+  match fast:
+    case True{}:
+      True{}
+    case False{}:
+      rok.each(t, s)
+
+def rok.all(+t: RS.Tok, +s: Bytes()) -> Bool:
+  rok.all.at(rok.fast(t, s), t, s)
 
 def ris.other(f: RS.Fld) -> Bool:
   match f:
