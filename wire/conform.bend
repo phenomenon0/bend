@@ -16,8 +16,14 @@
 # what it sees from its side.
 #
 #   bend wire/conform.bend -o conform
-#   cc -std=c11 -O2 -Wall wire/conform.c -o conform-peer
+#   cc -std=c11 -O2 -Wall wire/conform.c -o conform-peer -lssl -lcrypto
 #   ./conform-peer ./conform 19120 /tmp/conform-root
+#
+# (the peer runs ./conform PORT ROOT CA), and, out of this program, the connects: TCP.connect_poll to a peer
+# that accepts, to a closed port, to one whose SYNs go unanswered
+# (cx.ok), and TLS.connect to a server its pin trusts, to the same
+# server against the system's store, under another name, and to one
+# that does not speak TLS (tls.ok).
 import Base
 import ./world.bend as W
 
@@ -494,6 +500,98 @@ def files(+root: String, f: U32) -> IO(U32):
     x  : U32 <- read.file(r)
     return (f5 + x : U32)
 
+# Connects
+# ========
+#
+# The peer listens on port + 1 and accepts; nothing listens on port + 2;
+# port + 3's backlog is full, so its SYNs go unanswered; port + 4 is a
+# TLS server whose certificate names localhost and is its own CA (the
+# file ca), and it answers "ping" with "pong" through the session;
+# port + 5 speaks plain HTTP and closes.
+
+def cx.judge(name: String, +ms: U32, d: W.Dial, +took: Nat, +ok: Bool, +code: U32, f: U32) ->
+  IO(U32):
+  do IO<U32>:
+    x : U32 <- verdict(name, W.cx.ok(ms, d, took, tx.back(ok, code)),
+      tx.show(tx.back(ok, code)) ++ " after " ++ ms.note(took))
+    return (f + x : U32)
+
+def cx.back(name: String, +ms: U32, d: W.Dial, +took: Nat, f: U32,
+  r: Result<&1, &1, U32 & String, Socket>) -> IO(U32):
+  match r:
+    case Done{s}:
+      do IO<U32>:
+        Socket.close(s)
+        cx.judge(name, ms, d, took, True{}, 0, f)
+    case Fail{e}:
+      (code, msg) = e
+      cx.judge(name, ms, d, took, False{}, code, f)
+
+def cx.case(name: String, +port: U32, +ms: U32, d: W.Dial, f: U32) -> IO(U32):
+  do IO<U32>:
+    t0 : Nat <- IO.now()
+    r  : Result<&1, &1, U32 & String, Socket> <- TCP.connect_poll("127.0.0.1", port, ms)
+    t1 : Nat <- IO.now()
+    cx.back(name, ms, d, Nat.sub(t1, t0), f, r)
+
+# a session that came up must carry bytes both ways: "ping" out, "pong"
+# back, through the wire the byte effects share
+def tls.pong.is(r: Result<&1, &1, U32 & String, Maybe<&1, Bytes()>>) -> Bool:
+  match r:
+    case Done{may}:
+      match may:
+        case Some{bs}:
+          String.eq(bs, "pong")
+        case None{}:
+          False{}
+    case Fail{e}:
+      False{}
+
+def tls.pong(m: Socket & Result<&1, &1, U32 & String, Maybe<&1, Bytes()>>) -> IO(Bool):
+  (s, r) = m
+  do IO<Bool>:
+    Socket.close(s)
+    return tls.pong.is(r)
+
+def tls.talk(m: Socket & Result<&1, &1, U32 & String, Unit>) -> IO(Bool):
+  (s, r) = m
+  IO.bind(Socket & Result<&1, &1, U32 & String, Maybe<&1, Bytes()>>, Bool,
+    TCP.poll_buf(s, 16, 2000), tls.pong)
+
+def tls.judge(name: String, c: W.Cert, u: Result<&1, &1, U32 & String, Unit>, +talked: Bool,
+  note: String, f: U32) -> IO(U32):
+  do IO<U32>:
+    x : U32 <- verdict(name, W.tls.ok(c, u) && talked, note)
+    return (f + x : U32)
+
+def tls.back(name: String, c: W.Cert, f: U32, r: Result<&1, &1, U32 & String, Socket & String>) ->
+  IO(U32):
+  match r:
+    case Done{sp}:
+      (s, +proto) = sp
+      do IO<U32>:
+        m  : Socket & Result<&1, &1, U32 & String, Unit> <- TCP.send_buf_poll(s, "ping", 2000)
+        +ok : Bool <- tls.talk(m)
+        tls.judge(name, c, Done{Unit{}}, ok && String.eq(proto, "http/1.1"),
+          "done, " ++ Bool.pick(String, ok, "pong came back", "no pong") ++ ", ALPN " ++ proto, f)
+    case Fail{e}:
+      (+code, msg) = e
+      tls.judge(name, c, Fail{(code, "")}, True{}, "fail " ++ U32.show(code) ++ " (" ++ msg ++ ")", f)
+
+def tls.case(name: String, +port: U32, name2: String, ca: String, c: W.Cert, f: U32) -> IO(U32):
+  IO.bind(Result<&1, &1, U32 & String, Socket & String>, U32,
+    TLS.connect("127.0.0.1", port, name2, "http/1.1", ca, 2000), r => tls.back(name, c, f, r))
+
+def connects(+port: U32, +ca: String, f: U32) -> IO(U32):
+  do IO<U32>:
+    a : U32 <- cx.case("cx.accepts", (port + 1 : U32), 2000, W.Accepts{}, f)
+    b : U32 <- cx.case("cx.refused", (port + 2 : U32), 2000, W.Closed{}, a)
+    c : U32 <- cx.case("cx.silent", (port + 3 : U32), 300, W.Silent{}, b)
+    d : U32 <- tls.case("tls.pinned", (port + 4 : U32), "localhost", ca, W.Trusted{}, c)
+    e : U32 <- tls.case("tls.untrusted", (port + 4 : U32), "localhost", "", W.Untrusted{}, d)
+    g : U32 <- tls.case("tls.misnamed", (port + 4 : U32), "example.com", ca, W.Misnamed{}, e)
+    tls.case("tls.plain", (port + 5 : U32), "localhost", ca, W.NotTls{}, g)
+
 # The run
 # =======
 
@@ -507,14 +605,15 @@ def finish.tell(+g: U32, ok: Bool) -> IO(Unit):
 def finish.say(+g: U32) -> IO(Unit):
   finish.tell(g, U32.is_zero(g))
 
-def finish(root: String, lf: Listener & U32) -> IO(Unit):
+def finish(+port: U32, root: String, ca: String, lf: Listener & U32) -> IO(Unit):
   (l, f) = lf
   do IO<Unit>:
     Listener.close(l)
     g : U32 <- files(root, f)
-    finish.say(g)
+    h : U32 <- connects(port, ca, g)
+    finish.say(h)
 
-def run(root: String, l: Listener) -> IO(Unit):
+def run(+port: U32, root: String, ca: String, l: Listener) -> IO(Unit):
   do IO<Unit>:
     IO.print("ready")
     a : Listener & U32 <- rx.case("rx.silent", 100, 300, WNone{}, (l, 0))
@@ -526,27 +625,31 @@ def run(root: String, l: Listener) -> IO(Unit):
     h : Listener & U32 <- tx.case("tx.stall", 18n, 300, 0, W.Stops{}, False{}, g)
     i : Listener & U32 <- tx.case("tx.reset", 14n, 1000, 200, W.Resets{}, False{}, h)
     j : Listener & U32 <- shed(i)
-    finish(root, j)
+    finish(port, root, ca, j)
 
-def conform.at(root: String, may: Maybe<&2, U32>) -> IO(Unit):
+def conform.at(root: String, ca: String, may: Maybe<&2, U32>) -> IO(Unit):
   match may:
     case None{}:
       IO.die(Unit, 2, "conform: PORT is a number")
-    case Some{port}:
+    case Some{+port}:
       do IO<Unit>:
         l : Listener <- IO.try(Listener, TCP.listen(port))
-        run(root, l)
+        run(port, root, ca, l)
 
 def args.go(xs: List<String>) -> IO(Unit):
   match xs:
     case Con{port, rest}:
       match rest:
         case Con{root, more}:
-          conform.at(root, U32.read(port))
+          match more:
+            case Con{ca, none}:
+              conform.at(root, ca, U32.read(port))
+            case Nil{}:
+              IO.die(Unit, 2, "usage: conform PORT ROOT CA")
         case Nil{}:
-          IO.die(Unit, 2, "usage: conform PORT ROOT")
+          IO.die(Unit, 2, "usage: conform PORT ROOT CA")
     case Nil{}:
-      IO.die(Unit, 2, "usage: conform PORT ROOT")
+      IO.die(Unit, 2, "usage: conform PORT ROOT CA")
 
 def main() -> IO(Unit):
   do IO<Unit>:

@@ -445,6 +445,42 @@ def TCP.connect(host: String, port: U32) ->
   import "./effs/tcp_connect.c"
   import "./effs/tcp_connect.js"
 
+# TCP.connect with a deadline: host a dotted IPv4 address (DNS.resolve
+# turns a name into one). Contract (wire/world.bend, cx.ok): to a peer
+# that accepts, Done within ms; to a port nothing listens on, Fail with
+# ECONNREFUSED; to one that never answers, Fail with ETIMEDOUT (110 on
+# Linux, 60 on macOS) after at least ms, and never later than the loop's
+# next turn after it; a malformed address is EINVAL at once.
+def TCP.connect_poll(host: String, port: U32, ms: U32) ->
+  IO(Result<&1, &1, U32 & String, Socket>):
+  import "./effs/tcp_connect_poll.c"
+  import "./effs/tcp_connect_poll.js"
+
+# The first IPv4 address the system's resolver has for a name, dotted
+# (/etc/hosts, then DNS); a dotted address is its own answer, and a name
+# with none is ENOENT. The resolver blocks, so it runs off the loop.
+def DNS.resolve(name: String) -> IO(Result<&1, &1, U32 & String, String>):
+  import "./effs/dns_resolve.c"
+  import "./effs/dns_resolve.js"
+
+# TLS.connect(addr, port, name, alpn, ca, ms): TCP.connect_poll and a
+# TLS client handshake under the one deadline; the socket then carries
+# the session through the byte effects, as TLS.listen's do. The peer's
+# chain is verified against the system's store (ca "") or the file ca
+# names (a pin), and its certificate against name (a host name, sent as
+# SNI too, or an address); alpn is offered comma-separated ("" for
+# none), and the answer carries the protocol chosen ("" for none). A
+# close without close_notify reads as a failure, never as a FIN.
+# Contract (wire/world.bend, tx.ok's sibling cx.ok, and tls.ok): Done
+# only when the handshake completed and the certificate verified; a
+# certificate refused (untrusted, another name) is EACCES; any other
+# handshake failure is EPROTO or ECONNRESET; the deadline is ETIMEDOUT.
+# The JS lane has no TLS and answers ENOSYS.
+def TLS.connect(addr: String, port: U32, name: String, alpn: String, ca: String, ms: U32) ->
+  IO(Result<&1, &1, U32 & String, Socket & String>):
+  import "./effs/tls_listen.c"
+  import "./effs/tls_connect.js"
+
 # The byte pair. A String is decoded as UTF-8, so TCP.recv and TCP.send
 # carry text and only text: a byte that is not valid UTF-8 arrives as
 # U+FFFD, three bytes for one. A protocol that carries bytes -- any

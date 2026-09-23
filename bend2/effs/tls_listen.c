@@ -322,7 +322,7 @@ static void __attribute__((constructor)) tls_listen_use(void) {
 // TLS.listen_alpn(port, cert, key, names): names is a comma-separated
 // list ("h2", "h2,http/1.1"), each 1 to 255 bytes, turned here into the
 // wire's form; an empty name or a list past 255 bytes is EINVAL.
-#ifdef CID_TLS_LISTEN_ALPN
+// TLS.connect offers its list in the same form.
 static TlsAlpn* tls_alpn_of(const char* s, u64 n) {
   TlsAlpn* a = io_mem(calloc(1, sizeof(TlsAlpn)));
   u64 at = 0;
@@ -344,6 +344,7 @@ static TlsAlpn* tls_alpn_of(const char* s, u64 n) {
   return a;
 }
 
+#ifdef CID_TLS_LISTEN_ALPN
 Term tls_listen_alpn_run(Env e, Term* f, IoWork* w) {
   u64   an = 0;
   char* names = io_cstr(e, f[3], &an);
@@ -357,5 +358,239 @@ Term tls_listen_alpn_run(Env e, Term* f, IoWork* w) {
 
 static void __attribute__((constructor)) tls_listen_alpn_use(void) {
   io_eff(CID_TLS_LISTEN_ALPN, tls_listen_alpn_run, 0);
+}
+#endif
+
+// TLS.connect(addr, port, name, alpn, ca, ms): a TCP connect to addr (a
+// dotted IPv4 address) and a TLS client handshake over it, both under
+// one deadline of ms. The session is the one TLS.listen's sockets get,
+// so the byte effects carry it without knowing; unlike theirs, its
+// handshake is done here, so a peer that is not who it says it is fails
+// the connect rather than the first read.
+//
+// The peer is verified: its chain against the system's store (ca "") or
+// against the one file of certificates ca names (a pin), and its name
+// against name -- a host name checked as RFC 6125 says and sent as SNI,
+// or an address literal checked against the certificate's addresses.
+// alpn is what is offered, comma-separated ("" offers nothing); the
+// answer carries the protocol the server chose ("" for none). A peer
+// that closes without a close_notify is a failed read, never a FIN: a
+// body delimited by the close cannot be cut short and pass as whole.
+//
+// Codes: ETIMEDOUT for the deadline; EACCES for a certificate refused
+// (untrusted, expired, another name), with the verifier's reason;
+// EPROTO for any other handshake failure; the connect's own otherwise.
+#ifdef CID_TLS_CONNECT
+#include <netinet/tcp.h>
+#include <openssl/x509v3.h>
+#include <poll.h>
+
+typedef struct { char* ca; SSL_CTX* ctx; } TlsCli;
+
+static TlsCli tls_cli[8];
+
+// one client context per trust store, kept: loading the system's store
+// is the dear part of a connect. Past eight stores a context is made for
+// the connect and freed with its session (SSL_free drops the last
+// reference).
+static SSL_CTX* tls_cli_ctx(const char* ca, bool* own) {
+  *own = false;
+  for (u32 i = 0; i < 8; i += 1) {
+    if (tls_cli[i].ctx != NULL && strcmp(tls_cli[i].ca, ca) == 0) {
+      return tls_cli[i].ctx;
+    }
+  }
+  tls_pre();
+  SSL_CTX* ctx = SSL_CTX_new(TLS_client_method());
+  if (ctx == NULL) {
+    return NULL;
+  }
+  SSL_CTX_set_min_proto_version(ctx, TLS1_2_VERSION);
+  SSL_CTX_set_options(ctx, SSL_OP_NO_RENEGOTIATION);
+  SSL_CTX_set_mode(ctx, SSL_MODE_ENABLE_PARTIAL_WRITE
+    | SSL_MODE_ACCEPT_MOVING_WRITE_BUFFER | SSL_MODE_RELEASE_BUFFERS);
+  SSL_CTX_set_verify(ctx, SSL_VERIFY_PEER, NULL);
+  int ok = ca[0] == 0 ? SSL_CTX_set_default_verify_paths(ctx)
+    : SSL_CTX_load_verify_locations(ctx, ca, NULL);
+  if (ok != 1) {
+    ERR_clear_error();
+    SSL_CTX_free(ctx);
+    return NULL;
+  }
+  for (u32 i = 0; i < 8; i += 1) {
+    if (tls_cli[i].ctx == NULL) {
+      tls_cli[i].ca  = io_mem(strdup(ca));
+      tls_cli[i].ctx = ctx;
+      return ctx;
+    }
+  }
+  *own = true;
+  return ctx;
+}
+
+// While it runs: w->made the descriptor, w->hand the session (0 while
+// the TCP connect is under way), w->data the name, w->text the ALPN
+// list and the trust store, one after the other (w->size where the
+// store begins).
+static Term tls_connect_end(Env e, IoWork* w, int err, const char* why) {
+  int  fd  = (int)w->made;
+  SSL* ssl = (SSL*)w->hand;
+  Term r;
+  if (err != 0) {
+    if (ssl != NULL) {
+      SSL_free(ssl);
+    }
+    if (fd >= 0) {
+      close(fd);
+    }
+    r = io_fail(e, (u32)err, why);
+  } else {
+    const unsigned char* p = NULL;
+    unsigned int         n = 0;
+    SSL_get0_alpn_selected(ssl, &p, &n);
+    TLS_SLOT(tls_up, tls_up_cap, fd, u8);
+    TLS_SLOT(tls_ssl, tls_ssl_cap, fd, SSL*);
+    tls_ssl[fd] = ssl;
+    tls_up[fd]  = TLS_UP;
+    io_wire     = &tls_wire;
+    r = io_done(e, io_tup(e, io_hand(fd), io_str(e, p != NULL ? (const char*)p : "", n)));
+  }
+  ERR_clear_error();
+  free(w->data);
+  free(w->text);
+  return r;
+}
+
+static Term tls_connect_more(Env e, IoWork* w);
+
+// the handshake, a step: done, parked on the way the socket must become
+// ready, or failed
+static Term tls_connect_shake(Env e, IoWork* w, u64 at) {
+  int  fd  = (int)w->made;
+  SSL* ssl = (SSL*)w->hand;
+  tls_pre();
+  int n = SSL_do_handshake(ssl);
+  if (n == 1) {
+    return tls_connect_end(e, w, 0, NULL);
+  }
+  int why = SSL_get_error(ssl, n);
+  if (why == SSL_ERROR_WANT_READ || why == SSL_ERROR_WANT_WRITE) {
+    return io_tick() < at
+      ? io_wait_on(w, fd, why == SSL_ERROR_WANT_READ ? POLLIN : POLLOUT, at, tls_connect_more)
+      : tls_connect_end(e, w, ETIMEDOUT, NULL);
+  }
+  long v = SSL_get_verify_result(ssl);
+  if (v != X509_V_OK) {
+    return tls_connect_end(e, w, EACCES, X509_verify_cert_error_string(v));
+  }
+  unsigned long q = ERR_peek_error();
+  const char* text = q != 0 ? ERR_reason_error_string(q) : NULL;
+  return tls_connect_end(e, w, why == SSL_ERROR_SYSCALL && q == 0 ? ECONNRESET : EPROTO, text);
+}
+
+// the session over the connected socket: the store, the name to verify
+// and to send, the offer
+static Term tls_connect_open(Env e, IoWork* w, u64 at) {
+  int      fd  = (int)w->made;
+  bool     own = false;
+  SSL_CTX* ctx = tls_cli_ctx(w->text + w->size, &own);
+  if (ctx == NULL) {
+    return tls_connect_end(e, w, EINVAL, "the trust store did not load");
+  }
+  tls_pre();
+  SSL* ssl = SSL_new(ctx);
+  if (own) {
+    SSL_CTX_free(ctx);
+  }
+  if (ssl == NULL || SSL_set_fd(ssl, fd) != 1) {
+    SSL_free(ssl);
+    return tls_connect_end(e, w, ENOMEM, NULL);
+  }
+  w->hand = (intptr_t)ssl;
+  SSL_set_connect_state(ssl);
+  unsigned char ip[16];
+  bool literal = inet_pton(AF_INET, w->data, ip) == 1 || inet_pton(AF_INET6, w->data, ip) == 1;
+  int ok = literal
+    ? X509_VERIFY_PARAM_set1_ip_asc(SSL_get0_param(ssl), w->data)
+    : SSL_set_tlsext_host_name(ssl, w->data) == 1 && SSL_set1_host(ssl, w->data) == 1;
+  if (ok != 1) {
+    return tls_connect_end(e, w, EINVAL, "the name cannot be verified");
+  }
+  if (w->text[0] != 0) {
+    TlsAlpn* a = tls_alpn_of(w->text, strlen(w->text));
+    if (a == NULL) {
+      return tls_connect_end(e, w, EINVAL, "the ALPN list is malformed");
+    }
+    int bad = SSL_set_alpn_protos(ssl, a->at, a->n);
+    free(a);
+    if (bad != 0) {
+      return tls_connect_end(e, w, EINVAL, "the ALPN list is malformed");
+    }
+  }
+  return tls_connect_shake(e, w, at);
+}
+
+static Term tls_connect_more(Env e, IoWork* w) {
+  u64 at = io_wait_time(w);
+  int fd = (int)w->made;
+  if (w->hand != 0) {
+    return tls_connect_shake(e, w, at);
+  }
+  struct pollfd p = { fd, POLLOUT, 0 };
+  if (poll(&p, 1, 0) <= 0) {
+    return io_tick() < at ? io_wait_on(w, fd, POLLOUT, at, tls_connect_more)
+      : tls_connect_end(e, w, ETIMEDOUT, NULL);
+  }
+  int       err = 0;
+  socklen_t len = sizeof(err);
+  if (getsockopt(fd, SOL_SOCKET, SO_ERROR, &err, &len) != 0) {
+    err = errno;
+  }
+  return err != 0 ? tls_connect_end(e, w, err, NULL) : tls_connect_open(e, w, at);
+}
+
+Term tls_connect_run(Env e, Term* f, IoWork* w) {
+  struct sockaddr_in to;
+  u64   an = 0, nn = 0, pn = 0, cn = 0;
+  char* addr = io_cstr(e, f[0], &an);
+  w->data = io_cstr(e, f[2], &nn);
+  char* alpn = io_cstr(e, f[3], &pn);
+  char* ca   = io_cstr(e, f[4], &cn);
+  w->text = io_mem(malloc(pn + cn + 2));
+  memcpy(w->text, alpn, pn + 1);
+  memcpy(w->text + pn + 1, ca, cn + 1);
+  w->size = pn + 1;
+  w->made = -1;
+  w->hand = 0;
+  bool bad = io_nul(addr, an) || io_nul(w->data, nn) || nn == 0 || io_nul(alpn, pn)
+    || io_nul(ca, cn) || io_sys_addr(addr, (u32)f[1], &to) != 0;
+  free(addr);
+  free(alpn);
+  free(ca);
+  if (bad) {
+    return tls_connect_end(e, w, EINVAL, NULL);
+  }
+  u64 at = io_tick() + ((u64)f[5] == 0 ? 1 : (u64)f[5]) * 1000000ull;
+  int fd = socket(AF_INET, SOCK_STREAM, 0);
+  if (fd < 0) {
+    return tls_connect_end(e, w, errno, NULL);
+  }
+  w->made = fd;
+  int one = 1;
+  setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof(one));
+  if (fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) | O_NONBLOCK) < 0) {
+    return tls_connect_end(e, w, errno, NULL);
+  }
+  if (connect(fd, (struct sockaddr*)&to, sizeof(to)) == 0) {
+    return tls_connect_open(e, w, at);
+  }
+  if (errno != EINPROGRESS) {
+    return tls_connect_end(e, w, errno, NULL);
+  }
+  return io_wait_on(w, fd, POLLOUT, at, tls_connect_more);
+}
+
+static void __attribute__((constructor)) tls_connect_use(void) {
+  io_eff(CID_TLS_CONNECT, tls_connect_run, 0);
 }
 #endif

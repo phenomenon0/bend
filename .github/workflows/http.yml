@@ -104,11 +104,12 @@ jobs:
           wait $! || true
       # the bridge between the proofs and C: each effect the model makes
       # assumptions of, driven through its contract's cases and judged by
-      # world.bend's relations, with conform.c as its peer
+      # world.bend's relations, with conform.c as its peer; and the client
+      # side: TCP.connect_poll and TLS.connect against cx.ok and tls.ok
       - name: the effects keep their contracts
         run: |
           bun bend2/main.ts wire/conform.bend -o conform
-          cc -std=c11 -O2 -Wall wire/conform.c -o conform-peer
+          cc -std=c11 -O2 -Wall wire/conform.c -o conform-peer -lssl -lcrypto
           ./conform-peer ./conform 8095 "$PWD/conform-root/root"
       - name: the RESP server answers on bend-wire
         run: |

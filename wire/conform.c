@@ -14,8 +14,15 @@
 // sides passed.
 //
 //   bend wire/conform.bend -o conform
-//   cc -std=c11 -O2 -Wall wire/conform.c -o conform-peer
+//   cc -std=c11 -O2 -Wall wire/conform.c -o conform-peer -lssl -lcrypto
 //   ./conform-peer ./conform 19120 /tmp/conform-root
+//
+// For the connects conform makes out, it serves before conform starts:
+// port + 1 accepts, port + 2 is left closed, port + 3's backlog is full
+// (its SYNs go unanswered), port + 4 is TLS with a certificate for
+// localhost that is its own CA (made here with the openssl command,
+// passed to conform as the pin) and answers "ping" with "pong", and
+// port + 5 answers in plain HTTP and closes.
 #define _GNU_SOURCE
 #include <errno.h>
 #include <fcntl.h>
@@ -32,6 +39,8 @@
 #include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
+#include <openssl/err.h>
+#include <openssl/ssl.h>
 
 static int PORT, pass = 0, fail = 0;
 
@@ -125,11 +134,100 @@ static void files(const char* root) {
   f = fopen(q, "w"); fputs("out\n", f); fclose(f);
 }
 
+static int alpn_h11(SSL* ssl, const unsigned char** out, unsigned char* outn,
+  const unsigned char* in, unsigned int inn, void* arg) {
+  static const unsigned char h11[] = { 8, 'h', 't', 't', 'p', '/', '1', '.', '1' };
+  return SSL_select_next_proto((unsigned char**)out, outn, h11, sizeof(h11), in, inn)
+    == OPENSSL_NPN_NEGOTIATED ? SSL_TLSEXT_ERR_OK : SSL_TLSEXT_ERR_NOACK;
+}
+
+static int listen_on(int port, int backlog) {
+  int fd = socket(AF_INET, SOCK_STREAM, 0), one = 1;
+  setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
+  struct sockaddr_in a = { .sin_family = AF_INET, .sin_port = htons(port),
+    .sin_addr.s_addr = htonl(INADDR_LOOPBACK) };
+  if (bind(fd, (struct sockaddr*)&a, sizeof(a)) != 0 || listen(fd, backlog) != 0) {
+    perror("listen");
+    exit(1);
+  }
+  return fd;
+}
+
+// the connects' servers, in a child of their own until killed
+static pid_t servers(const char* cert, const char* key) {
+  int acc = listen_on(PORT + 1, 16), tls = listen_on(PORT + 4, 16), plain = listen_on(PORT + 5, 16);
+  pid_t pid = fork();
+  if (pid != 0) {
+    close(acc); close(tls); close(plain);
+    return pid;
+  }
+  SSL_CTX* ctx = SSL_CTX_new(TLS_server_method());
+  if (SSL_CTX_use_certificate_chain_file(ctx, cert) != 1
+    || SSL_CTX_use_PrivateKey_file(ctx, key, SSL_FILETYPE_PEM) != 1) {
+    fprintf(stderr, "the connects' certificate did not load\n");
+    _exit(1);
+  }
+  SSL_CTX_set_alpn_select_cb(ctx, alpn_h11, NULL);
+  for (;;) {
+    struct pollfd p[3] = { { acc, POLLIN, 0 }, { tls, POLLIN, 0 }, { plain, POLLIN, 0 } };
+    if (poll(p, 3, -1) < 0) continue;
+    if (p[0].revents) {
+      int c = accept(acc, NULL, NULL);
+      if (c >= 0) close(c);
+    }
+    if (p[2].revents) {
+      int c = accept(plain, NULL, NULL);
+      if (c >= 0) {
+        const char* r = "HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\n\r\n";
+        send(c, r, strlen(r), 0);
+        close(c);
+      }
+    }
+    if (p[1].revents) {
+      int c = accept(tls, NULL, NULL);
+      if (c < 0) continue;
+      struct timeval tv = { 3, 0 };
+      setsockopt(c, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+      SSL* ssl = SSL_new(ctx);
+      SSL_set_fd(ssl, c);
+      if (SSL_accept(ssl) == 1) {
+        char b[8];
+        if (SSL_read(ssl, b, 4) == 4 && memcmp(b, "ping", 4) == 0) {
+          SSL_write(ssl, "pong", 4);
+        }
+        SSL_shutdown(ssl);
+      }
+      SSL_free(ssl);
+      ERR_clear_error();
+      close(c);
+    }
+  }
+}
+
 int main(int argc, char** argv) {
   if (argc < 4) { fprintf(stderr, "usage: conform-peer BIN PORT ROOT\n"); return 2; }
   PORT = atoi(argv[2]);
   signal(SIGPIPE, SIG_IGN);
   files(argv[3]);
+
+  // the connects: a certificate for localhost, its own CA; a full
+  // backlog on port + 3 (one queued connection fills a backlog of 0,
+  // and the kernel drops the SYNs after it); the servers
+  char cert[4096], key[4096], cmd[12288];
+  snprintf(cert, sizeof(cert), "%s/../conform-cert.pem", argv[3]);
+  snprintf(key, sizeof(key), "%s/../conform-key.pem", argv[3]);
+  snprintf(cmd, sizeof(cmd), "openssl req -x509 -newkey rsa:2048 -keyout '%s' -out '%s' -days 2"
+    " -nodes -subj /CN=localhost -addext subjectAltName=DNS:localhost 2>/dev/null", key, cert);
+  if (system(cmd) != 0) { fprintf(stderr, "openssl req failed\n"); return 1; }
+  int full = listen_on(PORT + 3, 0), queued[3];
+  for (int i = 0; i < 3; i++) {
+    queued[i] = socket(AF_INET, SOCK_STREAM, 0);
+    fcntl(queued[i], F_SETFL, O_NONBLOCK);
+    struct sockaddr_in a = { .sin_family = AF_INET, .sin_port = htons(PORT + 3),
+      .sin_addr.s_addr = htonl(INADDR_LOOPBACK) };
+    connect(queued[i], (struct sockaddr*)&a, sizeof(a));
+  }
+  pid_t srv = servers(cert, key);
 
   int out[2];
   if (pipe(out) != 0) { perror("pipe"); return 1; }
@@ -140,7 +238,7 @@ int main(int argc, char** argv) {
     setrlimit(RLIMIT_NOFILE, &lim);
     dup2(out[1], 1);
     close(out[0]); close(out[1]);
-    execl(argv[1], argv[1], argv[2], argv[3], "--threads", "1", (char*)NULL);
+    execl(argv[1], argv[1], argv[2], argv[3], cert, "--threads", "1", (char*)NULL);
     perror("exec");
     _exit(127);
   }
@@ -248,6 +346,10 @@ int main(int argc, char** argv) {
   }
   int st = 0;
   waitpid(pid, &st, 0);
+  kill(srv, SIGKILL);
+  waitpid(srv, NULL, 0);
+  for (int i = 0; i < 3; i++) close(queued[i]);
+  close(full);
   int clean = WIFEXITED(st) && WEXITSTATUS(st) == 0;
   printf("conform: %d / %d on the effects' side, %d / %d on the peer's, exit %s\n",
     theirs_pass, theirs_pass + theirs_fail, pass, pass + fail, clean ? "clean" : "unclean");
