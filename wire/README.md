@@ -170,7 +170,9 @@ The client streams a response with `fetch.stream` (the head capped as
 `fetch` caps it, the body to the consumer); `demos/io_http_client
 --stream` fetches a 100 MB file from nginx in 10 MB of RSS, where
 gathering a 15 MB one takes 35 MB. For a request body, a server hands
-the stream a reader entered at the body (`R.body.len`, `R.body.chunked`).
+the stream a reader entered at the body (`R.body.len`, `R.body.chunked`):
+`demos/io_sink` takes 100 MB uploads, by length or chunked, at the
+speed nginx discards them, its peak RSS 3 MB after 200 MB.
 
 ## A protocol on the kit: RESP
 

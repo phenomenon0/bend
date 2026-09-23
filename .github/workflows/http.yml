@@ -9,10 +9,12 @@ name: http engine
 on:
   push:
     branches: [omen-http, claude/next-gen-tier-review-xss592]
-    paths: ["demos/io_http_engine/**", "demos/io_resp/**", "demos/io_http2/**", "wire/**", "power/csv*",
+    paths: ["demos/io_http_engine/**", "demos/io_resp/**", "demos/io_http2/**", "demos/io_sink/**",
+      "demos/io_http_client/**", "wire/**", "power/csv*",
       "bend2/**", "kernel/**", ".github/workflows/http.yml"]
   pull_request:
-    paths: ["demos/io_http_engine/**", "demos/io_resp/**", "demos/io_http2/**", "wire/**", "power/csv*",
+    paths: ["demos/io_http_engine/**", "demos/io_resp/**", "demos/io_http2/**", "demos/io_sink/**",
+      "demos/io_http_client/**", "wire/**", "power/csv*",
       "bend2/**", "kernel/**", ".github/workflows/http.yml"]
 jobs:
   engine:
@@ -138,6 +140,13 @@ jobs:
         run: |
           bun bend2/main.ts demos/io_resp/main.bend -o respd
           python3 demos/io_resp/smoke.py ./respd 6380
+      # the body stream on a server's side (demos/io_sink): uploads by
+      # length and chunked, pipelined, one framed two ways refused, and
+      # 200 MB taken whole while the server's peak RSS stays under 16 MB
+      - name: the sink streams uploads in bounded memory
+        run: |
+          bun bend2/main.ts demos/io_sink/main.bend -o sink
+          bash demos/io_sink/check.sh ./sink 8850
       - name: the engine and the control agree on 500 random streams
         run: |
           up() { for i in $(seq 1 50); do (exec 3<>/dev/tcp/127.0.0.1/$1) 2>/dev/null && return 0; sleep 0.1; done; return 1; }
