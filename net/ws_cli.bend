@@ -127,6 +127,20 @@ def sent(what: String, g: Ws.Out(Unit)) -> R():
         Ws.drop(c)
         return None{}
 
+# a recv that timed out leaves the connection as it was, and the steps
+# go on
+def got.err(c: Ws.Conn, e: Ws.Err) -> R():
+  match e:
+    case Ws.ETime{}:
+      do IO<Maybe<&1, Ws.Conn>>:
+        IO.print("error timed out")
+        return Some{c}
+    case _:
+      do IO<Maybe<&1, Ws.Conn>>:
+        IO.print("error " ++ Ws.err.show(e))
+        Ws.drop(c)
+        return None{}
+
 def got(g: Ws.Out(F.Msg)) -> R():
   (c, r) = g
   match r:
@@ -135,10 +149,7 @@ def got(g: Ws.Out(F.Msg)) -> R():
         IO.print(show.msg(m))
         return Some{c}
     case Fail{e}:
-      do IO<Maybe<&1, Ws.Conn>>:
-        IO.print("error " ++ Ws.err.show(e))
-        Ws.drop(c)
-        return None{}
+      got.err(c, e)
 
 def closed(r: Result<&2, &2, Ws.Err, U32>) -> R():
   match r:
