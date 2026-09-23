@@ -2998,3 +2998,861 @@ def Laws.canonical():
 
 def Laws.fixed_tables():
   ({==}, {==})
+
+# The cap
+# =======
+#
+# The machine never writes past its cap: n, the bytes written, stays at
+# most cap, and the output (the bytes not yet taken and the window) at
+# most n. Each step either keeps its output or goes through emit or
+# copy, which check the cap first. sok is the invariant; each lemma below
+# follows one function of the machine's step to where it builds a St.
+
+def inv(+cc: Nat, o: D.O) -> Bool:
+  match o:
+    case D.O{out, keep, +n, +cap, t}:
+      Nat.is_le(bl(out), n) && (Nat.is_le(n, cap) && Nat.is_le(cap, cc))
+
+def sok(+cc: Nat, st: D.St) -> Bool:
+  match st:
+    case D.St{m, o, bp}:
+      inv(cc, o)
+
+def and_tt(+a: Bool, +b: Bool, ea: {a == True{} : Bool}, eb: {b == True{} : Bool}) ->
+  {Bool.and(a, b) == True{} : Bool}:
+  %Equal.sym(Bool, a, True{}, ea) : {Bool.and(_, b) == True{} : Bool}
+  eb
+
+def add_comm(+a: Nat, +b: Nat) -> {Nat.add(a, b) == Nat.add(b, a) : Nat}:
+  match a:
+    case 0n:
+      Equal.sym(Nat, Nat.add(b, 0n), b, add_zero(b))
+    case 1n+p:
+      Equal.trans(Nat, 1n+Nat.add(p, b), 1n+Nat.add(b, p), Nat.add(b, 1n+p),
+        Equal.cong(Nat, Nat, x => 1n+x, Nat.add(p, b), Nat.add(b, p), add_comm(p, b)),
+        Equal.sym(Nat, Nat.add(b, 1n+p), 1n+Nat.add(b, p), add_succ(b, p)))
+
+def le0(+d: Nat) -> {Nat.is_le(0n, d) == True{} : Bool}:
+  match d:
+    case 0n:
+      {==}
+    case 1n+p:
+      {==}
+
+def lt_le(+x: Nat, +c: Nat) -> {Nat.is_lt(x, c) == True{} : Bool} -> {Nat.is_le(1n+x, c) == True{} : Bool}:
+  match x c:
+    case 0n 0n:
+      e => Bool.no({Nat.is_le(1n, 0n) == True{} : Bool}, e)
+    case 0n 1n+d:
+      e => le0(d)
+    case 1n+p 0n:
+      e => Bool.no({Nat.is_le(2n+p, 0n) == True{} : Bool}, e)
+    case 1n+p 1n+d:
+      e => lt_le(p, d)(e)
+
+def le_add(+k: Nat, +a: Nat, +b: Nat) -> {Nat.is_le(a, b) == True{} : Bool} ->
+  {Nat.is_le(Nat.add(k, a), Nat.add(k, b)) == True{} : Bool}:
+  match k:
+    case 0n:
+      e => e
+    case 1n+p:
+      e => le_add(p, a, b)(e)
+
+def bl_copy(+len: Nat, +out: Bytes(), +dist: Nat) -> {bl(D.copy.go(len, out, dist)) == Nat.add(len, bl(out)) : Nat}:
+  match len:
+    case 0n:
+      {==}
+    case 1n+p:
+      +c = Bytes.get(out, Nat.sub(Bytes.len(out), dist))
+      Equal.trans(Nat, bl(D.copy.go(p, Bytes.push(out, c), dist)), Nat.add(p, bl(Bytes.push(out, c))),
+        1n+Nat.add(p, bl(out)), bl_copy(p, Bytes.push(out, c), dist),
+        Equal.trans(Nat, Nat.add(p, bl(Bytes.push(out, c))), Nat.add(p, 1n+bl(out)), 1n+Nat.add(p, bl(out)),
+          Equal.cong(Nat, Nat, y => Nat.add(p, y), bl(Bytes.push(out, c)), 1n+bl(out), bl_push(out, c)),
+          add_succ(p, bl(out))))
+
+# The writes
+# ----------
+
+def cap.emit.if(+ok: Bool, +out: Bytes(), +keep: Nat, +n: Nat, +cap: Nat, +t: D.Tabs, +c: U32, +next: D.Mode,
+  +bp: Nat, +cc: Nat, e: {ok == Nat.is_lt(n, cap) : Bool}, +h: {inv(cc, D.O{out, keep, n, cap, t}) == True{} : Bool}) ->
+  {sok(cc, D.emit.if(ok, out, keep, n, cap, t, c, next, bp)) == True{} : Bool}:
+  match ok:
+    case True{}:
+      +h2 = Bool.and_r(Nat.is_le(bl(out), n), Nat.is_le(n, cap) && Nat.is_le(cap, cc), h)
+      %Equal.sym(Nat, bl(Bytes.push(out, c)), 1n+bl(out), bl_push(out, c)) :
+        {Bool.and(Nat.is_le(_, 1n+n), Nat.is_le(1n+n, cap) && Nat.is_le(cap, cc)) == True{} : Bool}
+      and_tt(Nat.is_le(bl(out), n), Nat.is_le(1n+n, cap) && Nat.is_le(cap, cc),
+        Bool.and_l(Nat.is_le(bl(out), n), Nat.is_le(n, cap) && Nat.is_le(cap, cc), h),
+        and_tt(Nat.is_le(1n+n, cap), Nat.is_le(cap, cc), lt_le(n, cap)(Equal.sym(Bool, True{}, Nat.is_lt(n, cap), e)),
+          Bool.and_r(Nat.is_le(n, cap), Nat.is_le(cap, cc), h2)))
+    case False{}:
+      h
+
+def cap.emit(+o: D.O, +c: U32, +next: D.Mode, +bp: Nat, +cc: Nat, +h: {inv(cc, o) == True{} : Bool}) ->
+  {sok(cc, D.emit(o, c, next, bp)) == True{} : Bool}:
+  match o:
+    case D.O{+out, +keep, +n, +cap, +t}:
+      cap.emit.if(Nat.is_lt(n, cap), out, keep, n, cap, t, c, next, bp, cc, {==}, h)
+
+def cap.copy.big(+big: Bool, +out: Bytes(), +keep: Nat, +n: Nat, +cap: Nat, +t: D.Tabs, +len: Nat, +dist: Nat,
+  +next: D.Mode, +bp: Nat, +cc: Nat, e: {big == Nat.is_lt(cap, Nat.add(n, len)) : Bool},
+  +h: {inv(cc, D.O{out, keep, n, cap, t}) == True{} : Bool}) ->
+  {sok(cc, D.copy.big(big, out, keep, n, cap, t, len, dist, next, bp)) == True{} : Bool}:
+  match big:
+    case True{}:
+      h
+    case False{}:
+      +h2 = Bool.and_r(Nat.is_le(bl(out), n), Nat.is_le(n, cap) && Nat.is_le(cap, cc), h)
+      +le1 = Equal.trans(Bool, Nat.is_le(bl(D.copy.go(len, out, dist)), Nat.add(n, len)),
+        Nat.is_le(Nat.add(len, bl(out)), Nat.add(len, n)), True{},
+        Equal.trans(Bool, Nat.is_le(bl(D.copy.go(len, out, dist)), Nat.add(n, len)),
+          Nat.is_le(Nat.add(len, bl(out)), Nat.add(n, len)), Nat.is_le(Nat.add(len, bl(out)), Nat.add(len, n)),
+          Equal.cong(Nat, Bool, y => Nat.is_le(y, Nat.add(n, len)), bl(D.copy.go(len, out, dist)),
+            Nat.add(len, bl(out)), bl_copy(len, out, dist)),
+          Equal.cong(Nat, Bool, y => Nat.is_le(Nat.add(len, bl(out)), y), Nat.add(n, len), Nat.add(len, n),
+            add_comm(n, len))),
+        le_add(len, bl(out), n)(Bool.and_l(Nat.is_le(bl(out), n), Nat.is_le(n, cap) && Nat.is_le(cap, cc), h)))
+      +le2 = Equal.trans(Bool, Nat.is_le(Nat.add(n, len), cap), Bool.not(Nat.is_lt(cap, Nat.add(n, len))), True{},
+        Equal.sym(Bool, Bool.not(Nat.is_lt(cap, Nat.add(n, len))), Nat.is_le(Nat.add(n, len), cap),
+          Nat.lt_flip(cap, Nat.add(n, len))),
+        Equal.cong(Bool, Bool, Bool.not, Nat.is_lt(cap, Nat.add(n, len)), False{},
+          Equal.sym(Bool, False{}, Nat.is_lt(cap, Nat.add(n, len)), e)))
+      and_tt(Nat.is_le(bl(D.copy.go(len, out, dist)), Nat.add(n, len)),
+        Nat.is_le(Nat.add(n, len), cap) && Nat.is_le(cap, cc), le1,
+        and_tt(Nat.is_le(Nat.add(n, len), cap), Nat.is_le(cap, cc), le2,
+          Bool.and_r(Nat.is_le(n, cap), Nat.is_le(cap, cc), h2)))
+
+def cap.copy.if(+far: Bool, +big: Bool, +out: Bytes(), +keep: Nat, +n: Nat, +cap: Nat, +t: D.Tabs, +len: Nat,
+  +dist: Nat, +next: D.Mode, +bp: Nat, +cc: Nat, e: {big == Nat.is_lt(cap, Nat.add(n, len)) : Bool},
+  +h: {inv(cc, D.O{out, keep, n, cap, t}) == True{} : Bool}) ->
+  {sok(cc, D.copy.if(far, big, out, keep, n, cap, t, len, dist, next, bp)) == True{} : Bool}:
+  match far:
+    case True{}:
+      h
+    case False{}:
+      cap.copy.big(big, out, keep, n, cap, t, len, dist, next, bp, cc, e, h)
+
+def cap.copy(+o: D.O, +len: Nat, +dist: Nat, +next: D.Mode, +bp: Nat, +cc: Nat, +h: {inv(cc, o) == True{} : Bool}) ->
+  {sok(cc, D.copy(o, len, dist, next, bp)) == True{} : Bool}:
+  match o:
+    case D.O{+out, +keep, +n, +cap, +t}:
+      cap.copy.if(Nat.is_lt(Bytes.len(out), dist), Nat.is_lt(cap, Nat.add(n, len)), out, keep, n, cap, t, len,
+        dist, next, bp, cc, {==}, h)
+
+# The step
+# --------
+
+def cap.next_block(+last: Bool, +o: D.O, +bp: Nat, +cc: Nat, +h: {inv(cc, o) == True{} : Bool}) ->
+  {sok(cc, D.next_block(last, o, bp)) == True{} : Bool}:
+  match last:
+    case True{}:
+      h
+    case False{}:
+      h
+
+def cap.stored_head(+last: Bool, +aligned: Bool, +o: D.O, +bp: Nat, +cc: Nat, +h: {inv(cc, o) == True{} : Bool}) ->
+  {sok(cc, D.stored_head(last, aligned, o, bp)) == True{} : Bool}:
+  match aligned:
+    case True{}:
+      h
+    case False{}:
+      h
+
+def cap.fixed(+last: Bool, +o: D.O, +bp: Nat, +cc: Nat, +h: {inv(cc, o) == True{} : Bool}) ->
+  {sok(cc, D.fixed(last, o, bp)) == True{} : Bool}:
+  match o:
+    case D.O{+out, +keep, +n, +cap, +t}:
+      match t:
+        case D.Tabs{+fll, +fd, +lb, +lx, +db, +dx}:
+          h
+
+def cap.block(+last: Bool, +b1: Bool, +b2: Bool, +o: D.O, +bp: Nat, +cc: Nat, +h: {inv(cc, o) == True{} : Bool}) ->
+  {sok(cc, D.block(last, b1, b2, o, bp)) == True{} : Bool}:
+  match b1 b2:
+    case False{} False{}:
+      cap.stored_head(last, Nat.is_eq(bp, 0n), o, bp, cc, h)
+    case True{} False{}:
+      cap.fixed(last, o, bp, cc, h)
+    case False{} True{}:
+      h
+    case True{} True{}:
+      h
+
+def cap.head(+acc: List<&2, Bool>, +o: D.O, +bp: Nat, +cc: Nat, +h: {inv(cc, o) == True{} : Bool}) ->
+  {sok(cc, D.head(acc, o, bp)) == True{} : Bool}:
+  match acc:
+    case Nil{}:
+      h
+    case Con{+b2, +t2}:
+      match t2:
+        case Nil{}:
+          h
+        case Con{+b1, +t1}:
+          match t1:
+            case Nil{}:
+              h
+            case Con{+last, +t0}:
+              match t0:
+                case Nil{}:
+                  cap.block(last, b1, b2, o, bp, cc, h)
+                case Con{+x, +r}:
+                  h
+
+def cap.stored_body(+last: Bool, +len: Nat, +o: D.O, +bp: Nat, +cc: Nat, +h: {inv(cc, o) == True{} : Bool}) ->
+  {sok(cc, D.stored_body(last, len, o, bp)) == True{} : Bool}:
+  match len:
+    case 0n:
+      cap.next_block(last, o, bp, cc, h)
+    case 1n+p:
+      h
+
+def cap.stored_nlen(+okb: Bool, +last: Bool, +len: Nat, +o: D.O, +bp: Nat, +cc: Nat,
+  +h: {inv(cc, o) == True{} : Bool}) -> {sok(cc, D.stored_nlen(okb, last, len, o, bp)) == True{} : Bool}:
+  match okb:
+    case True{}:
+      cap.stored_body(last, len, o, bp, cc, h)
+    case False{}:
+      h
+
+def cap.stored_byte(+last: Bool, +left: Nat, +c: U32, +o: D.O, +bp: Nat, +cc: Nat,
+  +h: {inv(cc, o) == True{} : Bool}) -> {sok(cc, D.stored_byte(last, left, c, o, bp)) == True{} : Bool}:
+  match last left:
+    case True{} 0n:
+      cap.emit(o, c, D.End{}, bp, cc, h)
+    case False{} 0n:
+      cap.emit(o, c, D.Get{2n, Nil{}, D.KHead{}}, bp, cc, h)
+    case True{} 1n+p:
+      cap.emit(o, c, D.Get{7n, Nil{}, D.KByte{True{}, p}}, bp, cc, h)
+    case False{} 1n+p:
+      cap.emit(o, c, D.Get{7n, Nil{}, D.KByte{False{}, p}}, bp, cc, h)
+
+def cap.dyn_end.tabs(+last: Bool, +ml: Maybe<&2, String>, +md: Maybe<&2, String>, +o: D.O, +bp: Nat, +cc: Nat,
+  +h: {inv(cc, o) == True{} : Bool}) -> {sok(cc, D.dyn_end.tabs(last, ml, md, o, bp)) == True{} : Bool}:
+  match ml:
+    case None{}:
+      h
+    case Some{+ll}:
+      match md:
+        case None{}:
+          h
+        case Some{+d}:
+          h
+
+def cap.dyn_end.at(+noend: Bool, +last: Bool, +ll: List<&2, Nat>, +d: List<&2, Nat>, +o: D.O, +bp: Nat, +cc: Nat,
+  +h: {inv(cc, o) == True{} : Bool}) -> {sok(cc, D.dyn_end.at(noend, last, ll, d, o, bp)) == True{} : Bool}:
+  match noend:
+    case True{}:
+      h
+    case False{}:
+      cap.dyn_end.tabs(last, D.table(ll, False{}), D.table(d, False{}), o, bp, cc, h)
+
+def cap.dyn_next(+hd: D.Dyn, +o: D.O, +bp: Nat, +cc: Nat, +h: {inv(cc, o) == True{} : Bool}) ->
+  {sok(cc, D.dyn_next(hd, o, bp)) == True{} : Bool}:
+  match hd:
+    case D.Dyn{+last, +nlit, +ndist, +left, +lens, +cl}:
+      match left:
+        case 0n:
+          +all = List.reverse(&2, Nat, lens)
+          +ll = List.take(&2, Nat, all, nlit)
+          cap.dyn_end.at(Nat.is_eq(D.nth(ll, 256n), 0n), last, ll, List.drop(&2, Nat, all, nlit), o, bp, cc, h)
+        case 1n+p:
+          h
+
+def cap.cl_done(+last: Bool, +nlit: Nat, +ndist: Nat, +m: Maybe<&2, String>, +o: D.O, +bp: Nat, +cc: Nat,
+  +h: {inv(cc, o) == True{} : Bool}) -> {sok(cc, D.cl_done(last, nlit, ndist, m, o, bp)) == True{} : Bool}:
+  match m:
+    case None{}:
+      h
+    case Some{+t}:
+      cap.dyn_next(D.Dyn{last, nlit, ndist, Nat.add(nlit, ndist), Nil{}, t}, o, bp, cc, h)
+
+def cap.rep.if(+over: Bool, +last: Bool, +nlit: Nat, +ndist: Nat, +left: Nat, +lens: List<&2, Nat>, +cl: String,
+  +count: Nat, +v: Nat, +o: D.O, +bp: Nat, +cc: Nat, +h: {inv(cc, o) == True{} : Bool}) ->
+  {sok(cc, D.rep.if(over, last, nlit, ndist, left, lens, cl, count, v, o, bp)) == True{} : Bool}:
+  match over:
+    case True{}:
+      h
+    case False{}:
+      cap.dyn_next(D.Dyn{last, nlit, ndist, Nat.sub(left, count), D.rep_n(count, v, lens), cl}, o, bp, cc, h)
+
+def cap.rep(+hd: D.Dyn, +count: Nat, +v: Nat, +o: D.O, +bp: Nat, +cc: Nat, +h: {inv(cc, o) == True{} : Bool}) ->
+  {sok(cc, D.rep(hd, count, v, o, bp)) == True{} : Bool}:
+  match hd:
+    case D.Dyn{+last, +nlit, +ndist, +left, +lens, +cl}:
+      cap.rep.if(Nat.is_lt(left, count), last, nlit, ndist, left, lens, cl, count, v, o, bp, cc, h)
+
+def cap.hclen.if(+okb: Bool, +last: Bool, +nlit: Nat, +ndist: Nat, +ncl: Nat, +o: D.O, +bp: Nat, +cc: Nat,
+  +h: {inv(cc, o) == True{} : Bool}) -> {sok(cc, D.hclen.if(okb, last, nlit, ndist, ncl, o, bp)) == True{} : Bool}:
+  match okb:
+    case True{}:
+      h
+    case False{}:
+      h
+
+def cap.cl_got(+last: Bool, +nlit: Nat, +ndist: Nat, +left: Nat, +got: List<&2, Nat>, +o: D.O, +bp: Nat, +cc: Nat,
+  +h: {inv(cc, o) == True{} : Bool}) -> {sok(cc, D.cl_got(last, nlit, ndist, left, got, o, bp)) == True{} : Bool}:
+  match left:
+    case 0n:
+      cap.cl_done(last, nlit, ndist, D.table(D.cl_lens(19n, List.reverse(&2, Nat, got), 0n), True{}), o, bp, cc, h)
+    case 1n+p:
+      h
+
+def cap.len_x(+blk: D.Blk, +base: Nat, +x: Nat, +o: D.O, +bp: Nat, +cc: Nat, +h: {inv(cc, o) == True{} : Bool}) ->
+  {sok(cc, D.len_x(blk, base, x, o, bp)) == True{} : Bool}:
+  match x:
+    case 0n:
+      h
+    case 1n+p:
+      h
+
+def cap.len_code(+blk: D.Blk, +i: Nat, +o: D.O, +bp: Nat, +cc: Nat, +h: {inv(cc, o) == True{} : Bool}) ->
+  {sok(cc, D.len_code(blk, i, o, bp)) == True{} : Bool}:
+  match o:
+    case D.O{+out, +keep, +n, +cap, +t}:
+      match t:
+        case D.Tabs{+fll, +fd, +lb, +lx, +db, +dx}:
+          cap.len_x(blk, U32.to_nat(Bytes.get(lb, i)), U32.to_nat(Bytes.get(lx, i)),
+            D.O{out, keep, n, cap, D.Tabs{fll, fd, lb, lx, db, dx}}, bp, cc, h)
+
+def cap.lit.c(+okb: Bool, +blk: D.Blk, +i: Nat, +o: D.O, +bp: Nat, +cc: Nat, +h: {inv(cc, o) == True{} : Bool}) ->
+  {sok(cc, D.lit.c(okb, blk, i, o, bp)) == True{} : Bool}:
+  match okb:
+    case True{}:
+      cap.len_code(blk, i, o, bp, cc, h)
+    case False{}:
+      h
+
+def cap.lit.b(+eob: Bool, +blk: D.Blk, +s: Nat, +o: D.O, +bp: Nat, +cc: Nat, +h: {inv(cc, o) == True{} : Bool}) ->
+  {sok(cc, D.lit.b(eob, blk, s, o, bp)) == True{} : Bool}:
+  match eob:
+    case True{}:
+      cap.next_block(D.blk_last(blk), o, bp, cc, h)
+    case False{}:
+      cap.lit.c(Nat.is_lt(s, U32.to_nat(286)), blk, Nat.sub(s, U32.to_nat(257)), o, bp, cc, h)
+
+def cap.lit(+is_lit: Bool, +blk: D.Blk, +s: Nat, +o: D.O, +bp: Nat, +cc: Nat, +h: {inv(cc, o) == True{} : Bool}) ->
+  {sok(cc, D.lit(is_lit, blk, s, o, bp)) == True{} : Bool}:
+  match is_lit:
+    case True{}:
+      cap.emit(o, U32.from_nat(s), D.lit_mode(blk), bp, cc, h)
+    case False{}:
+      cap.lit.b(Nat.is_eq(s, 256n), blk, s, o, bp, cc, h)
+
+def cap.dist_x(+blk: D.Blk, +len: Nat, +base: Nat, +x: Nat, +o: D.O, +bp: Nat, +cc: Nat,
+  +h: {inv(cc, o) == True{} : Bool}) -> {sok(cc, D.dist_x(blk, len, base, x, o, bp)) == True{} : Bool}:
+  match x:
+    case 0n:
+      cap.copy(o, len, base, D.lit_mode(blk), bp, cc, h)
+    case 1n+p:
+      h
+
+def cap.dist_code(+blk: D.Blk, +len: Nat, +s: Nat, +o: D.O, +bp: Nat, +cc: Nat, +h: {inv(cc, o) == True{} : Bool}) ->
+  {sok(cc, D.dist_code(blk, len, s, o, bp)) == True{} : Bool}:
+  match o:
+    case D.O{+out, +keep, +n, +cap, +t}:
+      match t:
+        case D.Tabs{+fll, +fd, +lb, +lx, +db, +dx}:
+          cap.dist_x(blk, len, U32.to_nat(Bytes.get(db, s)), U32.to_nat(Bytes.get(dx, s)),
+            D.O{out, keep, n, cap, D.Tabs{fll, fd, lb, lx, db, dx}}, bp, cc, h)
+
+def cap.dist(+okb: Bool, +blk: D.Blk, +len: Nat, +s: Nat, +o: D.O, +bp: Nat, +cc: Nat,
+  +h: {inv(cc, o) == True{} : Bool}) -> {sok(cc, D.dist(okb, blk, len, s, o, bp)) == True{} : Bool}:
+  match okb:
+    case True{}:
+      cap.dist_code(blk, len, s, o, bp, cc, h)
+    case False{}:
+      h
+
+def cap.cl_len(+hd: D.Dyn, +s: Nat, +o: D.O, +bp: Nat, +cc: Nat, +h: {inv(cc, o) == True{} : Bool}) ->
+  {sok(cc, D.cl_len(hd, s, o, bp)) == True{} : Bool}:
+  match hd:
+    case D.Dyn{+last, +nlit, +ndist, +left, +lens, +cl}:
+      cap.dyn_next(D.Dyn{last, nlit, ndist, Nat.sub(left, 1n), Con{s, lens}, cl}, o, bp, cc, h)
+
+def cap.cl_16(+hd: D.Dyn, +o: D.O, +bp: Nat, +cc: Nat, +h: {inv(cc, o) == True{} : Bool}) ->
+  {sok(cc, D.cl_16(hd, o, bp)) == True{} : Bool}:
+  match hd:
+    case D.Dyn{+last, +nlit, +ndist, +left, +lens, +cl}:
+      match lens:
+        case Nil{}:
+          h
+        case Con{+v, +t}:
+          h
+
+def cap.clsym(+hd: D.Dyn, +s: Nat, +o: D.O, +bp: Nat, +cc: Nat, +h: {inv(cc, o) == True{} : Bool}) ->
+  {sok(cc, D.clsym(hd, s, o, bp)) == True{} : Bool}:
+  match s:
+    case 0n:
+      cap.cl_len(hd, 0n, o, bp, cc, h)
+    case 1n:
+      cap.cl_len(hd, 1n, o, bp, cc, h)
+    case 2n:
+      cap.cl_len(hd, 2n, o, bp, cc, h)
+    case 3n:
+      cap.cl_len(hd, 3n, o, bp, cc, h)
+    case 4n:
+      cap.cl_len(hd, 4n, o, bp, cc, h)
+    case 5n:
+      cap.cl_len(hd, 5n, o, bp, cc, h)
+    case 6n:
+      cap.cl_len(hd, 6n, o, bp, cc, h)
+    case 7n:
+      cap.cl_len(hd, 7n, o, bp, cc, h)
+    case 8n:
+      cap.cl_len(hd, 8n, o, bp, cc, h)
+    case 9n:
+      cap.cl_len(hd, 9n, o, bp, cc, h)
+    case 10n:
+      cap.cl_len(hd, 10n, o, bp, cc, h)
+    case 11n:
+      cap.cl_len(hd, 11n, o, bp, cc, h)
+    case 12n:
+      cap.cl_len(hd, 12n, o, bp, cc, h)
+    case 13n:
+      cap.cl_len(hd, 13n, o, bp, cc, h)
+    case 14n:
+      cap.cl_len(hd, 14n, o, bp, cc, h)
+    case 15n:
+      cap.cl_len(hd, 15n, o, bp, cc, h)
+    case 16n:
+      cap.cl_16(hd, o, bp, cc, h)
+    case 17n:
+      h
+    case 18n:
+      h
+    case 19n+q:
+      cap.cl_len(hd, 19n+q, o, bp, cc, h)
+
+def cap.sym(+k: D.SK, +s: Nat, +o: D.O, +bp: Nat, +cc: Nat, +h: {inv(cc, o) == True{} : Bool}) ->
+  {sok(cc, D.sym(k, s, o, bp)) == True{} : Bool}:
+  match k:
+    case D.SLit{+blk}:
+      cap.lit(Nat.is_lt(s, 256n), blk, s, o, bp, cc, h)
+    case D.SDist{+blk, +len}:
+      cap.dist(Nat.is_lt(s, 30n), blk, len, s, o, bp, cc, h)
+    case D.SCl{+hd}:
+      cap.clsym(hd, s, o, bp, cc, h)
+
+def cap.walk.lr(+tab: String, +q: Nat, +leaf: Bool, +k: D.SK, +o: D.O, +bp: Nat, +cc: Nat,
+  +h: {inv(cc, o) == True{} : Bool}) -> {sok(cc, D.walk.lr(tab, q, leaf, k, o, bp)) == True{} : Bool}:
+  match leaf:
+    case True{}:
+      cap.sym(k, q, o, bp, cc, h)
+    case False{}:
+      h
+
+def cap.walk.at(+tab: String, +zero: Bool, qr: Nat & Nat, +k: D.SK, +o: D.O, +bp: Nat, +cc: Nat,
+  +h: {inv(cc, o) == True{} : Bool}) -> {sok(cc, D.walk.at(tab, zero, qr, k, o, bp)) == True{} : Bool}:
+  match zero:
+    case True{}:
+      h
+    case False{}:
+      match qr:
+        case (+q, +r):
+          cap.walk.lr(tab, q, Nat.is_eq(r, 1n), k, o, bp, cc, h)
+
+def cap.walk(+tab: String, +x: Nat, +k: D.SK, +o: D.O, +bp: Nat, +cc: Nat, +h: {inv(cc, o) == True{} : Bool}) ->
+  {sok(cc, D.walk(tab, x, k, o, bp)) == True{} : Bool}:
+  cap.walk.at(tab, Nat.is_eq(x, 0n), Nat.divmod(x, 2n), k, o, bp, cc, h)
+
+def cap.fire(+k: D.K, +acc: List<&2, Bool>, +o: D.O, +bp: Nat, +cc: Nat, +h: {inv(cc, o) == True{} : Bool}) ->
+  {sok(cc, D.fire(k, acc, o, bp)) == True{} : Bool}:
+  match k:
+    case D.KHead{}:
+      cap.head(acc, o, bp, cc, h)
+    case D.KLen{+last}:
+      h
+    case D.KNLen{+last, +len}:
+      cap.stored_nlen(D.compl(len, acc), last, D.hval(len, 0n), o, bp, cc, h)
+    case D.KByte{+last, +left}:
+      cap.stored_byte(last, left, U32.from_nat(D.hval(acc, 0n)), o, bp, cc, h)
+    case D.KLenX{+blk, +base}:
+      h
+    case D.KDistX{+blk, +len, +base}:
+      cap.copy(o, len, Nat.add(base, D.hval(acc, 0n)), D.lit_mode(blk), bp, cc, h)
+    case D.KHlit{+last}:
+      h
+    case D.KHdist{+last, +nlit}:
+      h
+    case D.KHclen{+last, +nlit, +ndist}:
+      cap.hclen.if(D.counts_ok(nlit, ndist), last, nlit, ndist, Nat.add(3n, D.hval(acc, 0n)), o, bp, cc, h)
+    case D.KCl{+last, +nlit, +ndist, +left, +got}:
+      cap.cl_got(last, nlit, ndist, left, Con{D.hval(acc, 0n), got}, o, bp, cc, h)
+    case D.KRep{+hd, +base, +v}:
+      cap.rep(hd, Nat.add(base, D.hval(acc, 0n)), v, o, bp, cc, h)
+
+def cap.mode(+m: D.Mode, +b: Bool, +o: D.O, +bp: Nat, +cc: Nat, +h: {inv(cc, o) == True{} : Bool}) ->
+  {sok(cc, D.mode(m, b, o, bp)) == True{} : Bool}:
+  match m:
+    case D.Get{+left, +acc, +k}:
+      match left:
+        case 0n:
+          cap.fire(k, Con{b, acc}, o, bp, cc, h)
+        case 1n+p:
+          h
+    case D.Walk{+node, +tab, +k}:
+      cap.walk(tab, U32.to_nat(Bytes.get(tab, Nat.add(Nat.double(node), Nat.bit(b, 0n)))), k, o, bp, cc, h)
+    case D.Skip{+last}:
+      cap.stored_head(last, Nat.is_eq(bp, 0n), o, bp, cc, h)
+    case D.End{}:
+      h
+    case D.Bad{+why}:
+      h
+
+def cap.bstep(+st: D.St, +b: Bool, +cc: Nat, +h: {sok(cc, st) == True{} : Bool}) ->
+  {sok(cc, D.bstep(st, b)) == True{} : Bool}:
+  match st:
+    case D.St{+m, +o, +bp}:
+      cap.mode(m, b, o, D.next_bp(bp), cc, h)
+
+def cap.step(+st: D.St, +c: U32, +cc: Nat, +h: {sok(cc, st) == True{} : Bool}) ->
+  {sok(cc, D.step(st, c)) == True{} : Bool}:
+  +s1 = D.bstep(st, D.bit(c, 0n))
+  +s2 = D.bstep(s1, D.bit(c, 1n))
+  +s3 = D.bstep(s2, D.bit(c, 2n))
+  +s4 = D.bstep(s3, D.bit(c, 3n))
+  +s5 = D.bstep(s4, D.bit(c, 4n))
+  +s6 = D.bstep(s5, D.bit(c, 5n))
+  +s7 = D.bstep(s6, D.bit(c, 6n))
+  cap.bstep(s7, D.bit(c, 7n), cc, cap.bstep(s6, D.bit(c, 6n), cc, cap.bstep(s5, D.bit(c, 5n), cc,
+    cap.bstep(s4, D.bit(c, 4n), cc, cap.bstep(s3, D.bit(c, 3n), cc, cap.bstep(s2, D.bit(c, 2n), cc,
+    cap.bstep(s1, D.bit(c, 1n), cc, cap.bstep(st, D.bit(c, 0n), cc, h))))))))
+
+def cap.feed(+bs: List<&2, U32>, +st: D.St, +cc: Nat, +h: {sok(cc, st) == True{} : Bool}) ->
+  {sok(cc, D.feed_list(bs, st)) == True{} : Bool}:
+  match bs:
+    case Nil{}:
+      h
+    case Con{+c, +t}:
+      cap.feed(t, D.step(st, c), cc, cap.step(st, c, cc, h))
+
+# The ends
+# --------
+
+def le_refl(+a: Nat) -> {Nat.is_le(a, a) == True{} : Bool}:
+  match a:
+    case 0n:
+      {==}
+    case 1n+p:
+      le_refl(p)
+
+def le_succ(+a: Nat, +b: Nat) -> {Nat.is_le(a, b) == True{} : Bool} -> {Nat.is_le(a, 1n+b) == True{} : Bool}:
+  match a b:
+    case 0n _:
+      e => {==}
+    case 1n+p 0n:
+      e => Bool.no({Nat.is_le(1n+p, 1n) == True{} : Bool}, e)
+    case 1n+p 1n+q:
+      e => le_succ(p, q)(e)
+
+# a drop is no longer than what it drops from
+def drop_le(+s: Bytes(), +k: Nat) -> {Nat.is_le(bl(Bytes.drop(s, k)), bl(s)) == True{} : Bool}:
+  match s k:
+    case SNil{} _:
+      {==}
+    case SCon{+h, +t} 0n:
+      le_refl(1n+bl(t))
+    case SCon{+h, +t} 1n+p:
+      le_succ(bl(Bytes.drop(t, p)), bl(t))(drop_le(t, p))
+
+# the machine at the start holds the invariant
+def cap.new(+cap: Nat, +tb: D.Tabs) -> {sok(cap, D.St{D.Get{2n, Nil{}, D.KHead{}}, D.O{"", 0n, 0n, cap, tb}, 0n}) == True{} : Bool}:
+  %Equal.sym(Bool, Nat.is_le(0n, cap), True{}, le0(cap)) :
+    {Bool.and(True{}, Bool.and(_, Nat.is_le(cap, cap))) == True{} : Bool}
+  le_refl(cap)
+
+def cap.written(+st: D.St, +cc: Nat, +h: {sok(cc, st) == True{} : Bool}) ->
+  {Nat.is_le(D.written(st), cc) == True{} : Bool}:
+  match st:
+    case D.St{+m, +o, +bp}:
+      match o:
+        case D.O{+out, +keep, +n, +capf, +t}:
+          +h2 = Bool.and_r(Nat.is_le(bl(out), n), Nat.is_le(n, capf) && Nat.is_le(capf, cc), h)
+          Nat.is_le_trans(n, capf, cc, Bool.and_l(Nat.is_le(n, capf), Nat.is_le(capf, cc), h2),
+            Bool.and_r(Nat.is_le(n, capf), Nat.is_le(capf, cc), h2))
+
+def is_done(r: Result<&2, &2, D.Why, Bytes()>) -> Bool:
+  match r:
+    case Fail{w}:
+      False{}
+    case Done{x}:
+      True{}
+
+def done_of(r: Result<&2, &2, D.Why, Bytes()>) -> Bytes():
+  match r:
+    case Fail{w}:
+      ""
+    case Done{x}:
+      x
+
+def not_done(-g: Type, +w: D.Why, +y: Bytes(),
+  e: {Fail{w} == Done{y} : Result<&2, &2, D.Why, Bytes()>}) -> g:
+  Bool.no(g, Equal.cong(Result<&2, &2, D.Why, Bytes()>, Bool, is_done, Fail{w}, Done{y}, e))
+
+# what the machine hands out at its end is at most cc bytes
+def cap.finish(+st: D.St, +cc: Nat, +y: Bytes(), +h: {sok(cc, st) == True{} : Bool},
+  e: {D.finish(st) == Done{y} : Result<&2, &2, D.Why, Bytes()>}) -> {Nat.is_le(bl(y), cc) == True{} : Bool}:
+  match st:
+    case D.St{+m, +o, +bp}:
+      match m o:
+        case D.End{} D.O{+out, +keep, +n, +capf, +t}:
+          +h2 = Bool.and_r(Nat.is_le(bl(out), n), Nat.is_le(n, capf) && Nat.is_le(capf, cc), h)
+          +ey = Equal.cong(Result<&2, &2, D.Why, Bytes()>, Bytes(), done_of, Done{Bytes.drop(out, keep)}, Done{y}, e)
+          %ey : {Nat.is_le(bl(_), cc) == True{} : Bool}
+          Nat.is_le_trans(bl(Bytes.drop(out, keep)), bl(out), cc, drop_le(out, keep),
+            Nat.is_le_trans(bl(out), n, cc, Bool.and_l(Nat.is_le(bl(out), n), Nat.is_le(n, capf) && Nat.is_le(capf, cc), h),
+              Nat.is_le_trans(n, capf, cc, Bool.and_l(Nat.is_le(n, capf), Nat.is_le(capf, cc), h2),
+                Bool.and_r(Nat.is_le(n, capf), Nat.is_le(capf, cc), h2))))
+        case D.Get{+left, +acc, +k} +o2:
+          not_done({Nat.is_le(bl(y), cc) == True{} : Bool}, D.Truncated{}, y, e)
+        case D.Walk{+node, +tab, +k} +o2:
+          not_done({Nat.is_le(bl(y), cc) == True{} : Bool}, D.Truncated{}, y, e)
+        case D.Skip{+last} +o2:
+          not_done({Nat.is_le(bl(y), cc) == True{} : Bool}, D.Truncated{}, y, e)
+        case D.Bad{+why} +o2:
+          not_done({Nat.is_le(bl(y), cc) == True{} : Bool}, why, y, e)
+
+# The window
+# ==========
+
+def lt_succ_r(+i: Nat, +b: Nat) -> {Nat.is_lt(i, b) == True{} : Bool} -> {Nat.is_lt(i, 1n+b) == True{} : Bool}:
+  match i b:
+    case 0n _:
+      e => {==}
+    case 1n+p 0n:
+      e => Bool.no({Nat.is_lt(1n+p, 1n) == True{} : Bool}, e)
+    case 1n+p 1n+q:
+      e => lt_succ_r(p, q)(e)
+
+def nsub_le(+b: Nat, +d: Nat) -> {Nat.is_le(Nat.sub(b, d), b) == True{} : Bool}:
+  match b d:
+    case 0n 0n:
+      {==}
+    case 0n 1n+q:
+      {==}
+    case 1n+p 0n:
+      le_refl(1n+p)
+    case 1n+p 1n+q:
+      le_succ(Nat.sub(p, q), p)(nsub_le(p, q))
+
+def le_lt_succ(+a: Nat, +b: Nat) -> {Nat.is_le(a, b) == True{} : Bool} -> {Nat.is_lt(a, 1n+b) == True{} : Bool}:
+  match a b:
+    case 0n _:
+      e => {==}
+    case 1n+p 0n:
+      e => Bool.no({Nat.is_lt(1n+p, 1n) == True{} : Bool}, e)
+    case 1n+p 1n+q:
+      e => le_lt_succ(p, q)(e)
+
+# a distance of at least 1 within b: its byte is before b
+def lt_sub(+d: Nat, +b: Nat, d1: {Nat.is_lt(0n, d) == True{} : Bool}, dle: {Nat.is_le(d, b) == True{} : Bool}) ->
+  {Nat.is_lt(Nat.sub(b, d), b) == True{} : Bool}:
+  match d b:
+    case 0n _:
+      Bool.no({Nat.is_lt(Nat.sub(b, 0n), b) == True{} : Bool}, d1)
+    case 1n+p 0n:
+      Bool.no({Nat.is_lt(Nat.sub(0n, 1n+p), 0n) == True{} : Bool}, dle)
+    case 1n+p 1n+q:
+      le_lt_succ(Nat.sub(q, p), q)(nsub_le(q, p))
+
+def get_app_lt(+a: Bytes(), +b: Bytes(), +i: Nat, lt: {Nat.is_lt(i, bl(a)) == True{} : Bool}) ->
+  {String.get(String.append(a, b), i) == String.get(a, i) : Maybe<&2, Char>}:
+  match a i:
+    case SNil{} _:
+      Nat.lt_zero({String.get(String.append(SNil{}, b), i) == String.get(SNil{}, i) : Maybe<&2, Char>}, i, lt)
+    case SCon{+h, +t} 0n:
+      {==}
+    case SCon{+h, +t} 1n+p:
+      get_app_lt(t, b, p, lt)
+
+def get_app_len(+a: Bytes(), +b: Bytes()) -> {String.get(String.append(a, b), bl(a)) == String.get(b, 0n) : Maybe<&2, Char>}:
+  match a:
+    case SNil{}:
+      {==}
+    case SCon{+h, +t}:
+      get_app_len(t, b)
+
+# a copy only appends: what was there reads the same
+def copy_prefix(+len: Nat, +out: Bytes(), +d: Nat, +i: Nat, +lt: {Nat.is_lt(i, bl(out)) == True{} : Bool}) ->
+  {String.get(D.copy.go(len, out, d), i) == String.get(out, i) : Maybe<&2, Char>}:
+  match len:
+    case 0n:
+      {==}
+    case 1n+p:
+      +c = Bytes.get(out, Nat.sub(Bytes.len(out), d))
+      +lt2 = Equal.trans(Bool, Nat.is_lt(i, bl(Bytes.push(out, c))), Nat.is_lt(i, 1n+bl(out)), True{},
+        Equal.cong(Nat, Bool, y => Nat.is_lt(i, y), bl(Bytes.push(out, c)), 1n+bl(out), bl_push(out, c)),
+        lt_succ_r(i, bl(out))(lt))
+      Equal.trans(Maybe<&2, Char>, String.get(D.copy.go(p, Bytes.push(out, c), d), i), String.get(Bytes.push(out, c), i),
+        String.get(out, i), copy_prefix(p, Bytes.push(out, c), d, i, lt2),
+        get_app_lt(out, SCon{Chr{c}, SNil{}}, i, lt))
+
+# each copied byte is the byte dist before it
+def copy_back.go(+len: Nat, +j: Nat, +out: Bytes(), +d: Nat, +d1: {Nat.is_lt(0n, d) == True{} : Bool},
+  +dle: {Nat.is_le(d, bl(out)) == True{} : Bool}, jl: {Nat.is_lt(j, len) == True{} : Bool}) ->
+  {Bytes.get(D.copy.go(len, out, d), Nat.add(j, bl(out))) ==
+    Bytes.get(D.copy.go(len, out, d), Nat.sub(Nat.add(j, bl(out)), d)) : U32}:
+  match len j:
+    case 0n _:
+      Nat.lt_zero({Bytes.get(D.copy.go(0n, out, d), Nat.add(j, bl(out))) ==
+        Bytes.get(D.copy.go(0n, out, d), Nat.sub(Nat.add(j, bl(out)), d)) : U32}, j, jl)
+    case 1n+p 0n:
+      +c = Bytes.get(out, Nat.sub(Bytes.len(out), d))
+      +o2 = Bytes.push(out, c)
+      +r = D.copy.go(p, o2, d)
+      +lt1 = Equal.trans(Bool, Nat.is_lt(bl(out), bl(o2)), Nat.is_lt(bl(out), 1n+bl(out)), True{},
+        Equal.cong(Nat, Bool, y => Nat.is_lt(bl(out), y), bl(o2), 1n+bl(out), bl_push(out, c)),
+        le_lt_succ(bl(out), bl(out))(le_refl(bl(out))))
+      +ls = lt_sub(d, bl(out), d1, dle)
+      +lt3 = Equal.trans(Bool, Nat.is_lt(Nat.sub(bl(out), d), bl(o2)), Nat.is_lt(Nat.sub(bl(out), d), 1n+bl(out)), True{},
+        Equal.cong(Nat, Bool, y => Nat.is_lt(Nat.sub(bl(out), d), y), bl(o2), 1n+bl(out), bl_push(out, c)),
+        lt_succ_r(Nat.sub(bl(out), d), bl(out))(ls))
+      +e1 = Equal.trans(Maybe<&2, Char>, String.get(r, bl(out)), String.get(o2, bl(out)), String.get(SCon{Chr{c}, SNil{}}, 0n),
+        copy_prefix(p, o2, d, bl(out), lt1), get_app_len(out, SCon{Chr{c}, SNil{}}))
+      +e2 = Equal.trans(Maybe<&2, Char>, String.get(r, Nat.sub(bl(out), d)), String.get(o2, Nat.sub(bl(out), d)),
+        String.get(out, Nat.sub(bl(out), d)), copy_prefix(p, o2, d, Nat.sub(bl(out), d), lt3),
+        get_app_lt(out, SCon{Chr{c}, SNil{}}, Nat.sub(bl(out), d), ls))
+      Equal.trans(U32, Bytes.byte(String.get(r, bl(out))), c, Bytes.byte(String.get(r, Nat.sub(bl(out), d))),
+        Equal.cong(Maybe<&2, Char>, U32, Bytes.byte, String.get(r, bl(out)), String.get(SCon{Chr{c}, SNil{}}, 0n), e1),
+        Equal.trans(U32, c, Bytes.get(out, Nat.sub(bl(out), d)), Bytes.byte(String.get(r, Nat.sub(bl(out), d))),
+          Equal.cong(Nat, U32, y => Bytes.get(out, Nat.sub(y, d)), Bytes.len(out), bl(out), blen(out)),
+          Equal.sym(U32, Bytes.byte(String.get(r, Nat.sub(bl(out), d))), Bytes.get(out, Nat.sub(bl(out), d)),
+            Equal.cong(Maybe<&2, Char>, U32, Bytes.byte, String.get(r, Nat.sub(bl(out), d)),
+              String.get(out, Nat.sub(bl(out), d)), e2))))
+    case 1n+p 1n+q:
+      +c = Bytes.get(out, Nat.sub(Bytes.len(out), d))
+      +o2 = Bytes.push(out, c)
+      +ih = copy_back.go(p, q, o2, d, d1,
+        Equal.trans(Bool, Nat.is_le(d, bl(o2)), Nat.is_le(d, 1n+bl(out)), True{},
+          Equal.cong(Nat, Bool, y => Nat.is_le(d, y), bl(o2), 1n+bl(out), bl_push(out, c)),
+          le_succ(d, bl(out))(dle)), jl)
+      +ea = Equal.trans(Nat, Nat.add(q, bl(o2)), Nat.add(q, 1n+bl(out)), 1n+Nat.add(q, bl(out)),
+        Equal.cong(Nat, Nat, y => Nat.add(q, y), bl(o2), 1n+bl(out), bl_push(out, c)), add_succ(q, bl(out)))
+      %ea :
+        {Bytes.get(D.copy.go(p, o2, d), _) == Bytes.get(D.copy.go(p, o2, d), Nat.sub(_, d)) : U32}
+      ih
+
+def drop_len(+s: Bytes(), +k: Nat) -> {bl(Bytes.drop(s, k)) == Nat.sub(bl(s), k) : Nat}:
+  match s k:
+    case SNil{} 0n:
+      {==}
+    case SNil{} 1n+p:
+      {==}
+    case SCon{+h, +t} 0n:
+      {==}
+    case SCon{+h, +t} 1n+p:
+      drop_len(t, p)
+
+def sub_self(+a: Nat) -> {Nat.sub(a, a) == 0n : Nat}:
+  match a:
+    case 0n:
+      {==}
+    case 1n+p:
+      sub_self(p)
+
+def sub_succ_l(+p: Nat, +s: Nat) -> {Nat.is_le(s, p) == True{} : Bool} -> {Nat.sub(1n+p, s) == 1n+Nat.sub(p, s) : Nat}:
+  match p s:
+    case 0n 0n:
+      e => {==}
+    case 1n+q 0n:
+      e => {==}
+    case 0n 1n+r:
+      e => Bool.no({Nat.sub(1n, 1n+r) == 1n+Nat.sub(0n, 1n+r) : Nat}, e)
+    case 1n+q 1n+r:
+      e => sub_succ_l(q, r)(e)
+
+def sub_sub_min(+a: Nat, +k: Nat) -> {Nat.sub(a, Nat.sub(a, k)) == Nat.min(a, k) : Nat}:
+  match a k:
+    case 0n 0n:
+      {==}
+    case 0n 1n+q:
+      {==}
+    case 1n+p 0n:
+      sub_self(p)
+    case 1n+p 1n+q:
+      Equal.trans(Nat, Nat.sub(1n+p, Nat.sub(p, q)), 1n+Nat.sub(p, Nat.sub(p, q)), 1n+Nat.min(p, q),
+        sub_succ_l(p, Nat.sub(p, q))(nsub_le(p, q)),
+        Equal.cong(Nat, Nat, y => 1n+y, Nat.sub(p, Nat.sub(p, q)), Nat.min(p, q), sub_sub_min(p, q)))
+
+def take_drop(+s: Bytes(), +k: Nat) -> {String.append(String.take(s, k), String.drop(s, k)) == s : Bytes()}:
+  match s k:
+    case SNil{} _:
+      {==}
+    case SCon{+h, +t} 0n:
+      {==}
+    case SCon{+h, +t} 1n+p:
+      Equal.cong(Bytes(), Bytes(), y => SCon{h, y}, String.append(String.take(t, p), String.drop(t, p)), t,
+        take_drop(t, p))
+
+# the window kept: the last min(len, 32768) bytes of the output
+def win_len(+out: Bytes(), +k: Nat) ->
+  {Bytes.len(Bytes.drop(out, Nat.sub(Bytes.len(out), k))) == Nat.min(Bytes.len(out), k) : Nat}:
+  +w = Nat.sub(Bytes.len(out), k)
+  +e = blen(out)
+  Equal.trans(Nat, Bytes.len(Bytes.drop(out, w)), bl(Bytes.drop(out, w)), Nat.min(Bytes.len(out), k),
+    blen(Bytes.drop(out, w)),
+    Equal.trans(Nat, bl(Bytes.drop(out, w)), Nat.sub(bl(out), w), Nat.min(Bytes.len(out), k), drop_len(out, w),
+      Equal.trans(Nat, Nat.sub(bl(out), w), Nat.sub(bl(out), Nat.sub(bl(out), k)), Nat.min(Bytes.len(out), k),
+        Equal.cong(Nat, Nat, y => Nat.sub(bl(out), Nat.sub(y, k)), Bytes.len(out), bl(out), e),
+        Equal.trans(Nat, Nat.sub(bl(out), Nat.sub(bl(out), k)), Nat.min(bl(out), k), Nat.min(Bytes.len(out), k),
+          sub_sub_min(bl(out), k),
+          Equal.cong(Nat, Nat, y => Nat.min(y, k), bl(out), Bytes.len(out), Equal.sym(Nat, Bytes.len(out), bl(out), e))))))
+
+# the laws at any tables: new(cap) is Dec("", 0n, cap, D.tabs())
+def cap.output(+s: List<&2, U32>, +cap: Nat, +tb: D.Tabs) ->
+  {Nat.is_le(D.written(D.feed_list(s, Dec("", 0n, cap, tb))), cap) == True{} : Bool}:
+  cap.written(D.feed_list(s, Dec("", 0n, cap, tb)), cap, cap.feed(s, Dec("", 0n, cap, tb), cap, cap.new(cap, tb)))
+
+def cap.inflate(+s: Bytes(), +cap: Nat, +tb: D.Tabs, +y: Bytes(),
+  e: {D.finish(D.feed(s, Dec("", 0n, cap, tb))) == Done{y} : Result<&2, &2, D.Why, Bytes()>}) ->
+  {Nat.is_le(Bytes.len(y), cap) == True{} : Bool}:
+  +s0 = Dec("", 0n, cap, tb)
+  +st = D.feed_list(Bytes.to_list(s), s0)
+  +e2 = Equal.trans(Result<&2, &2, D.Why, Bytes()>, D.finish(st), D.finish(D.feed(s, s0)), Done{y},
+    Equal.cong(D.St, Result<&2, &2, D.Why, Bytes()>, D.finish, st, D.feed(s, s0),
+      Equal.sym(D.St, D.feed(s, s0), st, Laws.inflate_buf(s, s0))), e)
+  le_by(Bytes.len(y), bl(y), cap, blen(y), cap.finish(st, cap, y, cap.feed(Bytes.to_list(s), s0, cap,
+    cap.new(cap, tb)), e2))
+
+def Laws.output_cap(s, cap):
+  cap.output(s, cap, D.tabs())
+
+def Laws.inflate_cap(s, cap, y, e):
+  cap.inflate(s, cap, D.tabs(), y, e)
+
+def Laws.copy_far(out, keep, n, cap, t, len, dist, next, bp, far):
+  %Equal.sym(Bool, Nat.is_lt(Bytes.len(out), dist), True{}, far) :
+    {D.copy.if(_, Nat.is_lt(cap, Nat.add(n, len)), out, keep, n, cap, t, len, dist, next, bp) ==
+      D.St{D.Bad{D.FarBack{}}, D.O{out, keep, n, cap, t}, bp} : D.St}
+  {==}
+
+def Laws.copy_near(out, keep, n, cap, t, len, dist, next, bp, near, room):
+  +nf = Equal.trans(Bool, Nat.is_lt(Bytes.len(out), dist), Bool.not(Nat.is_le(dist, Bytes.len(out))), False{},
+    Equal.sym(Bool, Bool.not(Nat.is_le(dist, Bytes.len(out))), Nat.is_lt(Bytes.len(out), dist),
+      Nat.le_flip(dist, Bytes.len(out))),
+    Equal.cong(Bool, Bool, Bool.not, Nat.is_le(dist, Bytes.len(out)), True{}, near))
+  +nb = Equal.trans(Bool, Nat.is_lt(cap, Nat.add(n, len)), Bool.not(Nat.is_le(Nat.add(n, len), cap)), False{},
+    Equal.sym(Bool, Bool.not(Nat.is_le(Nat.add(n, len), cap)), Nat.is_lt(cap, Nat.add(n, len)),
+      Nat.le_flip(Nat.add(n, len), cap)),
+    Equal.cong(Bool, Bool, Bool.not, Nat.is_le(Nat.add(n, len), cap), True{}, room))
+  %Equal.sym(Bool, Nat.is_lt(Bytes.len(out), dist), False{}, nf) :
+    {D.copy.if(_, Nat.is_lt(cap, Nat.add(n, len)), out, keep, n, cap, t, len, dist, next, bp) ==
+      D.St{next, D.O{D.copy.go(len, out, dist), keep, Nat.add(n, len), cap, t}, bp} : D.St}
+  %Equal.sym(Bool, Nat.is_lt(cap, Nat.add(n, len)), False{}, nb) :
+    {D.copy.big(_, out, keep, n, cap, t, len, dist, next, bp) ==
+      D.St{next, D.O{D.copy.go(len, out, dist), keep, Nat.add(n, len), cap, t}, bp} : D.St}
+  {==}
+
+def Laws.copy_back(len, out, dist, j, d1, dle, jl):
+  +e = blen(out)
+  %Equal.sym(Nat, Bytes.len(out), bl(out), e) :
+    {Bytes.get(D.copy.go(len, out, dist), Nat.add(j, _)) ==
+      Bytes.get(D.copy.go(len, out, dist), Nat.sub(Nat.add(j, _), dist)) : U32}
+  copy_back.go(len, j, out, dist, d1,
+    Equal.trans(Bool, Nat.is_le(dist, bl(out)), Nat.is_le(dist, Bytes.len(out)), True{},
+      Equal.cong(Nat, Bool, y => Nat.is_le(dist, y), bl(out), Bytes.len(out), Equal.sym(Nat, Bytes.len(out), bl(out), e)),
+      dle), jl)
+
+def Laws.take_window(m, out, keep, n, cap, t, bp):
+  (win_len(out, 32768n), take_drop(out, Nat.sub(Bytes.len(out), 32768n)))
+

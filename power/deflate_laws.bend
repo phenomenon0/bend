@@ -281,3 +281,93 @@ def ref.fd(t: D.Tabs) -> String:
 law fixed_tables:
   {ref.decodes(ref.fll(D.tabs()), ref.fixed(288n, 0n), 0n) == True{} : Bool} &
   {ref.decodes(ref.fd(D.tabs()), ref.fdist(32n, 0n), 0n) == True{} : Bool}
+
+# The cap
+# =======
+
+# LAW: the cap is a bomb guard. However many bytes come in, the machine
+# has written at most cap bytes...
+law output_cap:
+  for +s: List<&2, U32>
+  for +cap: Nat
+  {Nat.is_le(D.written(D.feed_list(s, D.new(cap))), cap) == True{} : Bool}
+
+# ... and what a stream inflates to is at most cap bytes.
+law inflate_cap:
+  for +s: Bytes()
+  for +cap: Nat
+  for +y: Bytes()
+  for e: {D.inflate(cap, s) == Done{y} : Result<&2, &2, D.Why, Bytes()>}
+  {Nat.is_le(Bytes.len(y), cap) == True{} : Bool}
+
+# The window
+# ==========
+
+# LAW: a distance past the output is refused, with nothing written ...
+law copy_far:
+  for +out: Bytes()
+  for +keep: Nat
+  for +n: Nat
+  for +cap: Nat
+  for +t: D.Tabs
+  for +len: Nat
+  for +dist: Nat
+  for +next: D.Mode
+  for +bp: Nat
+  for far: {Nat.is_lt(Bytes.len(out), dist) == True{} : Bool}
+  {D.copy(D.O{out, keep, n, cap, t}, len, dist, next, bp) ==
+    D.St{D.Bad{D.FarBack{}}, D.O{out, keep, n, cap, t}, bp} : D.St}
+
+# ... and one within it, under the cap, is copied: len more bytes,
+# counted, and the machine goes on.
+law copy_near:
+  for +out: Bytes()
+  for +keep: Nat
+  for +n: Nat
+  for +cap: Nat
+  for +t: D.Tabs
+  for +len: Nat
+  for +dist: Nat
+  for +next: D.Mode
+  for +bp: Nat
+  for near: {Nat.is_le(dist, Bytes.len(out)) == True{} : Bool}
+  for room: {Nat.is_le(Nat.add(n, len), cap) == True{} : Bool}
+  {D.copy(D.O{out, keep, n, cap, t}, len, dist, next, bp) ==
+    D.St{next, D.O{D.copy.go(len, out, dist), keep, Nat.add(n, len), cap, t}, bp} : D.St}
+
+# LAW: LZ77. Each byte a copy writes is the byte dist before it, the
+# copy running over its own bytes when len > dist.
+law copy_back:
+  for +len: Nat
+  for +out: Bytes()
+  for +dist: Nat
+  for +j: Nat
+  for d1: {Nat.is_lt(0n, dist) == True{} : Bool}
+  for dle: {Nat.is_le(dist, Bytes.len(out)) == True{} : Bool}
+  for jl: {Nat.is_lt(j, len) == True{} : Bool}
+  {Bytes.get(D.copy.go(len, out, dist), Nat.add(j, Bytes.len(out))) ==
+    Bytes.get(D.copy.go(len, out, dist), Nat.sub(Nat.add(j, Bytes.len(out)), dist)) : U32}
+
+# what a take leaves the machine: its window
+def win(r: Bytes() & D.St) -> Bytes():
+  (x, st) = r
+  match st:
+    case D.St{m, o, bp}:
+      match o:
+        case D.O{out, keep, n, cap, t}:
+          out
+
+# LAW: a take keeps the last 32768 bytes (all of them, fewer written):
+# the whole window any distance reaches back into, and what it drops is
+# what comes before it.
+law take_window:
+  for +m: D.Mode
+  for +out: Bytes()
+  for +keep: Nat
+  for +n: Nat
+  for +cap: Nat
+  for +t: D.Tabs
+  for +bp: Nat
+  {Bytes.len(win(D.take(D.St{m, D.O{out, keep, n, cap, t}, bp}))) == Nat.min(Bytes.len(out), 32768n) : Nat} &
+  {String.append(String.take(out, Nat.sub(Bytes.len(out), 32768n)), win(D.take(D.St{m, D.O{out, keep, n, cap, t},
+    bp}))) == out : Bytes()}
