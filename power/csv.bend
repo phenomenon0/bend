@@ -706,6 +706,56 @@ def show.go(+d: Dialect, rs: List<&2, List<&2, Bytes()>>, acc: Bytes()) -> Bytes
 def show(+d: Dialect, rs: List<&2, List<&2, Bytes()>>) -> Bytes():
   show.go(d, rs, "")
 
+# What the writer promises to read back
+# -------------------------------------
+#
+# show's output reads back as the records it was given (csv_laws.bend,
+# round_trip) whenever fits holds: the dialect is sane -- CRLF is a line
+# end to it, and its quote, its delimiter, CR and LF are four different
+# bytes -- and every record has a field, is at most max_fields wide and,
+# unless ragged, as wide as the first, and every field is at most
+# max_field bytes.
+
+def size(s: Bytes()) -> Nat:
+  match s:
+    case SNil{}:
+      0n
+    case SCon{h, t}:
+      1n+size(t)
+
+def sane(+d: Dialect) -> Bool:
+  crlf(d) && Bool.not(U32.is_eq(delim(d), quote(d))) && Bool.not(U32.is_eq(13, quote(d)))
+    && Bool.not(U32.is_eq(13, delim(d))) && Bool.not(U32.is_eq(10, quote(d)))
+    && Bool.not(U32.is_eq(10, delim(d)))
+
+def fits.fields(+d: Dialect, r: List<&2, Bytes()>) -> Bool:
+  match r:
+    case Nil{}:
+      True{}
+    case Con{f, t}:
+      Nat.is_le(size(f), max_field(d)) && fits.fields(d, t)
+
+def fits.rec(+d: Dialect, +n0: Nat, +r: List<&2, Bytes()>) -> Bool:
+  Bool.not(List.is_empty(&2, Bytes(), r)) && Nat.is_le(width(r), max_fields(d))
+    && (ragged(d) || Nat.is_eq(width(r), n0)) && fits.fields(d, r)
+
+def fits.recs(+d: Dialect, +n0: Nat, rs: List<&2, List<&2, Bytes()>>) -> Bool:
+  match rs:
+    case Nil{}:
+      True{}
+    case Con{r, t}:
+      fits.rec(d, n0, r) && fits.recs(d, n0, t)
+
+def fits.at(+d: Dialect, rs: List<&2, List<&2, Bytes()>>) -> Bool:
+  match rs:
+    case Nil{}:
+      True{}
+    case Con{+r, t}:
+      fits.recs(d, width(r), Con{r, t})
+
+def fits(+d: Dialect, rs: List<&2, List<&2, Bytes()>>) -> Bool:
+  sane(d) && fits.at(d, rs)
+
 # Files
 # =====
 #

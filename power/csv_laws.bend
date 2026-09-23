@@ -102,3 +102,25 @@ law csv_sim_reads:
   for +rs: List<&2, Bytes()>
   {Csv.result(d, Csv.finish(d, reads(d, rs, Csv.new(d)))) ==
     Spec.parse(Bytes.to_list(Bytes.concat(rs)), d) : Csv.Out}
+
+# The writer
+# ==========
+
+# LAW: what show writes reads back as the records it was given, for
+# every list of records a sane dialect can carry (Csv.fits): every field
+# byte for byte -- the ones with a quote, a delimiter, a CR or an LF in
+# them too, and the empty ones -- and the first as the header when the
+# dialect has one.
+law round_trip:
+  for +d: Csv.Dialect
+  for +rs: List<&2, List<&2, Bytes()>>
+  for ok: {Csv.fits(d, rs) == True{} : Bool}
+  {Csv.read(d, Csv.show(d, rs)) == Csv.table(d, rs) : Csv.Out}
+
+# LAW: and what show writes is RFC 4180 as csv_spec.bend reads it: the
+# reference accepts it, and reads the same records.
+law show_valid:
+  for +d: Csv.Dialect
+  for +rs: List<&2, List<&2, Bytes()>>
+  for ok: {Csv.fits(d, rs) == True{} : Bool}
+  {Spec.parse(Bytes.to_list(Csv.show(d, rs)), d) == Csv.table(d, rs) : Csv.Out}

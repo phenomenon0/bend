@@ -1538,3 +1538,1459 @@ def Laws.csv_sim_reads(d, rs):
     {Csv.result(d, Csv.finish(d, _)) == Spec.parse(Bytes.to_list(Bytes.concat(rs)), d) : Csv.Out}
   Laws.csv_sim(d, Bytes.to_list(Bytes.concat(rs)))
 
+
+# The writer
+# ==========
+#
+# round_trip reads show's output back with the byte machine. The writer
+# builds its output in an accumulator; pfx.* say every piece it adds is
+# the accumulator followed by the piece alone, so the reader reads the
+# pieces one after another (slow_app). A field without a special byte
+# is read as it is (UR, UF); an escaped one's doubled quotes are read as
+# one each (UESC, QF); a delimiter ends a field (TD) and CRLF a record
+# (TCRLF); then records (REC) and the document (DOC). pa is the offset
+# after the bytes, which the reader keeps.
+
+def slow_app(+d: Csv.Dialect, a: Bytes(), -b: Bytes(), p: Csv.P) ->
+  {Csv.feed_buf.slow(d, Bytes.append(a, b), p) ==
+    Csv.feed_buf.slow(d, b, Csv.feed_buf.slow(d, a, p)) : Csv.P}:
+  match a:
+    case SNil{}:
+      {==}
+    case SCon{Chr{c}, t}:
+      slow_app(d, t, b, Csv.step(d, p, c))
+
+def pa(s: Bytes(), pos: Nat) -> Nat:
+  match s:
+    case SNil{}:
+      pos
+    case SCon{h, t}:
+      pa(t, 1n+pos)
+
+def pa_app(a: Bytes(), -b: Bytes(), pos: Nat) -> {pa(Bytes.append(a, b), pos) == pa(b, pa(a, pos)) : Nat}:
+  match a:
+    case SNil{}:
+      {==}
+    case SCon{h, t}:
+      pa_app(t, b, 1n+pos)
+
+# a byte whose class is known steps by that class
+def STK(+d: Csv.Dialect, +c: U32, -k: Csv.K, e: {Csv.cls(d, c) == k : Csv.K}, +m: Csv.Mode, +fl: Nat,
+  +cur: List<&2, Bytes()>, +out: List<&2, List<&2, Bytes()>>, +w: Maybe<&2, Nat>, +pos: Nat) ->
+  {Csv.step(d, Csv.P{m, fl, cur, out, w, pos}, c) == Csv.step.at(d, m, k, c, fl, cur, out, w, pos) : Csv.P}:
+  Equal.cong(Csv.K, Csv.P, kk => Csv.step.at(d, m, kk, c, fl, cur, out, w, pos), Csv.cls(d, c), k, e)
+
+# three equalities in a row
+def tr3(-A: Type, -x: A, -y: A, -z: A, -v: A, e1: {x == y : A}, e2: {y == z : A}, e3: {z == v : A}) ->
+  {x == v : A}:
+  Equal.trans(A, x, y, v, e1, Equal.trans(A, y, z, v, e2, e3))
+
+# Every piece is the accumulator, then the piece
+def pfx.put(k: Csv.K, -c: U32, +acc: Bytes()) ->
+  {Csv.esc.put(k, c, acc) == Bytes.append(acc, Csv.esc.put(k, c, "")) : Bytes()}:
+  match k:
+    case Csv.KQ{}:
+      app_assoc(acc, Csv.one(c), Csv.one(c))
+    case Csv.KD{}:
+      {==}
+    case Csv.KCR{}:
+      {==}
+    case Csv.KLF{}:
+      {==}
+    case Csv.KO{}:
+      {==}
+
+def pfx.esc(+d: Csv.Dialect, +s: Bytes(), +acc: Bytes()) ->
+  {Csv.esc(d, s, acc) == Bytes.append(acc, Csv.esc(d, s, "")) : Bytes()}:
+  match s:
+    case SNil{}:
+      Equal.sym(Bytes(), Bytes.append(acc, ""), acc, app_nil(acc))
+    case SCon{Chr{+c}, t}:
+      tr3(Bytes(), Csv.esc(d, t, Csv.esc.put(Csv.cls(d, c), c, acc)),
+        Bytes.append(Csv.esc.put(Csv.cls(d, c), c, acc), Csv.esc(d, t, "")),
+        Bytes.append(Bytes.append(acc, Csv.esc.put(Csv.cls(d, c), c, "")), Csv.esc(d, t, "")),
+        Bytes.append(acc, Csv.esc(d, t, Csv.esc.put(Csv.cls(d, c), c, ""))),
+        pfx.esc(d, t, Csv.esc.put(Csv.cls(d, c), c, acc)),
+        Equal.cong(Bytes(), Bytes(), x => Bytes.append(x, Csv.esc(d, t, "")),
+          Csv.esc.put(Csv.cls(d, c), c, acc), Bytes.append(acc, Csv.esc.put(Csv.cls(d, c), c, "")),
+          pfx.put(Csv.cls(d, c), c, acc)),
+        Equal.trans(Bytes(), Bytes.append(Bytes.append(acc, Csv.esc.put(Csv.cls(d, c), c, "")),
+          Csv.esc(d, t, "")),
+          Bytes.append(acc, Bytes.append(Csv.esc.put(Csv.cls(d, c), c, ""), Csv.esc(d, t, ""))),
+          Bytes.append(acc, Csv.esc(d, t, Csv.esc.put(Csv.cls(d, c), c, ""))),
+          app_assoc(acc, Csv.esc.put(Csv.cls(d, c), c, ""), Csv.esc(d, t, "")),
+          Equal.cong(Bytes(), Bytes(), x => Bytes.append(acc, x),
+            Bytes.append(Csv.esc.put(Csv.cls(d, c), c, ""), Csv.esc(d, t, "")),
+            Csv.esc(d, t, Csv.esc.put(Csv.cls(d, c), c, "")),
+            Equal.sym(Bytes(), Csv.esc(d, t, Csv.esc.put(Csv.cls(d, c), c, "")),
+              Bytes.append(Csv.esc.put(Csv.cls(d, c), c, ""), Csv.esc(d, t, "")),
+              pfx.esc(d, t, Csv.esc.put(Csv.cls(d, c), c, ""))))))
+
+def pfx.quoted(+d: Csv.Dialect, +s: Bytes(), +acc: Bytes()) ->
+  {Csv.quoted(d, s, acc) == Bytes.append(acc, Csv.quoted(d, s, "")) : Bytes()}:
+  tr3(Bytes(), Bytes.append(Csv.esc(d, s, Csv.push(acc, Csv.quote(d))), Csv.one(Csv.quote(d))),
+    Bytes.append(Bytes.append(Csv.push(acc, Csv.quote(d)), Csv.esc(d, s, "")), Csv.one(Csv.quote(d))),
+    Bytes.append(Bytes.append(acc, Bytes.append(Csv.one(Csv.quote(d)), Csv.esc(d, s, ""))),
+      Csv.one(Csv.quote(d))),
+    Bytes.append(acc, Bytes.append(Csv.esc(d, s, Csv.one(Csv.quote(d))), Csv.one(Csv.quote(d)))),
+    Equal.cong(Bytes(), Bytes(), x => Bytes.append(x, Csv.one(Csv.quote(d))),
+      Csv.esc(d, s, Csv.push(acc, Csv.quote(d))),
+      Bytes.append(Csv.push(acc, Csv.quote(d)), Csv.esc(d, s, "")),
+      pfx.esc(d, s, Csv.push(acc, Csv.quote(d)))),
+    Equal.cong(Bytes(), Bytes(), x => Bytes.append(x, Csv.one(Csv.quote(d))),
+      Bytes.append(Csv.push(acc, Csv.quote(d)), Csv.esc(d, s, "")),
+      Bytes.append(acc, Bytes.append(Csv.one(Csv.quote(d)), Csv.esc(d, s, ""))),
+      app_assoc(acc, Csv.one(Csv.quote(d)), Csv.esc(d, s, ""))),
+    Equal.trans(Bytes(),
+      Bytes.append(Bytes.append(acc, Bytes.append(Csv.one(Csv.quote(d)), Csv.esc(d, s, ""))),
+        Csv.one(Csv.quote(d))),
+      Bytes.append(acc, Bytes.append(Bytes.append(Csv.one(Csv.quote(d)), Csv.esc(d, s, "")),
+        Csv.one(Csv.quote(d)))),
+      Bytes.append(acc, Bytes.append(Csv.esc(d, s, Csv.one(Csv.quote(d))), Csv.one(Csv.quote(d)))),
+      app_assoc(acc, Bytes.append(Csv.one(Csv.quote(d)), Csv.esc(d, s, "")), Csv.one(Csv.quote(d))),
+      Equal.cong(Bytes(), Bytes(), x => Bytes.append(acc, Bytes.append(x, Csv.one(Csv.quote(d)))),
+        Bytes.append(Csv.one(Csv.quote(d)), Csv.esc(d, s, "")), Csv.esc(d, s, Csv.one(Csv.quote(d))),
+        Equal.sym(Bytes(), Csv.esc(d, s, Csv.one(Csv.quote(d))),
+          Bytes.append(Csv.one(Csv.quote(d)), Csv.esc(d, s, "")),
+          pfx.esc(d, s, Csv.one(Csv.quote(d)))))))
+
+def pfx.fat(+d: Csv.Dialect, qb: Bool, +s: Bytes(), +acc: Bytes()) ->
+  {Csv.field.at(d, qb, s, acc) == Bytes.append(acc, Csv.field.at(d, qb, s, "")) : Bytes()}:
+  match qb:
+    case True{}:
+      pfx.quoted(d, s, acc)
+    case False{}:
+      {==}
+
+def pfx.crlf(acc: Bytes()) -> {Csv.crlf.put(acc) == Bytes.append(acc, Csv.crlf.put("")) : Bytes()}:
+  app_assoc(acc, Csv.one(13), Csv.one(10))
+
+# x ++ (a ++ b) ++ c, reassociated
+def asc3(+x: Bytes(), +a: Bytes(), +b: Bytes(), +c: Bytes()) ->
+  {Bytes.append(Bytes.append(Bytes.append(x, a), b), c) ==
+    Bytes.append(x, Bytes.append(Bytes.append(a, b), c)) : Bytes()}:
+  Equal.trans(Bytes(), Bytes.append(Bytes.append(Bytes.append(x, a), b), c),
+    Bytes.append(Bytes.append(x, Bytes.append(a, b)), c),
+    Bytes.append(x, Bytes.append(Bytes.append(a, b), c)),
+    Equal.cong(Bytes(), Bytes(), y => Bytes.append(y, c), Bytes.append(Bytes.append(x, a), b),
+      Bytes.append(x, Bytes.append(a, b)), app_assoc(x, a, b)),
+    app_assoc(x, Bytes.append(a, b), c))
+
+def pfx.fields(+d: Csv.Dialect, +r: List<&2, Bytes()>, +acc: Bytes()) ->
+  {Csv.fields(d, r, acc) == Bytes.append(acc, Csv.fields(d, r, "")) : Bytes()}:
+  match r:
+    case Nil{}:
+      Equal.sym(Bytes(), Bytes.append(acc, ""), acc, app_nil(acc))
+    case Con{+f, t}:
+      Equal.trans(Bytes(), Csv.fields(d, t, Csv.field(d, f, Csv.push(acc, Csv.delim(d)))),
+        Bytes.append(acc, Bytes.append(Bytes.append(Csv.one(Csv.delim(d)), Csv.field(d, f, "")),
+          Csv.fields(d, t, ""))),
+        Bytes.append(acc, Csv.fields(d, t, Csv.field(d, f, Csv.one(Csv.delim(d))))),
+        tr3(Bytes(), Csv.fields(d, t, Csv.field(d, f, Csv.push(acc, Csv.delim(d)))),
+          Bytes.append(Csv.field(d, f, Csv.push(acc, Csv.delim(d))), Csv.fields(d, t, "")),
+          Bytes.append(Bytes.append(Csv.push(acc, Csv.delim(d)), Csv.field(d, f, "")), Csv.fields(d, t, "")),
+          Bytes.append(acc, Bytes.append(Bytes.append(Csv.one(Csv.delim(d)), Csv.field(d, f, "")),
+            Csv.fields(d, t, ""))),
+          pfx.fields(d, t, Csv.field(d, f, Csv.push(acc, Csv.delim(d)))),
+          Equal.cong(Bytes(), Bytes(), x => Bytes.append(x, Csv.fields(d, t, "")),
+            Csv.field(d, f, Csv.push(acc, Csv.delim(d))),
+            Bytes.append(Csv.push(acc, Csv.delim(d)), Csv.field(d, f, "")),
+            pfx.fat(d, Csv.needs(d, f), f, Csv.push(acc, Csv.delim(d)))),
+          asc3(acc, Csv.one(Csv.delim(d)), Csv.field(d, f, ""), Csv.fields(d, t, ""))),
+        Equal.cong(Bytes(), Bytes(), x => Bytes.append(acc, x),
+          Bytes.append(Bytes.append(Csv.one(Csv.delim(d)), Csv.field(d, f, "")), Csv.fields(d, t, "")),
+          Csv.fields(d, t, Csv.field(d, f, Csv.one(Csv.delim(d)))),
+          Equal.sym(Bytes(), Csv.fields(d, t, Csv.field(d, f, Csv.one(Csv.delim(d)))),
+            Bytes.append(Bytes.append(Csv.one(Csv.delim(d)), Csv.field(d, f, "")), Csv.fields(d, t, "")),
+            Equal.trans(Bytes(), Csv.fields(d, t, Csv.field(d, f, Csv.one(Csv.delim(d)))),
+              Bytes.append(Csv.field(d, f, Csv.one(Csv.delim(d))), Csv.fields(d, t, "")),
+              Bytes.append(Bytes.append(Csv.one(Csv.delim(d)), Csv.field(d, f, "")), Csv.fields(d, t, "")),
+              pfx.fields(d, t, Csv.field(d, f, Csv.one(Csv.delim(d)))),
+              Equal.cong(Bytes(), Bytes(), x => Bytes.append(x, Csv.fields(d, t, "")),
+                Csv.field(d, f, Csv.one(Csv.delim(d))),
+                Bytes.append(Csv.one(Csv.delim(d)), Csv.field(d, f, "")),
+                pfx.fat(d, Csv.needs(d, f), f, Csv.one(Csv.delim(d))))))))
+
+# a record of two fields or more: its first field, the rest after it, CRLF
+def rec2.pfx(+d: Csv.Dialect, +f: Bytes(), +gs: List<&2, Bytes()>, +acc: Bytes()) ->
+  {Csv.crlf.put(Csv.fields(d, gs, Csv.field(d, f, acc))) ==
+    Bytes.append(acc, Csv.crlf.put(Csv.fields(d, gs, Csv.field(d, f, "")))) : Bytes()}:
+  tr3(Bytes(), Csv.crlf.put(Csv.fields(d, gs, Csv.field(d, f, acc))),
+    Bytes.append(Csv.fields(d, gs, Csv.field(d, f, acc)), Csv.crlf.put("")),
+    Bytes.append(Bytes.append(Bytes.append(acc, Csv.field(d, f, "")), Csv.fields(d, gs, "")),
+      Csv.crlf.put("")),
+    Bytes.append(acc, Csv.crlf.put(Csv.fields(d, gs, Csv.field(d, f, "")))),
+    pfx.crlf(Csv.fields(d, gs, Csv.field(d, f, acc))),
+    Equal.cong(Bytes(), Bytes(), x => Bytes.append(x, Csv.crlf.put("")),
+      Csv.fields(d, gs, Csv.field(d, f, acc)),
+      Bytes.append(Bytes.append(acc, Csv.field(d, f, "")), Csv.fields(d, gs, "")),
+      Equal.trans(Bytes(), Csv.fields(d, gs, Csv.field(d, f, acc)),
+        Bytes.append(Csv.field(d, f, acc), Csv.fields(d, gs, "")),
+        Bytes.append(Bytes.append(acc, Csv.field(d, f, "")), Csv.fields(d, gs, "")),
+        pfx.fields(d, gs, Csv.field(d, f, acc)),
+        Equal.cong(Bytes(), Bytes(), x => Bytes.append(x, Csv.fields(d, gs, "")),
+          Csv.field(d, f, acc), Bytes.append(acc, Csv.field(d, f, "")),
+          pfx.fat(d, Csv.needs(d, f), f, acc)))),
+    Equal.trans(Bytes(),
+      Bytes.append(Bytes.append(Bytes.append(acc, Csv.field(d, f, "")), Csv.fields(d, gs, "")),
+        Csv.crlf.put("")),
+      Bytes.append(acc, Bytes.append(Bytes.append(Csv.field(d, f, ""), Csv.fields(d, gs, "")),
+        Csv.crlf.put(""))),
+      Bytes.append(acc, Csv.crlf.put(Csv.fields(d, gs, Csv.field(d, f, "")))),
+      asc3(acc, Csv.field(d, f, ""), Csv.fields(d, gs, ""), Csv.crlf.put("")),
+      Equal.cong(Bytes(), Bytes(), x => Bytes.append(acc, x),
+        Bytes.append(Bytes.append(Csv.field(d, f, ""), Csv.fields(d, gs, "")), Csv.crlf.put("")),
+        Csv.crlf.put(Csv.fields(d, gs, Csv.field(d, f, ""))),
+        Equal.sym(Bytes(), Csv.crlf.put(Csv.fields(d, gs, Csv.field(d, f, ""))),
+          Bytes.append(Bytes.append(Csv.field(d, f, ""), Csv.fields(d, gs, "")), Csv.crlf.put("")),
+          Equal.trans(Bytes(), Csv.crlf.put(Csv.fields(d, gs, Csv.field(d, f, ""))),
+            Bytes.append(Csv.fields(d, gs, Csv.field(d, f, "")), Csv.crlf.put("")),
+            Bytes.append(Bytes.append(Csv.field(d, f, ""), Csv.fields(d, gs, "")), Csv.crlf.put("")),
+            pfx.crlf(Csv.fields(d, gs, Csv.field(d, f, ""))),
+            Equal.cong(Bytes(), Bytes(), x => Bytes.append(x, Csv.crlf.put("")),
+              Csv.fields(d, gs, Csv.field(d, f, "")),
+              Bytes.append(Csv.field(d, f, ""), Csv.fields(d, gs, "")),
+              pfx.fields(d, gs, Csv.field(d, f, ""))))))))
+
+def pfx.record(+d: Csv.Dialect, +r: List<&2, Bytes()>, +acc: Bytes()) ->
+  {Csv.record(d, r, acc) == Bytes.append(acc, Csv.record(d, r, "")) : Bytes()}:
+  match r:
+    case Nil{}:
+      pfx.crlf(acc)
+    case Con{+f, t}:
+      match t:
+        case Nil{}:
+          tr3(Bytes(), Csv.crlf.put(Csv.field.at(d, Bool.or(Csv.needs(d, f), String.is_empty(f)), f, acc)),
+            Bytes.append(Csv.field.at(d, Bool.or(Csv.needs(d, f), String.is_empty(f)), f, acc),
+              Csv.crlf.put("")),
+            Bytes.append(Bytes.append(acc, Csv.field.at(d, Bool.or(Csv.needs(d, f), String.is_empty(f)), f,
+              "")), Csv.crlf.put("")),
+            Bytes.append(acc, Csv.crlf.put(Csv.field.at(d, Bool.or(Csv.needs(d, f), String.is_empty(f)), f,
+              ""))),
+            pfx.crlf(Csv.field.at(d, Bool.or(Csv.needs(d, f), String.is_empty(f)), f, acc)),
+            Equal.cong(Bytes(), Bytes(), x => Bytes.append(x, Csv.crlf.put("")),
+              Csv.field.at(d, Bool.or(Csv.needs(d, f), String.is_empty(f)), f, acc),
+              Bytes.append(acc, Csv.field.at(d, Bool.or(Csv.needs(d, f), String.is_empty(f)), f, "")),
+              pfx.fat(d, Bool.or(Csv.needs(d, f), String.is_empty(f)), f, acc)),
+            Equal.trans(Bytes(),
+              Bytes.append(Bytes.append(acc, Csv.field.at(d, Bool.or(Csv.needs(d, f), String.is_empty(f)),
+                f, "")), Csv.crlf.put("")),
+              Bytes.append(acc, Bytes.append(Csv.field.at(d, Bool.or(Csv.needs(d, f), String.is_empty(f)),
+                f, ""), Csv.crlf.put(""))),
+              Bytes.append(acc, Csv.crlf.put(Csv.field.at(d, Bool.or(Csv.needs(d, f), String.is_empty(f)),
+                f, ""))),
+              app_assoc(acc, Csv.field.at(d, Bool.or(Csv.needs(d, f), String.is_empty(f)), f, ""),
+                Csv.crlf.put("")),
+              Equal.cong(Bytes(), Bytes(), x => Bytes.append(acc, x),
+                Bytes.append(Csv.field.at(d, Bool.or(Csv.needs(d, f), String.is_empty(f)), f, ""),
+                  Csv.crlf.put("")),
+                Csv.crlf.put(Csv.field.at(d, Bool.or(Csv.needs(d, f), String.is_empty(f)), f, "")),
+                Equal.sym(Bytes(),
+                  Csv.crlf.put(Csv.field.at(d, Bool.or(Csv.needs(d, f), String.is_empty(f)), f, "")),
+                  Bytes.append(Csv.field.at(d, Bool.or(Csv.needs(d, f), String.is_empty(f)), f, ""),
+                    Csv.crlf.put("")),
+                  pfx.crlf(Csv.field.at(d, Bool.or(Csv.needs(d, f), String.is_empty(f)), f, ""))))))
+        case Con{+g, +u}:
+          rec2.pfx(d, f, Con{g, u}, acc)
+
+def pfx.show(+d: Csv.Dialect, +rs: List<&2, List<&2, Bytes()>>, +acc: Bytes()) ->
+  {Csv.show.go(d, rs, acc) == Bytes.append(acc, Csv.show.go(d, rs, "")) : Bytes()}:
+  match rs:
+    case Nil{}:
+      Equal.sym(Bytes(), Bytes.append(acc, ""), acc, app_nil(acc))
+    case Con{+r, t}:
+      tr3(Bytes(), Csv.show.go(d, t, Csv.record(d, r, acc)),
+        Bytes.append(Csv.record(d, r, acc), Csv.show.go(d, t, "")),
+        Bytes.append(Bytes.append(acc, Csv.record(d, r, "")), Csv.show.go(d, t, "")),
+        Bytes.append(acc, Csv.show.go(d, t, Csv.record(d, r, ""))),
+        pfx.show(d, t, Csv.record(d, r, acc)),
+        Equal.cong(Bytes(), Bytes(), x => Bytes.append(x, Csv.show.go(d, t, "")),
+          Csv.record(d, r, acc), Bytes.append(acc, Csv.record(d, r, "")), pfx.record(d, r, acc)),
+        Equal.trans(Bytes(), Bytes.append(Bytes.append(acc, Csv.record(d, r, "")), Csv.show.go(d, t, "")),
+          Bytes.append(acc, Bytes.append(Csv.record(d, r, ""), Csv.show.go(d, t, ""))),
+          Bytes.append(acc, Csv.show.go(d, t, Csv.record(d, r, ""))),
+          app_assoc(acc, Csv.record(d, r, ""), Csv.show.go(d, t, "")),
+          Equal.cong(Bytes(), Bytes(), x => Bytes.append(acc, x),
+            Bytes.append(Csv.record(d, r, ""), Csv.show.go(d, t, "")),
+            Csv.show.go(d, t, Csv.record(d, r, "")),
+            Equal.sym(Bytes(), Csv.show.go(d, t, Csv.record(d, r, "")),
+              Bytes.append(Csv.record(d, r, ""), Csv.show.go(d, t, "")),
+              pfx.show(d, t, Csv.record(d, r, ""))))))
+
+# Bools and Nats
+# --------------
+
+def and.l(a: Bool, -b: Bool) -> {Bool.and(a, b) == True{} : Bool} -> {a == True{} : Bool}:
+  match a:
+    case True{}:
+      e => {==}
+    case False{}:
+      e => e
+
+def and.r(a: Bool, -b: Bool) -> {Bool.and(a, b) == True{} : Bool} -> {b == True{} : Bool}:
+  match a:
+    case True{}:
+      e => e
+    case False{}:
+      e => no({b == True{} : Bool}, e)
+
+def not.t(b: Bool) -> {Bool.not(b) == True{} : Bool} -> {b == False{} : Bool}:
+  match b:
+    case True{}:
+      e => no({True{} == False{} : Bool}, e)
+    case False{}:
+      e => {==}
+
+# a field that must be quoted is quoted: needs is special, or more
+def needs.ok(s: Bool, -x: Bool) -> {Bool.or(Bool.not(s), Bool.or(s, x)) == True{} : Bool}:
+  match s:
+    case True{}:
+      {==}
+    case False{}:
+      {==}
+
+def needs.ok2(s: Bool, -x: Bool, -y: Bool) ->
+  {Bool.or(Bool.not(s), Bool.or(Bool.or(s, x), y)) == True{} : Bool}:
+  match s:
+    case True{}:
+      {==}
+    case False{}:
+      {==}
+
+def or.f(y: Bool) -> {Bool.or(y, False{}) == True{} : Bool} -> {y == True{} : Bool}:
+  match y:
+    case True{}:
+      e => {==}
+    case False{}:
+      e => e
+
+def nat_eq(a: Nat, b: Nat) -> {Nat.is_eq(a, b) == True{} : Bool} -> {a == b : Nat}:
+  match a b:
+    case 0n 0n:
+      e => {==}
+    case 0n 1n+q:
+      e => no({0n == 1n+q : Nat}, e)
+    case 1n+p 0n:
+      e => no({1n+p == 0n : Nat}, e)
+    case 1n+p 1n+q:
+      e => Equal.cong(Nat, Nat, x => 1n+x, p, q, nat_eq(p, q)(e))
+
+def nat_refl(a: Nat) -> {Nat.is_eq(a, a) == True{} : Bool}:
+  match a:
+    case 0n:
+      {==}
+    case 1n+p:
+      nat_refl(p)
+
+def sub0(a: Nat) -> {Nat.sub(a, 0n) == a : Nat}:
+  match a:
+    case 0n:
+      {==}
+    case 1n+p:
+      {==}
+
+def bref(b: Bool) -> {Word.cmp.fin(b, b, EQ{}) == EQ{} : Cmp}:
+  match b:
+    case True{}:
+      {==}
+    case False{}:
+      {==}
+
+# U32 equality is reflexive
+def wref(n: Nat, w: Word(n)) -> {Word.cmp(n, w, w) == EQ{} : Cmp}:
+  match n:
+    case 0n:
+      {==}
+    case 1n+p:
+      match w:
+        case WCon{b, t}:
+          %Equal.sym(Cmp, Word.cmp(p, t, t), EQ{}, wref(p, t)) : {Word.cmp.fin(b, b, _) == EQ{} : Cmp}
+          bref(b)
+
+def u32ref(x: U32) -> {U32.is_eq(x, x) == True{} : Bool}:
+  match x:
+    case U32{w}:
+      %Equal.sym(Cmp, Word.cmp(32n, w, w), EQ{}, wref(32n, w)) : {Cmp.is_eq(_) == True{} : Bool}
+      {==}
+
+def kp.f(b: Bool, -x: Csv.K, -y: Csv.K) -> {b == False{} : Bool} -> {Csv.k.pick(b, x, y) == y : Csv.K}:
+  match b:
+    case True{}:
+      e => no({x == y : Csv.K}, Equal.sym(Bool, True{}, False{}, e))
+    case False{}:
+      e => {==}
+
+def kp.t(b: Bool, -x: Csv.K, -y: Csv.K) -> {b == True{} : Bool} -> {Csv.k.pick(b, x, y) == x : Csv.K}:
+  match b:
+    case True{}:
+      e => {==}
+    case False{}:
+      e => no({y == x : Csv.K}, e)
+
+# What sane says
+# --------------
+
+def SX(-a: Bool, -b: Bool, -c: Bool, -e: Bool, -f: Bool, -g: Bool) -> Type:
+  {a == True{} : Bool} & {b == False{} : Bool} & {c == False{} : Bool} & {e == False{} : Bool} &
+    {f == False{} : Bool} & {g == False{} : Bool}
+
+def sa6(+a: Bool, +b: Bool, +c: Bool, +e: Bool, +f: Bool, +g: Bool) ->
+  {Bool.and(Bool.and(Bool.and(Bool.and(Bool.and(a, Bool.not(b)), Bool.not(c)), Bool.not(e)), Bool.not(f)),
+    Bool.not(g)) == True{} : Bool} -> SX(a, b, c, e, f, g):
+  +h =>
+    +h5 = and.l(Bool.and(Bool.and(Bool.and(Bool.and(a, Bool.not(b)), Bool.not(c)), Bool.not(e)), Bool.not(f)),
+      Bool.not(g))(h)
+    +h4 = and.l(Bool.and(Bool.and(Bool.and(a, Bool.not(b)), Bool.not(c)), Bool.not(e)), Bool.not(f))(h5)
+    +h3 = and.l(Bool.and(Bool.and(a, Bool.not(b)), Bool.not(c)), Bool.not(e))(h4)
+    +h2 = and.l(Bool.and(a, Bool.not(b)), Bool.not(c))(h3)
+    (and.l(a, Bool.not(b))(h2),
+      (not.t(b)(and.r(a, Bool.not(b))(h2)),
+        (not.t(c)(and.r(Bool.and(a, Bool.not(b)), Bool.not(c))(h3)),
+          (not.t(e)(and.r(Bool.and(Bool.and(a, Bool.not(b)), Bool.not(c)), Bool.not(e))(h4)),
+            (not.t(f)(and.r(Bool.and(Bool.and(Bool.and(a, Bool.not(b)), Bool.not(c)), Bool.not(e)),
+              Bool.not(f))(h5)),
+              not.t(g)(and.r(Bool.and(Bool.and(Bool.and(Bool.and(a, Bool.not(b)), Bool.not(c)), Bool.not(e)),
+                Bool.not(f)), Bool.not(g))(h)))))))
+
+# the sane dialect's facts, one Bool at a time: sane is
+# ((((crlf && dq) && q13) && d13) && q10) && d10
+def SA(+d: Csv.Dialect) -> Type:
+  SX(Csv.crlf(d), U32.is_eq(Csv.delim(d), Csv.quote(d)), U32.is_eq(13, Csv.quote(d)),
+    U32.is_eq(13, Csv.delim(d)), U32.is_eq(10, Csv.quote(d)), U32.is_eq(10, Csv.delim(d)))
+
+def sane.sa(+d: Csv.Dialect) -> {Csv.sane(d) == True{} : Bool} -> SA(d):
+  h => sa6(Csv.crlf(d), U32.is_eq(Csv.delim(d), Csv.quote(d)), U32.is_eq(13, Csv.quote(d)),
+    U32.is_eq(13, Csv.delim(d)), U32.is_eq(10, Csv.quote(d)), U32.is_eq(10, Csv.delim(d)))(h)
+
+# the four bytes the writer writes about the text are the classes it
+# means them as
+def cls.q(+d: Csv.Dialect) -> {Csv.cls(d, Csv.quote(d)) == Csv.KQ{} : Csv.K}:
+  kp.t(U32.is_eq(Csv.quote(d), Csv.quote(d)), Csv.KQ{}, Csv.k.pick(U32.is_eq(Csv.quote(d), Csv.delim(d)),
+    Csv.KD{}, Csv.k.pick(U32.is_eq(Csv.quote(d), 13), Csv.KCR{}, Csv.k.pick(U32.is_eq(Csv.quote(d), 10),
+    Csv.KLF{}, Csv.KO{}))))(u32ref(Csv.quote(d)))
+
+def cls.d(+d: Csv.Dialect, s: SA(d)) -> {Csv.cls(d, Csv.delim(d)) == Csv.KD{} : Csv.K}:
+  (h1, s2) = s
+  (h2, s3) = s2
+  Equal.trans(Csv.K, Csv.cls(d, Csv.delim(d)),
+    Csv.k.pick(U32.is_eq(Csv.delim(d), Csv.delim(d)), Csv.KD{}, Csv.k.pick(U32.is_eq(Csv.delim(d), 13),
+      Csv.KCR{}, Csv.k.pick(U32.is_eq(Csv.delim(d), 10), Csv.KLF{}, Csv.KO{}))), Csv.KD{},
+    kp.f(U32.is_eq(Csv.delim(d), Csv.quote(d)), Csv.KQ{},
+      Csv.k.pick(U32.is_eq(Csv.delim(d), Csv.delim(d)), Csv.KD{}, Csv.k.pick(U32.is_eq(Csv.delim(d), 13),
+        Csv.KCR{}, Csv.k.pick(U32.is_eq(Csv.delim(d), 10), Csv.KLF{}, Csv.KO{}))))(h2),
+    kp.t(U32.is_eq(Csv.delim(d), Csv.delim(d)), Csv.KD{}, Csv.k.pick(U32.is_eq(Csv.delim(d), 13),
+      Csv.KCR{}, Csv.k.pick(U32.is_eq(Csv.delim(d), 10), Csv.KLF{}, Csv.KO{})))(u32ref(Csv.delim(d))))
+
+def cls.cr(+d: Csv.Dialect, s: SA(d)) -> {Csv.cls(d, 13) == Csv.KCR{} : Csv.K}:
+  (h1, s2) = s
+  (h2, s3) = s2
+  (h3, s4) = s3
+  (h4, s5) = s4
+  Equal.trans(Csv.K, Csv.cls(d, 13),
+    Csv.k.pick(U32.is_eq(13, Csv.delim(d)), Csv.KD{}, Csv.k.pick(U32.is_eq(13, 13), Csv.KCR{},
+      Csv.k.pick(U32.is_eq(13, 10), Csv.KLF{}, Csv.KO{}))), Csv.KCR{},
+    kp.f(U32.is_eq(13, Csv.quote(d)), Csv.KQ{}, Csv.k.pick(U32.is_eq(13, Csv.delim(d)), Csv.KD{},
+      Csv.k.pick(U32.is_eq(13, 13), Csv.KCR{}, Csv.k.pick(U32.is_eq(13, 10), Csv.KLF{}, Csv.KO{}))))(h3),
+    kp.f(U32.is_eq(13, Csv.delim(d)), Csv.KD{}, Csv.k.pick(U32.is_eq(13, 13), Csv.KCR{},
+      Csv.k.pick(U32.is_eq(13, 10), Csv.KLF{}, Csv.KO{})))(h4))
+
+def cls.lf(+d: Csv.Dialect, s: SA(d)) -> {Csv.cls(d, 10) == Csv.KLF{} : Csv.K}:
+  (h1, s2) = s
+  (h2, s3) = s2
+  (h3, s4) = s3
+  (h4, s5) = s4
+  (h5, h6) = s5
+  Equal.trans(Csv.K, Csv.cls(d, 10),
+    Csv.k.pick(U32.is_eq(10, Csv.delim(d)), Csv.KD{}, Csv.k.pick(U32.is_eq(10, 13), Csv.KCR{},
+      Csv.k.pick(U32.is_eq(10, 10), Csv.KLF{}, Csv.KO{}))), Csv.KLF{},
+    kp.f(U32.is_eq(10, Csv.quote(d)), Csv.KQ{}, Csv.k.pick(U32.is_eq(10, Csv.delim(d)), Csv.KD{},
+      Csv.k.pick(U32.is_eq(10, 13), Csv.KCR{}, Csv.k.pick(U32.is_eq(10, 10), Csv.KLF{}, Csv.KO{}))))(h5),
+    kp.f(U32.is_eq(10, Csv.delim(d)), Csv.KD{}, Csv.k.pick(U32.is_eq(10, 13), Csv.KCR{},
+      Csv.k.pick(U32.is_eq(10, 10), Csv.KLF{}, Csv.KO{})))(h6))
+
+# Reading a field back
+# --------------------
+
+# a byte that makes a field special is not one an unquoted run stays on
+def so(k: Csv.K, -x: Bool) -> {Bool.or(Bool.not(Csv.is_o(k)), x) == False{} : Bool} ->
+  {Csv.stay(False{}, k) == True{} : Bool}:
+  match k:
+    case Csv.KO{}:
+      e => {==}
+    case Csv.KQ{}:
+      e => no({False{} == True{} : Bool}, Equal.sym(Bool, True{}, False{}, e))
+    case Csv.KD{}:
+      e => no({False{} == True{} : Bool}, Equal.sym(Bool, True{}, False{}, e))
+    case Csv.KCR{}:
+      e => no({False{} == True{} : Bool}, Equal.sym(Bool, True{}, False{}, e))
+    case Csv.KLF{}:
+      e => no({False{} == True{} : Bool}, Equal.sym(Bool, True{}, False{}, e))
+
+# the state after a field's text, unquoted
+def PU(+a: Bytes(), +l: Nat, +fl: Nat, +cur: List<&2, Bytes()>, +out: List<&2, List<&2, Bytes()>>,
+  +w: Maybe<&2, Nat>, +pos: Nat) -> Csv.P:
+  Csv.P{Csv.Unq{a, l}, fl, cur, out, w, pos}
+
+def UR.at(+d: Csv.Dialect, +c: U32, k: Csv.K, e: {Csv.cls(d, c) == k : Csv.K}, +t: Bytes(), +a: Bytes(),
+  +l2: Nat, +fl: Nat, +cur: List<&2, Bytes()>, +out: List<&2, List<&2, Bytes()>>, +w: Maybe<&2, Nat>,
+  +pos: Nat,
+  ih: {Csv.special(d, t) == False{} : Bool} -> {Nat.is_le(Csv.size(t), l2) == True{} : Bool} ->
+    {Csv.feed_buf.slow(d, t, PU(Csv.push(a, c), l2, fl, cur, out, w, 1n+pos)) ==
+      PU(Bytes.append(Csv.push(a, c), t), Nat.sub(l2, Csv.size(t)), fl, cur, out, w, pa(t, 1n+pos)) :
+      Csv.P}) ->
+  {Bool.or(Bool.not(Csv.is_o(k)), Csv.special(d, t)) == False{} : Bool} ->
+  {Nat.is_le(Csv.size(t), l2) == True{} : Bool} ->
+  {Csv.feed_buf.slow(d, t, Csv.step(d, PU(a, 1n+l2, fl, cur, out, w, pos), c)) ==
+    PU(Bytes.append(a, SCon{Chr{c}, t}), Nat.sub(l2, Csv.size(t)), fl, cur, out, w, pa(t, 1n+pos)) :
+    Csv.P}:
+  match k:
+    case Csv.KO{}:
+      hs => hl => tr3(Csv.P, Csv.feed_buf.slow(d, t, Csv.step(d, PU(a, 1n+l2, fl, cur, out, w, pos), c)),
+        Csv.feed_buf.slow(d, t, PU(Csv.push(a, c), l2, fl, cur, out, w, 1n+pos)),
+        PU(Bytes.append(Csv.push(a, c), t), Nat.sub(l2, Csv.size(t)), fl, cur, out, w, pa(t, 1n+pos)),
+        PU(Bytes.append(a, SCon{Chr{c}, t}), Nat.sub(l2, Csv.size(t)), fl, cur, out, w, pa(t, 1n+pos)),
+        Equal.cong(Csv.P, Csv.P, x => Csv.feed_buf.slow(d, t, x),
+          Csv.step(d, PU(a, 1n+l2, fl, cur, out, w, pos), c),
+          Csv.step.at(d, Csv.Unq{a, 1n+l2}, Csv.KO{}, c, fl, cur, out, w, pos),
+          STK(d, c, Csv.KO{}, e, Csv.Unq{a, 1n+l2}, fl, cur, out, w, pos)),
+        ih(hs)(hl),
+        Equal.cong(Bytes(), Csv.P, x => PU(x, Nat.sub(l2, Csv.size(t)), fl, cur, out, w, pa(t, 1n+pos)),
+          Bytes.append(Csv.push(a, c), t), Bytes.append(a, SCon{Chr{c}, t}), push_app(a, c, t)))
+    case Csv.KQ{}:
+      hs => hl => no({Csv.feed_buf.slow(d, t, Csv.step(d, PU(a, 1n+l2, fl, cur, out, w, pos), c)) ==
+        PU(Bytes.append(a, SCon{Chr{c}, t}), Nat.sub(l2, Csv.size(t)), fl, cur, out, w, pa(t, 1n+pos)) :
+        Csv.P}, Equal.sym(Bool, True{}, False{}, hs))
+    case Csv.KD{}:
+      hs => hl => no({Csv.feed_buf.slow(d, t, Csv.step(d, PU(a, 1n+l2, fl, cur, out, w, pos), c)) ==
+        PU(Bytes.append(a, SCon{Chr{c}, t}), Nat.sub(l2, Csv.size(t)), fl, cur, out, w, pa(t, 1n+pos)) :
+        Csv.P}, Equal.sym(Bool, True{}, False{}, hs))
+    case Csv.KCR{}:
+      hs => hl => no({Csv.feed_buf.slow(d, t, Csv.step(d, PU(a, 1n+l2, fl, cur, out, w, pos), c)) ==
+        PU(Bytes.append(a, SCon{Chr{c}, t}), Nat.sub(l2, Csv.size(t)), fl, cur, out, w, pa(t, 1n+pos)) :
+        Csv.P}, Equal.sym(Bool, True{}, False{}, hs))
+    case Csv.KLF{}:
+      hs => hl => no({Csv.feed_buf.slow(d, t, Csv.step(d, PU(a, 1n+l2, fl, cur, out, w, pos), c)) ==
+        PU(Bytes.append(a, SCon{Chr{c}, t}), Nat.sub(l2, Csv.size(t)), fl, cur, out, w, pa(t, 1n+pos)) :
+        Csv.P}, Equal.sym(Bool, True{}, False{}, hs))
+
+# LEMMA: an unquoted field's text, byte by byte, into the field
+def UR(+d: Csv.Dialect, +f: Bytes(), +a: Bytes(), +l: Nat, +fl: Nat, +cur: List<&2, Bytes()>,
+  +out: List<&2, List<&2, Bytes()>>, +w: Maybe<&2, Nat>, +pos: Nat) ->
+  {Csv.special(d, f) == False{} : Bool} -> {Nat.is_le(Csv.size(f), l) == True{} : Bool} ->
+  {Csv.feed_buf.slow(d, f, PU(a, l, fl, cur, out, w, pos)) ==
+    PU(Bytes.append(a, f), Nat.sub(l, Csv.size(f)), fl, cur, out, w, pa(f, pos)) : Csv.P}:
+  match f l:
+    case SNil{} 0n:
+      hs => hl =>
+        %Equal.sym(Bytes(), Bytes.append(a, ""), a, app_nil(a)) :
+          {PU(a, 0n, fl, cur, out, w, pos) == PU(_, 0n, fl, cur, out, w, pos) : Csv.P}
+        {==}
+    case SNil{} 1n+x:
+      hs => hl =>
+        %Equal.sym(Bytes(), Bytes.append(a, ""), a, app_nil(a)) :
+          {PU(a, 1n+x, fl, cur, out, w, pos) == PU(_, 1n+x, fl, cur, out, w, pos) : Csv.P}
+        {==}
+    case SCon{Chr{c}, t} 0n:
+      hs => hl => no({Csv.feed_buf.slow(d, SCon{Chr{c}, t}, PU(a, 0n, fl, cur, out, w, pos)) ==
+        PU(Bytes.append(a, SCon{Chr{c}, t}), Nat.sub(0n, Csv.size(SCon{Chr{c}, t})), fl, cur, out, w,
+          pa(SCon{Chr{c}, t}, pos)) : Csv.P}, hl)
+    case SCon{Chr{+c}, t} 1n+l2:
+      UR.at(d, c, Csv.cls(d, c), {==}, t, a, l2, fl, cur, out, w, pos,
+        UR(d, t, Csv.push(a, c), l2, fl, cur, out, w, 1n+pos))
+
+# where a field starts: at a record's start, or after a delimiter
+def e.of(isr: Bool) -> E:
+  match isr:
+    case True{}:
+      ERec{}
+    case False{}:
+      EFld{}
+
+# the mode an unquoted field leaves the reader in: its start's, if it
+# is empty
+def ue(isr: Bool, +f: Bytes(), +l: Nat) -> E:
+  match f:
+    case SNil{}:
+      e.of(isr)
+    case SCon{h, t}:
+      EPl{SCon{h, t}, Nat.sub(l, Csv.size(SCon{h, t}))}
+
+def UF.con(+d: Csv.Dialect, +isr: Bool, +c: U32, +t: Bytes(), +fl: Nat, +cur: List<&2, Bytes()>,
+  +out: List<&2, List<&2, Bytes()>>, +w: Maybe<&2, Nat>, +pos: Nat) ->
+  {Csv.special(d, SCon{Chr{c}, t}) == False{} : Bool} ->
+  {Nat.is_le(Csv.size(SCon{Chr{c}, t}), Csv.max_field(d)) == True{} : Bool} ->
+  {Csv.feed_buf.slow(d, SCon{Chr{c}, t}, Csv.P{ent.m(isr), fl, cur, out, w, pos}) ==
+    PU(SCon{Chr{c}, t}, Nat.sub(Csv.max_field(d), Csv.size(SCon{Chr{c}, t})), fl, cur, out, w,
+      pa(SCon{Chr{c}, t}, pos)) : Csv.P}:
+  +hs => hl => Equal.trans(Csv.P, Csv.feed_buf.slow(d, SCon{Chr{c}, t}, Csv.P{ent.m(isr), fl, cur, out, w, pos}),
+    Csv.feed_buf.slow(d, SCon{Chr{c}, t}, PU("", Csv.max_field(d), fl, cur, out, w, pos)),
+    PU(SCon{Chr{c}, t}, Nat.sub(Csv.max_field(d), Csv.size(SCon{Chr{c}, t})), fl, cur, out, w,
+      pa(SCon{Chr{c}, t}, pos)),
+    Equal.cong(Csv.P, Csv.P, x => Csv.feed_buf.slow(d, t, x),
+      Csv.step.at(d, ent.m(isr), Csv.cls(d, c), c, fl, cur, out, w, pos),
+      Csv.step.at(d, Csv.Unq{"", Csv.max_field(d)}, Csv.cls(d, c), c, fl, cur, out, w, pos),
+      lem.ent.step(d, isr, Csv.cls(d, c), c, fl, cur, out, w, pos)(so(Csv.cls(d, c), Csv.special(d, t))(hs))),
+    UR(d, SCon{Chr{c}, t}, "", Csv.max_field(d), fl, cur, out, w, pos)(hs)(hl))
+
+# LEMMA: an unquoted field from where it starts
+def UF(+d: Csv.Dialect, isr: Bool, +f: Bytes(), +fl: Nat, +cur: List<&2, Bytes()>,
+  +out: List<&2, List<&2, Bytes()>>, +w: Maybe<&2, Nat>, +pos: Nat) ->
+  {Csv.special(d, f) == False{} : Bool} -> {Nat.is_le(Csv.size(f), Csv.max_field(d)) == True{} : Bool} ->
+  {Csv.feed_buf.slow(d, f, Csv.P{ent.m(isr), fl, cur, out, w, pos}) ==
+    Csv.P{e.m(ue(isr, f, Csv.max_field(d))), fl, cur, out, w, pa(f, pos)} : Csv.P}:
+  match isr f:
+    case True{} SNil{}:
+      hs => hl => {==}
+    case False{} SNil{}:
+      hs => hl => {==}
+    case True{} SCon{Chr{c}, t}:
+      UF.con(d, True{}, c, t, fl, cur, out, w, pos)
+    case False{} SCon{Chr{c}, t}:
+      UF.con(d, False{}, c, t, fl, cur, out, w, pos)
+
+# the state inside quotes
+def PQ(+a: Bytes(), +l: Nat, +fl: Nat, +cur: List<&2, Bytes()>, +out: List<&2, List<&2, Bytes()>>,
+  +w: Maybe<&2, Nat>, +pos: Nat) -> Csv.P:
+  Csv.P{Csv.Quo{a, l}, fl, cur, out, w, pos}
+
+# the rest of an escaped text after its first byte (written as W)
+def UESC.fin(+d: Csv.Dialect, +W: Bytes(), +c: U32, +t: Bytes(), +a: Bytes(), +l2: Nat, +fl: Nat,
+  +cur: List<&2, Bytes()>, +out: List<&2, List<&2, Bytes()>>, +w: Maybe<&2, Nat>, +pos: Nat,
+  inner: {Csv.feed_buf.slow(d, W, PQ(a, 1n+l2, fl, cur, out, w, pos)) ==
+    PQ(Csv.push(a, c), l2, fl, cur, out, w, pa(W, pos)) : Csv.P},
+  ih: {Csv.feed_buf.slow(d, Csv.esc(d, t, ""), PQ(Csv.push(a, c), l2, fl, cur, out, w, pa(W, pos))) ==
+    PQ(Bytes.append(Csv.push(a, c), t), Nat.sub(l2, Csv.size(t)), fl, cur, out, w,
+      pa(Csv.esc(d, t, ""), pa(W, pos))) : Csv.P}) ->
+  {Csv.feed_buf.slow(d, Csv.esc(d, t, W), PQ(a, 1n+l2, fl, cur, out, w, pos)) ==
+    PQ(Bytes.append(a, SCon{Chr{c}, t}), Nat.sub(l2, Csv.size(t)), fl, cur, out, w,
+      pa(Csv.esc(d, t, W), pos)) : Csv.P}:
+  tr3(Csv.P, Csv.feed_buf.slow(d, Csv.esc(d, t, W), PQ(a, 1n+l2, fl, cur, out, w, pos)),
+    Csv.feed_buf.slow(d, Csv.esc(d, t, ""), Csv.feed_buf.slow(d, W, PQ(a, 1n+l2, fl, cur, out, w, pos))),
+    Csv.feed_buf.slow(d, Csv.esc(d, t, ""), PQ(Csv.push(a, c), l2, fl, cur, out, w, pa(W, pos))),
+    PQ(Bytes.append(a, SCon{Chr{c}, t}), Nat.sub(l2, Csv.size(t)), fl, cur, out, w,
+      pa(Csv.esc(d, t, W), pos)),
+    Equal.trans(Csv.P, Csv.feed_buf.slow(d, Csv.esc(d, t, W), PQ(a, 1n+l2, fl, cur, out, w, pos)),
+      Csv.feed_buf.slow(d, Bytes.append(W, Csv.esc(d, t, "")), PQ(a, 1n+l2, fl, cur, out, w, pos)),
+      Csv.feed_buf.slow(d, Csv.esc(d, t, ""), Csv.feed_buf.slow(d, W, PQ(a, 1n+l2, fl, cur, out, w, pos))),
+      Equal.cong(Bytes(), Csv.P, x => Csv.feed_buf.slow(d, x, PQ(a, 1n+l2, fl, cur, out, w, pos)),
+        Csv.esc(d, t, W), Bytes.append(W, Csv.esc(d, t, "")), pfx.esc(d, t, W)),
+      slow_app(d, W, Csv.esc(d, t, ""), PQ(a, 1n+l2, fl, cur, out, w, pos))),
+    Equal.cong(Csv.P, Csv.P, x => Csv.feed_buf.slow(d, Csv.esc(d, t, ""), x),
+      Csv.feed_buf.slow(d, W, PQ(a, 1n+l2, fl, cur, out, w, pos)),
+      PQ(Csv.push(a, c), l2, fl, cur, out, w, pa(W, pos)), inner),
+    Equal.trans(Csv.P, Csv.feed_buf.slow(d, Csv.esc(d, t, ""), PQ(Csv.push(a, c), l2, fl, cur, out, w,
+      pa(W, pos))),
+      PQ(Bytes.append(Csv.push(a, c), t), Nat.sub(l2, Csv.size(t)), fl, cur, out, w,
+        pa(Csv.esc(d, t, ""), pa(W, pos))),
+      PQ(Bytes.append(a, SCon{Chr{c}, t}), Nat.sub(l2, Csv.size(t)), fl, cur, out, w,
+        pa(Csv.esc(d, t, W), pos)),
+      ih,
+      Equal.trans(Csv.P, PQ(Bytes.append(Csv.push(a, c), t), Nat.sub(l2, Csv.size(t)), fl, cur, out, w,
+        pa(Csv.esc(d, t, ""), pa(W, pos))),
+        PQ(Bytes.append(a, SCon{Chr{c}, t}), Nat.sub(l2, Csv.size(t)), fl, cur, out, w,
+          pa(Csv.esc(d, t, ""), pa(W, pos))),
+        PQ(Bytes.append(a, SCon{Chr{c}, t}), Nat.sub(l2, Csv.size(t)), fl, cur, out, w,
+          pa(Csv.esc(d, t, W), pos)),
+        Equal.cong(Bytes(), Csv.P, x => PQ(x, Nat.sub(l2, Csv.size(t)), fl, cur, out, w,
+          pa(Csv.esc(d, t, ""), pa(W, pos))), Bytes.append(Csv.push(a, c), t),
+          Bytes.append(a, SCon{Chr{c}, t}), push_app(a, c, t)),
+        Equal.cong(Nat, Csv.P, x => PQ(Bytes.append(a, SCon{Chr{c}, t}), Nat.sub(l2, Csv.size(t)), fl, cur,
+          out, w, x), pa(Csv.esc(d, t, ""), pa(W, pos)), pa(Csv.esc(d, t, W), pos),
+          Equal.sym(Nat, pa(Csv.esc(d, t, W), pos), pa(Csv.esc(d, t, ""), pa(W, pos)),
+            Equal.trans(Nat, pa(Csv.esc(d, t, W), pos), pa(Bytes.append(W, Csv.esc(d, t, "")), pos),
+              pa(Csv.esc(d, t, ""), pa(W, pos)),
+              Equal.cong(Bytes(), Nat, x => pa(x, pos), Csv.esc(d, t, W), Bytes.append(W, Csv.esc(d, t, "")),
+                pfx.esc(d, t, W)),
+              pa_app(W, Csv.esc(d, t, ""), pos)))))))
+
+# one byte inside quotes, as the writer wrote it: a quote twice, any
+# other byte once
+def UESC.one(+d: Csv.Dialect, +c: U32, k: Csv.K, +e: {Csv.cls(d, c) == k : Csv.K}, +a: Bytes(), +l2: Nat,
+  +fl: Nat, +cur: List<&2, Bytes()>, +out: List<&2, List<&2, Bytes()>>, +w: Maybe<&2, Nat>, +pos: Nat) ->
+  {Csv.feed_buf.slow(d, Csv.esc.put(k, c, ""), PQ(a, 1n+l2, fl, cur, out, w, pos)) ==
+    PQ(Csv.push(a, c), l2, fl, cur, out, w, pa(Csv.esc.put(k, c, ""), pos)) : Csv.P}:
+  match k:
+    case Csv.KQ{}:
+      Equal.trans(Csv.P, Csv.step(d, Csv.step(d, PQ(a, 1n+l2, fl, cur, out, w, pos), c), c),
+        Csv.step(d, Csv.P{Csv.QQ{a, 1n+l2}, fl, cur, out, w, 1n+pos}, c),
+        PQ(Csv.push(a, c), l2, fl, cur, out, w, 1n+1n+pos),
+        Equal.cong(Csv.P, Csv.P, x => Csv.step(d, x, c), Csv.step(d, PQ(a, 1n+l2, fl, cur, out, w, pos), c),
+          Csv.P{Csv.QQ{a, 1n+l2}, fl, cur, out, w, 1n+pos},
+          STK(d, c, Csv.KQ{}, e, Csv.Quo{a, 1n+l2}, fl, cur, out, w, pos)),
+        STK(d, c, Csv.KQ{}, e, Csv.QQ{a, 1n+l2}, fl, cur, out, w, 1n+pos))
+    case Csv.KD{}:
+      STK(d, c, Csv.KD{}, e, Csv.Quo{a, 1n+l2}, fl, cur, out, w, pos)
+    case Csv.KCR{}:
+      STK(d, c, Csv.KCR{}, e, Csv.Quo{a, 1n+l2}, fl, cur, out, w, pos)
+    case Csv.KLF{}:
+      STK(d, c, Csv.KLF{}, e, Csv.Quo{a, 1n+l2}, fl, cur, out, w, pos)
+    case Csv.KO{}:
+      STK(d, c, Csv.KO{}, e, Csv.Quo{a, 1n+l2}, fl, cur, out, w, pos)
+
+# LEMMA: an escaped text, as the writer wrote it, into the field
+def UESC(+d: Csv.Dialect, +s: Bytes(), +a: Bytes(), +l: Nat, +fl: Nat, +cur: List<&2, Bytes()>,
+  +out: List<&2, List<&2, Bytes()>>, +w: Maybe<&2, Nat>, +pos: Nat) ->
+  {Nat.is_le(Csv.size(s), l) == True{} : Bool} ->
+  {Csv.feed_buf.slow(d, Csv.esc(d, s, ""), PQ(a, l, fl, cur, out, w, pos)) ==
+    PQ(Bytes.append(a, s), Nat.sub(l, Csv.size(s)), fl, cur, out, w, pa(Csv.esc(d, s, ""), pos)) : Csv.P}:
+  match s l:
+    case SNil{} 0n:
+      hl =>
+        %Equal.sym(Bytes(), Bytes.append(a, ""), a, app_nil(a)) :
+          {PQ(a, 0n, fl, cur, out, w, pos) == PQ(_, 0n, fl, cur, out, w, pos) : Csv.P}
+        {==}
+    case SNil{} 1n+x:
+      hl =>
+        %Equal.sym(Bytes(), Bytes.append(a, ""), a, app_nil(a)) :
+          {PQ(a, 1n+x, fl, cur, out, w, pos) == PQ(_, 1n+x, fl, cur, out, w, pos) : Csv.P}
+        {==}
+    case SCon{Chr{c}, t} 0n:
+      hl => no({Csv.feed_buf.slow(d, Csv.esc(d, SCon{Chr{c}, t}, ""), PQ(a, 0n, fl, cur, out, w, pos)) ==
+        PQ(Bytes.append(a, SCon{Chr{c}, t}), Nat.sub(0n, Csv.size(SCon{Chr{c}, t})), fl, cur, out, w,
+          pa(Csv.esc(d, SCon{Chr{c}, t}, ""), pos)) : Csv.P}, hl)
+    case SCon{Chr{+c}, t} 1n+l2:
+      hl => UESC.fin(d, Csv.esc.put(Csv.cls(d, c), c, ""), c, t, a, l2, fl, cur, out, w, pos,
+        UESC.one(d, c, Csv.cls(d, c), {==}, a, l2, fl, cur, out, w, pos),
+        UESC(d, t, Csv.push(a, c), l2, fl, cur, out, w, pa(Csv.esc.put(Csv.cls(d, c), c, ""), pos))(hl))
+
+# the first byte of a field, a quote, opens it
+def entq(+d: Csv.Dialect, isr: Bool, -c: U32, -fl: Nat, -cur: List<&2, Bytes()>,
+  -out: List<&2, List<&2, Bytes()>>, -w: Maybe<&2, Nat>, -pos: Nat) ->
+  {Csv.step.at(d, ent.m(isr), Csv.KQ{}, c, fl, cur, out, w, pos) ==
+    PQ("", Csv.max_field(d), fl, cur, out, w, 1n+pos) : Csv.P}:
+  match isr:
+    case True{}:
+      {==}
+    case False{}:
+      {==}
+
+# LEMMA: a quoted field from where it starts: the reader is after its
+# closing quote, holding its text
+def QF(+d: Csv.Dialect, +isr: Bool, +s: Bytes(), +fl: Nat, +cur: List<&2, Bytes()>,
+  +out: List<&2, List<&2, Bytes()>>, +w: Maybe<&2, Nat>, +pos: Nat) ->
+  {Nat.is_le(Csv.size(s), Csv.max_field(d)) == True{} : Bool} ->
+  {Csv.feed_buf.slow(d, Csv.quoted(d, s, ""), Csv.P{ent.m(isr), fl, cur, out, w, pos}) ==
+    Csv.P{Csv.QQ{s, Nat.sub(Csv.max_field(d), Csv.size(s))}, fl, cur, out, w,
+      pa(Csv.quoted(d, s, ""), pos)} : Csv.P}:
+  hl => tr3(Csv.P,
+    Csv.feed_buf.slow(d, Csv.quoted(d, s, ""), Csv.P{ent.m(isr), fl, cur, out, w, pos}),
+    Csv.step(d, Csv.feed_buf.slow(d, Csv.esc(d, s, ""), Csv.step(d, Csv.P{ent.m(isr), fl, cur, out, w, pos},
+      Csv.quote(d))), Csv.quote(d)),
+    Csv.step(d, PQ(s, Nat.sub(Csv.max_field(d), Csv.size(s)), fl, cur, out, w,
+      pa(Csv.esc(d, s, ""), 1n+pos)), Csv.quote(d)),
+    Csv.P{Csv.QQ{s, Nat.sub(Csv.max_field(d), Csv.size(s))}, fl, cur, out, w,
+      pa(Csv.quoted(d, s, ""), pos)},
+    Equal.trans(Csv.P, Csv.feed_buf.slow(d, Csv.quoted(d, s, ""), Csv.P{ent.m(isr), fl, cur, out, w, pos}),
+      Csv.feed_buf.slow(d, Csv.one(Csv.quote(d)), Csv.feed_buf.slow(d, Csv.esc(d, s, Csv.one(Csv.quote(d))),
+        Csv.P{ent.m(isr), fl, cur, out, w, pos})),
+      Csv.step(d, Csv.feed_buf.slow(d, Csv.esc(d, s, ""), Csv.step(d, Csv.P{ent.m(isr), fl, cur, out, w, pos},
+        Csv.quote(d))), Csv.quote(d)),
+      slow_app(d, Csv.esc(d, s, Csv.one(Csv.quote(d))), Csv.one(Csv.quote(d)),
+        Csv.P{ent.m(isr), fl, cur, out, w, pos}),
+      Equal.cong(Csv.P, Csv.P, x => Csv.step(d, x, Csv.quote(d)),
+        Csv.feed_buf.slow(d, Csv.esc(d, s, Csv.one(Csv.quote(d))), Csv.P{ent.m(isr), fl, cur, out, w, pos}),
+        Csv.feed_buf.slow(d, Csv.esc(d, s, ""), Csv.step(d, Csv.P{ent.m(isr), fl, cur, out, w, pos},
+          Csv.quote(d))),
+        Equal.trans(Csv.P,
+          Csv.feed_buf.slow(d, Csv.esc(d, s, Csv.one(Csv.quote(d))), Csv.P{ent.m(isr), fl, cur, out, w, pos}),
+          Csv.feed_buf.slow(d, Bytes.append(Csv.one(Csv.quote(d)), Csv.esc(d, s, "")),
+            Csv.P{ent.m(isr), fl, cur, out, w, pos}),
+          Csv.feed_buf.slow(d, Csv.esc(d, s, ""), Csv.step(d, Csv.P{ent.m(isr), fl, cur, out, w, pos},
+            Csv.quote(d))),
+          Equal.cong(Bytes(), Csv.P, x => Csv.feed_buf.slow(d, x, Csv.P{ent.m(isr), fl, cur, out, w, pos}),
+            Csv.esc(d, s, Csv.one(Csv.quote(d))), Bytes.append(Csv.one(Csv.quote(d)), Csv.esc(d, s, "")),
+            pfx.esc(d, s, Csv.one(Csv.quote(d)))),
+          {==}))),
+    Equal.cong(Csv.P, Csv.P, x => Csv.step(d, x, Csv.quote(d)),
+      Csv.feed_buf.slow(d, Csv.esc(d, s, ""), Csv.step(d, Csv.P{ent.m(isr), fl, cur, out, w, pos},
+        Csv.quote(d))),
+      PQ(s, Nat.sub(Csv.max_field(d), Csv.size(s)), fl, cur, out, w, pa(Csv.esc(d, s, ""), 1n+pos)),
+      Equal.trans(Csv.P,
+        Csv.feed_buf.slow(d, Csv.esc(d, s, ""), Csv.step(d, Csv.P{ent.m(isr), fl, cur, out, w, pos},
+          Csv.quote(d))),
+        Csv.feed_buf.slow(d, Csv.esc(d, s, ""), PQ("", Csv.max_field(d), fl, cur, out, w, 1n+pos)),
+        PQ(s, Nat.sub(Csv.max_field(d), Csv.size(s)), fl, cur, out, w, pa(Csv.esc(d, s, ""), 1n+pos)),
+        Equal.cong(Csv.P, Csv.P, x => Csv.feed_buf.slow(d, Csv.esc(d, s, ""), x),
+          Csv.step(d, Csv.P{ent.m(isr), fl, cur, out, w, pos}, Csv.quote(d)),
+          PQ("", Csv.max_field(d), fl, cur, out, w, 1n+pos),
+          Equal.trans(Csv.P, Csv.step(d, Csv.P{ent.m(isr), fl, cur, out, w, pos}, Csv.quote(d)),
+            Csv.step.at(d, ent.m(isr), Csv.KQ{}, Csv.quote(d), fl, cur, out, w, pos),
+            PQ("", Csv.max_field(d), fl, cur, out, w, 1n+pos),
+            STK(d, Csv.quote(d), Csv.KQ{}, cls.q(d), ent.m(isr), fl, cur, out, w, pos),
+            entq(d, isr, Csv.quote(d), fl, cur, out, w, pos))),
+        UESC(d, s, "", Csv.max_field(d), fl, cur, out, w, 1n+pos)(hl))),
+    Equal.trans(Csv.P, Csv.step(d, PQ(s, Nat.sub(Csv.max_field(d), Csv.size(s)), fl, cur, out, w,
+      pa(Csv.esc(d, s, ""), 1n+pos)), Csv.quote(d)),
+      Csv.P{Csv.QQ{s, Nat.sub(Csv.max_field(d), Csv.size(s))}, fl, cur, out, w,
+        1n+pa(Csv.esc(d, s, ""), 1n+pos)},
+      Csv.P{Csv.QQ{s, Nat.sub(Csv.max_field(d), Csv.size(s))}, fl, cur, out, w,
+        pa(Csv.quoted(d, s, ""), pos)},
+      STK(d, Csv.quote(d), Csv.KQ{}, cls.q(d), Csv.Quo{s, Nat.sub(Csv.max_field(d), Csv.size(s))}, fl,
+        cur, out, w, pa(Csv.esc(d, s, ""), 1n+pos)),
+      Equal.cong(Nat, Csv.P, x => Csv.P{Csv.QQ{s, Nat.sub(Csv.max_field(d), Csv.size(s))}, fl, cur, out, w,
+        x}, 1n+pa(Csv.esc(d, s, ""), 1n+pos), pa(Csv.quoted(d, s, ""), pos),
+        Equal.sym(Nat, pa(Csv.quoted(d, s, ""), pos), 1n+pa(Csv.esc(d, s, ""), 1n+pos),
+          Equal.trans(Nat, pa(Csv.quoted(d, s, ""), pos),
+            pa(Csv.one(Csv.quote(d)), pa(Csv.esc(d, s, Csv.one(Csv.quote(d))), pos)),
+            1n+pa(Csv.esc(d, s, ""), 1n+pos),
+            pa_app(Csv.esc(d, s, Csv.one(Csv.quote(d))), Csv.one(Csv.quote(d)), pos),
+            Equal.trans(Nat, 1n+pa(Csv.esc(d, s, Csv.one(Csv.quote(d))), pos),
+              1n+pa(Bytes.append(Csv.one(Csv.quote(d)), Csv.esc(d, s, "")), pos),
+              1n+pa(Csv.esc(d, s, ""), 1n+pos),
+              Equal.cong(Bytes(), Nat, x => 1n+pa(x, pos), Csv.esc(d, s, Csv.one(Csv.quote(d))),
+                Bytes.append(Csv.one(Csv.quote(d)), Csv.esc(d, s, "")), pfx.esc(d, s, Csv.one(Csv.quote(d)))),
+              {==}))))))
+
+# the mode a field leaves the reader in, quoted or not
+def fe(qb: Bool, isr: Bool, +f: Bytes(), +mf: Nat) -> E:
+  match qb:
+    case True{}:
+      ECl{f, Nat.sub(mf, Csv.size(f))}
+    case False{}:
+      ue(isr, f, mf)
+
+def txt_fe(qb: Bool, isr: Bool, f: Bytes(), -mf: Nat) -> {e.txt(fe(qb, isr, f, mf)) == f : Bytes()}:
+  match qb isr f:
+    case True{} _ _:
+      {==}
+    case False{} True{} SNil{}:
+      {==}
+    case False{} False{} SNil{}:
+      {==}
+    case False{} _ SCon{h, t}:
+      {==}
+
+# LEMMA: a field as the writer wrote it, from where it starts
+def FLD(+d: Csv.Dialect, qb: Bool, +isr: Bool, +f: Bytes(), +fl: Nat, +cur: List<&2, Bytes()>,
+  +out: List<&2, List<&2, Bytes()>>, +w: Maybe<&2, Nat>, +pos: Nat) ->
+  {Bool.or(Bool.not(Csv.special(d, f)), qb) == True{} : Bool} ->
+  {Nat.is_le(Csv.size(f), Csv.max_field(d)) == True{} : Bool} ->
+  {Csv.feed_buf.slow(d, Csv.field.at(d, qb, f, ""), Csv.P{ent.m(isr), fl, cur, out, w, pos}) ==
+    Csv.P{e.m(fe(qb, isr, f, Csv.max_field(d))), fl, cur, out, w, pa(Csv.field.at(d, qb, f, ""), pos)} :
+    Csv.P}:
+  match qb:
+    case True{}:
+      hs => hl => QF(d, isr, f, fl, cur, out, w, pos)(hl)
+    case False{}:
+      hs => hl => UF(d, isr, f, fl, cur, out, w, pos)(not.t(Csv.special(d, f))(or.f(Bool.not(Csv.special(d, f)))(hs)))(hl)
+
+# Reading a record back
+# ---------------------
+
+# a delimiter after a field ends it
+def TD(+d: Csv.Dialect, ee: E, +fl: Nat, +cur: List<&2, Bytes()>, +out: List<&2, List<&2, Bytes()>>,
+  +w: Maybe<&2, Nat>, +pos: Nat, hd: {Csv.cls(d, Csv.delim(d)) == Csv.KD{} : Csv.K}) ->
+  {Csv.feed_buf.slow(d, Csv.one(Csv.delim(d)), Csv.P{e.m(ee), fl, cur, out, w, pos}) ==
+    Csv.endf(e.txt(ee), fl, cur, out, w, pos, Csv.FS{}, 1n+pos) : Csv.P}:
+  match ee:
+    case ERec{}:
+      STK(d, Csv.delim(d), Csv.KD{}, hd, Csv.RS{}, fl, cur, out, w, pos)
+    case EFld{}:
+      STK(d, Csv.delim(d), Csv.KD{}, hd, Csv.FS{}, fl, cur, out, w, pos)
+    case EPl{t, r}:
+      STK(d, Csv.delim(d), Csv.KD{}, hd, Csv.Unq{t, r}, fl, cur, out, w, pos)
+    case ECl{t, r}:
+      STK(d, Csv.delim(d), Csv.KD{}, hd, Csv.QQ{t, r}, fl, cur, out, w, pos)
+
+def CRS(+d: Csv.Dialect, ee: E, -fl: Nat, -cur: List<&2, Bytes()>, -out: List<&2, List<&2, Bytes()>>,
+  -w: Maybe<&2, Nat>, -pos: Nat) ->
+  {Csv.step.at(d, e.m(ee), Csv.KCR{}, 13, fl, cur, out, w, pos) == Csv.cr.at(d, e.txt(ee), fl, cur, out, w, pos) :
+    Csv.P}:
+  match ee:
+    case ERec{}:
+      {==}
+    case EFld{}:
+      {==}
+    case EPl{t, r}:
+      {==}
+    case ECl{t, r}:
+      {==}
+
+# the LF of a CRLF, after its CR, ends the record there
+def TCRLF.cr(+d: Csv.Dialect, +txt: Bytes(), +fl: Nat, +cur: List<&2, Bytes()>,
+  +out: List<&2, List<&2, Bytes()>>, +w: Maybe<&2, Nat>, +pos: Nat,
+  hlf: {Csv.cls(d, 10) == Csv.KLF{} : Csv.K}, +hc: {Csv.crlf(d) == True{} : Bool}) ->
+  {Csv.step(d, Csv.cr.at(d, txt, fl, cur, out, w, pos), 10) == Csv.endl(d, txt, fl, cur, out, w, pos, 1n+1n+pos) :
+    Csv.P}:
+  tr3(Csv.P, Csv.step(d, Csv.cr.at(d, txt, fl, cur, out, w, pos), 10),
+    Csv.step(d, Csv.P{Csv.CRp{txt, pos}, fl, cur, out, w, 1n+pos}, 10),
+    Csv.step.at(d, Csv.CRp{txt, pos}, Csv.KLF{}, 10, fl, cur, out, w, 1n+pos),
+    Csv.endl(d, txt, fl, cur, out, w, pos, 1n+1n+pos),
+    Equal.cong(Bool, Csv.P, bb => Csv.step(d, Csv.cr.at.ok(Bool.or(bb, Csv.cr(d)), txt, fl, cur, out, w, pos), 10),
+      Csv.crlf(d), True{}, hc),
+    STK(d, 10, Csv.KLF{}, hlf, Csv.CRp{txt, pos}, fl, cur, out, w, 1n+pos),
+    Equal.cong(Bool, Csv.P, bb => Csv.crp.at(d, Bool.and(bb, Csv.is_lf(Csv.KLF{})), Csv.cr(d), txt, pos, Csv.KLF{}, 10,
+      fl, cur, out, w, 1n+pos), Csv.crlf(d), True{}, hc))
+
+# CRLF after a field ends the field, then the record
+def TCRLF(+d: Csv.Dialect, +ee: E, +fl: Nat, +cur: List<&2, Bytes()>, +out: List<&2, List<&2, Bytes()>>,
+  +w: Maybe<&2, Nat>, +pos: Nat, hcr: {Csv.cls(d, 13) == Csv.KCR{} : Csv.K},
+  hlf: {Csv.cls(d, 10) == Csv.KLF{} : Csv.K}, hc: {Csv.crlf(d) == True{} : Bool}) ->
+  {Csv.feed_buf.slow(d, Csv.crlf.put(""), Csv.P{e.m(ee), fl, cur, out, w, pos}) ==
+    Csv.endl(d, e.txt(ee), fl, cur, out, w, pos, 1n+1n+pos) : Csv.P}:
+  Equal.trans(Csv.P, Csv.step(d, Csv.step(d, Csv.P{e.m(ee), fl, cur, out, w, pos}, 13), 10),
+    Csv.step(d, Csv.cr.at(d, e.txt(ee), fl, cur, out, w, pos), 10),
+    Csv.endl(d, e.txt(ee), fl, cur, out, w, pos, 1n+1n+pos),
+    Equal.cong(Csv.P, Csv.P, x => Csv.step(d, x, 10), Csv.step(d, Csv.P{e.m(ee), fl, cur, out, w, pos}, 13),
+      Csv.cr.at(d, e.txt(ee), fl, cur, out, w, pos),
+      Equal.trans(Csv.P, Csv.step(d, Csv.P{e.m(ee), fl, cur, out, w, pos}, 13),
+        Csv.step.at(d, e.m(ee), Csv.KCR{}, 13, fl, cur, out, w, pos), Csv.cr.at(d, e.txt(ee), fl, cur, out, w, pos),
+        STK(d, 13, Csv.KCR{}, hcr, e.m(ee), fl, cur, out, w, pos), CRS(d, ee, fl, cur, out, w, pos))),
+    TCRLF.cr(d, e.txt(ee), fl, cur, out, w, pos, hlf, hc))
+
+# the width check a record's end makes: none for the first record; for
+# the rest, what the first left must be what this one leaves
+def RW(+d: Csv.Dialect, w: Maybe<&2, Nat>, +f: Nat) -> Type:
+  match w:
+    case None{}:
+      Unit
+    case Some{x}:
+      {Bool.or(Csv.ragged(d), Nat.is_eq(f, x)) == True{} : Bool}
+
+def wnext(w: Maybe<&2, Nat>, f: Nat) -> Maybe<&2, Nat>:
+  match w:
+    case None{}:
+      Some{f}
+    case Some{x}:
+      Some{x}
+
+# a record's end, after CRLF
+def RFE(+d: Csv.Dialect, w: Maybe<&2, Nat>, +f: Nat, +rec: List<&2, Bytes()>,
+  +out: List<&2, List<&2, Bytes()>>, +at: Nat, +np: Nat) -> RW(d, w, f) ->
+  {Csv.endr(d, f, rec, out, w, at, Csv.RS{}, np) ==
+    Csv.P{Csv.RS{}, Csv.max_fields(d), Nil{}, Con{rec, out}, wnext(w, f), np} : Csv.P}:
+  match w:
+    case None{}:
+      hw => {==}
+    case Some{+x}:
+      hw => Equal.cong(Bool, Csv.P, bb => Csv.endr.ok(bb, d, rec, out, x, at, Csv.RS{}, np),
+        Bool.or(Csv.ragged(d), Nat.is_eq(f, x)), True{}, hw)
+
+# the bytes of the fields after a record's first, then CRLF
+def RFB(+d: Csv.Dialect, +g: Bytes(), +u: List<&2, Bytes()>) ->
+  {Bytes.append(Csv.fields(d, Con{g, u}, ""), Csv.crlf.put("")) ==
+    SCon{Chr{Csv.delim(d)}, Bytes.append(Csv.field(d, g, ""), Bytes.append(Csv.fields(d, u, ""),
+      Csv.crlf.put("")))} : Bytes()}:
+  tr3(Bytes(), Bytes.append(Csv.fields(d, Con{g, u}, ""), Csv.crlf.put("")),
+    Bytes.append(Bytes.append(Bytes.append(Csv.one(Csv.delim(d)), Csv.field(d, g, "")), Csv.fields(d, u, "")),
+      Csv.crlf.put("")),
+    Bytes.append(Csv.one(Csv.delim(d)), Bytes.append(Bytes.append(Csv.field(d, g, ""), Csv.fields(d, u, "")),
+      Csv.crlf.put(""))),
+    Bytes.append(Csv.one(Csv.delim(d)), Bytes.append(Csv.field(d, g, ""), Bytes.append(Csv.fields(d, u, ""),
+      Csv.crlf.put("")))),
+    Equal.cong(Bytes(), Bytes(), x => Bytes.append(x, Csv.crlf.put("")), Csv.fields(d, Con{g, u}, ""),
+      Bytes.append(Bytes.append(Csv.one(Csv.delim(d)), Csv.field(d, g, "")), Csv.fields(d, u, "")),
+      Equal.trans(Bytes(), Csv.fields(d, u, Csv.field(d, g, Csv.one(Csv.delim(d)))),
+        Bytes.append(Csv.field(d, g, Csv.one(Csv.delim(d))), Csv.fields(d, u, "")),
+        Bytes.append(Bytes.append(Csv.one(Csv.delim(d)), Csv.field(d, g, "")), Csv.fields(d, u, "")),
+        pfx.fields(d, u, Csv.field(d, g, Csv.one(Csv.delim(d)))),
+        Equal.cong(Bytes(), Bytes(), x => Bytes.append(x, Csv.fields(d, u, "")),
+          Csv.field(d, g, Csv.one(Csv.delim(d))), Bytes.append(Csv.one(Csv.delim(d)), Csv.field(d, g, "")),
+          pfx.fat(d, Csv.needs(d, g), g, Csv.one(Csv.delim(d)))))),
+    asc3(Csv.one(Csv.delim(d)), Csv.field(d, g, ""), Csv.fields(d, u, ""), Csv.crlf.put("")),
+    Equal.cong(Bytes(), Bytes(), x => Bytes.append(Csv.one(Csv.delim(d)), x),
+      Bytes.append(Bytes.append(Csv.field(d, g, ""), Csv.fields(d, u, "")), Csv.crlf.put("")),
+      Bytes.append(Csv.field(d, g, ""), Bytes.append(Csv.fields(d, u, ""), Csv.crlf.put(""))),
+      app_assoc(Csv.field(d, g, ""), Csv.fields(d, u, ""), Csv.crlf.put(""))))
+
+def RFP(+d: Csv.Dialect, +t: List<&2, Bytes()>, +cur: List<&2, Bytes()>, +txt: Bytes(),
+  +out: List<&2, List<&2, Bytes()>>, +w: Maybe<&2, Nat>, +f: Nat, +pos: Nat) -> Csv.P:
+  Csv.P{Csv.RS{}, Csv.max_fields(d), Nil{}, Con{List.reverse.go(&2, Bytes(), cur, Con{txt, t}), out},
+    wnext(w, f), pa(Bytes.append(Csv.fields(d, t, ""), Csv.crlf.put("")), pos)}
+
+def RFQ(+d: Csv.Dialect, +out: List<&2, List<&2, Bytes()>>, +w: Maybe<&2, Nat>, +f: Nat,
+  +rec: List<&2, Bytes()>, +p: Nat) -> Csv.P:
+  Csv.P{Csv.RS{}, Csv.max_fields(d), Nil{}, Con{rec, out}, wnext(w, f), p}
+
+# the step of RF past one delimiter and one field
+def RF.con(+d: Csv.Dialect, +g: Bytes(), +u: List<&2, Bytes()>, +ee: E, +f: Nat, +cur: List<&2, Bytes()>,
+  +out: List<&2, List<&2, Bytes()>>, +w: Maybe<&2, Nat>, +pos: Nat,
+  hd: {Csv.cls(d, Csv.delim(d)) == Csv.KD{} : Csv.K},
+  ih: {Csv.feed_buf.slow(d, Bytes.append(Csv.fields(d, u, ""), Csv.crlf.put("")),
+    Csv.P{e.m(fe(Csv.needs(d, g), False{}, g, Csv.max_field(d))), f, Con{e.txt(ee), cur}, out, w,
+      pa(Csv.field(d, g, ""), 1n+pos)}) ==
+    RFP(d, u, Con{e.txt(ee), cur}, e.txt(fe(Csv.needs(d, g), False{}, g, Csv.max_field(d))), out, w,
+      Nat.sub(f, 1n+List.length(&2, Bytes(), u)), pa(Csv.field(d, g, ""), 1n+pos)) : Csv.P},
+  hlg: {Nat.is_le(Csv.size(g), Csv.max_field(d)) == True{} : Bool}) ->
+  {Csv.feed_buf.slow(d, Bytes.append(Csv.fields(d, Con{g, u}, ""), Csv.crlf.put("")),
+    Csv.P{e.m(ee), 1n+f, cur, out, w, pos}) ==
+    RFP(d, Con{g, u}, cur, e.txt(ee), out, w, Nat.sub(f, 1n+List.length(&2, Bytes(), u)), pos) : Csv.P}:
+  tr3(Csv.P,
+    Csv.feed_buf.slow(d, Bytes.append(Csv.fields(d, Con{g, u}, ""), Csv.crlf.put("")),
+      Csv.P{e.m(ee), 1n+f, cur, out, w, pos}),
+    Csv.feed_buf.slow(d, Bytes.append(Csv.fields(d, u, ""), Csv.crlf.put("")),
+      Csv.P{e.m(fe(Csv.needs(d, g), False{}, g, Csv.max_field(d))), f, Con{e.txt(ee), cur}, out, w,
+        pa(Csv.field(d, g, ""), 1n+pos)}),
+    RFP(d, u, Con{e.txt(ee), cur}, e.txt(fe(Csv.needs(d, g), False{}, g, Csv.max_field(d))), out, w,
+      Nat.sub(f, 1n+List.length(&2, Bytes(), u)), pa(Csv.field(d, g, ""), 1n+pos)),
+    RFP(d, Con{g, u}, cur, e.txt(ee), out, w, Nat.sub(f, 1n+List.length(&2, Bytes(), u)), pos),
+    tr3(Csv.P,
+      Csv.feed_buf.slow(d, Bytes.append(Csv.fields(d, Con{g, u}, ""), Csv.crlf.put("")),
+        Csv.P{e.m(ee), 1n+f, cur, out, w, pos}),
+      Csv.feed_buf.slow(d, Bytes.append(Csv.field(d, g, ""), Bytes.append(Csv.fields(d, u, ""), Csv.crlf.put(""))),
+        Csv.step(d, Csv.P{e.m(ee), 1n+f, cur, out, w, pos}, Csv.delim(d))),
+      Csv.feed_buf.slow(d, Bytes.append(Csv.field(d, g, ""), Bytes.append(Csv.fields(d, u, ""), Csv.crlf.put(""))),
+        Csv.P{Csv.FS{}, f, Con{e.txt(ee), cur}, out, w, 1n+pos}),
+      Csv.feed_buf.slow(d, Bytes.append(Csv.fields(d, u, ""), Csv.crlf.put("")),
+        Csv.P{e.m(fe(Csv.needs(d, g), False{}, g, Csv.max_field(d))), f, Con{e.txt(ee), cur}, out, w,
+          pa(Csv.field(d, g, ""), 1n+pos)}),
+      Equal.cong(Bytes(), Csv.P, x => Csv.feed_buf.slow(d, x, Csv.P{e.m(ee), 1n+f, cur, out, w, pos}),
+        Bytes.append(Csv.fields(d, Con{g, u}, ""), Csv.crlf.put("")),
+        SCon{Chr{Csv.delim(d)}, Bytes.append(Csv.field(d, g, ""), Bytes.append(Csv.fields(d, u, ""),
+          Csv.crlf.put("")))}, RFB(d, g, u)),
+      Equal.cong(Csv.P, Csv.P, x => Csv.feed_buf.slow(d, Bytes.append(Csv.field(d, g, ""),
+        Bytes.append(Csv.fields(d, u, ""), Csv.crlf.put(""))), x),
+        Csv.step(d, Csv.P{e.m(ee), 1n+f, cur, out, w, pos}, Csv.delim(d)),
+        Csv.P{Csv.FS{}, f, Con{e.txt(ee), cur}, out, w, 1n+pos},
+        TD(d, ee, 1n+f, cur, out, w, pos, hd)),
+      Equal.trans(Csv.P,
+        Csv.feed_buf.slow(d, Bytes.append(Csv.field(d, g, ""), Bytes.append(Csv.fields(d, u, ""),
+          Csv.crlf.put(""))), Csv.P{Csv.FS{}, f, Con{e.txt(ee), cur}, out, w, 1n+pos}),
+        Csv.feed_buf.slow(d, Bytes.append(Csv.fields(d, u, ""), Csv.crlf.put("")),
+          Csv.feed_buf.slow(d, Csv.field(d, g, ""), Csv.P{Csv.FS{}, f, Con{e.txt(ee), cur}, out, w, 1n+pos})),
+        Csv.feed_buf.slow(d, Bytes.append(Csv.fields(d, u, ""), Csv.crlf.put("")),
+          Csv.P{e.m(fe(Csv.needs(d, g), False{}, g, Csv.max_field(d))), f, Con{e.txt(ee), cur}, out, w,
+            pa(Csv.field(d, g, ""), 1n+pos)}),
+        slow_app(d, Csv.field(d, g, ""), Bytes.append(Csv.fields(d, u, ""), Csv.crlf.put("")),
+          Csv.P{Csv.FS{}, f, Con{e.txt(ee), cur}, out, w, 1n+pos}),
+        Equal.cong(Csv.P, Csv.P, x => Csv.feed_buf.slow(d, Bytes.append(Csv.fields(d, u, ""), Csv.crlf.put("")), x),
+          Csv.feed_buf.slow(d, Csv.field(d, g, ""), Csv.P{Csv.FS{}, f, Con{e.txt(ee), cur}, out, w, 1n+pos}),
+          Csv.P{e.m(fe(Csv.needs(d, g), False{}, g, Csv.max_field(d))), f, Con{e.txt(ee), cur}, out, w,
+            pa(Csv.field(d, g, ""), 1n+pos)},
+          FLD(d, Csv.needs(d, g), False{}, g, f, Con{e.txt(ee), cur}, out, w, 1n+pos)(
+            needs.ok(Csv.special(d, g), Bool.and(Csv.pad(d), Csv.spaced(g))))(hlg)))),
+    ih,
+    Equal.trans(Csv.P,
+      RFQ(d, out, w, Nat.sub(f, 1n+List.length(&2, Bytes(), u)),
+        List.reverse.go(&2, Bytes(), cur, Con{e.txt(ee), Con{e.txt(fe(Csv.needs(d, g), False{}, g,
+          Csv.max_field(d))), u}}),
+        pa(Bytes.append(Csv.fields(d, u, ""), Csv.crlf.put("")), pa(Csv.field(d, g, ""), 1n+pos))),
+      RFQ(d, out, w, Nat.sub(f, 1n+List.length(&2, Bytes(), u)),
+        List.reverse.go(&2, Bytes(), cur, Con{e.txt(ee), Con{g, u}}),
+        pa(Bytes.append(Csv.fields(d, u, ""), Csv.crlf.put("")), pa(Csv.field(d, g, ""), 1n+pos))),
+      RFQ(d, out, w, Nat.sub(f, 1n+List.length(&2, Bytes(), u)),
+        List.reverse.go(&2, Bytes(), cur, Con{e.txt(ee), Con{g, u}}),
+        pa(Bytes.append(Csv.fields(d, Con{g, u}, ""), Csv.crlf.put("")), pos)),
+      Equal.cong(Bytes(), Csv.P, x => RFQ(d, out, w, Nat.sub(f, 1n+List.length(&2, Bytes(), u)),
+        List.reverse.go(&2, Bytes(), cur, Con{e.txt(ee), Con{x, u}}),
+        pa(Bytes.append(Csv.fields(d, u, ""), Csv.crlf.put("")), pa(Csv.field(d, g, ""), 1n+pos))),
+        e.txt(fe(Csv.needs(d, g), False{}, g, Csv.max_field(d))), g,
+        txt_fe(Csv.needs(d, g), False{}, g, Csv.max_field(d))),
+      Equal.cong(Nat, Csv.P, x => RFQ(d, out, w, Nat.sub(f, 1n+List.length(&2, Bytes(), u)),
+        List.reverse.go(&2, Bytes(), cur, Con{e.txt(ee), Con{g, u}}), x),
+        pa(Bytes.append(Csv.fields(d, u, ""), Csv.crlf.put("")), pa(Csv.field(d, g, ""), 1n+pos)),
+        pa(Bytes.append(Csv.fields(d, Con{g, u}, ""), Csv.crlf.put("")), pos),
+        Equal.sym(Nat, pa(Bytes.append(Csv.fields(d, Con{g, u}, ""), Csv.crlf.put("")), pos),
+          pa(Bytes.append(Csv.fields(d, u, ""), Csv.crlf.put("")), pa(Csv.field(d, g, ""), 1n+pos)),
+          Equal.trans(Nat, pa(Bytes.append(Csv.fields(d, Con{g, u}, ""), Csv.crlf.put("")), pos),
+            pa(SCon{Chr{Csv.delim(d)}, Bytes.append(Csv.field(d, g, ""), Bytes.append(Csv.fields(d, u, ""),
+              Csv.crlf.put("")))}, pos),
+            pa(Bytes.append(Csv.fields(d, u, ""), Csv.crlf.put("")), pa(Csv.field(d, g, ""), 1n+pos)),
+            Equal.cong(Bytes(), Nat, x => pa(x, pos), Bytes.append(Csv.fields(d, Con{g, u}, ""), Csv.crlf.put("")),
+              SCon{Chr{Csv.delim(d)}, Bytes.append(Csv.field(d, g, ""), Bytes.append(Csv.fields(d, u, ""),
+                Csv.crlf.put("")))}, RFB(d, g, u)),
+            pa_app(Csv.field(d, g, ""), Bytes.append(Csv.fields(d, u, ""), Csv.crlf.put("")), 1n+pos))))))
+
+# LEMMA: the fields after a record's first, then its CRLF: the record,
+# kept whole, and the reader at the next record's start
+def RF(+d: Csv.Dialect, +t: List<&2, Bytes()>, +ee: E, +fl: Nat, +cur: List<&2, Bytes()>,
+  +out: List<&2, List<&2, Bytes()>>, +w: Maybe<&2, Nat>, +pos: Nat,
+  +hd: {Csv.cls(d, Csv.delim(d)) == Csv.KD{} : Csv.K}, +hcr: {Csv.cls(d, 13) == Csv.KCR{} : Csv.K},
+  +hlf: {Csv.cls(d, 10) == Csv.KLF{} : Csv.K}, +hc: {Csv.crlf(d) == True{} : Bool}) ->
+  {Nat.is_le(1n+List.length(&2, Bytes(), t), fl) == True{} : Bool} ->
+  {Csv.fits.fields(d, t) == True{} : Bool} ->
+  RW(d, w, Nat.sub(fl, 1n+List.length(&2, Bytes(), t))) ->
+  {Csv.feed_buf.slow(d, Bytes.append(Csv.fields(d, t, ""), Csv.crlf.put("")), Csv.P{e.m(ee), fl, cur, out, w, pos}) ==
+    RFP(d, t, cur, e.txt(ee), out, w, Nat.sub(fl, 1n+List.length(&2, Bytes(), t)), pos) : Csv.P}:
+  match t fl:
+    case Nil{} 0n:
+      hl => hf => hw => no({Csv.feed_buf.slow(d, Csv.crlf.put(""), Csv.P{e.m(ee), 0n, cur, out, w, pos}) ==
+        RFP(d, Nil{}, cur, e.txt(ee), out, w, 0n, pos) : Csv.P}, hl)
+    case Nil{} 1n+f:
+      match f:
+        case 0n:
+          hl => hf => hw => Equal.trans(Csv.P,
+            Csv.feed_buf.slow(d, Csv.crlf.put(""), Csv.P{e.m(ee), 1n+0n, cur, out, w, pos}),
+            Csv.endl(d, e.txt(ee), 1n+0n, cur, out, w, pos, 1n+1n+pos),
+            RFP(d, Nil{}, cur, e.txt(ee), out, w, 0n, pos),
+            TCRLF(d, ee, 1n+0n, cur, out, w, pos, hcr, hlf, hc),
+            RFE(d, w, 0n, List.reverse(&2, Bytes(), Con{e.txt(ee), cur}), out, pos, 1n+1n+pos)(hw))
+        case 1n+f2:
+          hl => hf => hw => Equal.trans(Csv.P,
+            Csv.feed_buf.slow(d, Csv.crlf.put(""), Csv.P{e.m(ee), 1n+1n+f2, cur, out, w, pos}),
+            Csv.endl(d, e.txt(ee), 1n+1n+f2, cur, out, w, pos, 1n+1n+pos),
+            RFP(d, Nil{}, cur, e.txt(ee), out, w, 1n+f2, pos),
+            TCRLF(d, ee, 1n+1n+f2, cur, out, w, pos, hcr, hlf, hc),
+            RFE(d, w, 1n+f2, List.reverse(&2, Bytes(), Con{e.txt(ee), cur}), out, pos, 1n+1n+pos)(hw))
+    case Con{g, u} 0n:
+      hl => hf => hw => no({Csv.feed_buf.slow(d, Bytes.append(Csv.fields(d, Con{g, u}, ""), Csv.crlf.put("")),
+        Csv.P{e.m(ee), 0n, cur, out, w, pos}) ==
+        RFP(d, Con{g, u}, cur, e.txt(ee), out, w, 0n, pos) : Csv.P}, hl)
+    case Con{+g, +u} 1n+f:
+      hl => +hf => hw => RF.con(d, g, u, ee, f, cur, out, w, pos, hd,
+        RF(d, u, fe(Csv.needs(d, g), False{}, g, Csv.max_field(d)), f, Con{e.txt(ee), cur}, out, w,
+          pa(Csv.field(d, g, ""), 1n+pos), hd, hcr, hlf, hc)(hl)(and.r(Nat.is_le(Csv.size(g), Csv.max_field(d)),
+          Csv.fits.fields(d, u))(hf))(hw),
+        and.l(Nat.is_le(Csv.size(g), Csv.max_field(d)), Csv.fits.fields(d, u))(hf))
+
+# the first field of a record is quoted when it must be, and when it is
+# the record's only field and empty
+def rb(+d: Csv.Dialect, +f: Bytes(), t: List<&2, Bytes()>) -> Bool:
+  match t:
+    case Nil{}:
+      Bool.or(Csv.needs(d, f), String.is_empty(f))
+    case Con{g, u}:
+      Csv.needs(d, f)
+
+def rb.ok(+d: Csv.Dialect, +f: Bytes(), t: List<&2, Bytes()>) ->
+  {Bool.or(Bool.not(Csv.special(d, f)), rb(d, f, t)) == True{} : Bool}:
+  match t:
+    case Nil{}:
+      needs.ok2(Csv.special(d, f), Bool.and(Csv.pad(d), Csv.spaced(f)), String.is_empty(f))
+    case Con{g, u}:
+      needs.ok(Csv.special(d, f), Bool.and(Csv.pad(d), Csv.spaced(f)))
+
+# a record's bytes: its first field, then the rest and CRLF
+def REC.bytes(+d: Csv.Dialect, +f: Bytes(), t: List<&2, Bytes()>) ->
+  {Csv.record(d, Con{f, t}, "") ==
+    Bytes.append(Csv.field.at(d, rb(d, f, t), f, ""), Bytes.append(Csv.fields(d, t, ""), Csv.crlf.put(""))) :
+    Bytes()}:
+  match t:
+    case Nil{}:
+      pfx.crlf(Csv.field.at(d, Bool.or(Csv.needs(d, f), String.is_empty(f)), f, ""))
+    case Con{+g, +u}:
+      tr3(Bytes(), Csv.crlf.put(Csv.fields(d, Con{g, u}, Csv.field(d, f, ""))),
+        Bytes.append(Csv.fields(d, Con{g, u}, Csv.field(d, f, "")), Csv.crlf.put("")),
+        Bytes.append(Bytes.append(Csv.field(d, f, ""), Csv.fields(d, Con{g, u}, "")), Csv.crlf.put("")),
+        Bytes.append(Csv.field(d, f, ""), Bytes.append(Csv.fields(d, Con{g, u}, ""), Csv.crlf.put(""))),
+        pfx.crlf(Csv.fields(d, Con{g, u}, Csv.field(d, f, ""))),
+        Equal.cong(Bytes(), Bytes(), x => Bytes.append(x, Csv.crlf.put("")),
+          Csv.fields(d, Con{g, u}, Csv.field(d, f, "")),
+          Bytes.append(Csv.field(d, f, ""), Csv.fields(d, Con{g, u}, "")),
+          pfx.fields(d, Con{g, u}, Csv.field(d, f, ""))),
+        app_assoc(Csv.field(d, f, ""), Csv.fields(d, Con{g, u}, ""), Csv.crlf.put("")))
+
+def REC.con(+d: Csv.Dialect, +f: Bytes(), +t: List<&2, Bytes()>, +out: List<&2, List<&2, Bytes()>>,
+  +w: Maybe<&2, Nat>, +pos: Nat, +hd: {Csv.cls(d, Csv.delim(d)) == Csv.KD{} : Csv.K},
+  +hcr: {Csv.cls(d, 13) == Csv.KCR{} : Csv.K}, +hlf: {Csv.cls(d, 10) == Csv.KLF{} : Csv.K},
+  +hc: {Csv.crlf(d) == True{} : Bool},
+  hl: {Nat.is_le(1n+List.length(&2, Bytes(), t), Csv.max_fields(d)) == True{} : Bool},
+  +hf: {Csv.fits.fields(d, Con{f, t}) == True{} : Bool},
+  hw: RW(d, w, Nat.sub(Csv.max_fields(d), 1n+List.length(&2, Bytes(), t)))) ->
+  {Csv.feed_buf.slow(d, Csv.record(d, Con{f, t}, ""), Csv.P{Csv.RS{}, Csv.max_fields(d), Nil{}, out, w, pos}) ==
+    Csv.P{Csv.RS{}, Csv.max_fields(d), Nil{}, Con{Con{f, t}, out},
+      wnext(w, Nat.sub(Csv.max_fields(d), 1n+List.length(&2, Bytes(), t))),
+      pa(Csv.record(d, Con{f, t}, ""), pos)} : Csv.P}:
+  tr3(Csv.P, Csv.feed_buf.slow(d, Csv.record(d, Con{f, t}, ""), Csv.P{Csv.RS{}, Csv.max_fields(d), Nil{}, out, w, pos}),
+    Csv.feed_buf.slow(d, Bytes.append(Csv.fields(d, t, ""), Csv.crlf.put("")),
+      Csv.feed_buf.slow(d, Csv.field.at(d, rb(d, f, t), f, ""), Csv.P{Csv.RS{}, Csv.max_fields(d), Nil{}, out, w, pos})),
+    Csv.feed_buf.slow(d, Bytes.append(Csv.fields(d, t, ""), Csv.crlf.put("")),
+      Csv.P{e.m(fe(rb(d, f, t), True{}, f, Csv.max_field(d))), Csv.max_fields(d), Nil{}, out, w,
+        pa(Csv.field.at(d, rb(d, f, t), f, ""), pos)}),
+    Csv.P{Csv.RS{}, Csv.max_fields(d), Nil{}, Con{Con{f, t}, out},
+      wnext(w, Nat.sub(Csv.max_fields(d), 1n+List.length(&2, Bytes(), t))),
+      pa(Csv.record(d, Con{f, t}, ""), pos)},
+    Equal.trans(Csv.P,
+      Csv.feed_buf.slow(d, Csv.record(d, Con{f, t}, ""), Csv.P{Csv.RS{}, Csv.max_fields(d), Nil{}, out, w, pos}),
+      Csv.feed_buf.slow(d, Bytes.append(Csv.field.at(d, rb(d, f, t), f, ""), Bytes.append(Csv.fields(d, t, ""),
+        Csv.crlf.put(""))), Csv.P{Csv.RS{}, Csv.max_fields(d), Nil{}, out, w, pos}),
+      Csv.feed_buf.slow(d, Bytes.append(Csv.fields(d, t, ""), Csv.crlf.put("")),
+        Csv.feed_buf.slow(d, Csv.field.at(d, rb(d, f, t), f, ""), Csv.P{Csv.RS{}, Csv.max_fields(d), Nil{}, out, w,
+          pos})),
+      Equal.cong(Bytes(), Csv.P, x => Csv.feed_buf.slow(d, x, Csv.P{Csv.RS{}, Csv.max_fields(d), Nil{}, out, w, pos}),
+        Csv.record(d, Con{f, t}, ""),
+        Bytes.append(Csv.field.at(d, rb(d, f, t), f, ""), Bytes.append(Csv.fields(d, t, ""), Csv.crlf.put(""))),
+        REC.bytes(d, f, t)),
+      slow_app(d, Csv.field.at(d, rb(d, f, t), f, ""), Bytes.append(Csv.fields(d, t, ""), Csv.crlf.put("")),
+        Csv.P{Csv.RS{}, Csv.max_fields(d), Nil{}, out, w, pos})),
+    Equal.cong(Csv.P, Csv.P, x => Csv.feed_buf.slow(d, Bytes.append(Csv.fields(d, t, ""), Csv.crlf.put("")), x),
+      Csv.feed_buf.slow(d, Csv.field.at(d, rb(d, f, t), f, ""), Csv.P{Csv.RS{}, Csv.max_fields(d), Nil{}, out, w, pos}),
+      Csv.P{e.m(fe(rb(d, f, t), True{}, f, Csv.max_field(d))), Csv.max_fields(d), Nil{}, out, w,
+        pa(Csv.field.at(d, rb(d, f, t), f, ""), pos)},
+      FLD(d, rb(d, f, t), True{}, f, Csv.max_fields(d), Nil{}, out, w, pos)(rb.ok(d, f, t))(
+        and.l(Nat.is_le(Csv.size(f), Csv.max_field(d)), Csv.fits.fields(d, t))(hf))),
+    Equal.trans(Csv.P,
+      Csv.feed_buf.slow(d, Bytes.append(Csv.fields(d, t, ""), Csv.crlf.put("")),
+        Csv.P{e.m(fe(rb(d, f, t), True{}, f, Csv.max_field(d))), Csv.max_fields(d), Nil{}, out, w,
+          pa(Csv.field.at(d, rb(d, f, t), f, ""), pos)}),
+      RFP(d, t, Nil{}, e.txt(fe(rb(d, f, t), True{}, f, Csv.max_field(d))), out, w,
+        Nat.sub(Csv.max_fields(d), 1n+List.length(&2, Bytes(), t)), pa(Csv.field.at(d, rb(d, f, t), f, ""), pos)),
+      Csv.P{Csv.RS{}, Csv.max_fields(d), Nil{}, Con{Con{f, t}, out},
+        wnext(w, Nat.sub(Csv.max_fields(d), 1n+List.length(&2, Bytes(), t))),
+        pa(Csv.record(d, Con{f, t}, ""), pos)},
+      RF(d, t, fe(rb(d, f, t), True{}, f, Csv.max_field(d)), Csv.max_fields(d), Nil{}, out, w,
+        pa(Csv.field.at(d, rb(d, f, t), f, ""), pos), hd, hcr, hlf, hc)(hl)(
+        and.r(Nat.is_le(Csv.size(f), Csv.max_field(d)), Csv.fits.fields(d, t))(hf))(hw),
+      Equal.trans(Csv.P,
+        RFQ(d, out, w, Nat.sub(Csv.max_fields(d), 1n+List.length(&2, Bytes(), t)),
+          Con{e.txt(fe(rb(d, f, t), True{}, f, Csv.max_field(d))), t},
+          pa(Bytes.append(Csv.fields(d, t, ""), Csv.crlf.put("")), pa(Csv.field.at(d, rb(d, f, t), f, ""), pos))),
+        RFQ(d, out, w, Nat.sub(Csv.max_fields(d), 1n+List.length(&2, Bytes(), t)), Con{f, t},
+          pa(Bytes.append(Csv.fields(d, t, ""), Csv.crlf.put("")), pa(Csv.field.at(d, rb(d, f, t), f, ""), pos))),
+        RFQ(d, out, w, Nat.sub(Csv.max_fields(d), 1n+List.length(&2, Bytes(), t)), Con{f, t},
+          pa(Csv.record(d, Con{f, t}, ""), pos)),
+        Equal.cong(Bytes(), Csv.P, x => RFQ(d, out, w, Nat.sub(Csv.max_fields(d), 1n+List.length(&2, Bytes(), t)),
+          Con{x, t}, pa(Bytes.append(Csv.fields(d, t, ""), Csv.crlf.put("")),
+            pa(Csv.field.at(d, rb(d, f, t), f, ""), pos))),
+          e.txt(fe(rb(d, f, t), True{}, f, Csv.max_field(d))), f, txt_fe(rb(d, f, t), True{}, f, Csv.max_field(d))),
+        Equal.cong(Nat, Csv.P, x => RFQ(d, out, w, Nat.sub(Csv.max_fields(d), 1n+List.length(&2, Bytes(), t)),
+          Con{f, t}, x),
+          pa(Bytes.append(Csv.fields(d, t, ""), Csv.crlf.put("")), pa(Csv.field.at(d, rb(d, f, t), f, ""), pos)),
+          pa(Csv.record(d, Con{f, t}, ""), pos),
+          Equal.sym(Nat, pa(Csv.record(d, Con{f, t}, ""), pos),
+            pa(Bytes.append(Csv.fields(d, t, ""), Csv.crlf.put("")), pa(Csv.field.at(d, rb(d, f, t), f, ""), pos)),
+            Equal.trans(Nat, pa(Csv.record(d, Con{f, t}, ""), pos),
+              pa(Bytes.append(Csv.field.at(d, rb(d, f, t), f, ""), Bytes.append(Csv.fields(d, t, ""),
+                Csv.crlf.put(""))), pos),
+              pa(Bytes.append(Csv.fields(d, t, ""), Csv.crlf.put("")), pa(Csv.field.at(d, rb(d, f, t), f, ""), pos)),
+              Equal.cong(Bytes(), Nat, x => pa(x, pos), Csv.record(d, Con{f, t}, ""),
+                Bytes.append(Csv.field.at(d, rb(d, f, t), f, ""), Bytes.append(Csv.fields(d, t, ""),
+                  Csv.crlf.put(""))), REC.bytes(d, f, t)),
+              pa_app(Csv.field.at(d, rb(d, f, t), f, ""), Bytes.append(Csv.fields(d, t, ""), Csv.crlf.put("")),
+                pos)))))))
+
+# LEMMA: a record, as the writer wrote it, from a record's start: kept,
+# field for field, and the reader at the next record's start
+def REC(+d: Csv.Dialect, r: List<&2, Bytes()>, +out: List<&2, List<&2, Bytes()>>, +w: Maybe<&2, Nat>,
+  +pos: Nat, +hd: {Csv.cls(d, Csv.delim(d)) == Csv.KD{} : Csv.K},
+  +hcr: {Csv.cls(d, 13) == Csv.KCR{} : Csv.K}, +hlf: {Csv.cls(d, 10) == Csv.KLF{} : Csv.K},
+  +hc: {Csv.crlf(d) == True{} : Bool}) ->
+  {Bool.not(List.is_empty(&2, Bytes(), r)) == True{} : Bool} ->
+  {Nat.is_le(Csv.width(r), Csv.max_fields(d)) == True{} : Bool} ->
+  {Csv.fits.fields(d, r) == True{} : Bool} ->
+  RW(d, w, Nat.sub(Csv.max_fields(d), Csv.width(r))) ->
+  {Csv.feed_buf.slow(d, Csv.record(d, r, ""), Csv.P{Csv.RS{}, Csv.max_fields(d), Nil{}, out, w, pos}) ==
+    Csv.P{Csv.RS{}, Csv.max_fields(d), Nil{}, Con{r, out}, wnext(w, Nat.sub(Csv.max_fields(d), Csv.width(r))),
+      pa(Csv.record(d, r, ""), pos)} : Csv.P}:
+  match r:
+    case Nil{}:
+      hn => hl => hf => hw => no({Csv.feed_buf.slow(d, Csv.record(d, Nil{}, ""), Csv.P{Csv.RS{}, Csv.max_fields(d),
+        Nil{}, out, w, pos}) == Csv.P{Csv.RS{}, Csv.max_fields(d), Nil{}, Con{Nil{}, out},
+        wnext(w, Nat.sub(Csv.max_fields(d), Csv.width(Nil{}))), pa(Csv.record(d, Nil{}, ""), pos)} : Csv.P}, hn)
+    case Con{+f, +t}:
+      hn => hl => +hf => hw => REC.con(d, f, t, out, w, pos, hd, hcr, hlf, hc, hl, hf, hw)
+
+# Reading the document back
+# -------------------------
+
+# what the first record left, against the width every record is held
+# to (n0, the first record's)
+def WI(+d: Csv.Dialect, w: Maybe<&2, Nat>, +n0: Nat) -> Data:
+  match w:
+    case None{}:
+      Unit
+    case Some{x}:
+      {Bool.or(Csv.ragged(d), Nat.is_eq(x, Nat.sub(Csv.max_fields(d), n0))) == True{} : Bool}
+
+def rwi.b(rg: Bool, +a: Nat, +n0: Nat, +x: Nat, +mn: Nat) ->
+  {Bool.or(rg, Nat.is_eq(a, n0)) == True{} : Bool} ->
+  {Bool.or(rg, Nat.is_eq(x, Nat.sub(mn, n0))) == True{} : Bool} ->
+  {Bool.or(rg, Nat.is_eq(Nat.sub(mn, a), x)) == True{} : Bool}:
+  match rg:
+    case True{}:
+      h1 => h2 => {==}
+    case False{}:
+      h1 => h2 =>
+        %Equal.sym(Nat, a, n0, nat_eq(a, n0)(h1)) : {Nat.is_eq(Nat.sub(mn, _), x) == True{} : Bool}
+        %Equal.sym(Nat, x, Nat.sub(mn, n0), nat_eq(x, Nat.sub(mn, n0))(h2)) :
+          {Nat.is_eq(Nat.sub(mn, n0), _) == True{} : Bool}
+        nat_refl(Nat.sub(mn, n0))
+
+def win.b(rg: Bool, +a: Nat, +n0: Nat, +mn: Nat) ->
+  {Bool.or(rg, Nat.is_eq(a, n0)) == True{} : Bool} ->
+  {Bool.or(rg, Nat.is_eq(Nat.sub(mn, a), Nat.sub(mn, n0))) == True{} : Bool}:
+  match rg:
+    case True{}:
+      h1 => {==}
+    case False{}:
+      h1 =>
+        %Equal.sym(Nat, a, n0, nat_eq(a, n0)(h1)) : {Nat.is_eq(Nat.sub(mn, _), Nat.sub(mn, n0)) == True{} : Bool}
+        nat_refl(Nat.sub(mn, n0))
+
+# the width check a record passes, and the one the next record meets
+def RWI(+d: Csv.Dialect, w: Maybe<&2, Nat>, +n0: Nat, +a: Nat) ->
+  {Bool.or(Csv.ragged(d), Nat.is_eq(a, n0)) == True{} : Bool} -> WI(d, w, n0) ->
+  RW(d, w, Nat.sub(Csv.max_fields(d), a)):
+  match w:
+    case None{}:
+      h1 => h2 => Unit{}
+    case Some{+x}:
+      h1 => h2 => rwi.b(Csv.ragged(d), a, n0, x, Csv.max_fields(d))(h1)(h2)
+
+def WIN(+d: Csv.Dialect, w: Maybe<&2, Nat>, +n0: Nat, +a: Nat) ->
+  {Bool.or(Csv.ragged(d), Nat.is_eq(a, n0)) == True{} : Bool} -> WI(d, w, n0) ->
+  WI(d, wnext(w, Nat.sub(Csv.max_fields(d), a)), n0):
+  match w:
+    case None{}:
+      h1 => h2 => win.b(Csv.ragged(d), a, n0, Csv.max_fields(d))(h1)
+    case Some{x}:
+      h1 => h2 => h2
+
+def wend(+d: Csv.Dialect, rs: List<&2, List<&2, Bytes()>>, w: Maybe<&2, Nat>) -> Maybe<&2, Nat>:
+  match rs:
+    case Nil{}:
+      w
+    case Con{r, t}:
+      wend(d, t, wnext(w, Nat.sub(Csv.max_fields(d), Csv.width(r))))
+
+# fits.rec, taken apart: (((has a field && within max_fields) && as wide)
+# && its fields fit)
+def FR(+d: Csv.Dialect, +n0: Nat, +r: List<&2, Bytes()>) -> Type:
+  {Bool.not(List.is_empty(&2, Bytes(), r)) == True{} : Bool} &
+    {Nat.is_le(Csv.width(r), Csv.max_fields(d)) == True{} : Bool} &
+    {Bool.or(Csv.ragged(d), Nat.is_eq(Csv.width(r), n0)) == True{} : Bool} &
+    {Csv.fits.fields(d, r) == True{} : Bool}
+
+def fr(+d: Csv.Dialect, +n0: Nat, +r: List<&2, Bytes()>) -> {Csv.fits.rec(d, n0, r) == True{} : Bool} -> FR(d, n0, r):
+  +h =>
+    +h3 = and.l(Bool.and(Bool.and(Bool.not(List.is_empty(&2, Bytes(), r)), Nat.is_le(Csv.width(r), Csv.max_fields(d))),
+      Bool.or(Csv.ragged(d), Nat.is_eq(Csv.width(r), n0))), Csv.fits.fields(d, r))(h)
+    +h2 = and.l(Bool.and(Bool.not(List.is_empty(&2, Bytes(), r)), Nat.is_le(Csv.width(r), Csv.max_fields(d))),
+      Bool.or(Csv.ragged(d), Nat.is_eq(Csv.width(r), n0)))(h3)
+    (and.l(Bool.not(List.is_empty(&2, Bytes(), r)), Nat.is_le(Csv.width(r), Csv.max_fields(d)))(h2),
+      (and.r(Bool.not(List.is_empty(&2, Bytes(), r)), Nat.is_le(Csv.width(r), Csv.max_fields(d)))(h2),
+        (and.r(Bool.and(Bool.not(List.is_empty(&2, Bytes(), r)), Nat.is_le(Csv.width(r), Csv.max_fields(d))),
+          Bool.or(Csv.ragged(d), Nat.is_eq(Csv.width(r), n0)))(h3),
+          and.r(Bool.and(Bool.and(Bool.not(List.is_empty(&2, Bytes(), r)), Nat.is_le(Csv.width(r),
+            Csv.max_fields(d))), Bool.or(Csv.ragged(d), Nat.is_eq(Csv.width(r), n0))), Csv.fits.fields(d, r))(h))))
+
+def fr.wd(+d: Csv.Dialect, +n0: Nat, +r: List<&2, Bytes()>, x: FR(d, n0, r)) ->
+  {Bool.or(Csv.ragged(d), Nat.is_eq(Csv.width(r), n0)) == True{} : Bool}:
+  (a, x2) = x
+  (b, x3) = x2
+  (c, e) = x3
+  c
+
+def sa.crlf(+d: Csv.Dialect, x: SA(d)) -> {Csv.crlf(d) == True{} : Bool}:
+  (a, b) = x
+  a
+
+def DOCP(+d: Csv.Dialect, +rs: List<&2, List<&2, Bytes()>>, +out: List<&2, List<&2, Bytes()>>,
+  +w: Maybe<&2, Nat>, +pos: Nat) -> Csv.P:
+  Csv.P{Csv.RS{}, Csv.max_fields(d), Nil{}, List.reverse.go(&2, List<&2, Bytes()>, rs, out), wend(d, rs, w),
+    pa(Csv.show.go(d, rs, ""), pos)}
+
+def DOC.con(+d: Csv.Dialect, +r: List<&2, Bytes()>, +t: List<&2, List<&2, Bytes()>>, +n0: Nat,
+  +out: List<&2, List<&2, Bytes()>>, +w: Maybe<&2, Nat>, +pos: Nat,
+  +hd: {Csv.cls(d, Csv.delim(d)) == Csv.KD{} : Csv.K}, +hcr: {Csv.cls(d, 13) == Csv.KCR{} : Csv.K},
+  +hlf: {Csv.cls(d, 10) == Csv.KLF{} : Csv.K}, +hc: {Csv.crlf(d) == True{} : Bool},
+  fr0: FR(d, n0, r), hwi: WI(d, w, n0),
+  ih: {Csv.feed_buf.slow(d, Csv.show.go(d, t, ""), Csv.P{Csv.RS{}, Csv.max_fields(d), Nil{}, Con{r, out},
+    wnext(w, Nat.sub(Csv.max_fields(d), Csv.width(r))), pa(Csv.record(d, r, ""), pos)}) ==
+    DOCP(d, t, Con{r, out}, wnext(w, Nat.sub(Csv.max_fields(d), Csv.width(r))), pa(Csv.record(d, r, ""), pos)) :
+    Csv.P}) ->
+  {Csv.feed_buf.slow(d, Csv.show.go(d, Con{r, t}, ""), Csv.P{Csv.RS{}, Csv.max_fields(d), Nil{}, out, w, pos}) ==
+    DOCP(d, Con{r, t}, out, w, pos) : Csv.P}:
+  (hn, fr1) = fr0
+  (hl, fr2) = fr1
+  (hwd, hf) = fr2
+  tr3(Csv.P, Csv.feed_buf.slow(d, Csv.show.go(d, Con{r, t}, ""), Csv.P{Csv.RS{}, Csv.max_fields(d), Nil{}, out, w, pos}),
+    Csv.feed_buf.slow(d, Csv.show.go(d, t, ""), Csv.feed_buf.slow(d, Csv.record(d, r, ""),
+      Csv.P{Csv.RS{}, Csv.max_fields(d), Nil{}, out, w, pos})),
+    Csv.feed_buf.slow(d, Csv.show.go(d, t, ""), Csv.P{Csv.RS{}, Csv.max_fields(d), Nil{}, Con{r, out},
+      wnext(w, Nat.sub(Csv.max_fields(d), Csv.width(r))), pa(Csv.record(d, r, ""), pos)}),
+    DOCP(d, Con{r, t}, out, w, pos),
+    Equal.trans(Csv.P,
+      Csv.feed_buf.slow(d, Csv.show.go(d, Con{r, t}, ""), Csv.P{Csv.RS{}, Csv.max_fields(d), Nil{}, out, w, pos}),
+      Csv.feed_buf.slow(d, Bytes.append(Csv.record(d, r, ""), Csv.show.go(d, t, "")),
+        Csv.P{Csv.RS{}, Csv.max_fields(d), Nil{}, out, w, pos}),
+      Csv.feed_buf.slow(d, Csv.show.go(d, t, ""), Csv.feed_buf.slow(d, Csv.record(d, r, ""),
+        Csv.P{Csv.RS{}, Csv.max_fields(d), Nil{}, out, w, pos})),
+      Equal.cong(Bytes(), Csv.P, x => Csv.feed_buf.slow(d, x, Csv.P{Csv.RS{}, Csv.max_fields(d), Nil{}, out, w, pos}),
+        Csv.show.go(d, t, Csv.record(d, r, "")), Bytes.append(Csv.record(d, r, ""), Csv.show.go(d, t, "")),
+        pfx.show(d, t, Csv.record(d, r, ""))),
+      slow_app(d, Csv.record(d, r, ""), Csv.show.go(d, t, ""), Csv.P{Csv.RS{}, Csv.max_fields(d), Nil{}, out, w, pos})),
+    Equal.cong(Csv.P, Csv.P, x => Csv.feed_buf.slow(d, Csv.show.go(d, t, ""), x),
+      Csv.feed_buf.slow(d, Csv.record(d, r, ""), Csv.P{Csv.RS{}, Csv.max_fields(d), Nil{}, out, w, pos}),
+      Csv.P{Csv.RS{}, Csv.max_fields(d), Nil{}, Con{r, out}, wnext(w, Nat.sub(Csv.max_fields(d), Csv.width(r))),
+        pa(Csv.record(d, r, ""), pos)},
+      REC(d, r, out, w, pos, hd, hcr, hlf, hc)(hn)(hl)(hf)(RWI(d, w, n0, Csv.width(r))(hwd)(hwi))),
+    Equal.trans(Csv.P,
+      Csv.feed_buf.slow(d, Csv.show.go(d, t, ""), Csv.P{Csv.RS{}, Csv.max_fields(d), Nil{}, Con{r, out},
+        wnext(w, Nat.sub(Csv.max_fields(d), Csv.width(r))), pa(Csv.record(d, r, ""), pos)}),
+      DOCP(d, t, Con{r, out}, wnext(w, Nat.sub(Csv.max_fields(d), Csv.width(r))), pa(Csv.record(d, r, ""), pos)),
+      DOCP(d, Con{r, t}, out, w, pos),
+      ih,
+      Equal.cong(Nat, Csv.P, x => Csv.P{Csv.RS{}, Csv.max_fields(d), Nil{},
+        List.reverse.go(&2, List<&2, Bytes()>, t, Con{r, out}),
+        wend(d, t, wnext(w, Nat.sub(Csv.max_fields(d), Csv.width(r)))), x},
+        pa(Csv.show.go(d, t, ""), pa(Csv.record(d, r, ""), pos)), pa(Csv.show.go(d, Con{r, t}, ""), pos),
+        Equal.sym(Nat, pa(Csv.show.go(d, Con{r, t}, ""), pos), pa(Csv.show.go(d, t, ""), pa(Csv.record(d, r, ""), pos)),
+          Equal.trans(Nat, pa(Csv.show.go(d, t, Csv.record(d, r, "")), pos),
+            pa(Bytes.append(Csv.record(d, r, ""), Csv.show.go(d, t, "")), pos),
+            pa(Csv.show.go(d, t, ""), pa(Csv.record(d, r, ""), pos)),
+            Equal.cong(Bytes(), Nat, x => pa(x, pos), Csv.show.go(d, t, Csv.record(d, r, "")),
+              Bytes.append(Csv.record(d, r, ""), Csv.show.go(d, t, "")), pfx.show(d, t, Csv.record(d, r, ""))),
+            pa_app(Csv.record(d, r, ""), Csv.show.go(d, t, ""), pos))))))
+
+# LEMMA: every record, as the writer wrote it: kept in order
+def DOC(+d: Csv.Dialect, rs: List<&2, List<&2, Bytes()>>, +n0: Nat, +out: List<&2, List<&2, Bytes()>>,
+  +w: Maybe<&2, Nat>, +pos: Nat, +hd: {Csv.cls(d, Csv.delim(d)) == Csv.KD{} : Csv.K},
+  +hcr: {Csv.cls(d, 13) == Csv.KCR{} : Csv.K}, +hlf: {Csv.cls(d, 10) == Csv.KLF{} : Csv.K},
+  +hc: {Csv.crlf(d) == True{} : Bool}) ->
+  {Csv.fits.recs(d, n0, rs) == True{} : Bool} -> WI(d, w, n0) ->
+  {Csv.feed_buf.slow(d, Csv.show.go(d, rs, ""), Csv.P{Csv.RS{}, Csv.max_fields(d), Nil{}, out, w, pos}) ==
+    DOCP(d, rs, out, w, pos) : Csv.P}:
+  match rs:
+    case Nil{}:
+      hr => hwi => {==}
+    case Con{+r, +t}:
+      +hr => +hwi =>
+        DOC.con(d, r, t, n0, out, w, pos, hd, hcr, hlf, hc,
+          fr(d, n0, r)(and.l(Csv.fits.rec(d, n0, r), Csv.fits.recs(d, n0, t))(hr)), hwi,
+          DOC(d, t, n0, Con{r, out}, wnext(w, Nat.sub(Csv.max_fields(d), Csv.width(r))), pa(Csv.record(d, r, ""), pos),
+            hd, hcr, hlf, hc)(and.r(Csv.fits.rec(d, n0, r), Csv.fits.recs(d, n0, t))(hr))(
+            WIN(d, w, n0, Csv.width(r))(fr.wd(d, n0, r,
+              fr(d, n0, r)(and.l(Csv.fits.rec(d, n0, r), Csv.fits.recs(d, n0, t))(hr))))(hwi)))
+
+# reversing twice
+def rr(xs: List<&2, List<&2, Bytes()>>, -acc: List<&2, List<&2, Bytes()>>) ->
+  {List.reverse.go(&2, List<&2, Bytes()>, List.reverse.go(&2, List<&2, Bytes()>, xs, acc), Nil{}) ==
+    List.reverse.go(&2, List<&2, Bytes()>, acc, xs) : List<&2, List<&2, Bytes()>>}:
+  match xs:
+    case Nil{}:
+      {==}
+    case Con{h, t}:
+      rr(t, Con{h, acc})
+
+# The laws, whole
+# ---------------
+
+def RT.con(+d: Csv.Dialect, +r: List<&2, Bytes()>, +t: List<&2, List<&2, Bytes()>>) ->
+  {Csv.fits(d, Con{r, t}) == True{} : Bool} ->
+  {Csv.read(d, Csv.show(d, Con{r, t})) == Csv.table(d, Con{r, t}) : Csv.Out}:
+  +ok =>
+    Equal.trans(Csv.Out, Csv.read(d, Csv.show(d, Con{r, t})),
+      Csv.result(d, Csv.finish(d, Csv.feed_buf.slow(d, Csv.show.go(d, Con{r, t}, ""), Csv.new(d)))),
+      Csv.table(d, Con{r, t}),
+      Equal.cong(Csv.P, Csv.Out, p => Csv.result(d, Csv.finish(d, p)),
+        Csv.feed_buf(d, Csv.show.go(d, Con{r, t}, ""), Csv.new(d)),
+        Csv.feed_buf.slow(d, Csv.show.go(d, Con{r, t}, ""), Csv.new(d)),
+        lem.go(d, Bytes.len(Csv.show.go(d, Con{r, t}, "")), (Csv.new(d), Csv.show.go(d, Con{r, t}, "")))),
+      Equal.trans(Csv.Out,
+        Csv.result(d, Csv.finish(d, Csv.feed_buf.slow(d, Csv.show.go(d, Con{r, t}, ""), Csv.new(d)))),
+        Csv.result(d, Csv.finish(d, DOCP(d, Con{r, t}, Nil{}, None{}, 0n))),
+        Csv.table(d, Con{r, t}),
+        Equal.cong(Csv.P, Csv.Out, p => Csv.result(d, Csv.finish(d, p)),
+          Csv.feed_buf.slow(d, Csv.show.go(d, Con{r, t}, ""), Csv.new(d)),
+          DOCP(d, Con{r, t}, Nil{}, None{}, 0n),
+          DOC(d, Con{r, t}, Csv.width(r), Nil{}, None{}, 0n, cls.d(d, sane.sa(d)(and.l(Csv.sane(d), Csv.fits.at(d, Con{r, t}))(ok))), cls.cr(d, sane.sa(d)(and.l(Csv.sane(d), Csv.fits.at(d, Con{r, t}))(ok))),
+            cls.lf(d, sane.sa(d)(and.l(Csv.sane(d), Csv.fits.at(d, Con{r, t}))(ok))), sa.crlf(d, sane.sa(d)(and.l(Csv.sane(d), Csv.fits.at(d, Con{r, t}))(ok))))(
+            and.r(Csv.sane(d), Csv.fits.at(d, Con{r, t}))(ok))(Unit{})),
+        Equal.cong(List<&2, List<&2, Bytes()>>, Csv.Out, xs => Csv.table(d, xs),
+          List.reverse(&2, List<&2, Bytes()>, List.reverse.go(&2, List<&2, Bytes()>, Con{r, t}, Nil{})),
+          Con{r, t}, rr(Con{r, t}, Nil{}))))
+
+def Laws.round_trip(d, rs, ok):
+  match rs:
+    case Nil{}:
+      {==}
+    case Con{r, t}:
+      RT.con(d, r, t)(ok)
+
+def Laws.show_valid(d, rs, ok):
+  Equal.trans(Csv.Out, Spec.parse(Bytes.to_list(Csv.show(d, rs)), d), Csv.read(d, Csv.show(d, rs)),
+    Csv.table(d, rs),
+    Equal.sym(Csv.Out, Csv.read(d, Csv.show(d, rs)), Spec.parse(Bytes.to_list(Csv.show(d, rs)), d),
+      Laws.csv_sim_buf(d, Csv.show(d, rs))),
+    Laws.round_trip(d, rs, ok))
