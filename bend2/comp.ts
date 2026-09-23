@@ -281,6 +281,14 @@ const OPERATIONS: Record<string, Intr> = Object.setPrototypeOf({
     C:  "($0 < $1)",
     JS: "($0 < $1)",
   },
+  nat_min: {
+    C:  "($0 < $1 ? $0 : $1)",
+    JS: "($0 < $1 ? $0 : $1)",
+  },
+  nat_max: {
+    C:  "($0 < $1 ? $1 : $0)",
+    JS: "($0 < $1 ? $1 : $0)",
+  },
   nat_divmod: {
     C:    ["($1 == 0 ? 0 : $0 / $1)", "($1 == 0 ? $0 : $0 % $1)"],
     call: true,
