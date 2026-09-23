@@ -487,9 +487,33 @@ def fields.of(ls: List<&2, Bytes()>) -> Maybe<&2, List<&2, Wr.Field>>:
     case Con{+l, t}:
       fields.put(field.of(l), fields.of(t))
 
+# a buffer cut at every byte x, the pieces in order (k bounds the cuts;
+# the byte after x, the LF of a CR LF, is skipped with it when skip is 2)
+def cut.at(k: Nat, found: Bool, +s: Bytes(), +i: Nat, +x: U32, +skip: Nat) -> List<&2, Bytes()>:
+  match k found:
+    case 0n _:
+      [s]
+    case _ False{}:
+      [s]
+    case 1n+j True{}:
+      +t = String.drop(s, Nat.add(i, skip))
+      Con{String.take(s, i), cut.at(j, Nat.is_lt(Bytes.find_byte(t, 0n, x), Bytes.len(t)), t,
+        Bytes.find_byte(t, 0n, x), x, skip)}
+
+def cut(+s: Bytes(), +x: U32, +skip: Nat) -> List<&2, Bytes()>:
+  +i = Bytes.find_byte(s, 0n, x)
+  cut.at(Bytes.len(s), Nat.is_lt(i, Bytes.len(s)), s, i, x, skip)
+
 # the field lines after the status line (none when it is alone)
+def rlines.at(e: Bool, +rest: Bytes()) -> List<&2, Bytes()>:
+  match e:
+    case True{}:
+      Nil{}
+    case False{}:
+      cut(rest, 13, 2n)
+
 def rlines(+rest: Bytes()) -> List<&2, Bytes()>:
-  Bool.pick(List<&2, Bytes()>, String.is_empty(rest), Nil{}, String.split_on(rest, "\r\n"))
+  rlines.at(String.is_empty(rest), rest)
 
 # a list's members (RFC 9110 5.6.1): split at commas, each trimmed and
 # lowercased, the empty ones dropped
@@ -511,7 +535,7 @@ def mem.go(xs: List<&2, Bytes()>) -> List<&2, Bytes()>:
       mem.keep(trim(x), mem.go(t))
 
 def members(+v: Bytes()) -> List<&2, Bytes()>:
-  mem.go(String.split_on(v, ","))
+  mem.go(cut(v, 44, 1n))
 
 # every name a Connection field names
 def conn.names.at(yes: Bool, +v: Bytes(), rest: List<&2, Bytes()>) -> List<&2, Bytes()>:
