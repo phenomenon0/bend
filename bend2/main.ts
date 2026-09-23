@@ -30,7 +30,7 @@ import * as Export from "./export.ts";
 // Constants
 // =========
 
-const VERSION = "2.0.21";
+const VERSION = "2.0.25";
 
 const HELP = `Bend ${VERSION}: check, run, build and publish Bend programs.
 
@@ -283,7 +283,8 @@ async function cli_checkup(file: string): Promise<void> {
     if (m === null) {
       continue;
     }
-    const at = path.join(path.dirname(file), m[1]);
+    const at = m[1].startsWith("/") ? m[1]
+      : path.join(path.dirname(file), m[1]);
     cli_say(1, "--- " + m[1] + " ---\n");
     let code = 1;
     try {
@@ -307,7 +308,7 @@ function path_real(p: string): string {
 }
 
 function cli_emit(book: Bend.Book, out: string): void {
-  if (out.endsWith(".js")) {
+  if (/\.c?js$/.test(out)) {
     fs.writeFileSync(out, Comp.js_book(book));
   } else if (out.endsWith(".c")) {
     fs.writeFileSync(out, Comp.compile_book(book));
@@ -660,7 +661,8 @@ function book_err(e: unknown): string {
 
 async function load_js(path: string): Promise<string> {
   try {
-    const [book] = await book_read(path);
+    const [book, n0] = await book_read(path);
+    cli_report(book, n0, 2);
     const outs = [...new Set(book.order)].filter((k) => {
       const tld = book.tlds[k];
       return tld.$ === "Def" && tld.v !== null && tld.b !== true

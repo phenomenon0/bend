@@ -3,6 +3,116 @@
 Each release names what changed for a user. `bend update` installs the
 latest one; the GitHub release carries the same notes.
 
+## 2.0.25 (2026-09-21)
+
+- **A literal is a `Nat` or `String` by name only where the datatype is
+  Base's**: a file that declares its own `Nat` checks a literal
+  structurally again, so `type Nat: Succ{e: Empty}` no longer admits `1n`
+  and a closed `Empty` (#941). An array count past the nat cap is refused
+  instead of making a fractional literal that defeats termination (#954).
+- **A wide record compiles**: any field list past 255 words has its
+  multi-word fields boxed, for constructor layouts, nodes and def
+  signatures alike, so a 512-word record no longer dies "an arity over
+  255" (#944). A recursive datatype hidden behind a type family is boxed
+  instead of overflowing the compiler (#959). A datatype named
+  `__proto__`, `constructor` or `toString` compiles (#948). Still open: a
+  join holding several wide results, or a wide value held across a
+  non-tail call, is refused with the same message.
+- **An annotated lambda or match applied where it stands compiles** on both
+  lanes, as its let-bound form did (#956).
+- **A read parked on a FIFO sees its end on macOS** (#928, PR #932 by
+  PedroVIOliv): both IO loops wait with `select`, since Darwin's `poll`
+  never reports a named pipe's close.
+- **A foreign effect's scheduling helper cannot be overwritten** by an
+  effect named `X_need`, in either discovery order (#946, PR #951 by
+  tachytelicdetonation).
+- **A generated C local carries a `_` prefix** (PR #926 by nood-co1), so a
+  host macro such as macOS's `ts_32` cannot capture it; emitted C grows by
+  1 to 5 %.
+- **The Node and Bun loaders report unsafe and foreign dependencies** on
+  stderr, as the CLI does (PR #933 by vicmcorrea), and two books compiled in
+  one process no longer share layout memos (PR #961 by vicmcorrea).
+- **Simpler compiler and effects, same output**: the layout packer assigns
+  offsets once (PR #945 by tachytelicdetonation), the array intrinsics share
+  one cell path (PR #955 by PedroVIOliv), the facts fixpoint compares set
+  sizes (PR #960 by byronbenharris), the JS emitter keeps one descriptor per
+  native constructor (PR #952 by ramonzx6), one `BEND_RTC` macro serves the
+  device compilers (PR #963 by costamatheus97), and the file and audio
+  effects share one source each (PRs #950 and #939 by tachytelicdetonation
+  and tontontimiro).
+
+## 2.0.24 (2026-09-21)
+
+- **A string or nat literal is one `Lit` node in the checker** (PRs #907 and
+  #924 by MattCozendey): a literal unfolds one constructor at a time when it
+  is compared, matched or checked, so 50 defs of 1000-char strings check in
+  0.14 s and 74 MB instead of 4 s and 2.6 GB, a 200k-char literal checks
+  instead of overflowing the stack, 2000 defs of `200n` check in 0.18 s
+  instead of 1.06 s, a self-call on a nat literal past 256 passes the
+  termination check, and `1n+0n` is `1n`. The compiled output is unchanged.
+- **The device hands no leaf off**: a fork-free leaf reached from a forking
+  def inside a bang runs on heap continuations on the GPU again, as in
+  2.0.21, so a `do Result` loop of hundreds of turns under a parallel tree no
+  longer dies with "memory fault". The host keeps PR #876's handoff and its
+  gains; symreg on Metal stays at 0.32 s (#930).
+
+## 2.0.23 (2026-09-20)
+
+- **`Array.map` walks the block**: Base's map reads each cell and writes the
+  result into a fresh array instead of splitting and rebuilding the tree, so
+  16M U32 map in 15 ms instead of 176 ms at a fifth of the memory. Its
+  elements are `Data` now; a map over affine elements is written from the
+  tree by hand (#911, #913).
+- A template refuses a second `~` binder of one name, in a def or a law's
+  `for ~T` clauses; the two became one opaque constant in the generic check
+  and let a closed `Empty` through (#905).
+- The C lane heats a stuck family's type argument at every instantiation, so
+  a record carried through `F(n, RT)` is opened as the record it is (#916).
+- Inside an imported module, a local named like one of the module's own defs
+  binds, in a let, a `+` let, a pattern, a `+` pattern and a lambda (#915).
+- A right spine of forks under `!` runs on the GPU at any depth the cores
+  take: the device grow pass no longer stops after 128 turns (#918).
+- The JS lane names a def from a hyphenated or absolute import path legally,
+  `--checkup` opens an absolute import as the run does, and `-o out.cjs`
+  emits the CommonJS program (#904, #906, #908, #910).
+
+## 2.0.22 (2026-09-20)
+
+- **An `@unsafe` def forks an array**: `Array.fork` gives two handles to one
+  block, `Array.join` merges them back, and `Array.atomic.*` (add, sub, and,
+  or, xor, min, max, cas, fadd) act on the shared block from the cores and the
+  GPU. A match on a shared handle copies its part, as a clone does (#885).
+- Two `@unsafe` defs recurse into each other through their laws: an unsafe
+  body may call a law that is not yet filled, as it may call itself without
+  descent.
+- A typed let, `x : T = v`, binds `x` to `{v : T}`; a let with a pattern
+  takes no type (destructure in the body).
+- A `do` block of one statement is typed by its header, and the header's
+  leading quantities are filled once for `bind`, `pure` and the annotation:
+  `do Result<String, U32>:` with a bind now checks (#900).
+- A word match compares the whole word: a string, char, U32 or F32 literal
+  pattern is one equality and its default one else, so three string arms
+  compile to 291 KB of C, not 16.7 MB (#892).
+- An Array cell is its element datatype's open layout, so a generic body over
+  `Array<Boxed<A>>` and its callers agree on the block class; the C lane no
+  longer takes the ANode arm for a leaf (#893).
+- A node shared through a family with two or more indices is opened with
+  `ctr_take` on the C lane, instead of read and freed as owned (#901).
+- A C table's F32 row is the constant's own bits: a signalling NaN keeps its
+  payload (#897).
+- A constructor refuses a repeated field name; the JS lane keyed both fields
+  on one property (#899).
+- A module imported through `../` or a dot directory works inside an annotated
+  operator: an operator is the name whose only dot leads it (#903).
+- A GPU out-of-heap reports at once instead of after seconds of aliased
+  allocation, a `--gpu` span under the fixed region fails with its message
+  instead of a segfault, and a lane's stack ends at the static image: its
+  2049th word no longer overwrites a constant (#889).
+- Fork-free leaves run sequentially and CPU ring work is dealt across workers
+  (PR #876 by nicolas-abril): binarytrees 0.31 → 0.20 s and symreg on the GPU
+  0.56 → 0.32 s on an M4 Max. On the GPU a fork-free leaf reached from a
+  forking def now runs on its lane's 2048-word stack, as a fork kid does.
+
 ## 2.0.21 (2026-09-20)
 
 - A template instance that calls back into an instance whose body is

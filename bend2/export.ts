@@ -81,6 +81,8 @@ function term(tm: Bend.HTerm, d: number): string {
       return "(adt " + name(t.k) + " (" + t.r.map(name).join(" ") + ")" + xs + ")";
     }
     case "Ctr": return "(ctr " + name(t.k) + t.x.map((x) => " " + term(x, d)).join("") + ")";
+    // a string or nat literal leaves as the constructor chain it stands for
+    case "Lit": return term(Bend.term_higher(Bend.lit_full(t)), d);
     case "Mat": return "(mat " + name(t.k) + " " + term(t.h, d) + " " + term(t.m, d) + ")";
     case "Efq": return "efq";
     case "Eql": return "(eql " + term(t.a, d) + " " + term(t.b, d) + " " + term(t.T, d) + ")";
