@@ -280,7 +280,7 @@ def stored_all(w, x, at, ln, last):
             break
 
 
-def block(w, toks, x, at, ln, last):
+def block(w, toks, x, at, ln, last, fixed=False):
     fa = [0] * 286
     da = [0] * 30
     xt = 0
@@ -298,7 +298,10 @@ def block(w, toks, x, at, ln, last):
     st = 8 * ln + 48 * (1 + ln // K64)
     fx = 3 + xt + sum(f * l for f, l in zip(fa, FIXED_LL)) + 5 * sum(da)
     dy = hbits + xt + sum(f * l for f, l in zip(fa, ll)) + sum(f * l for f, l in zip(da, d))
-    if st < min(fx, dy):
+    if fixed:
+        w.put(last); w.put(1); w.put(0)
+        put_body(w, toks, FIXED_LL, FIXED_D)
+    elif st < min(fx, dy):
         stored_all(w, x, at, ln, last)
     elif fx <= dy:
         w.put(last); w.put(1); w.put(0)
@@ -316,7 +319,7 @@ def block(w, toks, x, at, ln, last):
         put_body(w, toks, ll, d)
 
 
-def twin(x, lvl):
+def twin(x, lvl, fixed=False):
     w = Bits()
     n = len(x)
     if lvl == 0:
@@ -374,7 +377,7 @@ def twin(x, lvl):
     avail = False
     while i < n:
         if len(toks) >= 16383:
-            block(w, toks, x, bs, tpos - bs, 0)
+            block(w, toks, x, bs, tpos - bs, 0, fixed)
             toks = []
             bs = tpos
         ok = i + 3 <= n
@@ -411,7 +414,7 @@ def twin(x, lvl):
     if avail:
         toks.append(("L", x[n - 1]))
         tpos += 1
-    block(w, toks, x, bs, tpos - bs, 1)
+    block(w, toks, x, bs, tpos - bs, 1, fixed)
     w.align()
     return bytes(w.out)
 
@@ -628,6 +631,14 @@ def main():
             assert zlib.decompress(t, -15) == x, (name, lvl)
             row('IO.print("deflate %s L%d " ++ enc(%s, %dn))' % (name, lvl, bstr(z9.hex()), lvl),
                 "deflate %s L%d %d %d back ok %d %d" % (name, lvl, len(t), zlib.crc32(t), len(x), zlib.crc32(x)))
+    # deflate_fixed: the same matches, every block with the fixed code
+    for name, x in INPUTS:
+        z9 = raw(x, 9)
+        for lvl in (1, 4, 9):
+            t = twin(x, lvl, True)
+            assert zlib.decompress(t, -15) == x, (name, lvl)
+            row('IO.print("fixed %s L%d " ++ fix(%s, %dn))' % (name, lvl, bstr(z9.hex()), lvl),
+                "fixed %s L%d %d %d back ok %d %d" % (name, lvl, len(t), zlib.crc32(t), len(x), zlib.crc32(x)))
     # malformed and edge streams: as zlib reads them
     for name, h in MALFORMED:
         z = bytes.fromhex(h.replace(" ", ""))
@@ -770,11 +781,11 @@ def read_all(path: String) -> IO(Bytes()):
     f : File <- IO.try(File, File.open(path, "r"))
     loop(64n, (f, More{""}))
 
-def res(r: Result<&2, &2, D.Err, Bytes()>) -> String:
+def res(r: Result<&2, &2, D.Why, Bytes()>) -> String:
   match r:
     case Done{+b}:
       "ok " ++ Nat.show(Bytes.len(b)) ++ " " ++ U32.show(D.crc32(b, 0))
-    case Fail{D.Err{at, why}}:
+    case Fail{why}:
       "bad " ++ D.why.show(why)
 
 def gres(r: Result<&2, &2, Z.Err, Bytes()>) -> String:
@@ -793,7 +804,7 @@ def inf(+b: Bytes(), cap: Nat) -> String:
 def gun(+b: Bytes(), cap: Nat) -> String:
   gres(Z.gunzip(cap, b))
 
-def got(r: Result<&2, &2, D.Err, Bytes()>) -> Bytes():
+def got(r: Result<&2, &2, D.Why, Bytes()>) -> Bytes():
   match r:
     case Done{b}:
       b
@@ -804,6 +815,9 @@ def got(r: Result<&2, &2, D.Err, Bytes()>) -> Bytes():
 def enc.at(+z: Bytes()) -> String:
   Nat.show(Bytes.len(z)) ++ " " ++ U32.show(D.crc32(z, 0)) ++ " back " ++
     res(D.inflate(U32.to_nat(100000000), z))
+
+def fix(+b: Bytes(), lvl: Nat) -> String:
+  enc.at(D.deflate_fixed(got(D.inflate(U32.to_nat(100000000), b)), lvl))
 
 def enc(+b: Bytes(), lvl: Nat) -> String:
   enc.at(D.deflate(got(D.inflate(U32.to_nat(100000000), b)), lvl))
@@ -818,7 +832,7 @@ def gz(+b: Bytes(), lvl: Nat) -> String:
 def crc(+b: Bytes()) -> String:
   U32.show(D.crc32(got(D.inflate(U32.to_nat(100000000), b)), 0))
 
-def reads.fin(r: Result<&2, &2, D.Err, Bytes()>, acc: Bytes()) -> Result<&2, &2, D.Err, Bytes()>:
+def reads.fin(r: Result<&2, &2, D.Why, Bytes()>, acc: Bytes()) -> Result<&2, &2, D.Why, Bytes()>:
   match r:
     case Done{b}:
       Done{Bytes.append(acc, b)}
@@ -827,7 +841,7 @@ def reads.fin(r: Result<&2, &2, D.Err, Bytes()>, acc: Bytes()) -> Result<&2, &2,
 
 # the stream in reads of k bytes, each read's output taken as it comes
 def reads.go(n: Nat, +s: Bytes(), +k: Nat, r: Bytes() & D.St, acc: Bytes()) ->
-  Result<&2, &2, D.Err, Bytes()>:
+  Result<&2, &2, D.Why, Bytes()>:
   match n:
     case 0n:
       (b, st) = r

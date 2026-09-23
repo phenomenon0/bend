@@ -64,11 +64,11 @@ def read_all(path: String) -> IO(Bytes()):
     f : File <- IO.try(File, File.open(path, "r"))
     loop(64n, (f, More{""}))
 
-def res(r: Result<&2, &2, D.Err, Bytes()>) -> String:
+def res(r: Result<&2, &2, D.Why, Bytes()>) -> String:
   match r:
     case Done{+b}:
       "ok " ++ Nat.show(Bytes.len(b)) ++ " " ++ U32.show(D.crc32(b, 0))
-    case Fail{D.Err{at, why}}:
+    case Fail{why}:
       "bad " ++ D.why.show(why)
 
 def gres(r: Result<&2, &2, Z.Err, Bytes()>) -> String:
@@ -87,7 +87,7 @@ def inf(+b: Bytes(), cap: Nat) -> String:
 def gun(+b: Bytes(), cap: Nat) -> String:
   gres(Z.gunzip(cap, b))
 
-def got(r: Result<&2, &2, D.Err, Bytes()>) -> Bytes():
+def got(r: Result<&2, &2, D.Why, Bytes()>) -> Bytes():
   match r:
     case Done{b}:
       b
@@ -98,6 +98,9 @@ def got(r: Result<&2, &2, D.Err, Bytes()>) -> Bytes():
 def enc.at(+z: Bytes()) -> String:
   Nat.show(Bytes.len(z)) ++ " " ++ U32.show(D.crc32(z, 0)) ++ " back " ++
     res(D.inflate(U32.to_nat(100000000), z))
+
+def fix(+b: Bytes(), lvl: Nat) -> String:
+  enc.at(D.deflate_fixed(got(D.inflate(U32.to_nat(100000000), b)), lvl))
 
 def enc(+b: Bytes(), lvl: Nat) -> String:
   enc.at(D.deflate(got(D.inflate(U32.to_nat(100000000), b)), lvl))
@@ -112,7 +115,7 @@ def gz(+b: Bytes(), lvl: Nat) -> String:
 def crc(+b: Bytes()) -> String:
   U32.show(D.crc32(got(D.inflate(U32.to_nat(100000000), b)), 0))
 
-def reads.fin(r: Result<&2, &2, D.Err, Bytes()>, acc: Bytes()) -> Result<&2, &2, D.Err, Bytes()>:
+def reads.fin(r: Result<&2, &2, D.Why, Bytes()>, acc: Bytes()) -> Result<&2, &2, D.Why, Bytes()>:
   match r:
     case Done{b}:
       Done{Bytes.append(acc, b)}
@@ -121,7 +124,7 @@ def reads.fin(r: Result<&2, &2, D.Err, Bytes()>, acc: Bytes()) -> Result<&2, &2,
 
 # the stream in reads of k bytes, each read's output taken as it comes
 def reads.go(n: Nat, +s: Bytes(), +k: Nat, r: Bytes() & D.St, acc: Bytes()) ->
-  Result<&2, &2, D.Err, Bytes()>:
+  Result<&2, &2, D.Why, Bytes()>:
   match n:
     case 0n:
       (b, st) = r
@@ -237,6 +240,21 @@ def main() -> IO(Unit):
     IO.print("deflate text L7 " ++ enc(blob(dat, U32.to_nat(183283), U32.to_nat(14021)), 7n))
     IO.print("deflate text L8 " ++ enc(blob(dat, U32.to_nat(183283), U32.to_nat(14021)), 8n))
     IO.print("deflate text L9 " ++ enc(blob(dat, U32.to_nat(183283), U32.to_nat(14021)), 9n))
+    IO.print("fixed empty L1 " ++ fix(blob(dat, U32.to_nat(5), U32.to_nat(2)), 1n))
+    IO.print("fixed empty L4 " ++ fix(blob(dat, U32.to_nat(5), U32.to_nat(2)), 4n))
+    IO.print("fixed empty L9 " ++ fix(blob(dat, U32.to_nat(5), U32.to_nat(2)), 9n))
+    IO.print("fixed one L1 " ++ fix(blob(dat, U32.to_nat(13), U32.to_nat(3)), 1n))
+    IO.print("fixed one L4 " ++ fix(blob(dat, U32.to_nat(13), U32.to_nat(3)), 4n))
+    IO.print("fixed one L9 " ++ fix(blob(dat, U32.to_nat(13), U32.to_nat(3)), 9n))
+    IO.print("fixed rep L1 " ++ fix(blob(dat, U32.to_nat(20127), U32.to_nat(37)), 1n))
+    IO.print("fixed rep L4 " ++ fix(blob(dat, U32.to_nat(20127), U32.to_nat(37)), 4n))
+    IO.print("fixed rep L9 " ++ fix(blob(dat, U32.to_nat(20127), U32.to_nat(37)), 9n))
+    IO.print("fixed rand L1 " ++ fix(blob(dat, U32.to_nat(20164), U32.to_nat(4101)), 1n))
+    IO.print("fixed rand L4 " ++ fix(blob(dat, U32.to_nat(20164), U32.to_nat(4101)), 4n))
+    IO.print("fixed rand L9 " ++ fix(blob(dat, U32.to_nat(20164), U32.to_nat(4101)), 9n))
+    IO.print("fixed text L1 " ++ fix(blob(dat, U32.to_nat(183283), U32.to_nat(14021)), 1n))
+    IO.print("fixed text L4 " ++ fix(blob(dat, U32.to_nat(183283), U32.to_nat(14021)), 4n))
+    IO.print("fixed text L9 " ++ fix(blob(dat, U32.to_nat(183283), U32.to_nat(14021)), 9n))
     IO.print("stream zlib stored lengths " ++ inf(blob(dat, U32.to_nat(197304), U32.to_nat(5)), U32.to_nat(100000000)))
     IO.print("stream zlib fixed " ++ inf(blob(dat, U32.to_nat(5), U32.to_nat(2)), U32.to_nat(100000000)))
     IO.print("stream zlib block type " ++ inf(blob(dat, U32.to_nat(197309), U32.to_nat(1)), U32.to_nat(100000000)))
@@ -422,6 +440,21 @@ def main() -> IO(Unit):
 #|deflate text L7 14055 105383165 back ok 40000 1758392975
 #|deflate text L8 14017 1868283740 back ok 40000 1758392975
 #|deflate text L9 14018 1597473911 back ok 40000 1758392975
+#|fixed empty L1 2 1794392380 back ok 0 0
+#|fixed empty L4 2 1794392380 back ok 0 0
+#|fixed empty L9 2 1794392380 back ok 0 0
+#|fixed one L1 3 538398705 back ok 1 1505515367
+#|fixed one L4 3 538398705 back ok 1 1505515367
+#|fixed one L9 3 538398705 back ok 1 1505515367
+#|fixed rep L1 197 2517186447 back ok 20000 3401418545
+#|fixed rep L4 130 965859345 back ok 20000 3401418545
+#|fixed rep L9 130 965859345 back ok 20000 3401418545
+#|fixed rand L1 4326 2821907903 back ok 4096 275690851
+#|fixed rand L4 4326 2821907903 back ok 4096 275690851
+#|fixed rand L9 4326 2821907903 back ok 4096 275690851
+#|fixed text L1 20767 540296280 back ok 40000 1758392975
+#|fixed text L4 18416 521321405 back ok 40000 1758392975
+#|fixed text L9 16989 1483173473 back ok 40000 1758392975
 #|stream zlib stored lengths bad BadStored
 #|stream zlib fixed ok 0 0
 #|stream zlib block type bad BadBlock

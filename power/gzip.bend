@@ -80,7 +80,7 @@ def gzip(+x: Bytes(), +lvl: Nat) -> Bytes():
 # where the reader is in a member. Head: k of the ten fixed bytes read;
 # the header's bytes so far are kept (hb) for FHCRC. XLen, XSkip: the
 # extra field. Name, Comm: to their zero. HCrc: the two check bytes.
-# Body: the deflate stream, from the member's base offset. Trail: k of
+# Body: the deflate stream. Trail: k of
 # the eight read, the CRC-32 and ISIZE as they fill, little end first.
 # Gap: between members. Start: before the first.
 type Ph is Data:
@@ -91,7 +91,7 @@ type Ph is Data:
   Name{flg: U32, hb: Bytes()}
   Comm{flg: U32, hb: Bytes()}
   HCrc{k: Nat, lo: Nat, hb: Bytes()}
-  Body{base: Nat, st: D.St}
+  Body{st: D.St}
   Trail{k: Nat, cv: U32, sv: U32, st: D.St}
   Gap{}
   Bad{at: Nat, why: Why}
@@ -113,7 +113,7 @@ def next.hcrc(ok: Bool, hb: Bytes(), +cap: Nat, +pos: Nat) -> Ph:
     case True{}:
       HCrc{0n, 0n, hb}
     case False{}:
-      Body{1n+pos, D.new(cap)}
+      Body{D.new(cap)}
 
 def next.comm(ok: Bool, +flg: U32, hb: Bytes(), +cap: Nat, +pos: Nat) -> Ph:
   match ok:
@@ -195,7 +195,7 @@ def zstr(zero: Bool, +stage: Nat, +flg: U32, +hb: Bytes(), +cap: Nat, +pos: Nat)
 def hcrc.at(ok: Bool, +cap: Nat, +pos: Nat) -> Ph:
   match ok:
     case True{}:
-      Body{1n+pos, D.new(cap)}
+      Body{D.new(cap)}
     case False{}:
       Bad{pos, BadHcrc{}}
 
@@ -208,27 +208,27 @@ def hcrc(first: Bool, +lo: Nat, +hb: Bytes(), +c: U32, +cap: Nat, +pos: Nat) -> 
         U32.to_nat(U32.and(D.crc32(hb, 0), 65535))), cap, pos)
 
 # a byte of the deflate stream: at its end, the trailer
-def body(+base: Nat, st: D.St) -> Ph:
+def body(+pos: Nat, st: D.St) -> Ph:
   match st:
     case D.St{m, o, bp}:
       match m:
-        case D.End{at}:
-          Trail{0n, 0, 0, D.St{D.End{at}, o, bp}}
-        case D.Bad{at, why}:
-          Bad{Nat.add(base, at), Inflate{why}}
+        case D.End{}:
+          Trail{0n, 0, 0, D.St{D.End{}, o, bp}}
+        case D.Bad{why}:
+          Bad{pos, Inflate{why}}
         case D.Get{l, a, k}:
-          Body{base, D.St{D.Get{l, a, k}, o, bp}}
+          Body{D.St{D.Get{l, a, k}, o, bp}}
         case D.Walk{n, t, k}:
-          Body{base, D.St{D.Walk{n, t, k}, o, bp}}
+          Body{D.St{D.Walk{n, t, k}, o, bp}}
         case D.Skip{l}:
-          Body{base, D.St{D.Skip{l}, o, bp}}
+          Body{D.St{D.Skip{l}, o, bp}}
 
 # the member's bytes not yet taken, and how many it has in all
 def rest(st: D.St) -> Bytes() & Nat:
   match st:
     case D.St{m, o, bp}:
       match o:
-        case D.O{out, keep, n, cap, pos, t}:
+        case D.O{out, keep, n, cap, t}:
           (Bytes.drop(out, keep), n)
 
 def trail.size(ok: Bool, +sv: U32, +pos: Nat, +b: Bytes(), +n: Nat, +done: Bytes(), +crc: U32,
@@ -288,14 +288,14 @@ def step(g: G, +c: U32) -> G:
           G{zstr(U32.is_eq(c, 0), 3n, flg, Bytes.push(hb, c), cap, pos), done, crc, cap, 1n+pos}
         case HCrc{+k, lo, hb}:
           G{hcrc(Nat.is_eq(k, 0n), lo, hb, c, cap, pos), done, crc, cap, 1n+pos}
-        case Body{+base, st}:
-          G{body(base, D.step(st, c)), done, crc, cap, 1n+pos}
+        case Body{st}:
+          G{body(pos, D.step(st, c)), done, crc, cap, 1n+pos}
         case Trail{+k, cv, sv, st}:
           trail(Nat.is_eq(k, 7n), k, cv, sv, st, c, done, crc, cap, pos)
         case Gap{}:
           G{gap(c, pos), done, crc, cap, 1n+pos}
         case Bad{at, why}:
-          G{Bad{at, why}, done, crc, cap, 1n+pos}
+          G{Bad{at, why}, done, crc, cap, pos}
 
 def wstep(e: Unit, g: G, c: U32) -> G:
   step(g, c)
@@ -310,15 +310,14 @@ def feed(+s: Bytes(), g: G) -> G:
 def feed_list(bs: List<&2, U32>, g: G) -> G:
   Wr.feed(~Unit, ~G, ~wstep, Unit{}, bs, g)
 
-def take.at(r: Bytes() & D.St, +base: Nat, done: Bytes(), +crc: U32, +cap: Nat, +pos: Nat) ->
-  Bytes() & G:
+def take.at(r: Bytes() & D.St, done: Bytes(), +crc: U32, +cap: Nat, +pos: Nat) -> Bytes() & G:
   (+b, st) = r
-  (Bytes.append(done, b), G{Body{base, st}, "", D.crc32(b, crc), cap, pos})
+  (Bytes.append(done, b), G{Body{st}, "", D.crc32(b, crc), cap, pos})
 
 def take.ph(ph: Ph, done: Bytes(), +crc: U32, +cap: Nat, +pos: Nat) -> Bytes() & G:
   match ph:
-    case Body{base, st}:
-      take.at(D.take(st), base, done, crc, cap, pos)
+    case Body{st}:
+      take.at(D.take(st), done, crc, cap, pos)
     case Start{}:
       (done, G{Start{}, "", crc, cap, pos})
     case Head{k, flg, hb}:

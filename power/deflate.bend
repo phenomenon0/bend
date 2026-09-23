@@ -12,8 +12,8 @@
 # Budgets. Every output byte is counted against Cfg's cap before it is
 # written: a stream that would produce more is refused (TooBig) with
 # the cap's worth written and nothing past it, so a decompression bomb
-# costs its cap and no more. Refusals are terminal: Bad{at, why} is kept
-# whatever follows, at the offset of the byte that broke the rule.
+# costs its cap and no more. Refusals are terminal: Bad{why} is kept
+# whatever follows (gzip.bend says at which byte).
 #   BadBlock    block type 3
 #   BadStored   a stored block whose NLEN is not LEN's complement
 #   BadCounts   HLIT past 286 or HDIST past 30 codes
@@ -561,21 +561,20 @@ type SK is Data:
 
 # what the next bit does. Get: left more bits after this one, acc those
 # read (newest first). Walk: a code, at node of tab. Skip: the bits to
-# the next byte after a stored block's header. End: at, the offset of
-# the byte the stream ended in.
+# the next byte after a stored block's header. End: the stream is over;
+# what follows it is not read. Bad: refused, for good.
 type Mode is Data:
   Get{left: Nat, acc: List<&2, Bool>, k: K}
   Walk{node: Nat, tab: String, k: SK}
   Skip{last: Bool}
-  End{at: Nat}
-  Bad{at: Nat, why: Why}
+  End{}
+  Bad{why: Why}
 
 # the output and what the machine reads by: out, the bytes not yet taken
 # with the window before them (keep of them taken already); n, all
-# bytes written; cap, the most there may be; pos, the offset of the byte
-# being read; the tables
+# bytes written; cap, the most there may be; the tables
 type O is Data:
-  O{out: Bytes(), keep: Nat, n: Nat, cap: Nat, pos: Nat, t: Tabs}
+  O{out: Bytes(), keep: Nat, n: Nat, cap: Nat, t: Tabs}
 
 # the machine: its mode, its output, the offset of the next bit in its
 # byte
@@ -584,17 +583,13 @@ type St is Data:
 
 # a machine at the start of a stream, at most cap bytes out
 def new(cap: Nat) -> St:
-  St{Get{2n, Nil{}, KHead{}}, O{"", 0n, 0n, cap, 0n, tabs()}, 0n}
+  St{Get{2n, Nil{}, KHead{}}, O{"", 0n, 0n, cap, tabs()}, 0n}
 
 def fail(o: O, bp: Nat, why: Why) -> St:
-  match o:
-    case O{out, keep, n, cap, +pos, t}:
-      St{Bad{pos, why}, O{out, keep, n, cap, pos, t}, bp}
+  St{Bad{why}, o, bp}
 
 def done(o: O, bp: Nat) -> St:
-  match o:
-    case O{out, keep, n, cap, +pos, t}:
-      St{End{pos}, O{out, keep, n, cap, pos, t}, bp}
+  St{End{}, o, bp}
 
 # after a block: the next header, or the end
 def next_block(last: Bool, o: O, bp: Nat) -> St:
@@ -605,24 +600,18 @@ def next_block(last: Bool, o: O, bp: Nat) -> St:
       St{Get{2n, Nil{}, KHead{}}, o, bp}
 
 # one byte out, if the cap has room
-def emit.if(ok: Bool, out: Bytes(), keep: Nat, n: Nat, cap: Nat, +pos: Nat, t: Tabs, c: U32,
-  next: Mode, bp: Nat) -> St:
+def emit.if(ok: Bool, out: Bytes(), keep: Nat, n: Nat, cap: Nat, t: Tabs, c: U32, next: Mode,
+  bp: Nat) -> St:
   match ok:
     case True{}:
-      St{next, O{Bytes.push(out, c), keep, 1n+n, cap, pos, t}, bp}
+      St{next, O{Bytes.push(out, c), keep, 1n+n, cap, t}, bp}
     case False{}:
-      St{Bad{pos, TooBig{}}, O{out, keep, n, cap, pos, t}, bp}
+      St{Bad{TooBig{}}, O{out, keep, n, cap, t}, bp}
 
 def emit(o: O, c: U32, next: Mode, bp: Nat) -> St:
   match o:
-    case O{out, keep, +n, +cap, pos, t}:
-      emit.if(Nat.is_lt(n, cap), out, keep, n, cap, pos, t, c, next, bp)
-
-# the last byte of the stream: out, and the end is where it was read
-def emit_end(o: O, c: U32, bp: Nat) -> St:
-  match o:
-    case O{out, keep, +n, +cap, +pos, t}:
-      emit.if(Nat.is_lt(n, cap), out, keep, n, cap, pos, t, c, End{pos}, bp)
+    case O{out, keep, +n, +cap, t}:
+      emit.if(Nat.is_lt(n, cap), out, keep, n, cap, t, c, next, bp)
 
 # len bytes, each the one dist back
 def copy.go(len: Nat, out: Bytes(), +dist: Nat) -> Bytes():
@@ -634,27 +623,27 @@ def copy.go(len: Nat, out: Bytes(), +dist: Nat) -> Bytes():
       +c = Bytes.get(o, Nat.sub(Bytes.len(o), dist))
       copy.go(p, Bytes.push(o, c), dist)
 
-def copy.big(big: Bool, out: Bytes(), keep: Nat, n: Nat, cap: Nat, +pos: Nat, t: Tabs,
-  +len: Nat, dist: Nat, next: Mode, bp: Nat) -> St:
+def copy.big(big: Bool, out: Bytes(), keep: Nat, n: Nat, cap: Nat, t: Tabs, +len: Nat,
+  dist: Nat, next: Mode, bp: Nat) -> St:
   match big:
     case True{}:
-      St{Bad{pos, TooBig{}}, O{out, keep, n, cap, pos, t}, bp}
+      St{Bad{TooBig{}}, O{out, keep, n, cap, t}, bp}
     case False{}:
-      St{next, O{copy.go(len, out, dist), keep, Nat.add(n, len), cap, pos, t}, bp}
+      St{next, O{copy.go(len, out, dist), keep, Nat.add(n, len), cap, t}, bp}
 
-def copy.if(far: Bool, big: Bool, out: Bytes(), keep: Nat, n: Nat, cap: Nat, +pos: Nat,
-  t: Tabs, len: Nat, dist: Nat, next: Mode, bp: Nat) -> St:
+def copy.if(far: Bool, big: Bool, out: Bytes(), keep: Nat, n: Nat, cap: Nat, t: Tabs,
+  len: Nat, dist: Nat, next: Mode, bp: Nat) -> St:
   match far:
     case True{}:
-      St{Bad{pos, FarBack{}}, O{out, keep, n, cap, pos, t}, bp}
+      St{Bad{FarBack{}}, O{out, keep, n, cap, t}, bp}
     case False{}:
-      copy.big(big, out, keep, n, cap, pos, t, len, dist, next, bp)
+      copy.big(big, out, keep, n, cap, t, len, dist, next, bp)
 
 def copy(o: O, +len: Nat, +dist: Nat, next: Mode, bp: Nat) -> St:
   match o:
-    case O{+out, keep, +n, +cap, pos, t}:
+    case O{+out, keep, +n, +cap, t}:
       copy.if(Nat.is_lt(Bytes.len(out), dist), Nat.is_lt(cap, Nat.add(n, len)), out, keep, n,
-        cap, pos, t, len, dist, next, bp)
+        cap, t, len, dist, next, bp)
 
 def lit_mode(b: Blk) -> Mode:
   match b:
@@ -684,11 +673,10 @@ def stored_head(last: Bool, aligned: Bool, o: O, bp: Nat) -> St:
 # a fixed Huffman block: its tables are the machine's
 def fixed(last: Bool, o: O, bp: Nat) -> St:
   match o:
-    case O{out, keep, n, cap, pos, t}:
+    case O{out, keep, n, cap, t}:
       match t:
         case Tabs{+fll, +fd, lb, lx, db, dx}:
-          St{lit_mode(Blk{last, fll, fd}), O{out, keep, n, cap, pos, Tabs{fll, fd, lb, lx, db, dx}},
-            bp}
+          St{lit_mode(Blk{last, fll, fd}), O{out, keep, n, cap, Tabs{fll, fd, lb, lx, db, dx}}, bp}
 
 def block(last: Bool, b1: Bool, b2: Bool, o: O, +bp: Nat) -> St:
   match b1 b2:
@@ -727,7 +715,7 @@ def stored_nlen(ok: Bool, last: Bool, len: Nat, o: O, bp: Nat) -> St:
 def stored_byte(last: Bool, left: Nat, c: U32, o: O, bp: Nat) -> St:
   match last left:
     case True{} 0n:
-      emit_end(o, c, bp)
+      emit(o, c, End{}, bp)
     case False{} 0n:
       emit(o, c, Get{2n, Nil{}, KHead{}}, bp)
     case _ 1n+p:
@@ -877,11 +865,11 @@ def len_x(blk: Blk, base: Nat, x: Nat, o: O, bp: Nat) -> St:
 # length code i: its base and extra bits from the tables
 def len_code(blk: Blk, +i: Nat, o: O, bp: Nat) -> St:
   match o:
-    case O{out, keep, n, cap, pos, t}:
+    case O{out, keep, n, cap, t}:
       match t:
         case Tabs{fll, fd, +lb, +lx, db, dx}:
           len_x(blk, U32.to_nat(Bytes.get(lb, i)), U32.to_nat(Bytes.get(lx, i)),
-            O{out, keep, n, cap, pos, Tabs{fll, fd, lb, lx, db, dx}}, bp)
+            O{out, keep, n, cap, Tabs{fll, fd, lb, lx, db, dx}}, bp)
 
 def lit.c(ok: Bool, blk: Blk, +i: Nat, o: O, bp: Nat) -> St:
   match ok:
@@ -915,11 +903,11 @@ def dist_x(blk: Blk, +len: Nat, base: Nat, x: Nat, o: O, bp: Nat) -> St:
 # distance code s: its base and extra bits from the tables
 def dist_code(blk: Blk, len: Nat, +s: Nat, o: O, bp: Nat) -> St:
   match o:
-    case O{out, keep, n, cap, pos, t}:
+    case O{out, keep, n, cap, t}:
       match t:
         case Tabs{fll, fd, lb, lx, +db, +dx}:
           dist_x(blk, len, U32.to_nat(Bytes.get(db, s)), U32.to_nat(Bytes.get(dx, s)),
-            O{out, keep, n, cap, pos, Tabs{fll, fd, lb, lx, db, dx}}, bp)
+            O{out, keep, n, cap, Tabs{fll, fd, lb, lx, db, dx}}, bp)
 
 # a distance symbol
 def dist(ok: Bool, blk: Blk, len: Nat, +s: Nat, o: O, bp: Nat) -> St:
@@ -999,10 +987,10 @@ def mode(m: Mode, b: Bool, o: O, +bp: Nat) -> St:
       walk(tab, U32.to_nat(Bytes.get(tab, Nat.add(Nat.double(node), Nat.bit(b, 0n)))), k, o, bp)
     case Skip{last}:
       stored_head(last, Nat.is_eq(bp, 0n), o, bp)
-    case End{at}:
-      St{End{at}, o, bp}
-    case Bad{at, why}:
-      St{Bad{at, why}, o, bp}
+    case End{}:
+      St{End{}, o, bp}
+    case Bad{why}:
+      St{Bad{why}, o, bp}
 
 def next_bp(+bp: Nat) -> Nat:
   pick(Nat.is_eq(bp, 7n), 0n, 1n+bp)
@@ -1012,17 +1000,10 @@ def bstep(st: St, b: Bool) -> St:
     case St{m, o, bp}:
       mode(m, b, o, next_bp(bp))
 
-def tick(st: St) -> St:
-  match st:
-    case St{m, o, bp}:
-      match o:
-        case O{out, keep, n, cap, pos, t}:
-          St{m, O{out, keep, n, cap, 1n+pos, t}, bp}
-
 # one byte: its eight bits, low first
 def step(st: St, +c: U32) -> St:
-  tick(bstep(bstep(bstep(bstep(bstep(bstep(bstep(bstep(st, bit(c, 0n)), bit(c, 1n)),
-    bit(c, 2n)), bit(c, 3n)), bit(c, 4n)), bit(c, 5n)), bit(c, 6n)), bit(c, 7n)))
+  bstep(bstep(bstep(bstep(bstep(bstep(bstep(bstep(st, bit(c, 0n)), bit(c, 1n)), bit(c, 2n)),
+    bit(c, 3n)), bit(c, 4n)), bit(c, 5n)), bit(c, 6n)), bit(c, 7n))
 
 # the step as the reader kit (wire/reader.bend) takes it: nothing beside
 # the state
@@ -1045,46 +1026,43 @@ def take(st: St) -> Bytes() & St:
   match st:
     case St{m, o, bp}:
       match o:
-        case O{+out, keep, n, cap, pos, t}:
+        case O{+out, keep, n, cap, t}:
           +w = Nat.sub(Bytes.len(out), K32())
           (Bytes.drop(out, keep), St{m, O{Bytes.drop(out, w), Nat.sub(Bytes.len(out), w), n, cap,
-            pos, t}, bp})
-
-type Err is Data:
-  Err{at: Nat, why: Why}
+            t}, bp})
 
 # the end of input: the output not yet taken, or why there is none
-def finish(st: St) -> Result<&2, &2, Err, Bytes()>:
+def finish(st: St) -> Result<&2, &2, Why, Bytes()>:
   match st:
     case St{m, o, bp}:
       match m o:
-        case End{at} O{out, keep, n, cap, pos, t}:
+        case End{} O{out, keep, n, cap, t}:
           Done{Bytes.drop(out, keep)}
-        case Bad{at, why} _:
-          Fail{Err{at, why}}
-        case _ O{out, keep, n, cap, pos, t}:
-          Fail{Err{pos, Truncated{}}}
+        case Bad{why} _:
+          Fail{why}
+        case _ _:
+          Fail{Truncated{}}
 
-# where the stream ended (the offset after its last byte), if it has
-def ended(st: St) -> Maybe<&2, Nat>:
+# whether the stream has ended
+def ended(st: St) -> Bool:
   match st:
     case St{m, o, bp}:
       match m:
-        case End{at}:
-          Some{1n+at}
+        case End{}:
+          True{}
         case _:
-          None{}
+          False{}
 
 # all bytes written so far
 def written(st: St) -> Nat:
   match st:
     case St{m, o, bp}:
       match o:
-        case O{out, keep, n, cap, pos, t}:
+        case O{out, keep, n, cap, t}:
           n
 
 # a whole raw deflate stream, at most cap bytes out
-def inflate(cap: Nat, +s: Bytes()) -> Result<&2, &2, Err, Bytes()>:
+def inflate(cap: Nat, +s: Bytes()) -> Result<&2, &2, Why, Bytes()>:
   finish(feed(s, new(cap)))
 
 # Deflate
@@ -1209,13 +1187,15 @@ def arr_str(xs: List<U32>, out: String) -> String:
 def cstr(bs: List<&2, Nat>, xs: List<&2, Nat>, dist: Bool, d: Nat) -> String:
   arr_str(Array.to_list(~U32, cfill(bs, xs, 0n, dist, Array.new(U32, d, 0))), "")
 
-# what a block is written with: its two codes; the code of every length
-# and distance, and the codes' bases and extra bits
+# what a block is written with: whether every block is to be fixed; its
+# two codes; the code of every length and distance, and the codes'
+# bases and extra bits
 type EC is Data:
-  EC{ll: Hc, d: Hc, lcs: String, dcs: String, lb: String, lx: String, db: String, dx: String}
+  EC{fx: Bool, ll: Hc, d: Hc, lcs: String, dcs: String, lb: String, lx: String, db: String,
+    dx: String}
 
-def ec_fixed() -> EC:
-  EC{hc(fixed_ll_lens()), hc(fixed_d_lens()), cstr(LBASE(), LEXT(), False{}, 8n),
+def ec_fixed(fx: Bool) -> EC:
+  EC{fx, hc(fixed_ll_lens()), hc(fixed_d_lens()), cstr(LBASE(), LEXT(), False{}, 8n),
     cstr(DBASE(), DEXT(), True{}, 9n), str_of(LBASE(), ""), str_of(LEXT(), ""),
     str_of(DBASE(), ""), str_of(DEXT(), "")}
 
@@ -1237,10 +1217,11 @@ def put_ref(w: W, +ll: Hc, +d: Hc, +lcs: String, +dcs: String, +lb: String, +lx:
 
 def put_tok(tok: Tok, w: W, t: EC) -> W & EC:
   match tok t:
-    case Lit{c} EC{+ll, d, lcs, dcs, lb, lx, db, dx}:
-      (put_sym(w, ll, U32.to_nat(c)), EC{ll, d, lcs, dcs, lb, lx, db, dx})
-    case Ref{len, dist} EC{+ll, +d, +lcs, +dcs, +lb, +lx, +db, +dx}:
-      (put_ref(w, ll, d, lcs, dcs, lb, lx, db, dx, len, dist), EC{ll, d, lcs, dcs, lb, lx, db, dx})
+    case Lit{c} EC{fx, +ll, d, lcs, dcs, lb, lx, db, dx}:
+      (put_sym(w, ll, U32.to_nat(c)), EC{fx, ll, d, lcs, dcs, lb, lx, db, dx})
+    case Ref{len, dist} EC{fx, +ll, +d, +lcs, +dcs, +lb, +lx, +db, +dx}:
+      (put_ref(w, ll, d, lcs, dcs, lb, lx, db, dx, len, dist),
+        EC{fx, ll, d, lcs, dcs, lb, lx, db, dx})
 
 def put_toks(toks: List<&2, Tok>, r: W & EC) -> W & EC:
   match toks:
@@ -1253,8 +1234,8 @@ def put_toks(toks: List<&2, Tok>, r: W & EC) -> W & EC:
 def put_body.at(r: W & EC) -> W & EC:
   (w, t) = r
   match t:
-    case EC{+ll, d, lcs, dcs, lb, lx, db, dx}:
-      (put_sym(w, ll, 256n), EC{ll, d, lcs, dcs, lb, lx, db, dx})
+    case EC{fx, +ll, d, lcs, dcs, lb, lx, db, dx}:
+      (put_sym(w, ll, 256n), EC{fx, ll, d, lcs, dcs, lb, lx, db, dx})
 
 # the tokens and the end of the block
 def put_body(toks: List<&2, Tok>, w: W, t: EC) -> W & EC:
@@ -1277,7 +1258,7 @@ def freq1(tok: Tok, t: EC, r: FQ) -> FQ:
   match tok t r:
     case Lit{c} _ FQ{fa, da, xt}:
       FQ{bump_a(fa, U32.to_nat(c)), da, xt}
-    case Ref{+len, +dist} EC{ll, d, +lcs, +dcs, lb, +lx, db, +dx} FQ{fa, da, xt}:
+    case Ref{+len, +dist} EC{fx, ll, d, +lcs, +dcs, lb, +lx, db, +dx} FQ{fa, da, xt}:
       +k = nat_at(lcs, lidx(len))
       +q = nat_at(dcs, didx(dist))
       FQ{bump_a(fa, Nat.add(U32.to_nat(257), k)), bump_a(da, q),
@@ -1623,8 +1604,8 @@ def stored_all(+x: Bytes(), +at: Nat, +len: Nat, last: Bool, w: W) -> W:
 
 def ec_with(ll: Hc, d: Hc, t: EC) -> EC:
   match t:
-    case EC{a, b, lcs, dcs, lb, lx, db, dx}:
-      EC{ll, d, lcs, dcs, lb, lx, db, dx}
+    case EC{fx, a, b, lcs, dcs, lb, lx, db, dx}:
+      EC{fx, ll, d, lcs, dcs, lb, lx, db, dx}
 
 def dyn_block.at(r: W & EC) -> W:
   (w, t) = r
@@ -1687,10 +1668,23 @@ def wblock.plan(toks: List<&2, Tok>, +x: Bytes(), +at: Nat, +len: Nat, last: Boo
         Nat.add(dp_bits(p), Nat.add(xt, Nat.add(dot(fl, dp_ll(p)), dot(fd, dp_d(p)))))),
         toks, x, at, len, last, w, p, t)
 
+def ec_fx(t: EC) -> Bool:
+  match t:
+    case EC{fx, ll, d, lcs, dcs, lb, lx, db, dx}:
+      fx
+
+def wblock.any(fx: Bool, +toks: List<&2, Tok>, +x: Bytes(), +at: Nat, +len: Nat, last: Bool,
+  w: W, +t: EC) -> W:
+  match fx:
+    case True{}:
+      fixed_block(toks, w, last, t)
+    case False{}:
+      wblock.plan(toks, x, at, len, last, w, t,
+        freq(toks, t, FQ{Array.new(U32, 9n, 0), Array.new(U32, 5n, 0), 0n}))
+
 # a block: the tokens that cover the len bytes of x from at
 def wblock(+toks: List<&2, Tok>, +x: Bytes(), +at: Nat, +len: Nat, last: Bool, w: W, +t: EC) -> W:
-  wblock.plan(toks, x, at, len, last, w, t,
-    freq(toks, t, FQ{Array.new(U32, 9n, 0), Array.new(U32, 5n, 0), 0n}))
+  wblock.any(ec_fx(t), toks, x, at, len, last, w, t)
 
 # LZ77
 # ----
@@ -1992,15 +1986,20 @@ def lz_end(z: Z) -> W:
     case Z{x, n, lv, t, i, h, toks, nt, tpos, bs, w, plen, pdist, avail, go}:
       lz_end.at(avail, x, n, t, toks, tpos, bs, w)
 
-# The raw deflate stream of x at a level: 0 stores, 1..9 as zlib's
-def deflate.at(lz_level: Bool, +x: Bytes(), +lvl: Nat) -> Bytes():
+# The raw deflate stream of x at a level: 0 stores, 1..9 as zlib's;
+# fx, every block with the fixed code
+def deflate.at(lz_level: Bool, +x: Bytes(), +lvl: Nat, fx: Bool) -> Bytes():
   match lz_level:
     case False{}:
       w_out(stored_all(x, 0n, Bytes.len(x), True{}, w_new()))
     case True{}:
       +n = Bytes.len(x)
-      w_out(lz_end(lz(1n+n, Z{x, n, level(lvl), ec_fixed(), 0n, h_new(), Nil{}, 0n, 0n, 0n,
+      w_out(lz_end(lz(1n+n, Z{x, n, level(lvl), ec_fixed(fx), 0n, h_new(), Nil{}, 0n, 0n, 0n,
         w_new(), 0n, 0n, False{}, Nat.is_lt(0n, n)})))
 
 def deflate(+x: Bytes(), +lvl: Nat) -> Bytes():
-  deflate.at(Nat.is_lt(0n, lvl), x, lvl)
+  deflate.at(Nat.is_lt(0n, lvl), x, lvl, False{})
+
+# the same matches, every block written with the fixed code
+def deflate_fixed(+x: Bytes(), +lvl: Nat) -> Bytes():
+  deflate.at(True{}, x, Nat.max(1n, lvl), True{})
