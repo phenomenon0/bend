@@ -3574,6 +3574,16 @@ def Bytes.find_any.go(s, w, x, y, z):
 def Bytes.find_any(b: Bytes(), +i: Nat, w: U32, x: U32, y: U32, z: U32) -> Nat:
   Nat.add(i, Bytes.find_any.go(String.drop(b, i), w, x, y, z))
 
+# the low eight bits of the cell at i, 0 past the end
+def Bytes.word_le.at(+b: Bytes(), i: Nat) -> U32:
+  U32.and(Bytes.get(b, i), 255)
+
+# the four bytes from i as one U32, little end first, a byte past the end 0:
+# the word a hash or a checksum reads, in one borrowed read natively
+def Bytes.word_le(+b: Bytes(), +i: Nat) -> U32:
+  U32.or(U32.or(Bytes.word_le.at(b, i), U32.shln(Bytes.word_le.at(b, 1n+i), 8n)),
+    U32.or(U32.shln(Bytes.word_le.at(b, 2n+i), 16n), U32.shln(Bytes.word_le.at(b, 3n+i), 24n)))
+
 # Regex
 # -----
 

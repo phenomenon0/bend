@@ -419,6 +419,7 @@ const OPERATIONS: Record<string, Intr> = Object.setPrototypeOf({
   // count; push appends in place into an unshared buffer's spare room.
   bytes_get: { C: "str_byte_peek(e, $0, $1)", peek: [0], JS: "bytes_get($0, $1)" },
   bytes_len: { C: "str_len_peek(e, $0)", peek: [0], JS: "str_length($0)" },
+  bytes_word_le: { C: "str_word_le_peek(e, $0, $1)", peek: [0], JS: "bytes_word_le($0, $1)" },
   bytes_push: { C: "str_push_take(e, $0, $1)", JS: "bytes_push($0, $1)" },
   bytes_span: { C: "str_span_peek(e, $0, $1, $2, $3)", peek: [0],
     JS: "bytes_span($0, $1, $2, $3)" },
@@ -891,6 +892,15 @@ function str_offset(s, n) {
 function bytes_get(s, i) {
   const j = str_offset(s, i);
   return j < s.length ? s.codePointAt(j) : 256;
+}
+function bytes_word_le(s, i) {
+  let j = str_offset(s, i), x = 0;
+  for (let k = 0; k < 4 && j < s.length; k++) {
+    const c = s.codePointAt(j);
+    x |= (c & 255) << (8 * k);
+    j += c > 0xffff ? 2 : 1;
+  }
+  return x >>> 0;
 }
 function bytes_push(s, c) { return s + str_prepend(char_new(c), ""); }
 function bytes_span(s, i, lo, hi) {
@@ -5359,17 +5369,20 @@ INLINE Term str_push_take(Env e, Term s, u32 c) {
   // The filling loop's case, read once: the one owner of a descriptor
   // holding the one count of a heap payload with room and wide enough
   // cells stores the cell and bumps the length.
+  // Both counts are read whole and plainly; the one acquire, once both are
+  // one, orders the store after whatever the last other owners did.
   if (!term_triv(s) && term_rfc(s)) {
-    u64 cell = rfc_view(e, term_loc(s));
+    u64 cell = e.mem[term_loc(s)];
     Loc l = cell >> 24;
     Term d = e.mem[l];
     u64 ol = e.mem[l + 1];
     if ((cell & RFC_CNT) == 1 && (u32)ol && term_rfc(d)) {
-      u64 dc = rfc_view(e, term_loc(d));
+      u64 dc = e.mem[term_loc(d)];
       Loc dl = dc >> 24;
       u32 nar = (u32)(term_aux(d) >> 5) & 3, at = (u32)(ol >> 32) + (u32)ol;
       if ((dc & RFC_CNT) == 1 && dl >= HEAP_OFF && str_fit(c) >= nar
           && at < str_cap(d)) {
+        a32_acq(a32_at(e.mem, term_loc(d)));
         str_cell_put(e.mem, dl, nar, at, c);
         e.mem[l + 1] = ol + 1;
         return s;
@@ -5407,6 +5420,22 @@ INLINE u32 str_byte_peek(Env e, Term s, Nat i) {
   StrParts p = str_peek_ro(e, s);
   return i < p.len
     ? str_cell(e.mem, term_peek_ro(e, p.data), str_nar(p), p.off + (u32)i) : 256;
+}
+
+// the four cells from i, each's low byte, little end first, 0 past the end
+INLINE u32 str_word_le_peek(Env e, Term s, Nat i) {
+  StrParts p = str_peek_ro(e, s);
+  if (i >= p.len) { return 0; }
+  Loc l = term_peek_ro(e, p.data);
+  u32 nar = str_nar(p), j = p.off + (u32)i, n = p.len - (u32)i, x = 0;
+  if (nar == 2 && n >= 4) {
+    DEV u8* b = (DEV u8*)(e.mem + l) + j;
+    return (u32)b[0] | (u32)b[1] << 8 | (u32)b[2] << 16 | (u32)b[3] << 24;
+  }
+  for (u32 k = 0; k < 4 && k < n; k++) {
+    x |= (str_cell(e.mem, l, nar, j + k) & 255) << (8 * k);
+  }
+  return x;
 }
 
 // how many cells from i are in [lo, hi)
