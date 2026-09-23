@@ -393,14 +393,20 @@ def req.ver(m: List<&2, U32>, t: List<&2, U32>, sp: Span) -> RLine:
     case Span{v, SAt{k, c, rest}}:
       RBad{}
 
+# a target ended at a space: it may not be empty
+def req.target.sp(m: List<&2, U32>, t: List<&2, U32>, rest: List<&2, U32>) -> RLine:
+  match t:
+    case Nil{}:
+      RBad{}
+    case Con{h, r}:
+      req.ver(m, Con{h, r}, span(TVer{}, rest))
+
 def req.target(m: List<&2, U32>, sp: Span) -> RLine:
   match sp:
     case Span{t, SEnd{}}:
       RTarget{m, t}
-    case Span{Nil{}, SAt{Eng.KSp{}, c, rest}}:
-      RBad{}
-    case Span{Con{h, r}, SAt{Eng.KSp{}, c, rest}}:
-      req.ver(m, Con{h, r}, span(TVer{}, rest))
+    case Span{t, SAt{Eng.KSp{}, c, rest}}:
+      req.target.sp(m, t, rest)
     case Span{t, SAt{k, c, rest}}:
       RBad{}
 
