@@ -1411,13 +1411,14 @@ def h.ping(+c: Cn, w: Bytes(), rq: List<&2, Req>, +fl: U32, +pay: Bytes(), z: Bo
     case True{} True{}:
       ping.ack(c, w, rq, pay, flag(fl, 1))
 
-# GOAWAY (6.8): on stream 0; the peer is going, and so is the connection
+# GOAWAY (6.8): on stream 0. The peer opens no more streams; the ones
+# it has are still answered, and the peer closes when it is done.
 def h.goaway(+c: Cn, w: Bytes(), rq: List<&2, Req>, z: Bool) -> Out:
   match z:
     case False{}:
       die(c, w, rq, e.proto())
     case True{}:
-      Out{c, w, rq, True{}}
+      ok(c, w, rq)
 
 # WINDOW_UPDATE (6.9): four bytes; an increment of 0 is a
 # PROTOCOL_ERROR, one that takes a window past 2^31-1 a
