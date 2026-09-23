@@ -74,3 +74,25 @@ law gunzip_bad:
   for +pos: Nat
   {Z.feed_list(s, Z.G{Z.Bad{at, why}, done, crc, cap, pos}) ==
     Z.G{Z.Bad{at, why}, done, crc, cap, pos} : Z.G}
+
+# CRC-32
+# ======
+
+# The reference: the register a bit at a time, eight bits to a byte,
+# each bit D.crc.bit -- shift right, and fold in the polynomial
+# 0xEDB88320 when the bit shifted out is 1 -- the byte first xored into
+# the register's low eight bits. As RFC 1952 8 and ISO 3309 give it.
+def crc_ref(x: Bytes(), c: U32) -> U32:
+  match x:
+    case SNil{}:
+      c
+    case SCon{Chr{b}, t}:
+      crc_ref(t, D.crc.bits(8n, U32.xor(c, U32.and(b, 255))))
+
+# LAW: the table-driven CRC-32 is the bit-at-a-time one, for every input
+# and every CRC it is continued from: the table's 256 cells are right,
+# and a byte folded in by its cell is the byte's eight bits folded in.
+law crc32_ref:
+  for +x: Bytes()
+  for +prev: U32
+  {D.crc32(x, prev) == U32.not(crc_ref(x, U32.not(prev))) : U32}
