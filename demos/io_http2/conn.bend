@@ -594,33 +594,40 @@ def st.w.fin(r: St, v: Bool) -> St:
       St{id, ss, meth, path, clen, body, got, rw, sw, out, v}
 
 
-def st.pick(hit: Bool, s: St, rest: Maybe<&2, St>) -> Maybe<&2, St>:
-  match hit:
-    case True{}:
-      Some{s}
-    case False{}:
-      rest
-
-def st.find(sts: List<&2, St>, +sid: U32) -> Maybe<&2, St>:
+# whether the list's first stream has id sid
+def st.at(+sts: List<&2, St>, +sid: U32) -> Bool:
   match sts:
     case Nil{}:
+      False{}
+    case Con{+s, t}:
+      U32.is_eq(st.id(s), sid)
+
+# The walks stop at the stream they look for (hit says the head is it):
+# a list holds each id once (st.put removes before it adds), so the
+# first is the only one, and what follows it is kept untouched.
+def st.find.go(sts: List<&2, St>, +sid: U32, hit: Bool) -> Maybe<&2, St>:
+  match sts hit:
+    case Nil{} _:
       None{}
-    case Con{+s, t}:
-      st.pick(U32.is_eq(st.id(s), sid), s, st.find(t, sid))
+    case Con{s, t} True{}:
+      Some{s}
+    case Con{s, +t} False{}:
+      st.find.go(t, sid, st.at(t, sid))
 
-def st.keep(s: St, rest: List<&2, St>, drop: Bool) -> List<&2, St>:
-  match drop:
-    case True{}:
-      rest
-    case False{}:
-      Con{s, rest}
+def st.find(+sts: List<&2, St>, +sid: U32) -> Maybe<&2, St>:
+  st.find.go(sts, sid, st.at(sts, sid))
 
-def st.del(sts: List<&2, St>, +sid: U32) -> List<&2, St>:
-  match sts:
-    case Nil{}:
+def st.del.go(sts: List<&2, St>, +sid: U32, hit: Bool) -> List<&2, St>:
+  match sts hit:
+    case Nil{} _:
       Nil{}
-    case Con{+s, t}:
-      st.keep(s, st.del(t, sid), U32.is_eq(st.id(s), sid))
+    case Con{s, t} True{}:
+      t
+    case Con{s, +t} False{}:
+      Con{s, st.del.go(t, sid, st.at(t, sid))}
+
+def st.del(+sts: List<&2, St>, +sid: U32) -> List<&2, St>:
+  st.del.go(sts, sid, st.at(sts, sid))
 
 # the stream list with s in place of the stream of its id (or s added)
 def st.put(sts: List<&2, St>, +s: St) -> List<&2, St>:
