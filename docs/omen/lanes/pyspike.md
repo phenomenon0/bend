@@ -324,3 +324,34 @@ will drift; regenerate rather than trust it.
 - **No `for`, no strings, no containers, no exceptions, no classes.** Each is
   refused by name rather than silently mis-run, which is the property worth
   keeping as the subset grows.
+
+## Review round (2026-09-23)
+
+A deep review against CPython 3.11.15 found five programs the VM ran to exit 0
+with the wrong output, which is the one thing a refusal-first lane may not do.
+Each one now faults or matches CPython, and each has a control in the battery:
+
+| program | before | now |
+|---|---|---|
+| `print(x)` with `x` never bound | `None` | `vm: a name read before assignment (NameError)` |
+| a local read before its store | `None` | `... (UnboundLocalError)` |
+| `print(f(1))` above `def f` | `1` | NameError: a module-level def is a store of `VFunc{k}` into its global where it stands, and a call loads its callee as `LOAD_GLOBAL` does |
+| `print(f)` | `None` | refused: functions as values are outside the subset |
+| `None == None` | `False` | `True` (`val_eq`: str by text, num by value, None with None) |
+
+Other fixes in the same round:
+- `0xbeef` and `0xE` were refused as floats. The literal walk now takes a digit of the base before the float markers.
+- Ints are capped at 2**48 − 1 on every lane. Past that, the JS lane died inside the runtime and the C lane would have wrapped at 2**64. The cap is checked on literals, `+` and `*`.
+- A def rebound to a non-function (`f = 3; f()`) faults at the call. Before, it silently called the def. Redefinition now binds in source order: `print(f())` between two `def f` prints `1`, then `2`.
+
+**The C lane did not build on a 15 GB host.** The emitter peaked above 14 GB on
+`vm.bend` and was OOM-killed. Bisecting by stubbing defs showed the cause:
+- `cexp`'s `match tag:` over eleven string literals. A string-literal match is emitted as a per-character 32-bit bit tree, with the arm bodies under it.
+- `prewalk`'s five-arm string match. After the first fix it nested past clang's 256-bracket limit.
+
+Both now classify the tag once with an `S.choose` chain into a nullary constructor (`EK`, `PK`) and match on that. The emitter now peaks at 2.4 GB, and C emission takes 15 s instead of never finishing.
+
+Battery: `VM PASS: 34, FAIL: 0` (7 fixtures × 3 lanes + check + mutation + 12
+refusals), on x86_64 with 4 cores and 15 GB. `fib(24)` on the C lane takes 0.95 s on this host. There is no pre-change C number on the same host, because the old file could not build here.
+The ttok caps were not measured: the tokenizer's BPE download is blocked by
+this host's egress policy. `vm.bend` was at 17.8k of 64k and grew about 10%.

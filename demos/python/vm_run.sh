@@ -120,6 +120,17 @@ refused() {
 refused 'print(1 < 2 < 3)' 'chained comparisons are outside the subset'
 refused 'print(["a"])'     'lists are outside the subset'
 refused 'print(3 - 9)'     'a negative result is outside the subset'
+# A name is unset until its first store -- global, local, or a def's own
+# binding -- and a read before it faults as CPython raises, never a None.
+refused 'print(x)'         'a name read before assignment (NameError)'
+refused $'def f():\n    print(y)\n    y = 1\nf()' 'a local read before assignment (UnboundLocalError)'
+refused $'print(f(1))\ndef f(a):\n    return a' 'a name read before assignment (NameError)'
+refused $'def f():\n    return 1\nf = 3\nprint(f())' 'calling a non-function is outside the subset'
+refused $'def f(a):\n    return a\nprint(f)' 'functions as values are outside the subset'
+# Ints stop at 2**48 - 1 on every lane: past it is refused, not wrapped.
+refused 'print(16777216 * 16777216)' 'an int past 2**48 - 1 is outside the subset'
+refused 'print(281474976710655 + 1)' 'an int past 2**48 - 1 is outside the subset'
+refused 'print(281474976710656)' 'an int past 2**48 - 1 is outside the subset'
 
 printf '\nVM PASS: %d, FAIL: %d\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

@@ -22,8 +22,10 @@ type Val is Data:
   VBool{b: Bool}
   VNone{}
   VStr{s: String}
+  VFunc{i: Nat}
+  VUnset{}
 
-# op is U32 and DENSE 0..26 (contiguous rows only); a and b are operands.
+# op is U32 and DENSE 0..29 (contiguous rows only); a and b are operands.
 type Instr is Data:
   Instr{op: U32, a: Nat, b: Nat}
 
@@ -187,6 +189,22 @@ def cx_fault(+c: Cx) -> String:
     case Cx{code, len, env, fault}:
       fault
 
+# The subset's int ceiling, 2**48 - 1: every lane holds it exactly (the JS
+# lane's immediates stop there, the C lane's words would wrap at 2**64), so a
+# result past it is refused rather than rounded or wrapped. Composed, never
+# written long, and never through 2**48 itself -- the JS lane refuses that
+# intermediate: (2**16 - 1) * 2**32 + (2**16 - 1) * 2**16 + (2**16 - 1).
+def int_cap() -> Nat:
+  +w = Nat.mul(256n, 256n)
+  +m = Nat.sub(w, 1n)
+  Nat.add(Nat.mul(m, Nat.mul(w, w)), Nat.add(Nat.mul(m, w), m))
+
+def add_fits(+x: Nat, +y: Nat) -> Bool:
+  Nat.is_le(y, int_cap()) && Nat.is_le(x, Nat.sub(int_cap(), y))
+
+def mul_fits(+x: Nat, +y: Nat) -> Bool:
+  Nat.is_eq(y, 0n) || Nat.is_le(x, Nat.div(int_cap(), y))
+
 # Number literals
 # ===============
 
@@ -221,9 +239,11 @@ def digits(+s: String, +base: Nat, +acc: Nat) -> NV:
       NV{acc, ""}
     case SCon{+h, +t}:
       S.choose(NV, Char.is_eq(h, '_'), u => digits(t, base, acc), u =>
-        S.choose(NV, Char.is_eq(h, '.') || Char.is_eq(h, 'e') || Char.is_eq(h, 'E') || Char.is_eq(h, 'j') || Char.is_eq(h, 'J'),
-          u => NV{0n, "floats and complex literals are outside the subset"}, u =>
-          S.choose(NV, digit_ok(h, base), u => digits(t, base, (base * acc + digit_val(h) : Nat)), u => NV{0n, "invalid digit in literal"})))
+        S.choose(NV, digit_ok(h, base), u =>
+          S.choose(NV, Nat.is_le(acc, Nat.div(Nat.sub(int_cap(), digit_val(h)), base)), u => digits(t, base, (base * acc + digit_val(h) : Nat)), u =>
+            NV{0n, "an int past 2**48 - 1 is outside the subset"}), u =>
+          S.choose(NV, Char.is_eq(h, '.') || Char.is_eq(h, 'e') || Char.is_eq(h, 'E') || Char.is_eq(h, 'j') || Char.is_eq(h, 'J'),
+            u => NV{0n, "floats and complex literals are outside the subset"}, u => NV{0n, "invalid digit in literal"})))
 
 def number_value(+raw: String) -> NV:
   S.choose(NV, String.starts_with(raw, "0x") || String.starts_with(raw, "0X"), u => digits(String.drop(raw, 2n), 16n, 0n), u =>
@@ -497,8 +517,26 @@ def prewalk_targets(+js: S.Json, +ns: List<&2, String>) -> List<&2, String>:
     case _:
       ns
 
+# The statement kinds the prewalk looks into, read off the tag once: a match
+# over string literals emits a per-character bit tree, which nested past
+# clang's 256-bracket limit in the C lane.
+type PK is Data:
+  PAssign{}
+  PAugAssign{}
+  PAnnAssign{}
+  PIf{}
+  PWhile{}
+  POther{}
+
+def pw_kind(+tag: String) -> PK:
+  S.choose(PK, String.eq(tag, "Assign"), u => PAssign{}, u =>
+    S.choose(PK, String.eq(tag, "AugAssign"), u => PAugAssign{}, u =>
+      S.choose(PK, String.eq(tag, "AnnAssign"), u => PAnnAssign{}, u =>
+        S.choose(PK, String.eq(tag, "If"), u => PIf{}, u =>
+          S.choose(PK, String.eq(tag, "While"), u => PWhile{}, u => POther{})))))
+
 type PW is Data:
-  PWOne{tag: String, j: S.Json}
+  PWOne{kind: PK, j: S.Json}
   PWChain{js: S.Json}
 
 # The local-name prewalk: one self-recursive def (a chain and a statement
@@ -510,23 +548,23 @@ def prewalk(fuel: Nat, job: PW, +ns: List<&2, String>) -> List<&2, String>:
     case 1n++left PWChain{js}:
       match js:
         case S.JItem{+one, rest}:
-          +tag : String = jtag(one)
-          prewalk(left, PWChain{rest}, prewalk(left, PWOne{tag, one}, ns))
+          +kind : PK = pw_kind(jtag(one))
+          prewalk(left, PWChain{rest}, prewalk(left, PWOne{kind, one}, ns))
         case _:
           ns
-    case 1n++left PWOne{+tag, +j}:
-      match tag:
-        case "Assign":
+    case 1n++left PWOne{+kind, +j}:
+      match kind:
+        case PAssign{}:
           prewalk_targets(jitems(jfield(j, "targets")), ns)
-        case "AugAssign":
+        case PAugAssign{}:
           prewalk_target(jfield(j, "target"), ns)
-        case "AnnAssign":
+        case PAnnAssign{}:
           S.choose(List<&2, String>, jnull(jfield(j, "value")), u => ns, u => prewalk_target(jfield(j, "target"), ns))
-        case "If":
+        case PIf{}:
           prewalk(left, PWChain{jitems(jfield(j, "orelse"))}, prewalk(left, PWChain{jitems(jfield(j, "body"))}, ns))
-        case "While":
+        case PWhile{}:
           prewalk(left, PWChain{jitems(jfield(j, "orelse"))}, prewalk(left, PWChain{jitems(jfield(j, "body"))}, ns))
-        case _:
+        case POther{}:
           ns
 
 # Fuels are derived from the module (runtime data), never written as one
@@ -599,13 +637,26 @@ def collect(+js: S.Json, +defs: List<&2, Def>) -> GD:
     case _:
       GD{defs, ""}
 
-# Pass 2 prep: the module body minus its defs.
-def skip_defs(+js: S.Json) -> S.Json:
+# Pass 2 prep: each module-level def becomes a _DefBind statement where it
+# stands -- the k-th def (source order, its function index) is bound to its
+# name when control reaches it, as CPython binds it, so a call that runs
+# first is a NameError rather than a call.
+def def_bind(+name: String, +k: Nat) -> S.Json:
+  S.JObj{S.JField{"tag", S.JStr{"_DefBind"}, S.JField{"name", S.JStr{name}, S.JField{"index", S.JNum{k}, S.JEnd{}}}}}
+
+def jnum(+j: S.Json) -> Nat:
+  match j:
+    case S.JNum{n}:
+      n
+    case _:
+      0n
+
+def bind_defs(+js: S.Json, +k: Nat) -> S.Json:
   match js:
     case S.JEnd{}:
       S.JEnd{}
-    case S.JItem{one, rest}:
-      S.choose(S.Json, String.eq(jtag(one), "FunctionDef"), u => skip_defs(rest), u => S.JItem{one, skip_defs(rest)})
+    case S.JItem{+one, rest}:
+      S.choose(S.Json, String.eq(jtag(one), "FunctionDef"), u => S.JItem{def_bind(jstr(jfield(one, "name")), k), bind_defs(rest, 1n+k)}, u => S.JItem{one, bind_defs(rest, k)})
     case _:
       S.JEnd{}
 
@@ -621,8 +672,10 @@ def bop_put(+frags: List<&2, Frg>, +end: Nat, +is_and: Bool, +first: Nat, +acc: 
     case Con{Frg{c, l, op}, t} 1n+p:
       bop_put(t, end, is_and, 1n+p, join(acc, Con{Instr{Bool.pick(U32, is_and, 21, 22), end, 0n}, c}))
 
-# Chained comparisons: a < b < c asks (a<b) and (b<c); the middle operand is
-# evaluated twice (the subset's middles are pure; noted in the report).
+# Assembles a Compare: the leftmost operand (op 98), then each comparator and
+# its opcode. Chains are refused in cexp's Compare arm, so only the 0n arm
+# runs today; the 1n+p arm is the (a<b) and (b<c) shape, which would evaluate
+# a middle twice, kept for when chains land with a DUP.
 def cmp_put(+frags: List<&2, Frg>, +end: Nat, +first: Nat, +acc: List<&2, Instr>) -> List<&2, Instr>:
   match frags first:
     case Nil{} _:
@@ -634,25 +687,54 @@ def cmp_put(+frags: List<&2, Frg>, +end: Nat, +first: Nat, +acc: List<&2, Instr>
     case Con{Frg{c, l, op}, t} 1n+p:
       cmp_put(t, end, 1n+p, join(acc, Con{Instr{5, 0n, 0n}, Con{Instr{19, end, 0n}, join(one(op, 0n, 0n), c)}}))
 
-# One self-recursive def compiles every expression shape. Many is a JItem
-# chain (call and print arguments, in order). BOp and CmpJ are the two-pass
-# chains: the values are compiled first (the walk), then assembled with the
-# end target every keep-jump needs. Tag1 re-enters with the tag as a field,
+# A constant: one CONST row into the growing pool.
 def const_cx(+env: Env, +v: Val) -> Cx:
   +made : AC = add_const(env, v)
   Cx{one(0, ac_idx(made), 0n), 1n, ac_env(made), ""}
 
+type EK is Data:
+  EConstant{}
+  EName{}
+  EBinOp{}
+  EUnaryOp{}
+  EBoolOp{}
+  ECompare{}
+  ECall{}
+  EIfExp{}
+  ESubscript{}
+  EList{}
+  EDict{}
+  EOther{}
+
+# The expression's kind, read off its tag once. The dispatch below is a
+# constructor match: a match over string literals is emitted as a
+# per-character tree with the arm bodies under it, and at eleven arms of this
+# size that drove the C emitter past 14 GB.
+def expr_kind(+tag: String) -> EK:
+  S.choose(EK, String.eq(tag, "Constant"), u => EConstant{}, u =>
+    S.choose(EK, String.eq(tag, "Name"), u => EName{}, u =>
+    S.choose(EK, String.eq(tag, "BinOp"), u => EBinOp{}, u =>
+    S.choose(EK, String.eq(tag, "UnaryOp"), u => EUnaryOp{}, u =>
+    S.choose(EK, String.eq(tag, "BoolOp"), u => EBoolOp{}, u =>
+    S.choose(EK, String.eq(tag, "Compare"), u => ECompare{}, u =>
+    S.choose(EK, String.eq(tag, "Call"), u => ECall{}, u =>
+    S.choose(EK, String.eq(tag, "IfExp"), u => EIfExp{}, u =>
+    S.choose(EK, String.eq(tag, "Subscript"), u => ESubscript{}, u =>
+    S.choose(EK, String.eq(tag, "List"), u => EList{}, u =>
+    S.choose(EK, String.eq(tag, "Dict"), u => EDict{}, u =>
+      EOther{})))))))))))
+
 # One self-recursive def compiles every expression shape. Many is a JItem
 # chain (call and print arguments, in order). BOp and CmpJ are the two-pass
 # chains: the values are compiled first (the walk), then assembled with the
-# end target every keep-jump needs. Tag1 re-enters with the tag as a field,
-# the one legal scrutinee for the dispatch.
+# end target every keep-jump needs. Tag1 re-enters with the expression's
+# kind as a field, the one legal scrutinee for the dispatch.
 type Job is Data:
   One{j: S.Json}
   Many{js: S.Json}
   BOp{js: S.Json, base0: Nat, acc: List<&2, Frg>, sum: Nat, n: Nat, flt: String, is_and: Bool}
   CmpJ{ops: S.Json, vals: S.Json, base0: Nat, acc: List<&2, Frg>, sum: Nat, n: Nat, flt: String}
-  Tag1{tag: String, j: S.Json}
+  Tag1{kind: EK, j: S.Json}
 
 def slot_put(+found: Maybe<&2, Nat>, +env: Env, +name: String, is_store: Bool) -> Cx:
   match found:
@@ -718,10 +800,10 @@ def cexp(+fuel: Nat, +job: Job, +base: Nat, +env: Env) -> Cx:
         case _ _:
           Cx{Nil{}, 0n, env, flt}
     case 1n++left One{j}:
-      cexp(left, Tag1{jtag(j), j}, base, env)
-    case 1n++left Tag1{tag, j}:
-      match tag:
-        case "Constant":
+      cexp(left, Tag1{expr_kind(jtag(j)), j}, base, env)
+    case 1n++left Tag1{kind, j}:
+      match kind:
+        case EConstant{}:
           +raw = jstr(jfield(j, "_raw"))
           S.choose(Cx, String.eq(raw, "True"), u => const_cx(env, VBool{True{}}), u =>
             S.choose(Cx, String.eq(raw, "False"), u => const_cx(env, VBool{False{}}), u =>
@@ -731,32 +813,35 @@ def cexp(+fuel: Nat, +job: Job, +base: Nat, +env: Env) -> Cx:
                   S.choose(Cx, String.is_empty(nv_f(nv)), u => const_cx(env, VInt{nv_n(nv)}), u => Cx{Nil{}, 0n, env, nv_f(nv)}), u =>
                   +sv : SV = str_lit(raw)
                   S.choose(Cx, String.is_empty(sv_f(sv)), u => const_cx(env, VStr{sv_s(sv)}), u => Cx{Nil{}, 0n, env, sv_f(sv)})))))
-        case "Name":
-          name_cx(env, jstr(jfield(j, "id")), False{})
-        case "BinOp":
+        case EName{}:
+          Env{+cs, +nc, +gs, +ng, +fs, +ns, +nn} = env
+          +name = jstr(jfield(j, "id"))
+          S.choose(Cx, func_hit(fs, name) && Bool.not(has_name(ns, name)), u => Cx{Nil{}, 0n, Env{cs, nc, gs, ng, fs, ns, nn}, "functions as values are outside the subset"}, u =>
+            name_cx(Env{cs, nc, gs, ng, fs, ns, nn}, name, False{}))
+        case EBinOp{}:
           +lft : Cx = cexp(left, One{jfield(j, "left")}, base, env)
           +rgt : Cx = cexp(left, One{jfield(j, "right")}, (cx_len(lft) + base : Nat), cx_env(lft))
           +code = binop_code(jstr(jfield(jfield(j, "op"), "tag")))
           S.choose(Cx, U32.is_eq(code, 99), u => Cx{Nil{}, 0n, cx_env(rgt), "the operator is outside the subset"}, u =>
             Cx{join(one(code, 0n, 0n), join(cx_code(rgt), cx_code(lft))), 1n+(cx_len(lft) + cx_len(rgt) : Nat), cx_env(rgt),
               pick_fault(cx_fault(lft), cx_fault(rgt))})
-        case "UnaryOp":
+        case EUnaryOp{}:
           +op = jstr(jfield(jfield(j, "op"), "tag"))
           S.choose(Cx, String.eq(op, "UAdd"), u => cexp(left, One{jfield(j, "operand")}, base, env), u =>
             S.choose(Cx, String.eq(op, "Not"), u =>
               +inner : Cx = cexp(left, One{jfield(j, "operand")}, base, env)
               Cx{join(one(17, 0n, 0n), cx_code(inner)), 1n+cx_len(inner), cx_env(inner), cx_fault(inner)}, u =>
               Cx{Nil{}, 0n, env, "negatives and ~ are outside the subset"}))
-        case "BoolOp":
+        case EBoolOp{}:
           cexp(left, BOp{jitems(jfield(j, "values")), base, Nil{}, 0n, 0n, "", String.eq(jstr(jfield(jfield(j, "op"), "tag")), "And")}, base, env)
-        case "Compare":
+        case ECompare{}:
           +ops = jitems(jfield(j, "ops"))
           S.choose(Cx, Nat.is_eq(jcount(ops), 1n), u =>
             +lft : Cx = cexp(left, One{jfield(j, "left")}, base, env)
             cexp(left, CmpJ{ops, jitems(jfield(j, "comparators")), base, Con{Frg{cx_code(lft), cx_len(lft), 98}, Nil{}}, cx_len(lft), 0n, cx_fault(lft)},
               (cx_len(lft) + base : Nat), cx_env(lft)), u =>
             Cx{Nil{}, 0n, env, "chained comparisons are outside the subset"})
-        case "Call":
+        case ECall{}:
           Env{+cs, +nc, +gs, +ng, +fs, +ns, +nn} = env
           +fn = jfield(j, "func")
           +kw = jitems(jfield(j, "keywords"))
@@ -769,9 +854,10 @@ def cexp(+fuel: Nat, +job: Job, +base: Nat, +env: Env) -> Cx:
                 Cx{join(one(25, 0n, jcount(args)), cx_code(argv)), 1n+cx_len(argv), cx_env(argv), cx_fault(argv)}, u =>
                 S.choose(Cx, func_hit(fs, name), u =>
                   +i : Nat = func_ix(fs, name, 0n)
-                  +argv : Cx = cexp(left, Many{args}, base, Env{cs, nc, gs, ng, fs, ns, nn})
+                  +callee : Cx = name_cx(Env{cs, nc, gs, ng, fs, ns, nn}, name, False{})
+                  +argv : Cx = cexp(left, Many{args}, (cx_len(callee) + base : Nat), cx_env(callee))
                   S.choose(Cx, Nat.is_eq(jcount(args), nparams_at(fs, i)), u =>
-                    Cx{join(one(23, i, jcount(args)), cx_code(argv)), 1n+cx_len(argv), cx_env(argv), cx_fault(argv)}, u =>
+                    Cx{join(one(23, i, jcount(args)), join(cx_code(argv), cx_code(callee))), (1n + (cx_len(callee) + cx_len(argv) : Nat) : Nat), cx_env(argv), cx_fault(argv)}, u =>
                     Cx{Nil{}, 0n, cx_env(argv), String.append(name, " is called with the wrong number of arguments")}), u =>
                   S.choose(Cx, String.eq(name, "len"), u =>
                     S.choose(Cx, Nat.is_eq(jcount(args), 1n), u =>
@@ -779,7 +865,7 @@ def cexp(+fuel: Nat, +job: Job, +base: Nat, +env: Env) -> Cx:
                       Cx{join(one(27, 0n, 0n), cx_code(argv)), 1n+cx_len(argv), cx_env(argv), cx_fault(argv)}, u =>
                       Cx{Nil{}, 0n, Env{cs, nc, gs, ng, fs, ns, nn}, String.append(name, " is called with the wrong number of arguments")}), u =>
                     Cx{Nil{}, 0n, Env{cs, nc, gs, ng, fs, ns, nn}, String.append(name, " is not a defined function")})))))
-        case "IfExp":
+        case EIfExp{}:
           +test : Cx = cexp(left, One{jfield(j, "test")}, base, env)
           +body : Cx = cexp(left, One{jfield(j, "body")}, (cx_len(test) + base + 1n : Nat), cx_env(test))
           +other : Cx = cexp(left, One{jfield(j, "orelse")}, (cx_len(test) + base + cx_len(body) + 2n : Nat), cx_env(body))
@@ -787,7 +873,7 @@ def cexp(+fuel: Nat, +job: Job, +base: Nat, +env: Env) -> Cx:
               join(cx_code(body), join(one(19, (cx_len(test) + base + cx_len(body) + 2n : Nat), 0n), cx_code(test))))),
             (cx_len(test) + cx_len(body) + cx_len(other) + 2n : Nat), cx_env(other),
             pick_fault(cx_fault(test), pick_fault(cx_fault(body), cx_fault(other)))}
-        case "Subscript":
+        case ESubscript{}:
           +val_j = jfield(j, "value")
           +slc_j = jfield(j, "slice")
           S.choose(Cx, String.eq(jtag(slc_j), "Slice"), u =>
@@ -811,11 +897,11 @@ def cexp(+fuel: Nat, +job: Job, +base: Nat, +env: Env) -> Cx:
                 Cx{join(one(28, 0n, 0n), join(cx_code(idx), cx_code(vs))),
                   (1n + (cx_len(vs) + cx_len(idx) : Nat) : Nat), cx_env(idx),
                   pick_fault(cx_fault(vs), cx_fault(idx))})))
-        case "List":
+        case EList{}:
           Cx{Nil{}, 0n, env, "lists are outside the subset"}
-        case "Dict":
+        case EDict{}:
           Cx{Nil{}, 0n, env, "dicts are outside the subset"}
-        case _:
+        case EOther{}:
           Cx{Nil{}, 0n, env, "the expression is outside the subset"}
 
 # `a and b and c`: each value but the last keeps itself on the stack when it
@@ -859,6 +945,8 @@ def cstmt(+fuel: Nat, +job: SJ, +base: Nat, +env: Env) -> Cx:
           Cx{Nil{}, 0n, env, ""}
     case 1n++left TagS{+tag, +sj, +rest}:
       +self : Cx = S.choose(Cx, String.eq(tag, "Pass"), u => Cx{Nil{}, 0n, env, ""}, u =>
+        S.choose(Cx, String.eq(tag, "_DefBind"), u =>
+          store_join(left, S.JObj{S.JField{"tag", S.JStr{"Name"}, S.JField{"id", jfield(sj, "name"), S.JEnd{}}}}, const_cx(env, VFunc{jnum(jfield(sj, "index"))}), base), u =>
         S.choose(Cx, String.eq(tag, "Expr"), u =>
           +inner : Cx = cexp(left, One{jfield(sj, "value")}, base, env)
           Cx{join(one(5, 0n, 0n), cx_code(inner)), 1n+cx_len(inner), cx_env(inner), cx_fault(inner)}, u =>
@@ -895,7 +983,7 @@ def cstmt(+fuel: Nat, +job: SJ, +base: Nat, +env: Env) -> Cx:
               join(cx_code(body), join(one(19, (cx_len(test) + base + cx_len(body) + 2n : Nat), 0n), cx_code(test))))),
             (cx_len(test) + cx_len(body) + cx_len(other) + 2n : Nat), cx_env(other),
             pick_fault(cx_fault(test), pick_fault(cx_fault(body), cx_fault(other)))}, u =>
-          Cx{Nil{}, 0n, env, "the statement is outside the subset"}))))))))
+          Cx{Nil{}, 0n, env, "the statement is outside the subset"})))))))))
       +after : Cx = cstmt(left, Walk{rest}, (cx_len(self) + base : Nat), cx_env(self))
       Cx{join(cx_code(after), cx_code(self)), (cx_len(self) + cx_len(after) : Nat), cx_env(after), pick_fault(cx_fault(self), cx_fault(after))}
 
@@ -969,8 +1057,8 @@ def env_nglobals(+e: Env) -> Nat:
 def build(+m: S.Module) -> Result<&2, &2, S.Error, Prog>:
   S.Module{body} = m
   +got : GD = collect(body, Nil{})
-  +defs = List.reverse(&2, Def, gd_defs(got))
-  +clean : S.Json = skip_defs(body)
+  +defs = gd_defs(got)
+  +clean : S.Json = bind_defs(body, 0n)
   +main : Cx = cstmt(stmt_fuel(clean), Walk{clean}, 0n, Env{Nil{}, 0n, Nil{}, 0n, defs, Nil{}, 0n})
   +done : Built = compile_defs(defs, cx_env(main), Nil{})
   +halted : List<&2, Instr> = Con{Instr{26, 0n, 0n}, cx_code(main)}
@@ -1111,12 +1199,14 @@ def pop_args(+n: Nat, +stack: List<&2, Val>) -> Pop:
     case 1n+p Nil{}:
       Pop{Nil{}, Nil{}}
 
-def nones(+n: Nat, +xs: List<&2, Val>) -> List<&2, Val>:
+# A local past the parameters starts unset: reading it before its first
+# store is CPython's UnboundLocalError, not a None.
+def unsets(+n: Nat, +xs: List<&2, Val>) -> List<&2, Val>:
   match n:
     case 0n:
       xs
     case 1n+p:
-      Con{VNone{}, nones(p, xs)}
+      Con{VUnset{}, unsets(p, xs)}
 
 def truthy(+v: Val) -> Bool:
   match v:
@@ -1128,6 +1218,10 @@ def truthy(+v: Val) -> Bool:
       False{}
     case VStr{s}:
       Bool.not(String.is_empty(s))
+    case VFunc{i}:
+      True{}
+    case VUnset{}:
+      False{}
 
 # CPython's bools are ints: True is 1 in arithmetic and comparison.
 def nums_ok(+a: Val, +b: Val) -> Bool:
@@ -1179,6 +1273,10 @@ def vtext(+v: Val) -> String:
       "None"
     case VStr{s}:
       s
+    case VFunc{i}:
+      "<function>"
+    case VUnset{}:
+      ""
 
 # A string is its own text; anything else is not a string.
 def is_str(+v: Val) -> Bool:
@@ -1241,6 +1339,38 @@ def num_of(+v: Val) -> Nat:
     case _:
       0n
 
+def is_unset(+v: Val) -> Bool:
+  match v:
+    case VUnset{}:
+      True{}
+    case _:
+      False{}
+
+def is_func(+v: Val) -> Bool:
+  match v:
+    case VFunc{i}:
+      True{}
+    case _:
+      False{}
+
+def func_of(+v: Val) -> Nat:
+  match v:
+    case VFunc{i}:
+      i
+    case _:
+      0n
+
+# Python's == over the subset's values: strings by text, numbers (bools are
+# ints) by value, None only with None; any other pair is unequal.
+def val_eq(+a: Val, +b: Val) -> Bool:
+  match a b:
+    case VStr{x} VStr{y}:
+      String.eq(x, y)
+    case VNone{} VNone{}:
+      True{}
+    case _ _:
+      S.choose(Bool, nums_ok(a, b), u => Nat.is_eq(num_of(a), num_of(b)), u => False{})
+
 def char_at(+s: String, +idx: Nat) -> String:
   String.take(String.drop(s, idx), 1n)
 
@@ -1297,10 +1427,10 @@ def fault_run(funcs: List<&2, Func>, consts: List<&2, Val>, stack: List<&2, Val>
 
 # The VM. One step per instruction: the fetch is the head of `rest` (a zipper,
 # O(1)), a jump re-drops from `here`, a call saves the caller's zipper in a
-# frame. The dispatch is the dense U32 match over op -- contiguous 0..26.
+# frame. The dispatch is the dense U32 match over op -- contiguous 0..29.
 # The opcode kind: one constructor per dense opcode row. The dispatch over
 # the run is a total constructor match (every body emitted once, no bit
-# tree); op -> kind is the dense U32 match, contiguous 0..26 -- the new
+# tree); op -> kind is the dense U32 match, contiguous 0..29 -- the new
 # compiler's table shape, and what it lowers to is measured in the report.
 type OpKind is Data:
   KConst{}
@@ -1433,14 +1563,18 @@ def step(+fuel: Nat, +job: Step) -> Run:
         case KConst{}:
           step(left, Go{Run{funcs, consts, Con{val_at(consts, a), stack}, here, more, locals, globals, frames, out, fault}})
         case KLoadL{}:
-          step(left, Go{Run{funcs, consts, Con{val_at(locals, a), stack}, here, more, locals, globals, frames, out, fault}})
+          S.choose(Run, is_unset(val_at(locals, a)), u =>
+            fault_run(funcs, consts, stack, here, locals, globals, frames, out, "a local read before assignment (UnboundLocalError)"), u =>
+            step(left, Go{Run{funcs, consts, Con{val_at(locals, a), stack}, here, more, locals, globals, frames, out, fault}}))
         case KStoreL{}:
           +picked : Pop = pop_args(1n, stack)
           S.choose(Run, pop_any(picked), u =>
             step(left, Go{Run{funcs, consts, pop_more(picked), here, more, val_set(locals, a, pop_head(picked)), globals, frames, out, fault}}), u =>
             fault_run(funcs, consts, stack, here, locals, globals, frames, out, "stack underflow"))
         case KLoadG{}:
-          step(left, Go{Run{funcs, consts, Con{val_at(globals, a), stack}, here, more, locals, globals, frames, out, fault}})
+          S.choose(Run, is_unset(val_at(globals, a)), u =>
+            fault_run(funcs, consts, stack, here, locals, globals, frames, out, "a name read before assignment (NameError)"), u =>
+            step(left, Go{Run{funcs, consts, Con{val_at(globals, a), stack}, here, more, locals, globals, frames, out, fault}}))
         case KStoreG{}:
           +picked : Pop = pop_args(1n, stack)
           S.choose(Run, pop_any(picked), u =>
@@ -1458,7 +1592,9 @@ def step(+fuel: Nat, +job: Step) -> Run:
             step(left, Go{Run{funcs, consts, Con{VStr{String.append(ss_y(ss), ss_x(ss))}, pop_more(picked)}, here, more, locals, globals, frames, out, fault}}), u =>
             S.choose(Run, nums_ok(pop_head(picked), pop_second(picked)), u =>
               +xy : NN = num2(pop_second(picked), pop_head(picked))
-              step(left, Go{Run{funcs, consts, Con{VInt{(nn_x(xy) + nn_y(xy) : Nat)}, pop_more(picked)}, here, more, locals, globals, frames, out, fault}}), u =>
+              S.choose(Run, add_fits(nn_x(xy), nn_y(xy)), u =>
+                step(left, Go{Run{funcs, consts, Con{VInt{(nn_x(xy) + nn_y(xy) : Nat)}, pop_more(picked)}, here, more, locals, globals, frames, out, fault}}), u =>
+                fault_run(funcs, consts, stack, here, locals, globals, frames, out, "an int past 2**48 - 1 is outside the subset")), u =>
               fault_run(funcs, consts, stack, here, locals, globals, frames, out, "a non-number in +")))
         case KSub{}:
           +picked : Pop = pop_args(2n, stack)
@@ -1472,7 +1608,9 @@ def step(+fuel: Nat, +job: Step) -> Run:
           +picked : Pop = pop_args(2n, stack)
           S.choose(Run, nums_ok(pop_head(picked), pop_second(picked)), u =>
             +xy : NN = num2(pop_second(picked), pop_head(picked))
-            step(left, Go{Run{funcs, consts, Con{VInt{(nn_x(xy) * nn_y(xy) : Nat)}, pop_more(picked)}, here, more, locals, globals, frames, out, fault}}), u =>
+            S.choose(Run, mul_fits(nn_x(xy), nn_y(xy)), u =>
+              step(left, Go{Run{funcs, consts, Con{VInt{(nn_x(xy) * nn_y(xy) : Nat)}, pop_more(picked)}, here, more, locals, globals, frames, out, fault}}), u =>
+              fault_run(funcs, consts, stack, here, locals, globals, frames, out, "an int past 2**48 - 1 is outside the subset")), u =>
             fault_run(funcs, consts, stack, here, locals, globals, frames, out, "a non-number in *"))
         case KDiv{}:
           +picked : Pop = pop_args(2n, stack)
@@ -1516,22 +1654,10 @@ def step(+fuel: Nat, +job: Step) -> Run:
             fault_run(funcs, consts, stack, here, locals, globals, frames, out, "a non-number in a comparison"))
         case KEq{}:
           +picked : Pop = pop_args(2n, stack)
-          S.choose(Run, both_str(pop_head(picked), pop_second(picked)), u =>
-            +ss : SS = str2(pop_head(picked), pop_second(picked))
-            step(left, Go{Run{funcs, consts, Con{VBool{String.eq(ss_x(ss), ss_y(ss))}, pop_more(picked)}, here, more, locals, globals, frames, out, fault}}), u =>
-            S.choose(Run, nums_ok(pop_head(picked), pop_second(picked)), u =>
-              +xy : NN = num2(pop_second(picked), pop_head(picked))
-              step(left, Go{Run{funcs, consts, Con{VBool{cmp_pick(15n, nn_x(xy), nn_y(xy))}, pop_more(picked)}, here, more, locals, globals, frames, out, fault}}), u =>
-              step(left, Go{Run{funcs, consts, Con{VBool{False{}}, pop_more(picked)}, here, more, locals, globals, frames, out, fault}})))
+          step(left, Go{Run{funcs, consts, Con{VBool{val_eq(pop_second(picked), pop_head(picked))}, pop_more(picked)}, here, more, locals, globals, frames, out, fault}})
         case KNeq{}:
           +picked : Pop = pop_args(2n, stack)
-          S.choose(Run, both_str(pop_head(picked), pop_second(picked)), u =>
-            +ss : SS = str2(pop_head(picked), pop_second(picked))
-            step(left, Go{Run{funcs, consts, Con{VBool{Bool.not(String.eq(ss_x(ss), ss_y(ss)))}, pop_more(picked)}, here, more, locals, globals, frames, out, fault}}), u =>
-            S.choose(Run, nums_ok(pop_head(picked), pop_second(picked)), u =>
-              +xy : NN = num2(pop_second(picked), pop_head(picked))
-              step(left, Go{Run{funcs, consts, Con{VBool{cmp_pick(16n, nn_x(xy), nn_y(xy))}, pop_more(picked)}, here, more, locals, globals, frames, out, fault}}), u =>
-              step(left, Go{Run{funcs, consts, Con{VBool{True{}}, pop_more(picked)}, here, more, locals, globals, frames, out, fault}})))
+          step(left, Go{Run{funcs, consts, Con{VBool{Bool.not(val_eq(pop_second(picked), pop_head(picked)))}, pop_more(picked)}, here, more, locals, globals, frames, out, fault}})
         case KNot{}:
           +picked : Pop = pop_args(1n, stack)
           S.choose(Run, pop_any(picked), u =>
@@ -1568,12 +1694,17 @@ def step(+fuel: Nat, +job: Step) -> Run:
               step(left, Go{Run{funcs, consts, pop_more(picked), here, more, locals, globals, frames, out, fault}})), u =>
             fault_run(funcs, consts, stack, here, locals, globals, frames, out, "stack underflow"))
         case KCall{}:
-          +callee : Func = func_at(funcs, a)
-          S.choose(Run, Nat.is_eq(b, f_np(callee)), u =>
-            +picked : Pop = pop_args(b, stack)
-            step(left, Go{Run{funcs, consts, pop_more(picked), f_code(callee), f_code(callee),
-              List.append(&2, Val, List.reverse(&2, Val, pop_vals(picked)), nones(Nat.sub(f_nl(callee), b), Nil{})), globals, Con{VFrame{here, more, locals}, frames}, out, fault}}), u =>
-            fault_run(funcs, consts, stack, here, locals, globals, frames, out, "a call with the wrong number of arguments"))
+          # The callee value sits under its b arguments, as CPython loads it:
+          # a name not yet bound by its def faulted at the load, a name
+          # rebound to a non-function faults here.
+          +picked : Pop = pop_args((b + 1n : Nat), stack)
+          S.choose(Run, is_func(val_at(pop_vals(picked), b)), u =>
+            +callee : Func = func_at(funcs, func_of(val_at(pop_vals(picked), b)))
+            S.choose(Run, Nat.is_eq(b, f_np(callee)), u =>
+              step(left, Go{Run{funcs, consts, pop_more(picked), f_code(callee), f_code(callee),
+                List.append(&2, Val, List.reverse(&2, Val, List.take(&2, Val, pop_vals(picked), b)), unsets(Nat.sub(f_nl(callee), b), Nil{})), globals, Con{VFrame{here, more, locals}, frames}, out, fault}}), u =>
+              fault_run(funcs, consts, stack, here, locals, globals, frames, out, "a call with the wrong number of arguments")), u =>
+            fault_run(funcs, consts, stack, here, locals, globals, frames, out, "calling a non-function is outside the subset"))
         case KRet{}:
           +picked : Pop = pop_args(1n, stack)
           S.choose(Run, pop_any(picked) && frames_ok(frames), u =>
@@ -1621,7 +1752,7 @@ def fuel() -> Nat:
 
 def vm_run(+prog: Prog) -> Run:
   Prog{funcs, consts, nglobals, code} = prog
-  step(fuel(), Go{Run{funcs, consts, Nil{}, code, code, Nil{}, List.replicate(Val, nglobals, VNone{}), Nil{}, Nil{}, ""}})
+  step(fuel(), Go{Run{funcs, consts, Nil{}, code, code, Nil{}, List.replicate(Val, nglobals, VUnset{}), Nil{}, Nil{}, ""}})
 
 # Composed, never written long: big Nat literals expand unary in the checker.
 def finish(+r: Run) -> IO(Unit):
