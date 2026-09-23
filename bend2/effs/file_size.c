@@ -4,7 +4,7 @@
 #include <sys/stat.h>
 
 // The size in bytes, as the host reports it; a file past 4 GiB fails
-// with EOVERFLOW.
+// with EOVERFLOW. An fstat does not block: it runs on the loop.
 static void file_size_call(IoWork* w) {
   struct stat st;
   int n = fstat((int)w->hand, &st);
@@ -22,7 +22,7 @@ static Term file_size_pack(Env e, IoWork* w) {
 
 Term file_size_run(Env e, Term* f, IoWork* w) {
   w->hand = (intptr_t)io_hand_v(f[0]);
-  return io_work(w, file_size_call, file_size_pack);
+  return io_now(e, w, file_size_call, file_size_pack);
 }
 
 static void __attribute__((constructor)) file_size_use(void) {

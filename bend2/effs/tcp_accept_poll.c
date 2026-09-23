@@ -87,6 +87,7 @@ static Term tcp_accept_poll_at(Env e, IoWork* w, u64 at) {
     int got = tcp_accept_poll_one(fd);
     int why = got < 0 ? errno : 0;
     if (got >= 0) {
+      io_fd_fresh(got);
       io_wire_join(fd, got);
       return io_tup(e, io_hand(fd), io_done(e, io_box(e, CID_SOME, io_hand(got))));
     }

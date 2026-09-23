@@ -4109,8 +4109,10 @@ using namespace metal;
 #include <time.h>
 #include <poll.h>
 #include <sys/select.h>
+#include <sys/wait.h>
 #ifdef __linux__
 #include <sys/epoll.h>
+#include <sys/prctl.h>
 #endif
 #ifdef __APPLE__
 #include <mach-o/dyld.h>
@@ -4425,6 +4427,9 @@ static Stk  io_stk;
 static const char* CLI_HELP =
   "usage: %s [options] [arguments]\n"
   "  --threads N       worker threads, 1 to 128 (default: the CPU count)\n"
+  "  --workers N       run N copies of the program as processes, as nginx\n"
+  "                    runs its workers; a server shares its port\n"
+  "                    (TCP.listen_shared) (default: 1)\n"
   "  --gpu on|off|4GB  run ! calls on the GPU, over this much of its memory\n"
   "                    (default: on if present, over 2GB on Metal)\n"
   "  --gpu-build       write the GPU program and exit\n"
@@ -7334,42 +7339,99 @@ static IoQue io_jobs;
 #ifdef __linux__
 static int     io_ep = -1;
 static u32     io_fds;
-static u8*     io_reg;
-static u32     io_reg_cap;
 static IoAct** io_time;
 static u32     io_time_n;
 static u32     io_time_cap;
 
-// Whether a descriptor is believed to be in the poller's set. A waiter
-// is registered with EPOLLONESHOT and left there: the kernel disarms it
-// as it fires, so a wake costs no syscall and the next park is one MOD
-// rather than an ADD and a DEL. The belief can be wrong in one way --
-// a descriptor closed and its number handed out again -- so every call
-// takes the other operation when the first is refused, which is what
-// makes the table a hint rather than bookkeeping to be kept exact.
-static bool io_reg_has(int fd) {
-  return fd >= 0 && (u32)fd < io_reg_cap && io_reg[fd] != 0;
+// A descriptor's place in the poller, and the activations parked on it
+// each way (rd, wr). reg is whether it is believed to be in the set.
+//
+// A socket the runtime made itself (own: accepted or connected, and
+// closed through Socket.close) is registered once, for both ways and
+// edge-triggered, and stays until it is closed: a park costs no syscall
+// and a wake none either. An edge says the socket became ready since the
+// poller last reported it, so what it needs besides is what was learnt
+// in between: rdy holds, a bit a way (1 read, 2 write), whether it may
+// be ready -- set by an edge, cleared by a call that found it not
+// (EAGAIN) and by a plain read that came back short, which on Linux
+// means the socket was drained. A read that finds its bit clear parks
+// without trying, as nginx does.
+//
+// Any other descriptor (a listener, a foreign effect's, one whose close
+// the runtime may not see) is registered with EPOLLONESHOT and left
+// there: the kernel disarms it as it fires, so a wake costs no syscall
+// and the next park is one MOD rather than an ADD and a DEL. That belief
+// can be wrong in one way -- a descriptor closed and its number handed
+// out again -- so every call takes the other operation when the first
+// is refused, which is what makes reg a hint rather than bookkeeping.
+typedef struct {
+  IoAct* rd;
+  IoAct* wr;
+  u8     reg;
+  u8     rdy;
+  u8     own;
+} IoFd;
+
+static IoFd* io_fdt;
+static u32   io_fdt_cap;
+
+static IoFd* io_fd_at(int fd) {
+  if ((u32)fd >= io_fdt_cap) {
+    u32 was = io_fdt_cap;
+    io_fdt_cap = io_fdt_cap != 0 ? io_fdt_cap * 2 : 1024;
+    while ((u32)fd >= io_fdt_cap) {
+      io_fdt_cap *= 2;
+    }
+    io_fdt = io_mem(realloc(io_fdt, io_fdt_cap * sizeof *io_fdt));
+    for (u32 i = was; i < io_fdt_cap; i += 1) {
+      io_fdt[i] = (IoFd){ NULL, NULL, 0, 3, 0 };
+    }
+  }
+  return &io_fdt[fd];
 }
 
-static void io_reg_put(int fd, u8 v) {
-  if (fd < 0) {
-    return;
-  }
-  if ((u32)fd >= io_reg_cap) {
-    if (v == 0) {
-      return;
-    }
-    u32 was = io_reg_cap;
-    io_reg_cap = io_reg_cap != 0 ? io_reg_cap * 2 : 1024;
-    while ((u32)fd >= io_reg_cap) {
-      io_reg_cap *= 2;
-    }
-    io_reg = io_mem(realloc(io_reg, io_reg_cap));
-    memset(io_reg + was, 0, io_reg_cap - was);
-  }
-  io_reg[fd] = v;
+#endif
+
+// Whether a read would find nothing: the descriptor is registered and
+// nothing has arrived since it was found empty. Only a plain socket's
+// reads keep this; a TLS session buffers what it decrypted.
+static bool io_fd_quiet(int fd, u8 way) {
+#ifdef __linux__
+  return fd >= 0 && (u32)fd < io_fdt_cap && io_fdt[fd].own && io_fdt[fd].reg
+    && !(io_fdt[fd].rdy & way);
+#else
+  (void)fd; (void)way;
+  return false;
+#endif
 }
 
+// what a call learnt: that a way may be ready, or that it is not
+static void io_fd_seen(int fd, u8 way, bool ready) {
+#ifdef __linux__
+  if (fd >= 0) {
+    IoFd* d = io_fd_at(fd);
+    d->rdy = ready ? d->rdy | way : d->rdy & (u8)~way;
+  }
+#else
+  (void)fd; (void)way; (void)ready;
+#endif
+}
+
+// A socket an effect has just made (own), or one it is about to close.
+static void io_fd_made(int fd, bool own) {
+#ifdef __linux__
+  if (fd >= 0 && (own || (u32)fd < io_fdt_cap)) {
+    *io_fd_at(fd) = (IoFd){ NULL, NULL, 0, 3, own };
+  }
+#else
+  (void)fd; (void)own;
+#endif
+}
+
+#define io_fd_fresh(fd) io_fd_made((fd), true)
+#define io_fd_gone(fd)  io_fd_made((fd), false)
+
+#ifdef __linux__
 static void io_time_put(IoAct* a, u32 i) {
   io_time[i] = a;
   a->heap    = i + 1;
@@ -7466,17 +7528,23 @@ static Term io_wait_on(IoWork* w, int fd, short evts, u64 time, IoPack more) {
   a->evts      = evts;
 #ifdef __linux__
   if (evts != 0) {
-    struct epoll_event ev;
-    ev.events   = (evts == POLLOUT ? EPOLLOUT : EPOLLIN) | EPOLLONESHOT;
-    ev.data.ptr = a;
-    bool known  = io_reg_has(fd);
-    int  op     = known ? EPOLL_CTL_MOD : EPOLL_CTL_ADD;
-    if (epoll_ctl(io_ep, op, fd, &ev) != 0) {
-      if (epoll_ctl(io_ep, known ? EPOLL_CTL_ADD : EPOLL_CTL_MOD, fd, &ev) != 0) {
+    IoFd* d   = io_fd_at(fd);
+    u8    way = evts == POLLOUT ? 2 : 1;
+    // the caller has just found it not ready that way
+    d->rdy &= (u8)~way;
+    if (!d->own || !d->reg) {
+      struct epoll_event ev;
+      ev.events   = d->own ? EPOLLIN | EPOLLOUT | EPOLLRDHUP | EPOLLET
+        : (way == 2 ? EPOLLOUT : EPOLLIN) | EPOLLONESHOT;
+      ev.data.u64 = (u64)fd + 1;
+      bool known  = d->reg;
+      if (epoll_ctl(io_ep, known ? EPOLL_CTL_MOD : EPOLL_CTL_ADD, fd, &ev) != 0
+          && epoll_ctl(io_ep, known ? EPOLL_CTL_ADD : EPOLL_CTL_MOD, fd, &ev) != 0) {
         err_fail("the poller refused a descriptor");
       }
+      d->reg = 1;
     }
-    io_reg_put(fd, 1);
+    *(way == 2 ? &d->wr : &d->rd) = a;
     io_fds += 1;
   }
   if (time != 0) {
@@ -7688,6 +7756,15 @@ static Term io_work(IoWork* w, IoCall call, IoPack pack) {
   return IO_PARK;
 }
 
+// Run call on the loop itself and resume at once: for work that does not
+// block on a warm system (an open, an fstat, a read the page cache holds),
+// where a helper's round trip -- two wakes and the eventfd -- costs more
+// than the call.
+static Term io_now(Env e, IoWork* w, IoCall call, IoPack pack) {
+  call(w);
+  return pack(e, w);
+}
+
 // Consume cont's request node; the effect returns a value or IO_PARK.
 static Term io_exec(Env e, IoWork* w) {
   IoAct* a = (IoAct*)w;
@@ -7715,16 +7792,21 @@ static bool io_idle(void) {
 // Takes the activation out of both sets and runs its continuation. A
 // re-park puts it back through io_wait_on, so nothing is left behind
 // when the effect changes what it waits for.
-// ready says the descriptor is what woke this activation, so the poller
-// has already disarmed it and the registration can stay for the next
-// park. A deadline that fires first leaves the descriptor armed and
-// pointing at an activation that has moved on, so that one is taken out.
+// ready says the descriptor is what woke this activation, and the poller
+// has already taken it from its slot. A deadline that fires first leaves
+// it in the slot, so it is taken out there; the registration stays.
 static void io_fire(Env e, IoAct* a, bool ready) {
   io_time_drop(a);
   if (a->evts != 0) {
     if (!ready) {
-      epoll_ctl(io_ep, EPOLL_CTL_DEL, (int)a->work.word, NULL);
-      io_reg_put((int)a->work.word, 0);
+      IoFd* d = io_fd_at((int)a->work.word);
+      if (d->rd == a) { d->rd = NULL; }
+      if (d->wr == a) { d->wr = NULL; }
+      // armed and pointing at an activation that has moved on
+      if (!d->own) {
+        epoll_ctl(io_ep, EPOLL_CTL_DEL, (int)a->work.word, NULL);
+        d->reg = 0;
+      }
     }
     io_fds -= 1;
     a->evts = 0;
@@ -7755,12 +7837,29 @@ static void io_wait(Env e) {
     }
   }
   for (int i = 0; i < m; i += 1) {
-    IoAct* a = es[i].data.ptr;
-    if (a == NULL) {
+    u64 k = es[i].data.u64;
+    if (k == 0) {
       io_take(e);
       continue;
     }
-    io_fire(e, a, true);
+    IoFd* d = io_fd_at((int)(k - 1));
+    u32   v = es[i].events;
+    if (v & (EPOLLIN | EPOLLRDHUP | EPOLLHUP | EPOLLERR)) {
+      d->rdy |= 1;
+      if (d->rd != NULL) {
+        IoAct* a = d->rd;
+        d->rd = NULL;
+        io_fire(e, a, true);
+      }
+    }
+    if (v & (EPOLLOUT | EPOLLHUP | EPOLLERR)) {
+      d->rdy |= 2;
+      if (d->wr != NULL) {
+        IoAct* a = d->wr;
+        d->wr = NULL;
+        io_fire(e, a, true);
+      }
+    }
   }
   u64 now = io_tick();
   while (io_time_n != 0 && io_time[0]->time <= now) {
@@ -8044,6 +8143,17 @@ static int io_step(Env e, IoAct* a) {
     u32 need = io_eff_rows[c].ask;
     u32 word = (u32)(need & IO_READ ? io_hand_v(e.mem[at]) : e.mem[at]);
     a->cont  = req;
+#ifdef __linux__
+    // Parked before any call has found the descriptor empty, an edge
+    // already reported (and a read that left bytes behind) would never
+    // come again, so a registered one is asked as it stands.
+    if (need & IO_READ && io_fdt_cap > word && io_fdt[word].own && io_fdt[word].reg) {
+      struct pollfd q = { (int)word, POLLIN, 0 };
+      if (poll(&q, 1, 0) > 0) {
+        need = 0;
+      }
+    }
+#endif
     if (need != 0) {
       io_wait_on(&a->work, (int)word, need & IO_READ ? POLLIN : 0,
         need & IO_TIME ? io_tick() + (u64)word * 1000000ull : 0, io_exec);
@@ -8071,7 +8181,7 @@ OUTLINE int io_loop(Corpus H) {
     err_fail("the event loop failed to open");
   }
 #ifdef __linux__
-  struct epoll_event wake = { .events = EPOLLIN, .data.ptr = NULL };
+  struct epoll_event wake = { .events = EPOLLIN, .data.u64 = 0 };
   if (epoll_ctl(io_ep, EPOLL_CTL_ADD, io_wake_fd[0], &wake)) {
     err_fail("the event loop failed to open");
   }
@@ -8230,11 +8340,74 @@ static void cli_fail(const char* msg, const char* arg) {
   exit(1);
 }
 
+// Workers
+// =======
+
+// --workers N: the process forks N copies of the program before it
+// starts a thread, and stays as their master, as nginx's does: it runs
+// no program itself, passes SIGTERM, SIGINT and SIGHUP on to every
+// copy, and ends when they have all ended, with the first failure's
+// code. A copy dies with its master. Each is its own heap, its own loop
+// and its own threads; a server's copies share its port through
+// SO_REUSEPORT, and the kernel spreads the connections between them.
+static pid_t* cli_kids;
+static int    cli_kids_n;
+
+static void cli_pass(int sig) {
+  for (int i = 0; i < cli_kids_n; i += 1) {
+    if (cli_kids[i] > 0) {
+      kill(cli_kids[i], sig);
+    }
+  }
+}
+
+static int cli_workers(long n) {
+  cli_kids   = io_mem(calloc((size_t)n, sizeof *cli_kids));
+  pid_t boss = getpid();
+  for (long i = 0; i < n; i += 1) {
+    pid_t k = fork();
+    if (k < 0) {
+      cli_pass(SIGTERM);
+      cli_fail("could not fork a worker", NULL);
+    }
+    if (k == 0) {
+#ifdef __linux__
+      prctl(PR_SET_PDEATHSIG, SIGTERM);
+#endif
+      if (getppid() != boss) {
+        _exit(1);
+      }
+      return -1;
+    }
+    cli_kids[cli_kids_n++] = k;
+  }
+  struct sigaction sa = { .sa_handler = cli_pass };
+  sigemptyset(&sa.sa_mask);
+  sigaction(SIGTERM, &sa, NULL);
+  sigaction(SIGINT, &sa, NULL);
+  sigaction(SIGHUP, &sa, NULL);
+  int code = 0, left = cli_kids_n, st = 0;
+  while (left > 0) {
+    pid_t k = waitpid(-1, &st, 0);
+    if (k < 0) {
+      if (errno == EINTR) {
+        continue;
+      }
+      break;
+    }
+    left -= 1;
+    int c = WIFEXITED(st) ? WEXITSTATUS(st) : 128 + WTERMSIG(st);
+    code  = code != 0 ? code : c;
+  }
+  return code;
+}
+
 // Main
 // ====
 
 int main(int argc, char** argv) {
   long thr = 0;
+  long wks = 1;
   int  gpu = -1;
   u64  mem = 0;
   io_argv = argv + 1;
@@ -8260,6 +8433,13 @@ int main(int argc, char** argv) {
         cli_fail("expected a thread count of 1 or more after --threads", NULL);
       }
       i += 1;
+    } else if (strcmp(a, "--workers") == 0) {
+      char* end = NULL;
+      wks = v != NULL ? strtol(v, &end, 10) : 0;
+      if (wks < 1 || wks > 1024 || end == NULL || *end != '\0') {
+        cli_fail("expected a worker count of 1 to 1024 after --workers", NULL);
+      }
+      i += 1;
     } else if (strcmp(a, "--gpu") == 0) {
       char*  end = NULL;
       double n   = v != NULL ? strtod(v, &end) : 0;
@@ -8276,6 +8456,12 @@ int main(int argc, char** argv) {
       i += 1;
     } else {
       io_argv[io_argc++] = argv[i];
+    }
+  }
+  if (wks > 1) {
+    int code = cli_workers(wks);
+    if (code >= 0) {
+      return code;
     }
   }
   bool dev = gpu != 0 && BANGS != 0 && gpu_probe();
@@ -8356,7 +8542,8 @@ const RUNTIME_MAIN: string = String.raw`
 // Cli
 // ===
 
-// A JS program runs one thread and no GPU: --threads and --gpu do nothing.
+// A JS program runs one thread, one process and no GPU: --threads,
+// --workers and --gpu do nothing.
 let cli_args = [];
 
 function cli(argv) {
@@ -8367,7 +8554,7 @@ function cli(argv) {
     } else if (argv[i] === "--help") {
       io_out(1, io_bytes("usage: " + process.argv[1] + "\n"));
       process.exit(0);
-    } else if (argv[i] === "--threads" || argv[i] === "--gpu") {
+    } else if (argv[i] === "--threads" || argv[i] === "--workers" || argv[i] === "--gpu") {
       i += 1;
     } else {
       cli_args.push(argv[i]);

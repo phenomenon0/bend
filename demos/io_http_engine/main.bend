@@ -1616,6 +1616,34 @@ def skip(s: Bytes(), go: Bool, c: U32, pd: Pend, out: List<&2, Req>) -> P & Byte
     case SCon{Chr{+x}, t} True{}:
       skip(t, run.stay(RX{}, cls(x)), x, pd, out)
 
+# The same walk, with the visible ASCII (33 up to 127) a value is mostly
+# made of found by Bytes.span in one borrowed pass: a byte the value
+# goes on past (a space, a tab, obs-text) is stepped as skip steps it,
+# and the span goes on after it. What k bounds is only how many spans:
+# past it, skip walks the rest. PROOF.bend's lem.skip.vis: the same
+# walk as skip, and so as feed.
+def skip.jump(ok: Bool, +t: Bytes()) -> Bytes():
+  match ok:
+    case True{}:
+      String.drop(t, Bytes.span(t, 0n, 33, 127))
+    case False{}:
+      t
+
+def skip.run(k: Nat, s: Bytes(), on: Bool, c: U32, pd: Pend, out: List<&2, Req>) -> P & Bytes():
+  match k s on:
+    case 0n _ _:
+      skip(s, on, c, pd, out)
+    case 1n+j _ False{}:
+      (step(P{InLx{}, pd, out}, c), s)
+    case 1n+j SNil{} True{}:
+      (P{InLx{}, pd, out}, SNil{})
+    case 1n+j SCon{Chr{+x}, t} True{}:
+      +ok = run.stay(RX{}, cls(x))
+      skip.run(j, skip.jump(ok, t), ok, x, pd, out)
+
+def skip.vis(+s: Bytes(), pd: Pend, out: List<&2, Req>) -> P & Bytes():
+  skip.run(Bytes.len(s), skip.jump(True{}, s), True{}, 0, pd, out)
+
 # a body: all of the read when the body goes on past it, else the r + 1
 # bytes that end it, with the message emitted
 def bod.took(pd: Pend, out: List<&2, Req>, b: Bytes(), xy: Bytes() & Bytes()) -> P & Bytes():
@@ -1667,7 +1695,7 @@ def adv.at(st: St, s: Bytes(), pd: Pend, out: List<&2, Req>) -> P & Bytes():
     case InLk{k}:
       run.go(RK{}, k, s, pd, out)
     case InLx{}:
-      skip(s, True{}, 0, pd, out)
+      skip.vis(s, pd, out)
     case Bod{r, b}:
       bod.go(r, b, s, pd, out)
     case Chd{r, b, left}:
@@ -2678,54 +2706,33 @@ def ext.go(bs: List<&2, U32>, cur: List<&2, U32>) -> List<&2, U32>:
     case Con{+c, t}:
       ext.go(t, ext.step(cur, c, U32.is_eq(c, 46)))
 
-type Mime is Data:
-  Mime{ext: List<&2, U32>, name: List<&2, U32>}
-
-def mimes() -> List<&2, Mime>:
-  [Mime{bytes("html"), bytes("text/html; charset=utf-8")},
-   Mime{bytes("htm"), bytes("text/html; charset=utf-8")},
-   Mime{bytes("css"), bytes("text/css; charset=utf-8")},
-   Mime{bytes("js"), bytes("application/javascript; charset=utf-8")},
-   Mime{bytes("json"), bytes("application/json")},
-   Mime{bytes("txt"), bytes("text/plain; charset=utf-8")},
-   Mime{bytes("svg"), bytes("image/svg+xml")},
-   Mime{bytes("png"), bytes("image/png")},
-   Mime{bytes("jpg"), bytes("image/jpeg")},
-   Mime{bytes("jpeg"), bytes("image/jpeg")},
-   Mime{bytes("gif"), bytes("image/gif")},
-   Mime{bytes("ico"), bytes("image/x-icon")},
-   Mime{bytes("wasm"), bytes("application/wasm")},
-   Mime{bytes("pdf"), bytes("application/pdf")}]
-
-def mime.one.go(name: List<&2, U32>, ok: Bool) -> Maybe<&2, List<&2, U32>>:
+# A file's type, by the bytes after its last '.'. The names are literals,
+# static blocks: finding one allocates nothing, and only the one found is
+# made the byte list a page's head is built from.
+def mime.pick(ok: Bool, a: Bytes(), b: Bytes()) -> Bytes():
   match ok:
     case True{}:
-      Some{name}
+      a
     case False{}:
-      None{}
+      b
 
-def mime.one(mi: Mime, e: List<&2, U32>) -> Maybe<&2, List<&2, U32>>:
-  match mi:
-    case Mime{x, name}:
-      mime.one.go(name, beq(x, e, True{}))
-
-def mime.keep(acc: Maybe<&2, List<&2, U32>>, mi: Mime, e: List<&2, U32>) -> Maybe<&2, List<&2, U32>>:
-  match acc:
-    case Some{n}:
-      Some{n}
-    case None{}:
-      mime.one(mi, e)
-
-def mime.go(ms: List<&2, Mime>, +e: List<&2, U32>, acc: Maybe<&2, List<&2, U32>>) -> Maybe<&2, List<&2, U32>>:
-  match ms:
-    case Nil{}:
-      acc
-    case Con{mi, t}:
-      mime.go(t, e, mime.keep(acc, mi, e))
+def mime.name(+e: Bytes()) -> Bytes():
+  mime.pick(bytes.eq(e, "html") || bytes.eq(e, "htm"), "text/html; charset=utf-8",
+  mime.pick(bytes.eq(e, "css"), "text/css; charset=utf-8",
+  mime.pick(bytes.eq(e, "js"), "application/javascript; charset=utf-8",
+  mime.pick(bytes.eq(e, "json"), "application/json",
+  mime.pick(bytes.eq(e, "txt"), "text/plain; charset=utf-8",
+  mime.pick(bytes.eq(e, "svg"), "image/svg+xml",
+  mime.pick(bytes.eq(e, "png"), "image/png",
+  mime.pick(bytes.eq(e, "jpg") || bytes.eq(e, "jpeg"), "image/jpeg",
+  mime.pick(bytes.eq(e, "gif"), "image/gif",
+  mime.pick(bytes.eq(e, "ico"), "image/x-icon",
+  mime.pick(bytes.eq(e, "wasm"), "application/wasm",
+  mime.pick(bytes.eq(e, "pdf"), "application/pdf",
+    "application/octet-stream"))))))))))))
 
 def ctype(e: List<&2, U32>) -> List<&2, U32>:
-  Maybe.default(&2, List<&2, U32>, mime.go(mimes(), e, None{}),
-    bytes("application/octet-stream"))
+  Bytes.to_list(mime.name(Bytes.from_list(e)))
 
 # One piece of a reply is bend-wire's L.Seg: bytes as they are, or a
 # file to write when the reply is written (the root, the path under it,
