@@ -141,8 +141,9 @@ connection holds none of the file itself. A file under `page.small()`
 which costs a small file less than a second send would. A body that
 comes up short (the file shrank) fails, ending the connection
 (`page_fail`, `page_read_short`). One core, `wrk -t2 -c32`, against
-nginx with one worker and sendfile on: 4 KiB 20.5k req/s to nginx's
-37.4k (as before), 1 MiB 2.3-2.6k req/s to nginx's 1.7k (1.6k before).
+nginx with one worker and sendfile on: 4 KiB about 20k req/s to
+nginx's 37k (as before), 1 MiB 1.9-2.6k req/s to nginx's 1.7k (1.4-1.6k
+before).
 
 ## Bodies as streams
 
