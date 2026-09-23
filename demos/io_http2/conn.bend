@@ -598,12 +598,16 @@ def st.w.fin(r: St, v: Bool) -> St:
 # taken out while a frame or an answer works on it, and put back after,
 # so each is held in one place; a look at a stream's state reads it
 # where it is.
-type Tk is Data:
-  Tk{m: Maybe<&2, St>, sts: List<&2, St>}
+#
+# It is a trie on the id's low bits (a client's ids are odd, so the bits
+# above the lowest): seven levels, then a bucket of the streams whose
+# ids agree on those bits (two only when one lives while 128 others
+# open), so a look, a take and a put walk seven nodes whatever the
+# table holds; a branch left empty is pruned. The table keeps its count.
 
-# whether the list's first stream has id sid
-def st.at(+sts: List<&2, St>, +sid: U32) -> Bool:
-  match sts:
+# a bucket: whether its first stream has id sid
+def b.at(+b: List<&2, St>, +sid: U32) -> Bool:
+  match b:
     case Nil{}:
       False{}
     case Con{+s, t}:
@@ -611,61 +615,190 @@ def st.at(+sts: List<&2, St>, +sid: U32) -> Bool:
 
 # The walks stop at the stream they look for (hit says the head is it):
 # the first is the only one, and what follows it is kept untouched.
-def st.look.go(sts: List<&2, St>, +sid: U32, d: Ss, hit: Bool) -> Ss:
-  match sts hit:
+def b.look.go(b: List<&2, St>, +sid: U32, d: Ss, hit: Bool) -> Ss:
+  match b hit:
     case Nil{} _:
       d
     case Con{s, t} True{}:
       st.ss(s)
     case Con{s, +t} False{}:
-      st.look.go(t, sid, d, st.at(t, sid))
+      b.look.go(t, sid, d, b.at(t, sid))
+
+def b.look(+b: List<&2, St>, +sid: U32, d: Ss) -> Ss:
+  b.look.go(b, sid, d, b.at(b, sid))
+
+# a bucket's stream sid taken out, and the bucket without it
+type Bt is Data:
+  Bt{m: Maybe<&2, St>, b: List<&2, St>}
+
+def bt.cons(s: St, k: Bt) -> Bt:
+  match k:
+    case Bt{m, r}:
+      Bt{m, Con{s, r}}
+
+def b.take.go(b: List<&2, St>, +sid: U32, hit: Bool) -> Bt:
+  match b hit:
+    case Nil{} _:
+      Bt{None{}, Nil{}}
+    case Con{s, t} True{}:
+      Bt{Some{s}, t}
+    case Con{s, +t} False{}:
+      bt.cons(s, b.take.go(t, sid, b.at(t, sid)))
+
+def b.take(+b: List<&2, St>, +sid: U32) -> Bt:
+  b.take.go(b, sid, b.at(b, sid))
+
+type Tr is Data:
+  TNone{}
+  TLeaf{b: List<&2, St>}
+  TNode{lo: Tr, hi: Tr}
+
+def key(+sid: U32) -> U32:
+  U32.shrn(sid, 1n)
+
+def bit(+k: U32) -> Bool:
+  Bool.not(U32.is_zero(U32.and(k, 1)))
+
+def tr.look(t: Tr, +k: U32, +sid: U32, d: Ss, hi: Bool) -> Ss:
+  match t hi:
+    case TNone{} _:
+      d
+    case TLeaf{b} _:
+      b.look(b, sid, d)
+    case TNode{l, h} False{}:
+      tr.look(l, U32.shrn(k, 1n), sid, d, bit(U32.shrn(k, 1n)))
+    case TNode{l, h} True{}:
+      tr.look(h, U32.shrn(k, 1n), sid, d, bit(U32.shrn(k, 1n)))
+
+# a branch with nothing left in it is pruned
+def tr.node(l: Tr, h: Tr) -> Tr:
+  match l h:
+    case TNone{} TNone{}:
+      TNone{}
+    case TNone{} TLeaf{b}:
+      TNode{TNone{}, TLeaf{b}}
+    case TNone{} TNode{a, c}:
+      TNode{TNone{}, TNode{a, c}}
+    case TLeaf{b} _:
+      TNode{TLeaf{b}, h}
+    case TNode{a, c} _:
+      TNode{TNode{a, c}, h}
+
+def tr.bucket(b: List<&2, St>) -> Tr:
+  match b:
+    case Nil{}:
+      TNone{}
+    case Con{s, t}:
+      TLeaf{Con{s, t}}
+
+type Tt is Data:
+  Tt{m: Maybe<&2, St>, t: Tr}
+
+def tt.b(k: Bt) -> Tt:
+  match k:
+    case Bt{m, b}:
+      Tt{m, tr.bucket(b)}
+
+def tt.lo(k: Tt, h: Tr) -> Tt:
+  match k:
+    case Tt{m, l}:
+      Tt{m, tr.node(l, h)}
+
+def tt.hi(l: Tr, k: Tt) -> Tt:
+  match k:
+    case Tt{m, h}:
+      Tt{m, tr.node(l, h)}
+
+def tr.take(t: Tr, +k: U32, +sid: U32, hi: Bool) -> Tt:
+  match t hi:
+    case TNone{} _:
+      Tt{None{}, TNone{}}
+    case TLeaf{b} _:
+      tt.b(b.take(b, sid))
+    case TNode{l, h} False{}:
+      tt.lo(tr.take(l, U32.shrn(k, 1n), sid, bit(U32.shrn(k, 1n))), h)
+    case TNode{l, h} True{}:
+      tt.hi(l, tr.take(h, U32.shrn(k, 1n), sid, bit(U32.shrn(k, 1n))))
+
+def tr.side(hi: Bool, c: Tr) -> Tr:
+  match hi:
+    case False{}:
+      TNode{c, TNone{}}
+    case True{}:
+      TNode{TNone{}, c}
+
+# a new branch down to s's bucket, d levels deep
+def tr.path(d: Nat, +k: U32, s: St) -> Tr:
+  match d:
+    case 0n:
+      TLeaf{Con{s, Nil{}}}
+    case 1n+e:
+      tr.side(bit(k), tr.path(e, U32.shrn(k, 1n), s))
+
+def tr.ins(t: Tr, +k: U32, +d: Nat, s: St, hi: Bool) -> Tr:
+  match t hi:
+    case TNone{} _:
+      tr.path(d, k, s)
+    case TLeaf{b} _:
+      TLeaf{Con{s, b}}
+    case TNode{l, h} False{}:
+      TNode{tr.ins(l, U32.shrn(k, 1n), Nat.sub(d, 1n), s, bit(U32.shrn(k, 1n))), h}
+    case TNode{l, h} True{}:
+      TNode{l, tr.ins(h, U32.shrn(k, 1n), Nat.sub(d, 1n), s, bit(U32.shrn(k, 1n)))}
+
+def tr.depth() -> Nat:
+  7n
+
+# the table: how many streams, and the trie
+type Tb is Data:
+  Tb{n: Nat, t: Tr}
+
+type Tk is Data:
+  Tk{m: Maybe<&2, St>, sts: Tb}
 
 # the state of stream sid, or d when it is not at work
-def st.look(+sts: List<&2, St>, +sid: U32, d: Ss) -> Ss:
-  st.look.go(sts, sid, d, st.at(sts, sid))
+def st.look(+sts: Tb, +sid: U32, d: Ss) -> Ss:
+  match sts:
+    case Tb{n, t}:
+      tr.look(t, key(sid), sid, d, bit(key(sid)))
 
-def tk.cons(s: St, k: Tk) -> Tk:
+def tk.of(+n: Nat, k: Tt) -> Tk:
   match k:
-    case Tk{m, r}:
-      Tk{m, Con{s, r}}
-
-def st.take.go(sts: List<&2, St>, +sid: U32, hit: Bool) -> Tk:
-  match sts hit:
-    case Nil{} _:
-      Tk{None{}, Nil{}}
-    case Con{s, t} True{}:
-      Tk{Some{s}, t}
-    case Con{s, +t} False{}:
-      tk.cons(s, st.take.go(t, sid, st.at(t, sid)))
+    case Tt{m, t}:
+      match m:
+        case None{}:
+          Tk{None{}, Tb{n, t}}
+        case Some{s}:
+          Tk{Some{s}, Tb{Nat.sub(n, 1n), t}}
 
 # stream sid taken out, and the table without it
-def st.take(+sts: List<&2, St>, +sid: U32) -> Tk:
-  st.take.go(sts, sid, st.at(sts, sid))
+def st.take(sts: Tb, +sid: U32) -> Tk:
+  match sts:
+    case Tb{n, t}:
+      tk.of(n, tr.take(t, key(sid), sid, bit(key(sid))))
 
-def st.del.of(k: Tk) -> List<&2, St>:
+def st.del.of(k: Tk) -> Tb:
   match k:
     case Tk{m, r}:
       r
 
-def st.del(+sts: List<&2, St>, +sid: U32) -> List<&2, St>:
+def st.del(sts: Tb, +sid: U32) -> Tb:
   st.del.of(st.take(sts, sid))
 
 # a stream put in that the table does not hold (a new one, or one taken)
-def st.ins(sts: List<&2, St>, s: St) -> List<&2, St>:
-  Con{s, sts}
-
-def st.count.go(sts: List<&2, St>, +n: Nat) -> Nat:
+def st.ins(sts: Tb, +s: St) -> Tb:
   match sts:
-    case Nil{}:
+    case Tb{n, t}:
+      +k = key(st.id(s))
+      Tb{1n+n, tr.ins(t, k, tr.depth(), s, bit(k))}
+
+def st.count(+sts: Tb) -> Nat:
+  match sts:
+    case Tb{n, t}:
       n
-    case Con{s, t}:
-      st.count.go(t, 1n+n)
 
-def st.count(+sts: List<&2, St>) -> Nat:
-  st.count.go(sts, 0n)
-
-def st.empty() -> List<&2, St>:
-  Nil{}
+def st.empty() -> Tb:
+  Tb{0n, TNone{}}
 
 # stream ids, one list type of their own (a U32 is read in place)
 type Ids is Data:
@@ -772,7 +905,7 @@ type Blk is Data:
 # may send); the peer's SETTINGS_INITIAL_WINDOW_SIZE and
 # SETTINGS_MAX_FRAME_SIZE; the budgets; whether our SETTINGS went out.
 type Cn is Data:
-  Cn{rd: Fm.Rd, hd: K.Dec, he: K.Tbl, hup: Bool, sts: List<&2, St>, gone: Ids,
+  Cn{rd: Fm.Rd, hd: K.Dec, he: K.Tbl, hup: Bool, sts: Tb, gone: Ids,
     last: U32, blk: Blk, csw: Sw, crw: Nat, init: Nat, fmax: Nat, bud: Bud, said: Bool}
 
 def cn.new() -> Cn:
@@ -799,7 +932,7 @@ def cn.hup(r: Cn) -> Bool:
     case Cn{rd, hd, he, hup, sts, gone, last, blk, csw, crw, init, fmax, bud, said}:
       hup
 
-def cn.sts(r: Cn) -> List<&2, St>:
+def cn.sts(r: Cn) -> Tb:
   match r:
     case Cn{rd, hd, he, hup, sts, gone, last, blk, csw, crw, init, fmax, bud, said}:
       sts
@@ -869,7 +1002,7 @@ def cn.w.hup(r: Cn, v: Bool) -> Cn:
     case Cn{rd, hd, he, _hup, sts, gone, last, blk, csw, crw, init, fmax, bud, said}:
       Cn{rd, hd, he, v, sts, gone, last, blk, csw, crw, init, fmax, bud, said}
 
-def cn.w.sts(r: Cn, v: List<&2, St>) -> Cn:
+def cn.w.sts(r: Cn, v: Tb) -> Cn:
   match r:
     case Cn{rd, hd, he, hup, _sts, gone, last, blk, csw, crw, init, fmax, bud, said}:
       Cn{rd, hd, he, hup, v, gone, last, blk, csw, crw, init, fmax, bud, said}
@@ -1366,7 +1499,7 @@ def h.rst(+c: Cn, w: Bytes(), rq: List<&2, Req>, +sid: U32, z: Bool, four: Bool)
 # MAX_FRAME_SIZE outside 2^14 to 2^24-1 is a PROTOCOL_ERROR; the rest are
 # taken or ignored.
 type Sets is Data:
-  SetOk{he: K.Tbl, hup: Bool, sts: List<&2, St>, init: Nat, fmax: Nat}
+  SetOk{he: K.Tbl, hup: Bool, sts: Tb, init: Nat, fmax: Nat}
   SetErr{code: U32}
 
 def set.table(s: Sets, +v: Nat) -> Sets:
@@ -1414,7 +1547,42 @@ def sts.move(sts: List<&2, St>, +up: Bool, +d: Nat) -> Maybe<&2, List<&2, St>>:
     case Con{+s, t}:
       sts.move.one(s, sw.move(st.sw(s), up, d), sts.move(t, up, d))
 
-def set.init.go(he: K.Tbl, hup: Bool, +v: Nat, fmax: Nat, m: Maybe<&2, List<&2, St>>) -> Sets:
+def tr.move.b(m: Maybe<&2, List<&2, St>>) -> Maybe<&2, Tr>:
+  match m:
+    case None{}:
+      None{}
+    case Some{b}:
+      Some{TLeaf{b}}
+
+def tr.move.n(ml: Maybe<&2, Tr>, mh: Maybe<&2, Tr>) -> Maybe<&2, Tr>:
+  match ml mh:
+    case Some{l} Some{h}:
+      Some{TNode{l, h}}
+    case _ _:
+      None{}
+
+def tr.move(t: Tr, +up: Bool, +d: Nat) -> Maybe<&2, Tr>:
+  match t:
+    case TNone{}:
+      Some{TNone{}}
+    case TLeaf{b}:
+      tr.move.b(sts.move(b, up, d))
+    case TNode{l, h}:
+      tr.move.n(tr.move(l, up, d), tr.move(h, up, d))
+
+def tb.move.of(+n: Nat, m: Maybe<&2, Tr>) -> Maybe<&2, Tb>:
+  match m:
+    case None{}:
+      None{}
+    case Some{t}:
+      Some{Tb{n, t}}
+
+def tb.move(sts: Tb, +up: Bool, +d: Nat) -> Maybe<&2, Tb>:
+  match sts:
+    case Tb{n, t}:
+      tb.move.of(n, tr.move(t, up, d))
+
+def set.init.go(he: K.Tbl, hup: Bool, +v: Nat, fmax: Nat, m: Maybe<&2, Tb>) -> Sets:
   match m:
     case None{}:
       SetErr{e.flow()}
@@ -1427,7 +1595,7 @@ def set.init(ok: Bool, s: Sets, +v: Nat) -> Sets:
       SetErr{e.flow()}
     case True{} SetOk{he, hup, sts, +init, fmax}:
       +up = Nat.is_le(init, v)
-      set.init.go(he, hup, v, fmax, sts.move(sts, up, on(up, Nat.sub(v, init), Nat.sub(init, v))))
+      set.init.go(he, hup, v, fmax, tb.move(sts, up, on(up, Nat.sub(v, init), Nat.sub(init, v))))
     case True{} SetErr{code}:
       SetErr{code}
 
@@ -1696,7 +1864,7 @@ def hello(+said: Bool, +rd: Fm.Rd) -> Bool & Bytes():
 
 # the reader goes back into the connection before the frames are
 # stepped (they never touch it), with whether it refused
-def read.hi(+root: H.Ht, +rd: Fm.Rd, hd: K.Dec, he: K.Tbl, hup: Bool, sts: List<&2, St>, gone: Ids,
+def read.hi(+root: H.Ht, +rd: Fm.Rd, hd: K.Dec, he: K.Tbl, hup: Bool, sts: Tb, gone: Ids,
   last: U32, blk: Blk, csw: Sw, crw: Nat, init: Nat, fmax: Nat, bud: Bud, fs: List<&2, Fm.Frm>,
   h: Bool & Bytes()) -> Out:
   match h:
@@ -1705,7 +1873,7 @@ def read.hi(+root: H.Ht, +rd: Fm.Rd, hd: K.Dec, he: K.Tbl, hup: Bool, sts: List<
       read.end(steps(root, fs, Out{Cn{rd, hd, he, hup, sts, gone, last, blk, csw, crw, init, fmax, bud, said}, hi,
         Nil{}, False{}}), m)
 
-def read.go(+root: H.Ht, hd: K.Dec, he: K.Tbl, hup: Bool, sts: List<&2, St>, gone: Ids, last: U32,
+def read.go(+root: H.Ht, hd: K.Dec, he: K.Tbl, hup: Bool, sts: Tb, gone: Ids, last: U32,
   blk: Blk, csw: Sw, crw: Nat, init: Nat, fmax: Nat, bud: Bud, +said: Bool, fsr: Fm.Rd & List<&2, Fm.Frm>) -> Out:
   match fsr:
     case (+rd, fs):
@@ -1798,7 +1966,7 @@ def pump.done(c: Cn, w: Bytes(), s: St, done: Bool) -> CW:
     case False{}:
       CW{cn.ins(c, s), w}
 
-def pump.one.fin(rd: Fm.Rd, hd: K.Dec, he: K.Tbl, hup: Bool, sts: List<&2, St>, gone: Ids, last: U32,
+def pump.one.fin(rd: Fm.Rd, hd: K.Dec, he: K.Tbl, hup: Bool, sts: Tb, gone: Ids, last: U32,
   blk: Blk, crw: Nat, init: Nat, fmax: Nat, bud: Bud, said: Bool, p: Pn) -> CW:
   match p:
     case Pn{n, +s, csw, w}:
@@ -1832,7 +2000,7 @@ def resp.put(c: Cn, w: Bytes(), s: St, body: Bytes(), empty: Bool) -> CW:
     case False{}:
       pump.one(c, w, st.w.fin(st.w.out(s, body), True{}))
 
-def resp.enc(rd: Fm.Rd, hd: K.Dec, +hup: Bool, sts: List<&2, St>, gone: Ids, last: U32, blk: Blk, csw: Sw,
+def resp.enc(rd: Fm.Rd, hd: K.Dec, +hup: Bool, sts: Tb, gone: Ids, last: U32, blk: Blk, csw: Sw,
   crw: Nat, init: Nat, fmax: Nat, bud: Bud, said: Bool, w: Bytes(), +s: St, body: Bytes(), +empty: Bool,
   e: K.Enc) -> CW:
   match e:
@@ -1861,28 +2029,42 @@ def answer(c: Cn, w: Bytes(), +sid: U32, status: Bytes(), ct: Bytes(), body: Byt
 # table pumped in turn; those done leave it, each giving the budgets
 # back one of each.
 type Pp is Data:
-  Pp{csw: Sw, w: Bytes(), sts: List<&2, St>, n: Nat}
+  Pp{csw: Sw, w: Bytes(), sts: Tb, n: Nat}
 
-def pump.keep.go(csw: Sw, w: Bytes(), s: St, sts: List<&2, St>, +n: Nat, done: Bool) -> Pp:
+def pump.keep.go(csw: Sw, w: Bytes(), s: St, sts: Tb, +n: Nat, done: Bool) -> Pp:
   match done:
     case True{}:
       Pp{csw, w, sts, 1n+n}
     case False{}:
       Pp{csw, w, st.ins(sts, s), n}
 
-def pump.keep(sts: List<&2, St>, +n: Nat, p: Pn) -> Pp:
+def pump.keep(sts: Tb, +n: Nat, p: Pn) -> Pp:
   match p:
     case Pn{k, +s, csw, w}:
       pump.keep.go(csw, w, s, sts, n, st.done(s))
 
-def pump.all(xs: List<&2, St>, +fmax: Nat, p: Pp) -> Pp:
+def pump.b(xs: List<&2, St>, +fmax: Nat, p: Pp) -> Pp:
   match xs:
     case Nil{}:
       p
     case Con{+s, t}:
       match p:
         case Pp{+csw, w, sts, n}:
-          pump.all(t, fmax, pump.keep(sts, n, pump.go(fmax, s, csw, w)))
+          pump.b(t, fmax, pump.keep(sts, n, pump.go(fmax, s, csw, w)))
+
+def pump.all(t: Tr, +fmax: Nat, p: Pp) -> Pp:
+  match t:
+    case TNone{}:
+      p
+    case TLeaf{b}:
+      pump.b(b, fmax, p)
+    case TNode{l, h}:
+      pump.all(h, fmax, pump.all(l, fmax, p))
+
+def pump.tb(sts: Tb, +fmax: Nat, p: Pp) -> Pp:
+  match sts:
+    case Tb{n, t}:
+      pump.all(t, fmax, p)
 
 def bud.times(k: Nat, b: Bud) -> Bud:
   match k:
@@ -1901,4 +2083,4 @@ def flush(c: Cn, w: Bytes()) -> CW:
   match c:
     case Cn{rd, hd, he, hup, sts, gone, last, blk, csw, crw, init, +fmax, bud, said}:
       pump.fin(rd, hd, he, hup, gone, last, blk, crw, init, fmax, bud, said,
-        pump.all(sts, fmax, Pp{csw, w, st.empty(), 0n}))
+        pump.tb(sts, fmax, Pp{csw, w, st.empty(), 0n}))
