@@ -133,12 +133,15 @@ jobs:
           ./httpd --port 8443 --tls-cert cert.pem --tls-key key.pem --max-conns 2 & up 8443
           $C/check-tls 8443 $! --conns=2; kill $!; wait $! || true
 
-      - name: a shared port takes two copies
+      - name: a shared port takes two copies, and --workers forks them
         run: |
           up() { for i in $(seq 1 50); do (exec 3<>/dev/tcp/127.0.0.1/$1) 2>/dev/null && return 0; sleep 0.1; done; return 1; }
           ./httpd --shared --port 8085 & A=$!; ./httpd --shared --port 8085 & B=$!; up 8085
           LOAD_SPIN=1 demos/io_http_engine/load 8085 32 2 8 /health
           kill $A $B; wait $A $B || true
+          ./httpd --workers 2 --shared --port 8086 & A=$!; up 8086
+          LOAD_SPIN=1 demos/io_http_engine/load 8086 32 2 1 /health
+          kill $A; wait $A
       # bend-h2: h2c by prior knowledge and h2 over TLS by ALPN, each run
       # through h2spec (every section, strict), then check.py's client:
       # requests, fifty streams at once, 1 MB through the windows both
