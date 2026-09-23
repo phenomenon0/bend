@@ -4175,6 +4175,17 @@ def e.mt.in(+c: U32, +e: {Bytes.span.in(c, 65, 91) == True{} : Bool}) ->
     {Spec.allows(Spec.TMeth{}, Eng.cls.vis(c, _, Eng.digit(c))) == True{} : Bool}
   e.mt.tk(c, Eng.digit(c))
 
+# a buffer from its first byte, and the length of one after its first
+def drop0(t: Bytes()) -> {String.drop(t, 0n) == t : Bytes()}:
+  match t:
+    case SNil{}:
+      {==}
+    case SCon{h, u}:
+      {==}
+
+def len_shift(t: Bytes()) -> {String.length.go(t, 1n) == 1n+String.length.go(t, 0n) : Nat}:
+  Bytes.len.shift(t, 0n)
+
 # a string all in a range the token holds holds only bytes it holds
 def aa.conv(-t: Spec.Tok, +c: U32, h: {Spec.allows(t, Eng.cls(c)) == True{} : Bool}) ->
   {Spec.allows(t, Spec.cls(c)) == True{} : Bool}:
@@ -4183,7 +4194,7 @@ def aa.conv(-t: Spec.Tok, +c: U32, h: {Spec.allows(t, Eng.cls(c)) == True{} : Bo
 
 def aa.len1(-x: Nat, +r: Bytes(), e: {Nat.is_eq(x, String.length.go(r, 1n)) == True{} : Bool}) ->
   {Nat.is_eq(x, 1n+String.length.go(r, 0n)) == True{} : Bool}:
-  %EP.len_shift(r) : {Nat.is_eq(x, _) == True{} : Bool}
+  %len_shift(r) : {Nat.is_eq(x, _) == True{} : Bool}
   e
 
 def aa.go.at(+t: Spec.Tok, +lo: U32, +hi: U32, +c: U32, +r: Bytes(), b: Bool,
@@ -4211,23 +4222,23 @@ def aa.fast(t: Spec.Tok, +s: Bytes(), e: {X.ok.fast(t, s) == True{} : Bool}) -> 
   match t:
     case Spec.TMeth{}:
       aa.go(~Spec.TMeth{}, ~65, ~91, ~(c => h => e.mt.in(c, h)), s,
-        %EP.drop0(s) : {Nat.is_eq(Bytes.span.go(_, 65, 91), String.length.go(s, 0n)) == True{} : Bool}
+        %drop0(s) : {Nat.is_eq(Bytes.span.go(_, 65, 91), String.length.go(s, 0n)) == True{} : Bool}
         e)
     case Spec.TTarget{}:
       aa.go(~Spec.TTarget{}, ~33, ~127, ~(c => h => e.tg.in(c, h)), s,
-        %EP.drop0(s) : {Nat.is_eq(Bytes.span.go(_, 33, 127), String.length.go(s, 0n)) == True{} : Bool}
+        %drop0(s) : {Nat.is_eq(Bytes.span.go(_, 33, 127), String.length.go(s, 0n)) == True{} : Bool}
         e)
     case Spec.TVer{}:
       no(AA(Spec.TVer{}, Bytes.to_list(s)), e)
     case Spec.TName{}:
       aa.go(~Spec.TName{}, ~97, ~123, ~(c => h => e.nm.in(c, h)), s,
-        %EP.drop0(s) : {Nat.is_eq(Bytes.span.go(_, 97, 123), String.length.go(s, 0n)) == True{} : Bool}
+        %drop0(s) : {Nat.is_eq(Bytes.span.go(_, 97, 123), String.length.go(s, 0n)) == True{} : Bool}
         e)
     case Spec.TOws{}:
       no(AA(Spec.TOws{}, Bytes.to_list(s)), e)
     case Spec.TVal{}:
       aa.go(~Spec.TVal{}, ~32, ~127, ~(c => h => e.val.in(c, h)), s,
-        %EP.drop0(s) : {Nat.is_eq(Bytes.span.go(_, 32, 127), String.length.go(s, 0n)) == True{} : Bool}
+        %drop0(s) : {Nat.is_eq(Bytes.span.go(_, 32, 127), String.length.go(s, 0n)) == True{} : Bool}
         e)
 
 def aa.of.at(fast: Bool, +t: Spec.Tok, +s: Bytes(), ef: {X.ok.fast(t, s) == fast : Bool},
@@ -5541,7 +5552,7 @@ def r.nm.in(+c: U32, +e: {Bytes.span.in(c, 97, 123) == True{} : Bool}) ->
 # a string all in a range the token holds holds only bytes it holds
 def raa.len1(-x: Nat, +r: Bytes(), e: {Nat.is_eq(x, String.length.go(r, 1n)) == True{} : Bool}) ->
   {Nat.is_eq(x, 1n+String.length.go(r, 0n)) == True{} : Bool}:
-  %EP.len_shift(r) : {Nat.is_eq(x, _) == True{} : Bool}
+  %len_shift(r) : {Nat.is_eq(x, _) == True{} : Bool}
   e
 
 def raa.go.at(+t: RS.Tok, +lo: U32, +hi: U32, +c: U32, +r: Bytes(), b: Bool,
@@ -5573,13 +5584,13 @@ def raa.fast(t: RS.Tok, +s: Bytes(), e: {X.rok.fast(t, s) == True{} : Bool}) -> 
       no(RAA(RS.TDig{}, Bytes.to_list(s)), e)
     case RS.TName{}:
       raa.go(~RS.TName{}, ~97, ~123, ~(c => h => r.nm.in(c, h)), s,
-        %EP.drop0(s) : {Nat.is_eq(Bytes.span.go(_, 97, 123), String.length.go(s, 0n)) == True{} : Bool}
+        %drop0(s) : {Nat.is_eq(Bytes.span.go(_, 97, 123), String.length.go(s, 0n)) == True{} : Bool}
         e)
     case RS.TOws{}:
       no(RAA(RS.TOws{}, Bytes.to_list(s)), e)
     case RS.TVal{}:
       raa.go(~RS.TVal{}, ~32, ~127, ~(c => h => r.val.in(c, h)), s,
-        %EP.drop0(s) : {Nat.is_eq(Bytes.span.go(_, 32, 127), String.length.go(s, 0n)) == True{} : Bool}
+        %drop0(s) : {Nat.is_eq(Bytes.span.go(_, 32, 127), String.length.go(s, 0n)) == True{} : Bool}
         e)
 
 def raa.of.at(fast: Bool, +t: RS.Tok, +s: Bytes(), ef: {X.rok.fast(t, s) == fast : Bool},
