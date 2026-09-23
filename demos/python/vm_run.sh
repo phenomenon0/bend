@@ -131,6 +131,32 @@ refused $'def f(a):\n    return a\nprint(f)' 'functions as values are outside th
 refused 'print(16777216 * 16777216)' 'an int past 2**48 - 1 is outside the subset'
 refused 'print(281474976710655 + 1)' 'an int past 2**48 - 1 is outside the subset'
 refused 'print(281474976710656)' 'an int past 2**48 - 1 is outside the subset'
+# A builtin read as a value is refused by its name, never a NameError.
+refused 'u = print'        'the builtin print is outside the subset'
+refused 'print(abs)'       'the builtin abs is outside the subset'
+# A string stops at 2**24 characters, however it grows.
+refused 'print(len("ab" * 9000000))' 'a string past 2**24 characters is outside the subset'
+refused $'s = "ab"\nk = 30\nwhile k > 0:\n    k -= 1\n    s = s + s\nprint(len(s))' 'a string past 2**24 characters is outside the subset'
+# CPython holds 999 calls in flight; the 1000th is its RecursionError.
+refused $'def f(n):\n    if n <= 0:\n        return 0\n    return f(n - 1)\nprint(f(999))' 'maximum recursion depth exceeded (RecursionError)'
+# A \x escape takes exactly two hex digits: CPython's SyntaxError, a refusal here.
+refused 'print("\x4")' 'an invalid \x escape'
+refused 'print("\x4g")' 'an invalid \x escape'
+
+# Optional: VM_FUZZ=n runs n generated programs through fuzz_vm.py on the
+# binaries just built (CPython the oracle, the C and JS lanes the suspects);
+# its findings count as one failure. Seeded by VM_FUZZ_SEED (default 1).
+if [ -n "${VM_FUZZ:-}" ]; then
+  name=fuzz
+  if python3 demos/python/fuzz_vm.py --n "$VM_FUZZ" --seed "${VM_FUZZ_SEED:-1}" > "$work/fuzz" 2>&1; then
+    pass=$((pass + 1))
+    printf 'ok   %-12s [%s]\n' "$name" "$(tail -1 "$work/fuzz")"
+  else
+    fail=$((fail + 1))
+    printf 'FAIL %-12s [%s]\n' "$name" "$(tail -1 "$work/fuzz")"
+    grep -A12 '^FAIL' "$work/fuzz" | head -40
+  fi
+fi
 
 printf '\nVM PASS: %d, FAIL: %d\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

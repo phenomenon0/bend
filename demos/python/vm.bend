@@ -36,7 +36,7 @@ type Func is Data:
   Func{nparams: Nat, nlocals: Nat, code: List<&2, Instr>}
 
 type VFrame is Data:
-  VFrame{here: List<&2, Instr>, rest: List<&2, Instr>, locals: List<&2, Val>}
+  VFrame{here: List<&2, Instr>, rest: List<&2, Instr>, locals: List<&2, Val>, depth: Nat}
 
 type Prog is Data:
   Prog{funcs: List<&2, Func>, consts: List<&2, Val>, nglobals: Nat, code: List<&2, Instr>}
@@ -324,6 +324,10 @@ type M is Data:
 # letters keep the backslash, \\u \\U \\N are refused. acc gathers the decoded
 # text chunk by chunk; buf holds the current chunk reversed. A mode that
 # stops mid-escape emits what it owes and re-dispatches the unconsumed char.
+# MOct ends two ways -- a third digit, or a char that is not one -- and both
+# leave cur, the char after the escape, still to handle exactly as MBody
+# would (close, escape, triple-quote run, or copy). The third-digit exit once
+# dropped it: "\101hi" read as "Ai" (found by fuzz_vm.py).
 def esc(+s: String, +q: Char, +tri: Bool, +raw: Bool, +acc: String, +buf: String, +m: M, +v: Nat, +k: Nat, +cur: Nat) -> ESV:
   match s m:
     case SNil{} _:
@@ -339,7 +343,7 @@ def esc(+s: String, +q: Char, +tri: Bool, +raw: Bool, +acc: String, +buf: String
         case MCr{}:
           S.choose(ESV, Char.is_eq(esc_char(cur), q) && Bool.not(tri), u => ESV{String.append(acc, String.reverse(buf)), "", ""}, u => ESV{acc, "", "an unterminated string literal"})
         case MHex2{}:
-          S.choose(ESV, Char.is_eq(esc_char(cur), q) && Bool.not(tri), u => ESV{String.append(acc, String.reverse(SCon{esc_char(v), buf})), "", ""}, u => ESV{acc, "", "an unterminated string literal"})
+          ESV{"", "", "an invalid \\x escape"}
         case MOct{}:
           S.choose(ESV, Nat.is_le(v, 255n), u => S.choose(ESV, Char.is_eq(esc_char(cur), q) && Bool.not(tri), u => ESV{String.append(acc, String.reverse(SCon{esc_char(v), buf})), "", ""}, u => ESV{acc, "", "an unterminated string literal"}), u => ESV{"", "", "an octal escape outside the range 0-0o377"})
         case _:
@@ -351,9 +355,10 @@ def esc(+s: String, +q: Char, +tri: Bool, +raw: Bool, +acc: String, +buf: String
     case SCon{+h, +t} MHex1{}:
       S.choose(ESV, digit_ok(esc_char(cur), 16n), u => esc(t, q, tri, raw, acc, buf, MHex2{}, digit_val(esc_char(cur)), 0n, U32.to_nat(Char.to_u32(h))), u => ESV{"", "", "an invalid \\x escape"})
     case SCon{+h, +t} MHex2{}:
-      S.choose(ESV, digit_ok(esc_char(cur), 16n), u => esc(t, q, tri, raw, acc, SCon{esc_char((16n*v + digit_val(esc_char(cur)) : Nat)), buf}, MBody{}, 0n, k, U32.to_nat(Char.to_u32(h))), u => S.choose(ESV, Char.is_eq(esc_char(cur), q) && Bool.not(tri), u => esc(t, q, tri, raw, String.append(acc, String.reverse(SCon{esc_char(v), buf})), "", MGap{}, 0n, 0n, U32.to_nat(Char.to_u32(h))), u => S.choose(ESV, Char.is_eq(esc_char(cur), Chr{92}) && Bool.not(raw), u => esc(t, q, tri, raw, acc, SCon{esc_char(v), buf}, MEsc{}, 0n, k, U32.to_nat(Char.to_u32(h))), u => esc(t, q, tri, raw, acc, SCon{esc_char(cur), SCon{esc_char(v), buf}}, MBody{}, 0n, k, U32.to_nat(Char.to_u32(h))))))
+      S.choose(ESV, digit_ok(esc_char(cur), 16n), u => esc(t, q, tri, raw, acc, SCon{esc_char((16n*v + digit_val(esc_char(cur)) : Nat)), buf}, MBody{}, 0n, k, U32.to_nat(Char.to_u32(h))), u => ESV{"", "", "an invalid \\x escape"})
     case SCon{+h, +t} MOct{}:
-      S.choose(ESV, Nat.is_lt(k, 3n) && digit_ok(esc_char(cur), 8n), u => esc(t, q, tri, raw, acc, buf, MOct{}, (8n*v + digit_val(esc_char(cur)) : Nat), 1n+k, U32.to_nat(Char.to_u32(h))), u => S.choose(ESV, Nat.is_lt(k, 3n), u => S.choose(ESV, Nat.is_le(v, 255n), u => S.choose(ESV, Char.is_eq(esc_char(cur), q) && Bool.not(tri), u => esc(t, q, tri, raw, String.append(acc, String.reverse(SCon{esc_char(v), buf})), "", MGap{}, 0n, 0n, U32.to_nat(Char.to_u32(h))), u => S.choose(ESV, Char.is_eq(esc_char(cur), Chr{92}) && Bool.not(raw), u => esc(t, q, tri, raw, acc, SCon{esc_char(v), buf}, MEsc{}, 0n, k, U32.to_nat(Char.to_u32(h))), u => esc(t, q, tri, raw, acc, SCon{esc_char(cur), SCon{esc_char(v), buf}}, MBody{}, 0n, k, U32.to_nat(Char.to_u32(h))))), u => ESV{"", "", "an octal escape outside the range 0-0o377"}), u => S.choose(ESV, Nat.is_le(v, 255n), u => esc(t, q, tri, raw, acc, SCon{esc_char(v), buf}, MBody{}, 0n, k, U32.to_nat(Char.to_u32(h))), u => ESV{"", "", "an octal escape outside the range 0-0o377"})))
+      S.choose(ESV, Nat.is_lt(k, 3n) && digit_ok(esc_char(cur), 8n), u => esc(t, q, tri, raw, acc, buf, MOct{}, (8n*v + digit_val(esc_char(cur)) : Nat), 1n+k, U32.to_nat(Char.to_u32(h))), u =>
+        S.choose(ESV, Nat.is_le(v, 255n), u => S.choose(ESV, Char.is_eq(esc_char(cur), q), u => S.choose(ESV, tri, u => esc(t, q, tri, raw, acc, SCon{esc_char(v), buf}, MQx{}, 1n, k, U32.to_nat(Char.to_u32(h))), u => esc(t, q, tri, raw, String.append(acc, String.reverse(SCon{esc_char(v), buf})), "", MGap{}, 0n, 0n, U32.to_nat(Char.to_u32(h)))), u => S.choose(ESV, Char.is_eq(esc_char(cur), Chr{92}) && Bool.not(raw), u => esc(t, q, tri, raw, acc, SCon{esc_char(v), buf}, MEsc{}, 0n, k, U32.to_nat(Char.to_u32(h))), u => esc(t, q, tri, raw, acc, SCon{esc_char(cur), SCon{esc_char(v), buf}}, MBody{}, 0n, k, U32.to_nat(Char.to_u32(h))))), u => ESV{"", "", "an octal escape outside the range 0-0o377"}))
     case SCon{+h, +t} MCr{}:
       S.choose(ESV, Char.is_eq(esc_char(cur), '\n'), u => esc(t, q, tri, raw, acc, buf, MBody{}, 0n, k, U32.to_nat(Char.to_u32(h))), u => S.choose(ESV, Char.is_eq(esc_char(cur), q) && Bool.not(tri), u => esc(t, q, tri, raw, String.append(acc, String.reverse(buf)), "", MGap{}, 0n, 0n, U32.to_nat(Char.to_u32(h))), u => S.choose(ESV, Char.is_eq(esc_char(cur), Chr{92}) && Bool.not(raw), u => esc(t, q, tri, raw, acc, buf, MEsc{}, 0n, k, U32.to_nat(Char.to_u32(h))), u => esc(t, q, tri, raw, acc, SCon{esc_char(cur), buf}, MBody{}, 0n, k, U32.to_nat(Char.to_u32(h))))))
     case SCon{+h, +t} MQx{}:
@@ -748,6 +753,12 @@ def name_cx(+env: Env, +name: String, +is_store: Bool) -> Cx:
   Env{+cs, nc, +gs, ng, +fs, +ns, nn} = env
   slot_put(local_find(ns, name, 0n), Env{cs, nc, gs, ng, fs, ns, nn}, name, is_store)
 
+# CPython's builtins, which a program may read without binding them. The
+# subset calls print and len by name and has none as a value: reading one
+# unbound is refused, not reported as a NameError that CPython never raises.
+def is_builtin(+name: String) -> Bool:
+  String.contains(" abs aiter all anext any ascii bin bool breakpoint bytearray bytes callable chr classmethod compile complex copyright credits delattr dict dir divmod enumerate eval exec exit filter float format frozenset getattr globals hasattr hash help hex id input int isinstance issubclass iter len license list locals map max memoryview min next object oct open ord pow print property quit range repr reversed round set setattr slice sorted staticmethod str sum super tuple type vars zip BaseException BaseExceptionGroup Exception ExceptionGroup ArithmeticError AssertionError AttributeError BlockingIOError BrokenPipeError BufferError BytesWarning ChildProcessError ConnectionAbortedError ConnectionError ConnectionRefusedError ConnectionResetError DeprecationWarning EOFError EncodingWarning EnvironmentError FileExistsError FileNotFoundError FloatingPointError FutureWarning GeneratorExit IOError ImportError ImportWarning IndentationError IndexError InterruptedError IsADirectoryError KeyError KeyboardInterrupt LookupError MemoryError ModuleNotFoundError NameError NotADirectoryError NotImplemented NotImplementedError OSError OverflowError PendingDeprecationWarning PermissionError ProcessLookupError RecursionError ReferenceError ResourceWarning RuntimeError RuntimeWarning StopAsyncIteration StopIteration SyntaxError SyntaxWarning SystemError SystemExit TabError TimeoutError TypeError UnboundLocalError UnicodeDecodeError UnicodeEncodeError UnicodeError UnicodeTranslateError UnicodeWarning UserWarning ValueError Warning ZeroDivisionError Ellipsis ", String.append(String.append(" ", name), " "))
+
 def is_usub(+j: S.Json) -> Bool:
   String.eq(jtag(j), "UnaryOp") && String.eq(jstr(jfield(jfield(j, "op"), "tag")), "USub")
 
@@ -817,7 +828,9 @@ def cexp(+fuel: Nat, +job: Job, +base: Nat, +env: Env) -> Cx:
           Env{+cs, +nc, +gs, +ng, +fs, +ns, +nn} = env
           +name = jstr(jfield(j, "id"))
           S.choose(Cx, func_hit(fs, name) && Bool.not(has_name(ns, name)), u => Cx{Nil{}, 0n, Env{cs, nc, gs, ng, fs, ns, nn}, "functions as values are outside the subset"}, u =>
-            name_cx(Env{cs, nc, gs, ng, fs, ns, nn}, name, False{}))
+            S.choose(Cx, is_builtin(name) && Bool.not(has_name(ns, name)) && Bool.not(has_name(gs, name)), u =>
+              Cx{Nil{}, 0n, Env{cs, nc, gs, ng, fs, ns, nn}, String.append(String.append("the builtin ", name), " is outside the subset")}, u =>
+              name_cx(Env{cs, nc, gs, ng, fs, ns, nn}, name, False{})))
         case EBinOp{}:
           +lft : Cx = cexp(left, One{jfield(j, "left")}, base, env)
           +rgt : Cx = cexp(left, One{jfield(j, "right")}, (cx_len(lft) + base : Nat), cx_env(lft))
@@ -1145,7 +1158,7 @@ def frames_ok(+fs: List<&2, VFrame>) -> Bool:
 def frame_of(+fs: List<&2, VFrame>) -> VFrame:
   match fs:
     case Nil{}:
-      VFrame{Nil{}, Nil{}, Nil{}}
+      VFrame{Nil{}, Nil{}, Nil{}, 0n}
     case Con{h, t}:
       h
 
@@ -1158,18 +1171,32 @@ def frames_tail(+fs: List<&2, VFrame>) -> List<&2, VFrame>:
 
 def vh_here(+f: VFrame) -> List<&2, Instr>:
   match f:
-    case VFrame{here, rest, locals}:
+    case VFrame{here, rest, locals, depth}:
       here
 
 def vh_rest(+f: VFrame) -> List<&2, Instr>:
   match f:
-    case VFrame{here, rest, locals}:
+    case VFrame{here, rest, locals, depth}:
       rest
 
 def vh_locals(+f: VFrame) -> List<&2, Val>:
   match f:
-    case VFrame{here, rest, locals}:
+    case VFrame{here, rest, locals, depth}:
       locals
+
+# The number of calls in flight: the depth the top frame recorded.
+def frames_depth(+fs: List<&2, VFrame>) -> Nat:
+  match fs:
+    case Nil{}:
+      0n
+    case Con{VFrame{here, rest, locals, depth}, t}:
+      depth
+
+# CPython 3.11 holds 1000 frames, the module's among them: the 1000th call
+# in flight is its RecursionError, and here the same call faults. Composed,
+# never written long.
+def call_cap() -> Nat:
+  Nat.sub(Nat.mul(10n, 100n), 1n)
 
 def cmp_pick(+which: Nat, +x: Nat, +y: Nat) -> Bool:
   match which:
@@ -1188,6 +1215,19 @@ def cmp_pick(+which: Nat, +x: Nat, +y: Nat) -> Bool:
     case 1n+p:
       Nat.is_ne(x, y)
 
+
+# Strings order as CPython orders them: code point by code point, a prefix
+# first.
+def str_pick(+which: Nat, +x: String, +y: String) -> Bool:
+  match which:
+    case 11n:
+      String.is_lt(x, y)
+    case 12n:
+      String.is_le(x, y)
+    case 13n:
+      String.is_gt(x, y)
+    case _:
+      String.is_ge(x, y)
 
 def pop_args(+n: Nat, +stack: List<&2, Val>) -> Pop:
   match n stack:
@@ -1370,6 +1410,21 @@ def val_eq(+a: Val, +b: Val) -> Bool:
       True{}
     case _ _:
       S.choose(Bool, nums_ok(a, b), u => Nat.is_eq(num_of(a), num_of(b)), u => False{})
+
+# str * int and int * str repeat the string; a bool counts as its int.
+def str_rep(+a: Val, +b: Val) -> Bool:
+  (is_str(a) && is_num(b)) || (is_num(a) && is_str(b))
+
+def rep_s(+a: Val, +b: Val) -> String:
+  S.choose(String, is_str(a), u => str_of(a), u => str_of(b))
+
+def rep_n(+a: Val, +b: Val) -> Nat:
+  S.choose(Nat, is_str(a), u => num_of(b), u => num_of(a))
+
+# A string stops at 2**24 characters: a repeat can grow one exponentially,
+# and past the ceiling it is refused rather than run out of memory.
+def str_cap() -> Nat:
+  Nat.mul(Nat.mul(256n, 256n), 256n)
 
 def char_at(+s: String, +idx: Nat) -> String:
   String.take(String.drop(s, idx), 1n)
@@ -1589,7 +1644,9 @@ def step(+fuel: Nat, +job: Step) -> Run:
           +picked : Pop = pop_args(2n, stack)
           S.choose(Run, both_str(pop_head(picked), pop_second(picked)), u =>
             +ss : SS = str2(pop_head(picked), pop_second(picked))
-            step(left, Go{Run{funcs, consts, Con{VStr{String.append(ss_y(ss), ss_x(ss))}, pop_more(picked)}, here, more, locals, globals, frames, out, fault}}), u =>
+            S.choose(Run, Nat.is_le((String.length(ss_y(ss)) + String.length(ss_x(ss)) : Nat), str_cap()), u =>
+              step(left, Go{Run{funcs, consts, Con{VStr{String.append(ss_y(ss), ss_x(ss))}, pop_more(picked)}, here, more, locals, globals, frames, out, fault}}), u =>
+              fault_run(funcs, consts, stack, here, locals, globals, frames, out, "a string past 2**24 characters is outside the subset")), u =>
             S.choose(Run, nums_ok(pop_head(picked), pop_second(picked)), u =>
               +xy : NN = num2(pop_second(picked), pop_head(picked))
               S.choose(Run, add_fits(nn_x(xy), nn_y(xy)), u =>
@@ -1606,12 +1663,18 @@ def step(+fuel: Nat, +job: Step) -> Run:
             fault_run(funcs, consts, stack, here, locals, globals, frames, out, "a non-number in -"))
         case KMul{}:
           +picked : Pop = pop_args(2n, stack)
+          S.choose(Run, str_rep(pop_second(picked), pop_head(picked)), u =>
+            +rs : String = rep_s(pop_second(picked), pop_head(picked))
+            +rn : Nat = rep_n(pop_second(picked), pop_head(picked))
+            S.choose(Run, Nat.is_eq(rn, 0n) || Nat.is_le(String.length(rs), Nat.div(str_cap(), rn)), u =>
+              step(left, Go{Run{funcs, consts, Con{VStr{String.repeat(rs, rn)}, pop_more(picked)}, here, more, locals, globals, frames, out, fault}}), u =>
+              fault_run(funcs, consts, stack, here, locals, globals, frames, out, "a string past 2**24 characters is outside the subset")), u =>
           S.choose(Run, nums_ok(pop_head(picked), pop_second(picked)), u =>
             +xy : NN = num2(pop_second(picked), pop_head(picked))
             S.choose(Run, mul_fits(nn_x(xy), nn_y(xy)), u =>
               step(left, Go{Run{funcs, consts, Con{VInt{(nn_x(xy) * nn_y(xy) : Nat)}, pop_more(picked)}, here, more, locals, globals, frames, out, fault}}), u =>
               fault_run(funcs, consts, stack, here, locals, globals, frames, out, "an int past 2**48 - 1 is outside the subset")), u =>
-            fault_run(funcs, consts, stack, here, locals, globals, frames, out, "a non-number in *"))
+            fault_run(funcs, consts, stack, here, locals, globals, frames, out, "a non-number in *")))
         case KDiv{}:
           +picked : Pop = pop_args(2n, stack)
           S.choose(Run, nums_ok(pop_head(picked), pop_second(picked)), u =>
@@ -1630,28 +1693,36 @@ def step(+fuel: Nat, +job: Step) -> Run:
             fault_run(funcs, consts, stack, here, locals, globals, frames, out, "a non-number in %"))
         case KLt{}:
           +picked : Pop = pop_args(2n, stack)
+          S.choose(Run, both_str(pop_head(picked), pop_second(picked)), u =>
+            step(left, Go{Run{funcs, consts, Con{VBool{str_pick(11n, str_of(pop_second(picked)), str_of(pop_head(picked)))}, pop_more(picked)}, here, more, locals, globals, frames, out, fault}}), u =>
           S.choose(Run, nums_ok(pop_head(picked), pop_second(picked)), u =>
             +xy : NN = num2(pop_second(picked), pop_head(picked))
             step(left, Go{Run{funcs, consts, Con{VBool{cmp_pick(11n, nn_x(xy), nn_y(xy))}, pop_more(picked)}, here, more, locals, globals, frames, out, fault}}), u =>
-            fault_run(funcs, consts, stack, here, locals, globals, frames, out, "a non-number in a comparison"))
+            fault_run(funcs, consts, stack, here, locals, globals, frames, out, "an ordering between a number and a string, or with None (TypeError)")))
         case KLtE{}:
           +picked : Pop = pop_args(2n, stack)
+          S.choose(Run, both_str(pop_head(picked), pop_second(picked)), u =>
+            step(left, Go{Run{funcs, consts, Con{VBool{str_pick(12n, str_of(pop_second(picked)), str_of(pop_head(picked)))}, pop_more(picked)}, here, more, locals, globals, frames, out, fault}}), u =>
           S.choose(Run, nums_ok(pop_head(picked), pop_second(picked)), u =>
             +xy : NN = num2(pop_second(picked), pop_head(picked))
             step(left, Go{Run{funcs, consts, Con{VBool{cmp_pick(12n, nn_x(xy), nn_y(xy))}, pop_more(picked)}, here, more, locals, globals, frames, out, fault}}), u =>
-            fault_run(funcs, consts, stack, here, locals, globals, frames, out, "a non-number in a comparison"))
+            fault_run(funcs, consts, stack, here, locals, globals, frames, out, "an ordering between a number and a string, or with None (TypeError)")))
         case KGt{}:
           +picked : Pop = pop_args(2n, stack)
+          S.choose(Run, both_str(pop_head(picked), pop_second(picked)), u =>
+            step(left, Go{Run{funcs, consts, Con{VBool{str_pick(13n, str_of(pop_second(picked)), str_of(pop_head(picked)))}, pop_more(picked)}, here, more, locals, globals, frames, out, fault}}), u =>
           S.choose(Run, nums_ok(pop_head(picked), pop_second(picked)), u =>
             +xy : NN = num2(pop_second(picked), pop_head(picked))
             step(left, Go{Run{funcs, consts, Con{VBool{cmp_pick(13n, nn_x(xy), nn_y(xy))}, pop_more(picked)}, here, more, locals, globals, frames, out, fault}}), u =>
-            fault_run(funcs, consts, stack, here, locals, globals, frames, out, "a non-number in a comparison"))
+            fault_run(funcs, consts, stack, here, locals, globals, frames, out, "an ordering between a number and a string, or with None (TypeError)")))
         case KGtE{}:
           +picked : Pop = pop_args(2n, stack)
+          S.choose(Run, both_str(pop_head(picked), pop_second(picked)), u =>
+            step(left, Go{Run{funcs, consts, Con{VBool{str_pick(14n, str_of(pop_second(picked)), str_of(pop_head(picked)))}, pop_more(picked)}, here, more, locals, globals, frames, out, fault}}), u =>
           S.choose(Run, nums_ok(pop_head(picked), pop_second(picked)), u =>
             +xy : NN = num2(pop_second(picked), pop_head(picked))
             step(left, Go{Run{funcs, consts, Con{VBool{cmp_pick(14n, nn_x(xy), nn_y(xy))}, pop_more(picked)}, here, more, locals, globals, frames, out, fault}}), u =>
-            fault_run(funcs, consts, stack, here, locals, globals, frames, out, "a non-number in a comparison"))
+            fault_run(funcs, consts, stack, here, locals, globals, frames, out, "an ordering between a number and a string, or with None (TypeError)")))
         case KEq{}:
           +picked : Pop = pop_args(2n, stack)
           step(left, Go{Run{funcs, consts, Con{VBool{val_eq(pop_second(picked), pop_head(picked))}, pop_more(picked)}, here, more, locals, globals, frames, out, fault}})
@@ -1700,10 +1771,13 @@ def step(+fuel: Nat, +job: Step) -> Run:
           +picked : Pop = pop_args((b + 1n : Nat), stack)
           S.choose(Run, is_func(val_at(pop_vals(picked), b)), u =>
             +callee : Func = func_at(funcs, func_of(val_at(pop_vals(picked), b)))
+            +depth : Nat = (1n + frames_depth(frames) : Nat)
+            S.choose(Run, Nat.is_le(depth, call_cap()), u =>
             S.choose(Run, Nat.is_eq(b, f_np(callee)), u =>
               step(left, Go{Run{funcs, consts, pop_more(picked), f_code(callee), f_code(callee),
-                List.append(&2, Val, List.reverse(&2, Val, List.take(&2, Val, pop_vals(picked), b)), unsets(Nat.sub(f_nl(callee), b), Nil{})), globals, Con{VFrame{here, more, locals}, frames}, out, fault}}), u =>
+                List.append(&2, Val, List.reverse(&2, Val, List.take(&2, Val, pop_vals(picked), b)), unsets(Nat.sub(f_nl(callee), b), Nil{})), globals, Con{VFrame{here, more, locals, depth}, frames}, out, fault}}), u =>
               fault_run(funcs, consts, stack, here, locals, globals, frames, out, "a call with the wrong number of arguments")), u =>
+              fault_run(funcs, consts, stack, here, locals, globals, frames, out, "maximum recursion depth exceeded (RecursionError)")), u =>
             fault_run(funcs, consts, stack, here, locals, globals, frames, out, "calling a non-function is outside the subset"))
         case KRet{}:
           +picked : Pop = pop_args(1n, stack)

@@ -356,3 +356,49 @@ refusals), on x86_64 with 4 cores and 15 GB. `fib(24)` on the C lane takes 0.95 
 Caps: `vm.bend` 27,059 / 64,000 ttok (25,453 before this round, so +1,606) and `vm_run.sh` 1,744 / 4,000. These were measured with
 js-tiktoken's cl100k ranks, because ttok's own BPE download is blocked on this host.
 They match `gates/repo.ts` exactly on the unmerged tree.
+
+## The fuzzer (2026-09-23)
+
+`python3 demos/python/fuzz_vm.py [--n 300] [--seed s] [--jobs 4] [--interp k]`
+checks the lane's contract instead of fixtures. It generates random programs in
+the subset and just past it. A program the VM runs to exit 0 must print
+CPython's bytes, and CPython must also exit 0. Every lane must agree. A non-zero
+exit must be the VM's own refusal or fault, never the runtime dying under it.
+Any finding is shrunk line by line and written to `tests/vm/_out/fuzz/`. Each
+program is a pure function of `(seed, index)`, so a finding replays.
+`VM_FUZZ=n bash demos/python/vm_run.sh` runs `n` programs after the battery.
+The file is `fuzz_vm.py`, not `vm_fuzz.py`, because the battery treats every
+`vm_*.py` as a fixture.
+
+About half the generated programs run cleanly on CPython. The rest raise on
+purpose (TypeError, IndexError, ZeroDivisionError, NameError, RecursionError),
+so the fault paths are exercised too. The first 300 programs found four problems
+that the fixtures had never reached:
+
+| finding | cause | now |
+|---|---|---|
+| `"\x41\101hi"` printed `AAihi` (a MISCOMPILE) | after a three-digit octal escape, the decoder dropped the next char | one exit for "octal ended" that handles the char in hand as MBody would; `vm_escapes.py` |
+| unbounded recursion ran for 56 s on C and timed out on JS | there was no depth limit; CPython raises at 999 calls in flight | a depth field on `VFrame`; call 1000 faults with `(RecursionError)`; `vm_deep.py` pins 998, a control pins 999 |
+| `u = print` reported a NameError that CPython never raises | a builtin read as a value fell through to an unset global | the 149 names of 3.11's `builtins` are refused by name |
+| `print("\x4")` ran | a one-digit `\x` escape was accepted; CPython rejects it | refused, with two controls |
+
+Found along the way, then implemented because they were cheap: string ordering
+(`<`, `<=`, `>`, `>=`, compared code point by code point as CPython does,
+`vm_order.py`), and `str * int` repetition (`vm_repeat.py`). A string stops at
+2**24 characters, whether it grows by `*` or by `+`, so an exponentially growing
+string is refused rather than exhausting memory.
+
+After the fixes, seeds 1 to 4 × 300 programs report `FUZZ PASS: 300, FAIL: 0`
+on the C and JS lanes, with the interpreter sampled on every 25th program for
+seeds 3 and 4. Battery: `VM PASS: 53, FAIL: 0`.
+
+What the table says comes next. Per 300 programs, these are the ones CPython
+ran and the VM refused:
+
+| refusal | per 300 | the fix |
+|---|---|---|
+| a negative result | 15–28 | signed ints (I64 with overflow checks) |
+| an int past 2**48 − 1 | 15–24 | the same move, up to 2**63; bigints stay later |
+| chained comparisons | 5–15 | a `DUP`/`ROT` pair so the middle operand is evaluated once |
+| the builtin print as a value | 3–6 | functions as values (`VFunc` is already there) |
+| wrong arity in a branch never taken | 1–5 | CPython checks arity at the call, so this check should move to runtime |
