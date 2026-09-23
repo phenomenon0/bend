@@ -283,12 +283,30 @@ def hf.sym(+root: H.Ht, acc: Bytes(), +sym: U32, eos: Bool) -> Hf:
 def hf.leaf(+root: H.Ht, acc: Bytes(), +sym: U32) -> Hf:
   hf.sym(root, acc, sym, U32.is_eq(sym, 256))
 
-def hf.to(+root: H.Ht, next: H.Ht, acc: Bytes()) -> Hf:
-  match next:
+# (a node is read where it is, and kept as it is)
+def ht.sym(+t: H.Ht) -> U32:
+  match t:
     case H.HLeaf{sym}:
-      hf.leaf(root, acc, sym)
+      sym
     case H.HNode{end, z, o}:
-      HfAt{H.HNode{end, z, o}, acc}
+      256
+
+def ht.leaf(+t: H.Ht) -> Bool:
+  match t:
+    case H.HLeaf{sym}:
+      True{}
+    case H.HNode{end, z, o}:
+      False{}
+
+def hf.at(+root: H.Ht, +next: H.Ht, acc: Bytes(), leaf: Bool) -> Hf:
+  match leaf:
+    case True{}:
+      hf.leaf(root, acc, ht.sym(next))
+    case False{}:
+      HfAt{next, acc}
+
+def hf.to(+root: H.Ht, +next: H.Ht, acc: Bytes()) -> Hf:
+  hf.at(root, next, acc, ht.leaf(next))
 
 def hf.child(node: H.Ht, bit: Bool) -> H.Ht:
   match node:
@@ -744,8 +762,15 @@ def beq.go(k: Nat, +a: Bytes(), +b: Bytes(), +i: Nat, same: Bool) -> Bool:
     case 1n+j True{}:
       beq.go(j, a, b, 4n+i, U32.is_eq(Bytes.word_le(a, i), Bytes.word_le(b, i)))
 
+def beq.at(same: Bool, +a: Bytes(), +b: Bytes()) -> Bool:
+  match same:
+    case False{}:
+      False{}
+    case True{}:
+      beq.go(Nat.div(Nat.add(Bytes.len(a), 3n), 4n), a, b, 0n, True{})
+
 def beq(+a: Bytes(), +b: Bytes()) -> Bool:
-  beq.go(Nat.div(Nat.add(Bytes.len(a), 3n), 4n), a, b, 0n, Nat.is_eq(Bytes.len(a), Bytes.len(b)))
+  beq.at(Nat.is_eq(Bytes.len(a), Bytes.len(b)), a, b)
 
 # The static table by name, for the encoder: a search tree on a name's
 # length, first byte and last byte (which tell every name in the table
