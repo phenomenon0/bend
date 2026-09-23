@@ -108,7 +108,8 @@ function shard_split(tests: Test[], count: number): Test[][] {
   return shards.filter((s) => s.length > 0);
 }
 
-// Every test's source goes to every shard: a test may import another.
+// Every test's source goes to every shard: a test may import another, or
+// a module from a subdirectory.
 function shard_pack(shard: Test[], tests: Test[]): Buffer {
   const dir = fs.mkdtempSync("/tmp/bend-shard-");
   lib.bend2_copy(path.join(dir, "bend2"));
@@ -116,8 +117,8 @@ function shard_pack(shard: Test[], tests: Test[]): Buffer {
     fs.mkdirSync(path.join(dir, "tests", sub), { recursive: true });
     for (const f of fs.readdirSync(path.join(TESTS, sub))) {
       if (!f.endsWith(".bend")) {
-        fs.copyFileSync(path.join(TESTS, sub, f),
-          path.join(dir, "tests", sub, f));
+        fs.cpSync(path.join(TESTS, sub, f),
+          path.join(dir, "tests", sub, f), { recursive: true });
       }
     }
   }

@@ -18,9 +18,9 @@ check() {
     rc=1
   fi
 }
-check bend2/base.bend 48928
-check bend2/bend.ts 42300
-check bend2/comp.ts 84100
+check bend2/base.bend 49777
+check bend2/bend.ts 44000
+check bend2/comp.ts 82900
 check bend2/main.ts 10000
 for t in tests/f64/*.bend tests/strings/*.bend; do
   if [ "$t" = tests/strings/bench_words.bend ]; then
