@@ -39,6 +39,8 @@
 #   curl -i http://127.0.0.1:8080/health
 import Base
 import ../../wire/reader.bend as Wr
+import ../../wire/loop.bend as L
+import ../../wire/effects.bend as Fx
 import ./ws.bend as Ws
 
 # Bytes
@@ -2701,15 +2703,11 @@ def ctype(e: List<&2, U32>) -> List<&2, U32>:
   Maybe.default(&2, List<&2, U32>, mime.go(mimes(), e, None{}),
     bytes("application/octet-stream"))
 
-# One piece of a reply: bytes as they are, or a file to write when the
-# reply is written: the root, the path under it, the type, and whether
-# only the head is wanted. Fixed routes stay pure; only a file route
-# puts IO on the path, and only for its own request.
-type Seg is Data:
-  Raw{bs: Bytes()}
-  Page{root: List<&2, U32>, path: List<&2, U32>, ct: List<&2, U32>, head: Bool}
-  Note{bs: Bytes()}
-  Shut{}
+# One piece of a reply is bend-wire's L.Seg: bytes as they are, or a
+# file to write when the reply is written (the root, the path under it,
+# the type, and whether only the head is wanted). Fixed routes stay
+# pure; only a file route puts IO on the path, and only for its own
+# request.
 
 def miss(head: Bool) -> Bytes():
   match head:
@@ -2718,20 +2716,20 @@ def miss(head: Bool) -> Bytes():
     case False{}:
       resp.missing()
 
-def page.name(root: List<&2, U32>, +ss: List<&2, List<&2, U32>>, head: Bool) -> Seg:
-  Page{root, join(ss), ctype(ext.go(last(ss, Nil{}), Nil{})), head}
+def page.name(root: List<&2, U32>, +ss: List<&2, List<&2, U32>>, head: Bool) -> L.Seg:
+  L.Page{root, join(ss), ctype(ext.go(last(ss, Nil{}), Nil{})), head}
 
-def page.of(root: List<&2, U32>, ss: List<&2, List<&2, U32>>, head: Bool) -> Seg:
+def page.of(root: List<&2, U32>, ss: List<&2, List<&2, U32>>, head: Bool) -> L.Seg:
   match ss:
     case Nil{}:
-      Page{root, bytes("index.html"), bytes("text/html; charset=utf-8"), head}
+      L.Page{root, bytes("index.html"), bytes("text/html; charset=utf-8"), head}
     case Con{s, t}:
       page.name(root, Con{s, t}, head)
 
-def page.pick(root: List<&2, U32>, may: Maybe<&2, List<&2, List<&2, U32>>>, head: Bool) -> Seg:
+def page.pick(root: List<&2, U32>, may: Maybe<&2, List<&2, List<&2, U32>>>, head: Bool) -> L.Seg:
   match may:
     case None{}:
-      Raw{miss(head)}
+      L.Raw{miss(head)}
     case Some{ss}:
       page.of(root, ss, head)
 
@@ -2740,7 +2738,7 @@ def page.pick(root: List<&2, U32>, may: Maybe<&2, List<&2, List<&2, U32>>>, head
 # escapes are not decoded, so an escaped ".." is a name no file has
 # rather than a climb. The name is opened by File.open_under, which
 # follows no symbolic link and opens nothing but a regular file.
-def page(root: List<&2, U32>, +path: List<&2, U32>, head: Bool) -> Seg:
+def page(root: List<&2, U32>, +path: List<&2, U32>, head: Bool) -> L.Seg:
   page.pick(root, fnames.of(False{}, path), head)
 
 # The access log: one line per request, what was asked, the status it
@@ -2761,430 +2759,17 @@ def flat.shut(sh: Bool, +bs: Bytes()) -> Bytes():
     case False{}:
       bs
 
-# The world the connection runs in
-# ================================
-#
-# Everything below that touches a socket or a file is written once, over
-# an effect interface, and instantiated twice: with the real effects
-# (IO, Socket, File, TCP.poll_buf ...) to serve, and with the pure model
-# of world.bend (the identity monad, a scripted peer for the socket, a
-# list of files) to prove what the loop does to every peer. The
-# interface is a set of template parameters, so the real instance is the
-# code it was before, compiled on its own and called directly: nothing
-# is passed at runtime and nothing is looked up.
-#
-#   ~M, ~pure, ~bind   the monad: IO, or Id in the model
-#   ~S, ~F             the socket and the file handle
-#   ~rx                read: TCP.poll_buf(s, max, ms)
-#   ~tx                write: TCP.send_buf_poll(s, bytes, ms)
-#   ~clk               the clock, in ms, beside the socket (IO.now)
-#   ~nap               sleep, beside the socket (IO.sleep)
-#   ~say               a log line (IO.print_err)
-#   ~fopen             File.open_under, beside the socket
-#   ~fsize ~fread ~fclose   File.size, File.read_buf, File.close
-#
-# Each effect's contract -- what the model assumes of it and what
-# conform.c checks the real one does -- is written beside it in
-# bend2/base.bend and, as a relation, in world.bend.
-
-# what a timed read answers, and what a send answers, beside the socket
-law Got:
-  for -S: Type
-  Type
-
-def Got(S):
-  S & Result<&1, &1, U32 & String, Maybe<&1, Bytes()>>
-
-law Put:
-  for -S: Type
-  Type
-
-def Put(S):
-  S & Result<&1, &1, U32 & String, Unit>
-
-# a resolved segment, logged against the note that was waiting if there
-# was one, and handed straight back: the line goes out before the
-# segments after it, so the log reads in the order the requests came
-def flat.note(
-  ~M: Type -> Type, ~pure: @-A: Type -> A -> M(A),
-  ~bind: @-A: Type -> @-B: Type -> M(A) -> (A -> M(B)) -> M(B), ~say: String -> M(Unit),
-  may: Maybe<&2, Bytes()>, +out: Bytes()
-) -> M(Bytes()):
-  match may:
-    case None{}:
-      pure(Bytes(), out)
-    case Some{note}:
-      bind(Unit, Bytes(), say(log.line(note, out)), u => pure(Bytes(), out))
-
-# Writing a reply
-# ===============
-#
-# The segments of one chunk's answers are written in order as they are
-# produced. Fixed replies wait on one block and go out in one send with
-# whatever comes next. A file goes out as its head, taken from fstat of
-# the descriptor that was opened, then as blocks of at most page.chunk()
-# bytes, each read only after the socket took the one before; so a file
-# costs one block of memory however large it is, and a pipelined batch
-# of files costs the same. The body is exactly the length its head
-# promised: a read that comes back short is read on, and one that ends
-# early (the file shrank) ends the connection, since nothing after it
-# could be framed.
-
-def page.chunk() -> U32:
-  65536
-
-# The batch budget. Fixed replies wait in one block, and once the block
-# reaches send.cap() bytes it goes out before the next reply is taken:
-# a pipelined read's replies come to what the peer sent and a head per
-# request, and this bounds even that. Every send has the idle time as
-# its deadline, so a peer that stops reading is let go rather than
-# holding its slot.
-def send.cap() -> U32:
-  1048576
-
-# what stays waiting after a reply brings the block to k bytes: all of
-# it below the cap, none of it (it has gone out) at or past it
-def batch.keep(c: Cmp, k: U32) -> U32:
-  match c:
-    case LT{}:
-      k
-    case EQ{}:
-      0
-    case GT{}:
-      0
-
-# the writer: the socket, the bytes waiting, and whether everything
-# promised so far has gone out. Once it has not, nothing more is written.
-type Em<-S: Type> is Type:
-  Em{s: S, acc: Bytes(), ok: Bool}
-
-# a file being written: its descriptor, the bytes still owed, the
-# socket, and what waits to go out in front of the next block
-type Pump<-S: Type, -F: Type> is Type:
-  Going{f: F, left: U32, s: S, pre: Bytes()}
-  Over{em: Em<S>}
-
-def send.flushed(
-  ~M: Type -> Type, ~pure: @-A: Type -> A -> M(A),
-  ~bind: @-A: Type -> @-B: Type -> M(A) -> (A -> M(B)) -> M(B), ~S: Type, m: Put(S)
-) -> M(Em<S>):
-  (s, r) = m
-  match r:
-    case Done{u}:
-      pure(Em<S>, Em{s, "", True{}})
-    case Fail{e}:
-      pure(Em<S>, Em{s, "", False{}})
-
-def send.held(
-  ~M: Type -> Type, ~pure: @-A: Type -> A -> M(A),
-  ~bind: @-A: Type -> @-B: Type -> M(A) -> (A -> M(B)) -> M(B), ~S: Type,
-  ~tx: S -> Bytes() -> U32 -> M(Put(S)), +ms: U32, s: S, acc: Bytes(), c: Cmp
-) -> M(Em<S>):
-  match c:
-    case LT{}:
-      pure(Em<S>, Em{s, acc, True{}})
-    case EQ{}:
-      bind(Put(S), Em<S>, tx(s, acc, ms), m => send.flushed(~M, ~pure, ~bind, ~S, m))
-    case GT{}:
-      bind(Put(S), Em<S>, tx(s, acc, ms), m => send.flushed(~M, ~pure, ~bind, ~S, m))
-
-# a reply joins the waiting block, and a block at the cap goes out
-def send.hold(
-  ~M: Type -> Type, ~pure: @-A: Type -> A -> M(A),
-  ~bind: @-A: Type -> @-B: Type -> M(A) -> (A -> M(B)) -> M(B), ~S: Type,
-  ~tx: S -> Bytes() -> U32 -> M(Put(S)), +ms: U32, s: S, +acc: Bytes()
-) -> M(Em<S>):
-  send.held(~M, ~pure, ~bind, ~S, ~tx, ms, s, acc,
-    U32.cmp(U32.from_nat(Bytes.len(acc)), send.cap()))
-
-# a file whose bytes are all out leaves what waits in front of the next
-# block (its head, when it was empty) to the batch, under the batch's
-# cap. As first written it was left waiting without the cap's test, so
-# a pipelined read of empty files grew the batch by a head each.
-def pump.left(
-  ~M: Type -> Type, ~pure: @-A: Type -> A -> M(A),
-  ~bind: @-A: Type -> @-B: Type -> M(A) -> (A -> M(B)) -> M(B), ~S: Type, ~F: Type,
-  ~tx: S -> Bytes() -> U32 -> M(Put(S)), ~fclose: F -> M(Unit), +ms: U32, f: F,
-  left: U32, s: S, pre: Bytes(), done: Bool
-) -> M(Pump<S, F>):
-  match done:
-    case True{}:
-      bind(Unit, Pump<S, F>, fclose(f), u =>
-        bind(Em<S>, Pump<S, F>, send.hold(~M, ~pure, ~bind, ~S, ~tx, ms, s, pre), em =>
-          pure(Pump<S, F>, Over{em})))
-    case False{}:
-      pure(Pump<S, F>, Going{f, left, s, pre})
-
-def pump.fail(
-  ~M: Type -> Type, ~pure: @-A: Type -> A -> M(A),
-  ~bind: @-A: Type -> @-B: Type -> M(A) -> (A -> M(B)) -> M(B), ~S: Type, ~F: Type,
-  ~fclose: F -> M(Unit), f: F, s: S, pre: Bytes()
-) -> M(Pump<S, F>):
-  bind(Unit, Pump<S, F>, fclose(f), u => pure(Pump<S, F>, Over{Em{s, pre, False{}}}))
-
-def pump.sent(
-  ~M: Type -> Type, ~pure: @-A: Type -> A -> M(A),
-  ~bind: @-A: Type -> @-B: Type -> M(A) -> (A -> M(B)) -> M(B), ~S: Type, ~F: Type,
-  ~tx: S -> Bytes() -> U32 -> M(Put(S)), ~fclose: F -> M(Unit), +ms: U32, m: Put(S),
-  f: F, +left: U32
-) -> M(Pump<S, F>):
-  (s, r) = m
-  match r:
-    case Fail{e}:
-      pump.fail(~M, ~pure, ~bind, ~S, ~F, ~fclose, f, s, "")
-    case Done{u}:
-      pump.left(~M, ~pure, ~bind, ~S, ~F, ~tx, ~fclose, ms, f, left, s, "", U32.is_zero(left))
-
-def pump.block(
-  ~M: Type -> Type, ~pure: @-A: Type -> A -> M(A),
-  ~bind: @-A: Type -> @-B: Type -> M(A) -> (A -> M(B)) -> M(B), ~S: Type, ~F: Type,
-  ~tx: S -> Bytes() -> U32 -> M(Put(S)), ~fclose: F -> M(Unit), +ms: U32, f: F,
-  +left: U32, s: S, pre: Bytes(), bs: Bytes(), +n: U32, empty: Bool
-) -> M(Pump<S, F>):
-  match empty:
-    case True{}:
-      pump.fail(~M, ~pure, ~bind, ~S, ~F, ~fclose, f, s, pre)
-    case False{}:
-      bind(Put(S), Pump<S, F>, tx(s, Bytes.append(pre, bs), ms), m =>
-        pump.sent(~M, ~pure, ~bind, ~S, ~F, ~tx, ~fclose, ms, m, f, (left - n : U32)))
-
-def pump.got(
-  ~M: Type -> Type, ~pure: @-A: Type -> A -> M(A),
-  ~bind: @-A: Type -> @-B: Type -> M(A) -> (A -> M(B)) -> M(B), ~S: Type, ~F: Type,
-  ~tx: S -> Bytes() -> U32 -> M(Put(S)), ~fclose: F -> M(Unit), +ms: U32,
-  got: F & Result<&1, &1, U32 & String, Bytes()>, left: U32, s: S, pre: Bytes()
-) -> M(Pump<S, F>):
-  (f, r) = got
-  match r:
-    case Fail{e}:
-      pump.fail(~M, ~pure, ~bind, ~S, ~F, ~fclose, f, s, pre)
-    case Done{+bs}:
-      pump.block(~M, ~pure, ~bind, ~S, ~F, ~tx, ~fclose, ms, f, left, s, pre, bs,
-        U32.from_nat(Bytes.len(bs)), U32.is_zero(U32.from_nat(Bytes.len(bs))))
-
-def pump.out(
-  ~M: Type -> Type, ~pure: @-A: Type -> A -> M(A),
-  ~bind: @-A: Type -> @-B: Type -> M(A) -> (A -> M(B)) -> M(B), ~S: Type, ~F: Type,
-  ~fclose: F -> M(Unit), p: Pump<S, F>
-) -> M(Em<S>):
-  match p:
-    case Over{em}:
-      pure(Em<S>, em)
-    case Going{f, left, s, pre}:
-      bind(Unit, Em<S>, fclose(f), u => pure(Em<S>, Em{s, pre, False{}}))
-
-# k bounds the reads: a block's worth each, and 64 short ones besides
-def pump(
-  ~M: Type -> Type, ~pure: @-A: Type -> A -> M(A),
-  ~bind: @-A: Type -> @-B: Type -> M(A) -> (A -> M(B)) -> M(B), ~S: Type, ~F: Type,
-  ~tx: S -> Bytes() -> U32 -> M(Put(S)),
-  ~fread: F -> U32 -> M(F & Result<&1, &1, U32 & String, Bytes()>),
-  ~fclose: F -> M(Unit), k: Nat, +ms: U32, p: Pump<S, F>
-) -> M(Em<S>):
-  match k:
-    case 0n:
-      pump.out(~M, ~pure, ~bind, ~S, ~F, ~fclose, p)
-    case 1n+j:
-      match p:
-        case Over{em}:
-          pure(Em<S>, em)
-        case Going{f, +left, s, pre}:
-          bind(F & Result<&1, &1, U32 & String, Bytes()>, Em<S>,
-            fread(f, U32.min(page.chunk(), left)), got =>
-            bind(Pump<S, F>, Em<S>, pump.got(~M, ~pure, ~bind, ~S, ~F, ~tx, ~fclose, ms, got,
-                left, s, pre),
-              p2 => pump(~M, ~pure, ~bind, ~S, ~F, ~tx, ~fread, ~fclose, j, ms, p2)))
-
-# a file's log line: its head's status, and the bytes its reply holds
-def log.sized(
-  ~M: Type -> Type, ~pure: @-A: Type -> A -> M(A),
-  ~bind: @-A: Type -> @-B: Type -> M(A) -> (A -> M(B)) -> M(B), ~say: String -> M(Unit),
-  may: Maybe<&2, Bytes()>, +hd: Bytes(), n: U32
-) -> M(Unit):
-  match may:
-    case None{}:
-      pure(Unit, Unit{})
-    case Some{note}:
-      say(note ++ " " ++ Bytes.slice(hd, 9n, 3n) ++ " "
-        ++ U32.show((U32.from_nat(Bytes.len(hd)) + n : U32)))
-
-def page.miss(
-  ~M: Type -> Type, ~pure: @-A: Type -> A -> M(A),
-  ~bind: @-A: Type -> @-B: Type -> M(A) -> (A -> M(B)) -> M(B), ~S: Type,
-  ~tx: S -> Bytes() -> U32 -> M(Put(S)), ~say: String -> M(Unit), +ms: U32, head: Bool,
-  may: Maybe<&2, Bytes()>, sh: Bool, s: S, acc: Bytes()
-) -> M(Em<S>):
-  bind(Bytes(), Em<S>, flat.note(~M, ~pure, ~bind, ~say, may, flat.shut(sh, miss(head))), out =>
-    send.hold(~M, ~pure, ~bind, ~S, ~tx, ms, s, Bytes.append(acc, out)))
-
-def page.start(
-  ~M: Type -> Type, ~pure: @-A: Type -> A -> M(A),
-  ~bind: @-A: Type -> @-B: Type -> M(A) -> (A -> M(B)) -> M(B), ~S: Type, ~F: Type,
-  ~tx: S -> Bytes() -> U32 -> M(Put(S)), ~say: String -> M(Unit),
-  ~fread: F -> U32 -> M(F & Result<&1, &1, U32 & String, Bytes()>),
-  ~fclose: F -> M(Unit), +ms: U32, f: F, +n: U32, +hd: Bytes(), head: Bool,
-  may: Maybe<&2, Bytes()>, s: S, acc: Bytes()
-) -> M(Em<S>):
-  match head:
-    case True{}:
-      bind(Unit, Em<S>, log.sized(~M, ~pure, ~bind, ~say, may, hd, 0), u =>
-        bind(Unit, Em<S>, fclose(f), u2 =>
-          send.hold(~M, ~pure, ~bind, ~S, ~tx, ms, s, Bytes.append(acc, hd))))
-    case False{}:
-      bind(Unit, Em<S>, log.sized(~M, ~pure, ~bind, ~say, may, hd, n), u =>
-        bind(Pump<S, F>, Em<S>,
-          pump.left(~M, ~pure, ~bind, ~S, ~F, ~tx, ~fclose, ms, f, n, s, Bytes.append(acc, hd),
-              U32.is_zero(n)),
-          p => pump(~M, ~pure, ~bind, ~S, ~F, ~tx, ~fread, ~fclose,
-              U32.to_nat((n / page.chunk() + 64 : U32)), ms, p)))
-
-def page.sized(
-  ~M: Type -> Type, ~pure: @-A: Type -> A -> M(A),
-  ~bind: @-A: Type -> @-B: Type -> M(A) -> (A -> M(B)) -> M(B), ~S: Type, ~F: Type,
-  ~tx: S -> Bytes() -> U32 -> M(Put(S)), ~say: String -> M(Unit),
-  ~fread: F -> U32 -> M(F & Result<&1, &1, U32 & String, Bytes()>),
-  ~fclose: F -> M(Unit), +ms: U32, got: F & Result<&1, &1, U32 & String, U32>,
-  ct: List<&2, U32>, head: Bool, may: Maybe<&2, Bytes()>, sh: Bool, s: S, acc: Bytes()
-) -> M(Em<S>):
-  (f, r) = got
-  match r:
-    case Fail{e}:
-      bind(Unit, Em<S>, fclose(f), u =>
-        page.miss(~M, ~pure, ~bind, ~S, ~tx, ~say, ms, head, may, sh, s, acc))
-    case Done{+n}:
-      page.start(~M, ~pure, ~bind, ~S, ~F, ~tx, ~say, ~fread, ~fclose, ms, f, n,
-        flat.shut(sh, reply.n.head("200 OK", ct, n)), head, may, s, acc)
-
-def page.opened(
-  ~M: Type -> Type, ~pure: @-A: Type -> A -> M(A),
-  ~bind: @-A: Type -> @-B: Type -> M(A) -> (A -> M(B)) -> M(B), ~S: Type, ~F: Type,
-  ~tx: S -> Bytes() -> U32 -> M(Put(S)), ~say: String -> M(Unit),
-  ~fsize: F -> M(F & Result<&1, &1, U32 & String, U32>),
-  ~fread: F -> U32 -> M(F & Result<&1, &1, U32 & String, Bytes()>),
-  ~fclose: F -> M(Unit), +ms: U32, m: S & Result<&1, &1, U32 & String, F>,
-  ct: List<&2, U32>, head: Bool, may: Maybe<&2, Bytes()>, sh: Bool, acc: Bytes()
-) -> M(Em<S>):
-  (s, r) = m
-  match r:
-    case Fail{e}:
-      page.miss(~M, ~pure, ~bind, ~S, ~tx, ~say, ms, head, may, sh, s, acc)
-    case Done{f}:
-      bind(F & Result<&1, &1, U32 & String, U32>, Em<S>, fsize(f), got =>
-        page.sized(~M, ~pure, ~bind, ~S, ~F, ~tx, ~say, ~fread, ~fclose, ms, got, ct, head,
-            may, sh, s, acc))
-
-def send.page(
-  ~M: Type -> Type, ~pure: @-A: Type -> A -> M(A),
-  ~bind: @-A: Type -> @-B: Type -> M(A) -> (A -> M(B)) -> M(B), ~S: Type, ~F: Type,
-  ~tx: S -> Bytes() -> U32 -> M(Put(S)), ~say: String -> M(Unit),
-  ~fopen: S -> String -> String -> M(S & Result<&1, &1, U32 & String, F>),
-  ~fsize: F -> M(F & Result<&1, &1, U32 & String, U32>),
-  ~fread: F -> U32 -> M(F & Result<&1, &1, U32 & String, Bytes()>),
-  ~fclose: F -> M(Unit), +ms: U32, root: List<&2, U32>, path: List<&2, U32>,
-  ct: List<&2, U32>, head: Bool, may: Maybe<&2, Bytes()>, sh: Bool, st: Em<S>
-) -> M(Em<S>):
-  match st:
-    case Em{s, acc, ok}:
-      match ok:
-        case False{}:
-          pure(Em<S>, Em{s, acc, False{}})
-        case True{}:
-          bind(S & Result<&1, &1, U32 & String, F>, Em<S>, fopen(s, text(root), text(path)), m =>
-            page.opened(~M, ~pure, ~bind, ~S, ~F, ~tx, ~say, ~fsize, ~fread, ~fclose, ms, m,
-                ct, head, may, sh, acc))
-
-def send.raw(
-  ~M: Type -> Type, ~pure: @-A: Type -> A -> M(A),
-  ~bind: @-A: Type -> @-B: Type -> M(A) -> (A -> M(B)) -> M(B), ~S: Type,
-  ~tx: S -> Bytes() -> U32 -> M(Put(S)), ~say: String -> M(Unit), +ms: U32,
-  may: Maybe<&2, Bytes()>, bs: Bytes(), st: Em<S>
-) -> M(Em<S>):
-  match st:
-    case Em{s, acc, ok}:
-      match ok:
-        case False{}:
-          pure(Em<S>, Em{s, acc, False{}})
-        case True{}:
-          bind(Bytes(), Em<S>, flat.note(~M, ~pure, ~bind, ~say, may, bs), out =>
-            send.hold(~M, ~pure, ~bind, ~S, ~tx, ms, s, Bytes.append(acc, out)))
-
-def send.fin(
-  ~M: Type -> Type, ~pure: @-A: Type -> A -> M(A),
-  ~bind: @-A: Type -> @-B: Type -> M(A) -> (A -> M(B)) -> M(B), ~S: Type, m: Put(S),
-  ok: Bool
-) -> M(Put(S)):
-  (s, r) = m
-  match ok:
-    case True{}:
-      pure(Put(S), (s, r))
-    case False{}:
-      pure(Put(S), (s, Fail{(5, "a file ended before the length its head promised")}))
-
-def send.end(
-  ~M: Type -> Type, ~pure: @-A: Type -> A -> M(A),
-  ~bind: @-A: Type -> @-B: Type -> M(A) -> (A -> M(B)) -> M(B), ~S: Type,
-  ~tx: S -> Bytes() -> U32 -> M(Put(S)), +ms: U32, st: Em<S>
-) -> M(Put(S)):
-  match st:
-    case Em{s, acc, ok}:
-      bind(Put(S), Put(S), tx(s, acc, ms), m => send.fin(~M, ~pure, ~bind, ~S, m, ok))
-
-# a Shut before a reply marks the one that ends its connection
-def send.go(
-  ~M: Type -> Type, ~pure: @-A: Type -> A -> M(A),
-  ~bind: @-A: Type -> @-B: Type -> M(A) -> (A -> M(B)) -> M(B), ~S: Type, ~F: Type,
-  ~tx: S -> Bytes() -> U32 -> M(Put(S)), ~say: String -> M(Unit),
-  ~fopen: S -> String -> String -> M(S & Result<&1, &1, U32 & String, F>),
-  ~fsize: F -> M(F & Result<&1, &1, U32 & String, U32>),
-  ~fread: F -> U32 -> M(F & Result<&1, &1, U32 & String, Bytes()>),
-  ~fclose: F -> M(Unit), xs: List<&2, Seg>, +ms: U32, may: Maybe<&2, Bytes()>, sh: Bool,
-  st: Em<S>
-) -> M(Put(S)):
-  match xs:
-    case Nil{}:
-      send.end(~M, ~pure, ~bind, ~S, ~tx, ms, st)
-    case Con{g, t}:
-      match g:
-        case Note{bs}:
-          send.go(~M, ~pure, ~bind, ~S, ~F, ~tx, ~say, ~fopen, ~fsize, ~fread, ~fclose, t, ms,
-              Some{bs}, sh, st)
-        case Shut{}:
-          send.go(~M, ~pure, ~bind, ~S, ~F, ~tx, ~say, ~fopen, ~fsize, ~fread, ~fclose, t, ms,
-              may, True{}, st)
-        case Raw{bs}:
-          bind(Em<S>, Put(S), send.raw(~M, ~pure, ~bind, ~S, ~tx, ~say, ms, may, flat.shut(sh,
-              bs), st), st2 =>
-            send.go(~M, ~pure, ~bind, ~S, ~F, ~tx, ~say, ~fopen, ~fsize, ~fread, ~fclose, t,
-                ms, None{}, False{}, st2))
-        case Page{root, path, ct, head}:
-          bind(Em<S>, Put(S),
-            send.page(~M, ~pure, ~bind, ~S, ~F, ~tx, ~say, ~fopen, ~fsize, ~fread, ~fclose, ms,
-                root, path, ct, head, may, sh, st), st2 =>
-            send.go(~M, ~pure, ~bind, ~S, ~F, ~tx, ~say, ~fopen, ~fsize, ~fread, ~fclose, t,
-                ms, None{}, False{}, st2))
-
-# The one hook the connection loop calls: write a plan's segments to the
-# socket, in order, streaming files, each send within ms of progress;
-# the result fails when the socket failed, stalled, or a file came up
-# short, and the connection then ends.
-def send.segs(
-  ~M: Type -> Type, ~pure: @-A: Type -> A -> M(A),
-  ~bind: @-A: Type -> @-B: Type -> M(A) -> (A -> M(B)) -> M(B), ~S: Type, ~F: Type,
-  ~tx: S -> Bytes() -> U32 -> M(Put(S)), ~say: String -> M(Unit),
-  ~fopen: S -> String -> String -> M(S & Result<&1, &1, U32 & String, F>),
-  ~fsize: F -> M(F & Result<&1, &1, U32 & String, U32>),
-  ~fread: F -> U32 -> M(F & Result<&1, &1, U32 & String, Bytes()>),
-  ~fclose: F -> M(Unit), s: S, xs: List<&2, Seg>, +ms: U32
-) -> M(Put(S)):
-  send.go(~M, ~pure, ~bind, ~S, ~F, ~tx, ~say, ~fopen, ~fsize, ~fread, ~fclose, xs, ms, None{},
-      False{}, Em{s, "", True{}})
-
+# The writer, the connection loop and the accept loop are bend-wire's
+# (wire/loop.bend, wire/effects.bend), written once over an effect
+# interface and proven once (wire/world.bend) for every protocol. What
+# is the engine's own is below: what a read's requests earn, and the
+# hooks it hands the loop.
 
 # What answering a chunk produced: the bytes to write, whether the peer
 # asked to close, and how many stream events to send afterwards (0 for
 # an ordinary reply).
 type Ans is Data:
-  Ans{out: List<&2, Seg>, close: Bool, stream: U32, sock: Bool}
+  Ans{out: List<&2, L.Seg>, close: Bool, stream: U32, sock: Bool}
 
 # Serving
 # =======
@@ -3230,9 +2815,9 @@ def reply.v13(status: Bytes(), ct: Bytes(), +body: Bytes()) -> Bytes():
 def live.keyed(key: List<&2, U32>, ok: Bool) -> Ans:
   match ok:
     case True{}:
-      Ans{[Raw{live.head(key)}], False{}, 0, True{}}
+      Ans{[L.Raw{live.head(key)}], False{}, 0, True{}}
     case False{}:
-      Ans{[Raw{resp.bad()}], True{}, 0, False{}}
+      Ans{[L.Raw{resp.bad()}], True{}, 0, False{}}
 
 # the key is checked and hashed as the byte list sha1.bend reads; it is
 # at most one read of a head, and only an upgrade pays for it
@@ -3244,7 +2829,7 @@ def live.answer(key: Bytes(), ws: Bool, head: Bool) -> Ans:
     case True{}:
       live.list(Bytes.to_list(key))
     case False{}:
-      Ans{[Raw{fixed(reply.v13("426 Upgrade Required", "text/plain", "websocket only\n"), head)}],
+      Ans{[L.Raw{fixed(reply.v13("426 Upgrade Required", "text/plain", "websocket only\n"), head)}],
         False{}, 0, False{}}
 
 # /events: the stream's head, then the events; a HEAD gets the head
@@ -3252,9 +2837,9 @@ def live.answer(key: Bytes(), ws: Bool, head: Bool) -> Ans:
 def events(head: Bool) -> Ans:
   match head:
     case True{}:
-      Ans{[Raw{sse.head()}], False{}, 0, False{}}
+      Ans{[L.Raw{sse.head()}], False{}, 0, False{}}
     case False{}:
-      Ans{[Raw{sse.head()}], False{}, sse.count(), False{}}
+      Ans{[L.Raw{sse.head()}], False{}, sse.count(), False{}}
 
 # the echo's body goes back as it arrived: within one read it is a view
 # of that read, and the reply is the only copy made of it. A file's path
@@ -3264,11 +2849,11 @@ def act.run(
 ) -> Ans:
   match a:
     case Health{}:
-      Ans{[Raw{fixed(resp.health(), head)}], False{}, 0, False{}}
+      Ans{[L.Raw{fixed(resp.health(), head)}], False{}, 0, False{}}
     case Root{}:
-      Ans{[Raw{fixed(resp.root(), head)}], False{}, 0, False{}}
+      Ans{[L.Raw{fixed(resp.root(), head)}], False{}, 0, False{}}
     case Echo{}:
-      Ans{[Raw{fixed(reply("200 OK", "application/octet-stream", body), head)}],
+      Ans{[L.Raw{fixed(reply("200 OK", "application/octet-stream", body), head)}],
         False{}, 0, False{}}
     case Events{}:
       events(head)
@@ -3283,7 +2868,7 @@ def serve.act(
 ) -> Ans:
   match found:
     case None{}:
-      Ans{[Raw{miss(head)}], False{}, 0, False{}}
+      Ans{[L.Raw{miss(head)}], False{}, 0, False{}}
     case Some{a}:
       act.run(srv, a, path, body, head, ws, key)
 
@@ -3308,7 +2893,7 @@ def serve.go(
     case True{}:
       serve.act(srv, route(srv.table(srv), path), path, body, head, ws, key)
     case False{}:
-      Ans{[Raw{resp.method()}], False{}, 0, False{}}
+      Ans{[L.Raw{resp.method()}], False{}, 0, False{}}
 
 # what a log line says was asked: the two methods this engine serves
 # are named, and anything else is "?", so a log line never carries a
@@ -3325,7 +2910,7 @@ def shown(m: Meth) -> Bytes():
 def noted.on(note: Bytes(), a: Ans) -> Ans:
   match a:
     case Ans{out, cl, st, sk}:
-      Ans{Con{Note{note}, out}, cl, st, sk}
+      Ans{Con{L.Note{note}, out}, cl, st, sk}
 
 # the note is only built when the log is on
 def noted(on: Bool, m: Meth, path: Bytes(), a: Ans) -> Ans:
@@ -3354,7 +2939,7 @@ def serve.fit(
 ) -> Ans:
   match far:
     case True{}:
-      Ans{[Raw{fixed(resp.long(), head)}], False{}, 0, False{}}
+      Ans{[L.Raw{fixed(resp.long(), head)}], False{}, 0, False{}}
     case False{}:
       serve.go(srv, path, body, ok, head, ws, key)
 
@@ -3368,7 +2953,7 @@ def serve.log(+srv: Srv, r: Req) -> Ans:
 def serve(+srv: Srv, r: Req) -> Ans:
   serve.log(srv, r)
 
-def ans.out(a: Ans) -> List<&2, Seg>:
+def ans.out(a: Ans) -> List<&2, L.Seg>:
   match a:
     case Ans{out, cl, st, sk}:
       out
@@ -3390,27 +2975,27 @@ def ans.sock(a: Ans) -> Bool:
 
 # the replies so far, newest first, joined oldest first: each is
 # copied once, so a pipelined batch costs what its replies do
-def answer.flat(acc: List<&2, List<&2, Seg>>, tail: List<&2, Seg>) -> List<&2, Seg>:
+def answer.flat(acc: List<&2, List<&2, L.Seg>>, tail: List<&2, L.Seg>) -> List<&2, L.Seg>:
   match acc:
     case Nil{}:
       tail
     case Con{a, t}:
-      answer.flat(t, List.append(&2, Seg, a, tail))
+      answer.flat(t, List.append(&2, L.Seg, a, tail))
 
 # the reply to a request that ends the connection says so
-def answer.shut(out: List<&2, Seg>, last: Bool) -> List<&2, Seg>:
+def answer.shut(out: List<&2, L.Seg>, last: Bool) -> List<&2, L.Seg>:
   match last:
     case True{}:
-      Con{Shut{}, out}
+      Con{L.Shut{}, out}
     case False{}:
       out
 
 # the end of a chunk's requests: a grammar that broke after them is
 # answered with a 400 after their replies, and the connection ends
-def answer.end(acc: List<&2, List<&2, Seg>>, bad: Bool) -> Ans:
+def answer.end(acc: List<&2, List<&2, L.Seg>>, bad: Bool) -> Ans:
   match bad:
     case True{}:
-      Ans{answer.flat(acc, [Raw{resp.bad()}]), True{}, 0, False{}}
+      Ans{answer.flat(acc, [L.Raw{resp.bad()}]), True{}, 0, False{}}
     case False{}:
       Ans{answer.flat(acc, Nil{}), False{}, 0, False{}}
 
@@ -3423,7 +3008,7 @@ def answer.end(acc: List<&2, List<&2, Seg>>, bad: Bool) -> Ans:
 # connection, since what followed it was never read as requests.
 def answer.go(
   +srv: Srv, rs: List<&2, Req>, bad: Bool, go: Bool, cl: Bool, st: U32, sk: Bool,
-  acc: List<&2, List<&2, Seg>>
+  acc: List<&2, List<&2, L.Seg>>
 ) -> Ans:
   match rs go:
     case _ False{}:
@@ -3444,64 +3029,60 @@ def answer(+srv: Srv, rs: List<&2, Req>, bad: Bool) -> Ans:
 # The server
 # ==========
 
-# What the connection does next: write these bytes and read again,
-# write them and close, write them and keep streaming without reading
-# again, or close now. Feed is the one that holds a connection open.
-type Plan is Data:
-  Go{out: List<&2, Seg>, p2: P}
-  Wait{p2: P}
-  End{out: List<&2, Seg>}
-  Feed{out: List<&2, Seg>, n: U32}
-  Sock{out: List<&2, Seg>, wr: Ws.W}
-  Hold{wr: Ws.W}
-  Stop{}
+# What the connection does next is bend-wire's plan (L.Plan): write and
+# read again, read again, write and close, write and keep streaming
+# events, write and switch to frames, read frames, or close now. A
+# connection's state between reads is the request reader; an upgraded
+# one's is the frame reader.
+def Plan() -> Data:
+  L.Plan<P, Ws.W>
 
 # After a 101 the bytes that followed the upgrade in the same read are
 # frames, and go to the frame reader rather than being dropped; the
 # replies they earned go out with the 101.
-def plan.up.rep(out: List<&2, Seg>, wr: Ws.W, r: Ws.Rep) -> Plan:
+def plan.up.rep(out: List<&2, L.Seg>, wr: Ws.W, r: Ws.Rep) -> Plan():
   match r:
     case Ws.Rep{o, close}:
       match close:
         case True{}:
-          End{List.append(&2, Seg, out, [Raw{o}])}
+          L.End{List.append(&2, L.Seg, out, [L.Raw{o}])}
         case False{}:
-          Sock{List.append(&2, Seg, out, [Raw{o}]), wr}
+          L.Sock{List.append(&2, L.Seg, out, [L.Raw{o}]), wr}
 
-def plan.up.dead(out: List<&2, Seg>, fs: List<&2, Ws.Frm>, dd: Ws.W & Bool) -> Plan:
+def plan.up.dead(out: List<&2, L.Seg>, fs: List<&2, Ws.Frm>, dd: Ws.W & Bool) -> Plan():
   (wr, bad) = dd
   plan.up.rep(out, wr, Ws.reply(fs, bad))
 
-def plan.up.take(out: List<&2, Seg>, tk: Ws.W & List<&2, Ws.Frm>) -> Plan:
+def plan.up.take(out: List<&2, L.Seg>, tk: Ws.W & List<&2, Ws.Frm>) -> Plan():
   (wr, fs) = tk
   plan.up.dead(out, fs, Ws.dead(wr))
 
-def plan.up(out: List<&2, Seg>, rest: Bytes()) -> Plan:
+def plan.up(out: List<&2, L.Seg>, rest: Bytes()) -> Plan():
   plan.up.take(out, Ws.take(Ws.feed_buf(rest, Ws.new())))
 
 def plan.pick(
-  out: List<&2, Seg>, p2: P, plain: Bool, cl: Bool, st: U32, sock: Bool
-) -> Plan:
+  out: List<&2, L.Seg>, p2: P, plain: Bool, cl: Bool, st: U32, sock: Bool
+) -> Plan():
   match plain cl sock:
     case _ _ True{}:
       plan.up(out, p.rest(p2))
     case False{} _ False{}:
-      Feed{out, st}
+      L.Feed{out, st}
     case True{} True{} False{}:
-      End{out}
+      L.End{out}
     case True{} False{} False{}:
-      Go{out, p2}
+      L.Go{out, p2}
 
 # nothing to write means the chunk ended mid-message: read on without
 # a write, unless the peer asked to close
-def plan.quiet(p2: P, cl: Bool) -> Plan:
+def plan.quiet(p2: P, cl: Bool) -> Plan():
   match cl:
     case True{}:
-      Stop{}
+      L.Stop{}
     case False{}:
-      Wait{p2}
+      L.Wait{p2}
 
-def plan.ans(a: Ans, p2: P) -> Plan:
+def plan.ans(a: Ans, p2: P) -> Plan():
   match a:
     case Ans{out, cl, +st, sock}:
       match out:
@@ -3512,653 +3093,88 @@ def plan.ans(a: Ans, p2: P) -> Plan:
 
 # a grammar that broke is answered with a 400, after the replies owed
 # to the requests the same read completed before it
-def plan.take(+srv: Srv, pr: P & List<&2, Req>, bad: Bool) -> Plan:
+def plan.take(+srv: Srv, pr: P & List<&2, Req>, bad: Bool) -> Plan():
   (p2, rs) = pr
   plan.ans(answer(srv, rs, bad), p2)
 
-def plan.go(+srv: Srv, q: P, bad: Bool) -> Plan:
+def plan.go(+srv: Srv, q: P, bad: Bool) -> Plan():
   plan.take(srv, p.take(q), bad)
 
-def plan.on(+srv: Srv, pb: P & Bool) -> Plan:
+def plan.on(+srv: Srv, pb: P & Bool) -> Plan():
   (q, bad) = pb
   plan.go(srv, q, bad)
 
-# the plan after one chunk: parse it, then decide
-# An empty chunk is the peer's FIN: nothing more will ever arrive, so
-# the connection ends here rather than reading again. As first written
-# the engine read again, and one peer that connected and closed without
-# a byte cost most of a core in passes until the fuel ran out.
-def plan.chunk(+srv: Srv, buf: Bytes(), p: P) -> Plan:
-  match buf:
-    case SNil{}:
-      Stop{}
-    case SCon{b, bs}:
-      plan.on(srv, p.dead(feed_buf(SCon{b, bs}, p)))
-
-# what a timed read gave: bytes to parse, the peer's silence past the
-# idle time (the connection ends), or a failure (it ends)
-def plan.may(
-  -S: Type, +srv: Srv, s: S, may: Maybe<&1, Bytes()>, p: P
-) -> S & Plan:
-  match may:
-    case None{}:
-      (s, Stop{})
-    case Some{buf}:
-      (s, plan.chunk(srv, buf, p))
-
-def plan.polled(
-  -S: Type, +srv: Srv, s: S, r: Result<&1, &1, U32 & String, Maybe<&1, Bytes()>>,
-  p: P
-) -> S & Plan:
-  match r:
-    case Done{may}:
-      plan.may(S, srv, s, may, p)
-    case Fail{e}:
-      (s, Stop{})
-
-# the socket and the plan, out of one timed read
-def plan.poll(-S: Type, +srv: Srv, m: Got(S), p: P) -> S & Plan:
-  (s, r) = m
-  plan.polled(S, srv, s, r, p)
-
-def chunk() -> U32:
-  16384
-
-# The head being read, for its budget. NoHead{} is no head in progress
-# (or a body, which the idle time alone bounds); Begun{} is a head the
-# last read began, whose clock starts now; Since{t0, n} is one that began
-# at t0 (the clock, ms) and has had n bytes since the read it began in.
-type Hw is Data:
-  NoHead{}
-  Begun{}
-  Since{t0: Nat, n: U32}
-
-# read the next chunk, within the idle time, and plan from it. Splitting
-# the send's socket out here is what lets the connection loop below be
-# one self-recursive def.
-def turn.s(
-  ~M: Type -> Type, ~pure: @-A: Type -> A -> M(A),
-  ~bind: @-A: Type -> @-B: Type -> M(A) -> (A -> M(B)) -> M(B), ~S: Type,
-  ~rx: S -> U32 -> U32 -> M(Got(S)), +srv: Srv, s: S, p: P
-) -> M((S & Plan) & Hw):
-  bind(Got(S), (S & Plan) & Hw, rx(s, chunk(), srv.idle(srv)), m =>
-    pure((S & Plan) & Hw, (plan.poll(S, srv, m, p), NoHead{})))
-
-# the watch after a read that finished no message: a head still in
-# progress keeps its clock, one just begun gets one
-def hw.next(mid: Bool, hw: Hw) -> Hw:
-  match mid:
-    case False{}:
-      NoHead{}
-    case True{}:
-      match hw:
-        case NoHead{}:
-          Begun{}
-        case Begun{}:
-          Begun{}
-        case Since{t0, n}:
-          Since{t0, n}
-
-# the most bytes a head may take after the read it began in. A read is
-# at most chunk() bytes, so every head under 16 KiB is read whole and
-# none past 32 KiB ever is; past it, the answer is a 431 and a close.
-def head.cap() -> U32:
-  16384
+# the plan after one read: parse it, then decide. The loop ends the
+# connection on an empty read (the peer's FIN) before it asks.
+def plan.chunk(+srv: Srv, buf: Bytes(), p: P) -> Plan():
+  plan.on(srv, p.dead(feed_buf(buf, p)))
 
 def resp.big() -> Bytes():
   reply("431 Request Header Fields Too Large", "text/plain", "head too large\n")
 
-def plan.sized(
-  -S: Type, +srv: Srv, s: S, buf: Bytes(), p: P, t0: Nat, n: U32, big: Bool
-) -> (S & Plan) & Hw:
-  match big:
-    case True{}:
-      ((s, End{[Shut{}, Raw{resp.big()}]}), NoHead{})
-    case False{}:
-      ((s, plan.chunk(srv, buf, p)), Since{t0, n})
-
-def plan.counted(
-  -S: Type, +srv: Srv, s: S, may: Maybe<&1, Bytes()>, p: P, t0: Nat, n: U32
-) -> (S & Plan) & Hw:
-  match may:
-    case None{}:
-      ((s, Stop{}), NoHead{})
-    case Some{+buf}:
-      +k = (n + U32.from_nat(Bytes.len(buf)) : U32)
-      plan.sized(S, srv, s, buf, p, t0, k, U32.is_lt(head.cap(), k))
-
-def plan.headed(-S: Type, +srv: Srv, m: Got(S), p: P, t0: Nat, n: U32) -> (S & Plan) & Hw:
-  (s, r) = m
-  match r:
-    case Done{may}:
-      plan.counted(S, srv, s, may, p, t0, n)
-    case Fail{e}:
-      ((s, Stop{}), NoHead{})
-
-# a read that continues a head waits for the idle time or for what is
-# left of the head's time, whichever is less; a head out of time is
-# dropped, as a silent peer is
-def turn.left(
-  ~M: Type -> Type, ~pure: @-A: Type -> A -> M(A),
-  ~bind: @-A: Type -> @-B: Type -> M(A) -> (A -> M(B)) -> M(B), ~S: Type,
-  ~rx: S -> U32 -> U32 -> M(Got(S)), +srv: Srv, s: S, p: P, t0: Nat, n: U32, +el: Nat,
-  ok: Bool
-) -> M((S & Plan) & Hw):
-  match ok:
-    case False{}:
-      pure((S & Plan) & Hw, ((s, Stop{}), NoHead{}))
-    case True{}:
-      bind(Got(S), (S & Plan) & Hw,
-        rx(s, chunk(),
-          U32.min(srv.idle(srv), U32.from_nat(Nat.sub(U32.to_nat(srv.head(srv)), el)))),
-        m => pure((S & Plan) & Hw, plan.headed(S, srv, m, p, t0, n)))
-
-def turn.at(
-  ~M: Type -> Type, ~pure: @-A: Type -> A -> M(A),
-  ~bind: @-A: Type -> @-B: Type -> M(A) -> (A -> M(B)) -> M(B), ~S: Type,
-  ~rx: S -> U32 -> U32 -> M(Got(S)), +srv: Srv, s: S, p: P, +t0: Nat, n: U32, now: Nat
-) -> M((S & Plan) & Hw):
-  +el = Nat.sub(now, t0)
-  turn.left(~M, ~pure, ~bind, ~S, ~rx, srv, s, p, t0, n, el,
-    Nat.is_lt(el, U32.to_nat(srv.head(srv))))
-
-# the clock read at a head's first read starts its time
-def turn.fresh.at(
-  ~M: Type -> Type, ~pure: @-A: Type -> A -> M(A),
-  ~bind: @-A: Type -> @-B: Type -> M(A) -> (A -> M(B)) -> M(B), ~S: Type,
-  ~rx: S -> U32 -> U32 -> M(Got(S)), +srv: Srv, s: S, p: P, +now: Nat
-) -> M((S & Plan) & Hw):
-  turn.at(~M, ~pure, ~bind, ~S, ~rx, srv, s, p, now, 0, now)
-
-def turn.fresh(
-  ~M: Type -> Type, ~pure: @-A: Type -> A -> M(A),
-  ~bind: @-A: Type -> @-B: Type -> M(A) -> (A -> M(B)) -> M(B), ~S: Type,
-  ~rx: S -> U32 -> U32 -> M(Got(S)), +srv: Srv, sn: S & Nat, p: P
-) -> M((S & Plan) & Hw):
-  (s, now) = sn
-  turn.fresh.at(~M, ~pure, ~bind, ~S, ~rx, srv, s, p, now)
-
-def turn.since(
-  ~M: Type -> Type, ~pure: @-A: Type -> A -> M(A),
-  ~bind: @-A: Type -> @-B: Type -> M(A) -> (A -> M(B)) -> M(B), ~S: Type,
-  ~rx: S -> U32 -> U32 -> M(Got(S)), +srv: Srv, sn: S & Nat, p: P, t0: Nat, n: U32
-) -> M((S & Plan) & Hw):
-  (s, now) = sn
-  turn.at(~M, ~pure, ~bind, ~S, ~rx, srv, s, p, t0, n, now)
-
-# read the next chunk for the request reader, under the head's budget
-# when a head is in progress
-def turn.h(
-  ~M: Type -> Type, ~pure: @-A: Type -> A -> M(A),
-  ~bind: @-A: Type -> @-B: Type -> M(A) -> (A -> M(B)) -> M(B), ~S: Type,
-  ~rx: S -> U32 -> U32 -> M(Got(S)), ~clk: S -> M(S & Nat), +srv: Srv, s: S, p: P, hw: Hw
-) -> M((S & Plan) & Hw):
-  match hw:
-    case NoHead{}:
-      turn.s(~M, ~pure, ~bind, ~S, ~rx, srv, s, p)
-    case Begun{}:
-      bind(S & Nat, (S & Plan) & Hw, clk(s), sn => turn.fresh(~M, ~pure, ~bind, ~S, ~rx, srv,
-          sn, p))
-    case Since{t0, n}:
-      bind(S & Nat, (S & Plan) & Hw, clk(s), sn => turn.since(~M, ~pure, ~bind, ~S, ~rx, srv,
-          sn, p, t0, n))
-
-def turn(
-  ~M: Type -> Type, ~pure: @-A: Type -> A -> M(A),
-  ~bind: @-A: Type -> @-B: Type -> M(A) -> (A -> M(B)) -> M(B), ~S: Type,
-  ~rx: S -> U32 -> U32 -> M(Got(S)), ~clk: S -> M(S & Nat), +srv: Srv, sent: Put(S),
-  p: P, hw: Hw
-) -> M((S & Plan) & Hw):
-  (s, r) = sent
-  match r:
-    case Fail{e}:
-      pure((S & Plan) & Hw, ((s, Stop{}), NoHead{}))
-    case Done{u}:
-      turn.h(~M, ~pure, ~bind, ~S, ~rx, ~clk, srv, s, p, hw)
-
 # A WebSocket connection: what the frames one read completed earned --
 # bytes to write and read on, nothing yet (read on), or the close.
-def plan.rep(-S: Type, s: S, wr: Ws.W, r: Ws.Rep) -> S & Plan:
+def plan.rep(wr: Ws.W, r: Ws.Rep) -> Plan():
   match r:
     case Ws.Rep{out, close}:
       match out:
         case SNil{}:
           match close:
             case True{}:
-              (s, End{Nil{}})
+              L.End{Nil{}}
             case False{}:
-              (s, Hold{wr})
+              L.Hold{wr}
         case SCon{h, t}:
           match close:
             case True{}:
-              (s, End{[Raw{SCon{h, t}}]})
+              L.End{[L.Raw{SCon{h, t}}]}
             case False{}:
-              (s, Sock{[Raw{SCon{h, t}}], wr})
+              L.Sock{[L.Raw{SCon{h, t}}], wr}
 
-def plan.framed(-S: Type, s: S, fs: List<&2, Ws.Frm>, dd: Ws.W & Bool) -> S & Plan:
+def plan.framed(fs: List<&2, Ws.Frm>, dd: Ws.W & Bool) -> Plan():
   (wr, bad) = dd
-  plan.rep(S, s, wr, Ws.reply(fs, bad))
+  plan.rep(wr, Ws.reply(fs, bad))
 
-def plan.frames(-S: Type, s: S, tk: Ws.W & List<&2, Ws.Frm>) -> S & Plan:
+def plan.frames(tk: Ws.W & List<&2, Ws.Frm>) -> Plan():
   (wr, fs) = tk
-  plan.framed(S, s, fs, Ws.dead(wr))
+  plan.framed(fs, Ws.dead(wr))
 
-def plan.wsm(-S: Type, s: S, may: Maybe<&1, Bytes()>, wr: Ws.W) -> S & Plan:
-  match may:
-    case None{}:
-      (s, Stop{})
-    case Some{bs}:
-      match bs:
-        case SNil{}:
-          (s, Stop{})
-        case SCon{b, t}:
-          plan.frames(S, s, Ws.take(Ws.feed_buf(SCon{b, t}, wr)))
+# a read of frames (never empty: the loop ends the connection on one)
+def plan.ws(wr: Ws.W, bs: Bytes()) -> Plan():
+  plan.frames(Ws.take(Ws.feed_buf(bs, wr)))
 
-def plan.wsr(
-  -S: Type, s: S, r: Result<&1, &1, U32 & String, Maybe<&1, Bytes()>>, wr: Ws.W
-) -> S & Plan:
-  match r:
-    case Done{may}:
-      plan.wsm(S, s, may, wr)
-    case Fail{e}:
-      (s, Stop{})
-
-def plan.ws(-S: Type, m: Got(S), wr: Ws.W) -> S & Plan:
-  (s, r) = m
-  plan.wsr(S, s, r, wr)
-
-def turn.wr(
-  ~M: Type -> Type, ~pure: @-A: Type -> A -> M(A),
-  ~bind: @-A: Type -> @-B: Type -> M(A) -> (A -> M(B)) -> M(B), ~S: Type,
-  ~rx: S -> U32 -> U32 -> M(Got(S)), +srv: Srv, s: S, wr: Ws.W
-) -> M(S & Plan):
-  bind(Got(S), S & Plan, rx(s, chunk(), srv.idle(srv)), m => pure(S & Plan, plan.ws(S, m, wr)))
-
-# after the frames' replies: a send that failed or stalled ends the
-# connection, as it does for requests. As first written this read on
-# whatever the send said, so a peer that sent pings and never read
-# held its connection for as many sends as the fuel allowed, each one
-# waiting out the idle time.
-def turn.ws(
-  ~M: Type -> Type, ~pure: @-A: Type -> A -> M(A),
-  ~bind: @-A: Type -> @-B: Type -> M(A) -> (A -> M(B)) -> M(B), ~S: Type,
-  ~rx: S -> U32 -> U32 -> M(Got(S)), +srv: Srv, sent: Put(S), wr: Ws.W
-) -> M(S & Plan):
-  (s, r) = sent
-  match r:
-    case Fail{e}:
-      pure(S & Plan, (s, Stop{}))
-    case Done{u}:
-      turn.wr(~M, ~pure, ~bind, ~S, ~rx, srv, s, wr)
-
-# the next event, or the end of the stream. A stream terminates because
-# the count runs out, the same way a connection does: no @unsafe, and a
-# peer that goes quiet still cannot hold a computation open forever.
-def plan.more(-S: Type, s: S, +n: U32, done: Bool) -> S & Plan:
-  match done:
-    case True{}:
-      (s, Stop{})
-    case False{}:
-      (s, Feed{[Raw{sse.event(n)}], (n - 1 : U32)})
-
-def plan.next(
-  -S: Type, s: S, r: Result<&1, &1, U32 & String, Unit>, +n: U32
-) -> S & Plan:
-  match r:
-    case Done{u}:
-      plan.more(S, s, n, U32.is_zero(n))
-    case Fail{e}:
-      (s, Stop{})
-
-# wait, then plan the next event. The engine writes on its own clock and
-# reads nothing, so the reader and the writer never contend for the one
-# socket the connection owns.
-def tick(
-  ~M: Type -> Type, ~pure: @-A: Type -> A -> M(A),
-  ~bind: @-A: Type -> @-B: Type -> M(A) -> (A -> M(B)) -> M(B), ~S: Type,
-  ~nap: S -> U32 -> M(S), sent: Put(S), n: U32
-) -> M(S & Plan):
-  (s, r) = sent
-  bind(S, S & Plan, nap(s, sse.gap()), s2 => pure(S & Plan, plan.next(S, s2, r, n)))
-
-# One connection. fuel is the most chunks it will ever read, so the
-# loop terminates by Bend's own rule rather than by @unsafe: a peer
-# that dribbles bytes forever runs the fuel out and is dropped.
-# the most chunks one connection may ever ask for. It is a real bound,
-# not a formality: it is what stops a peer from holding a computation
-# open forever, and it is why conn needs no @unsafe.
-def conn.fuel() -> Nat:
-  U32.to_nat(1048576)
-
-# the most reads in a row that may finish no message. A head arrives
-# in one or two chunks; one dribbled a byte at a time, each inside the
-# idle time, is not a client and is dropped after this many.
-def conn.waits() -> Nat:
-  64n
-
-# The socket, out of what its last send answered.
-def put.s(-S: Type, m: Put(S)) -> S:
-  (s, r) = m
-  s
-
-# The loop answers the socket when the connection is over; the caller
-# closes it. The watch rides beside the plan: a read that finishes no
-# message keeps the head's clock and count, and one that finishes one
-# starts them over for whatever head it left begun.
-def conn(
-  ~M: Type -> Type, ~pure: @-A: Type -> A -> M(A),
-  ~bind: @-A: Type -> @-B: Type -> M(A) -> (A -> M(B)) -> M(B), ~S: Type, ~F: Type,
-  ~rx: S -> U32 -> U32 -> M(Got(S)), ~tx: S -> Bytes() -> U32 -> M(Put(S)),
-  ~clk: S -> M(S & Nat), ~nap: S -> U32 -> M(S), ~say: String -> M(Unit),
-  ~fopen: S -> String -> String -> M(S & Result<&1, &1, U32 & String, F>),
-  ~fsize: F -> M(F & Result<&1, &1, U32 & String, U32>),
-  ~fread: F -> U32 -> M(F & Result<&1, &1, U32 & String, Bytes()>),
-  ~fclose: F -> M(Unit), f: Nat, +srv: Srv, sph: (S & Plan) & Hw, w: Nat
-) -> M(S):
-  match f:
-    case 0n:
-      ((s, pl), hw) = sph
-      pure(S, s)
-    case 1n+g:
-      ((s, pl), hw) = sph
-      match pl:
-        case Stop{}:
-          pure(S, s)
-        case End{out}:
-          bind(Put(S), S, send.segs(~M, ~pure, ~bind, ~S, ~F, ~tx, ~say, ~fopen, ~fsize,
-              ~fread, ~fclose, s, out, srv.idle(srv)), m => pure(S, put.s(S, m)))
-        case Wait{+p2}:
-          match w:
-            case 0n:
-              pure(S, s)
-            case 1n+v:
-              bind((S & Plan) & Hw, S, turn.h(~M, ~pure, ~bind, ~S, ~rx, ~clk, srv, s, p2,
-                  hw.next(p.head(p2), hw)),
-                sp2 => conn(~M, ~pure, ~bind, ~S, ~F, ~rx, ~tx, ~clk, ~nap, ~say, ~fopen,
-                    ~fsize, ~fread, ~fclose, g, srv, sp2, v))
-        case Feed{out, n}:
-          bind(Put(S), S, send.segs(~M, ~pure, ~bind, ~S, ~F, ~tx, ~say, ~fopen, ~fsize,
-              ~fread, ~fclose, s, out, srv.idle(srv)), m =>
-            bind(S & Plan, S, tick(~M, ~pure, ~bind, ~S, ~nap, m, n), sp2 =>
-              conn(~M, ~pure, ~bind, ~S, ~F, ~rx, ~tx, ~clk, ~nap, ~say, ~fopen, ~fsize,
-                  ~fread, ~fclose, g, srv, (sp2, NoHead{}), conn.waits())))
-        case Sock{out, wr}:
-          bind(Put(S), S, send.segs(~M, ~pure, ~bind, ~S, ~F, ~tx, ~say, ~fopen, ~fsize,
-              ~fread, ~fclose, s, out, srv.idle(srv)), m =>
-            bind(S & Plan, S, turn.ws(~M, ~pure, ~bind, ~S, ~rx, srv, m, wr), sp2 =>
-              conn(~M, ~pure, ~bind, ~S, ~F, ~rx, ~tx, ~clk, ~nap, ~say, ~fopen, ~fsize,
-                  ~fread, ~fclose, g, srv, (sp2, NoHead{}), conn.waits())))
-        case Hold{wr}:
-          match w:
-            case 0n:
-              pure(S, s)
-            case 1n+v:
-              bind(S & Plan, S, turn.wr(~M, ~pure, ~bind, ~S, ~rx, srv, s, wr), sp2 =>
-                conn(~M, ~pure, ~bind, ~S, ~F, ~rx, ~tx, ~clk, ~nap, ~say, ~fopen, ~fsize,
-                    ~fread, ~fclose, g, srv, (sp2, NoHead{}), v))
-        case Go{out, +p2}:
-          bind(Put(S), S, send.segs(~M, ~pure, ~bind, ~S, ~F, ~tx, ~say, ~fopen, ~fsize,
-              ~fread, ~fclose, s, out, srv.idle(srv)), m =>
-            bind((S & Plan) & Hw, S, turn(~M, ~pure, ~bind, ~S, ~rx, ~clk, srv, m, p2,
-                hw.next(p.head(p2), NoHead{})),
-              sp2 => conn(~M, ~pure, ~bind, ~S, ~F, ~rx, ~tx, ~clk, ~nap, ~say, ~fopen, ~fsize,
-                  ~fread, ~fclose, g, srv, sp2, conn.waits())))
-
-# A connection from its first read to the socket it leaves to be closed.
-def conn.start(
-  ~M: Type -> Type, ~pure: @-A: Type -> A -> M(A),
-  ~bind: @-A: Type -> @-B: Type -> M(A) -> (A -> M(B)) -> M(B), ~S: Type, ~F: Type,
-  ~rx: S -> U32 -> U32 -> M(Got(S)), ~tx: S -> Bytes() -> U32 -> M(Put(S)),
-  ~clk: S -> M(S & Nat), ~nap: S -> U32 -> M(S), ~say: String -> M(Unit),
-  ~fopen: S -> String -> String -> M(S & Result<&1, &1, U32 & String, F>),
-  ~fsize: F -> M(F & Result<&1, &1, U32 & String, U32>),
-  ~fread: F -> U32 -> M(F & Result<&1, &1, U32 & String, Bytes()>),
-  ~fclose: F -> M(Unit), +srv: Srv, s: S
-) -> M(S):
-  bind(Got(S), S, rx(s, chunk(), srv.idle(srv)), m =>
-    conn(~M, ~pure, ~bind, ~S, ~F, ~rx, ~tx, ~clk, ~nap, ~say, ~fopen, ~fsize, ~fread, ~fclose,
-        conn.fuel(), srv, (plan.poll(S, srv, m, p.new()), NoHead{}), conn.waits()))
-
-# The accept loop
-# ===============
+# The hooks
+# =========
 #
-# Written over its own interface, as the connection is: ~L the
-# listener, ~C what it accepts, ~E what serving needs, ~lsn one timed
-# accept (TCP.accept_poll), ~sig whether a stop was asked (SIGTERM),
-# ~hand the hand-off of an accepted connection. A turn ends the loop
-# only for a stop request or for a listener that is no longer one; an
-# accept that failed for one connection, or for a passing shortage, is
-# a turn like any other.
+# What the engine hands the loop (wire/loop.bend names each): its
+# budgets, its planners, its stream, and how its replies are framed and
+# logged.
+def h.plan(srv: Srv, buf: Bytes(), p: P) -> Plan():
+  plan.chunk(srv, buf, p)
 
-# why the loop ended: it spent its turns, a stop was asked, or the
-# listener died with this code
-type Why is Data:
-  Spent{}
-  Asked{}
-  Dead{code: U32}
+def h.mid(p: P) -> Bool:
+  p.head(p)
 
-# The errors accept(2) answers for one connection or for the moment
-# (tcp_accept_poll.c's passing set, and EAGAIN), by their numbers on
-# Linux and on macOS. The effect answers them itself, so none should
-# arrive here; if one does, it is one more turn and not the end.
-def accept.soft.codes() -> List<&2, U32>:
-  [1, 4, 11, 12, 23, 24, 35, 42, 45, 50, 51, 53, 55, 64, 65, 71, 92, 95, 100, 101,
-   102, 103, 105, 112, 113]
+def h.shut(sh: Bool, bs: Bytes()) -> Bytes():
+  flat.shut(sh, bs)
 
-def accept.soft.in(+code: U32, cs: List<&2, U32>) -> Bool:
-  match cs:
-    case Nil{}:
-      False{}
-    case Con{+c, t}:
-      U32.is_eq(code, c) || accept.soft.in(code, t)
+def h.fhead(ct: List<&2, U32>, n: U32) -> Bytes():
+  reply.n.head("200 OK", ct, n)
 
-def accept.soft(+code: U32) -> Bool:
-  accept.soft.in(code, accept.soft.codes())
+def h.lnote(note: Bytes(), out: Bytes()) -> String:
+  log.line(note, out)
 
-# after a turn: a stop request ends the loop, anything else goes on
-def accept.asked(
-  ~M: Type -> Type, ~pure: @-A: Type -> A -> M(A),
-  ~bind: @-A: Type -> @-B: Type -> M(A) -> (A -> M(B)) -> M(B), ~L: Type, lb: L & Bool
-) -> M(L & Maybe<&2, Why>):
-  (l, stop) = lb
-  match stop:
-    case True{}:
-      pure(L & Maybe<&2, Why>, (l, Some{Asked{}}))
-    case False{}:
-      pure(L & Maybe<&2, Why>, (l, None{}))
+# a file's log line: its head's status, and the bytes its reply holds
+def log.sized(note: Bytes(), +hd: Bytes(), n: U32) -> String:
+  note ++ " " ++ Bytes.slice(hd, 9n, 3n) ++ " " ++ U32.show((U32.from_nat(Bytes.len(hd)) + n : U32))
 
-# A connection to serve takes a slot first, so accepting parks while the
-# limit is reached and the backlog holds what arrives meanwhile. A stop
-# request is looked for on every turn, an arrival or not: asked only
-# when nothing arrived, it went unseen for as long as arrivals kept
-# coming. The ask is a flag read, not a syscall.
-def accept.on(
-  ~M: Type -> Type, ~pure: @-A: Type -> A -> M(A),
-  ~bind: @-A: Type -> @-B: Type -> M(A) -> (A -> M(B)) -> M(B), ~L: Type, ~C: Type,
-  ~E: Data, ~sig: L -> M(L & Bool), ~hand: @+env: E -> L -> C -> M(L), +env: E, l: L,
-  may: Maybe<&1, C>
-) -> M(L & Maybe<&2, Why>):
-  match may:
-    case None{}:
-      bind(L & Bool, L & Maybe<&2, Why>, sig(l), lb => accept.asked(~M, ~pure, ~bind, ~L, lb))
-    case Some{c}:
-      bind(L, L & Maybe<&2, Why>, hand(env, l, c), l2 =>
-        bind(L & Bool, L & Maybe<&2, Why>, sig(l2), lb => accept.asked(~M, ~pure, ~bind, ~L,
-            lb)))
+def h.lsize(note: Bytes(), hd: Bytes(), n: U32) -> String:
+  log.sized(note, hd, n)
 
-# a failure ends the loop only when the listener is no longer one
-def accept.dead(
-  ~M: Type -> Type, ~pure: @-A: Type -> A -> M(A),
-  ~bind: @-A: Type -> @-B: Type -> M(A) -> (A -> M(B)) -> M(B), ~L: Type,
-  ~sig: L -> M(L & Bool), l: L, +code: U32, soft: Bool
-) -> M(L & Maybe<&2, Why>):
-  match soft:
-    case True{}:
-      bind(L & Bool, L & Maybe<&2, Why>, sig(l), lb => accept.asked(~M, ~pure, ~bind, ~L, lb))
-    case False{}:
-      pure(L & Maybe<&2, Why>, (l, Some{Dead{code}}))
-
-def accept.fail.at(
-  ~M: Type -> Type, ~pure: @-A: Type -> A -> M(A),
-  ~bind: @-A: Type -> @-B: Type -> M(A) -> (A -> M(B)) -> M(B), ~L: Type,
-  ~sig: L -> M(L & Bool), l: L, +code: U32
-) -> M(L & Maybe<&2, Why>):
-  accept.dead(~M, ~pure, ~bind, ~L, ~sig, l, code, accept.soft(code))
-
-def accept.fail(
-  ~M: Type -> Type, ~pure: @-A: Type -> A -> M(A),
-  ~bind: @-A: Type -> @-B: Type -> M(A) -> (A -> M(B)) -> M(B), ~L: Type,
-  ~sig: L -> M(L & Bool), l: L, e: U32 & String
-) -> M(L & Maybe<&2, Why>):
-  (code, msg) = e
-  accept.fail.at(~M, ~pure, ~bind, ~L, ~sig, l, code)
-
-def accept.got(
-  ~M: Type -> Type, ~pure: @-A: Type -> A -> M(A),
-  ~bind: @-A: Type -> @-B: Type -> M(A) -> (A -> M(B)) -> M(B), ~L: Type, ~C: Type,
-  ~E: Data, ~sig: L -> M(L & Bool), ~hand: @+env: E -> L -> C -> M(L), +env: E,
-  m: L & Result<&1, &1, U32 & String, Maybe<&1, C>>
-) -> M(L & Maybe<&2, Why>):
-  (l, r) = m
-  match r:
-    case Done{may}:
-      accept.on(~M, ~pure, ~bind, ~L, ~C, ~E, ~sig, ~hand, env, l, may)
-    case Fail{e}:
-      accept.fail(~M, ~pure, ~bind, ~L, ~sig, l, e)
-
-# how often the accept loop looks up from the listener, in ms: the most
-# a stop request waits before it is seen
-def accept.tick() -> U32:
-  250
-
-def accept.why(w: Maybe<&2, Why>) -> Why:
-  match w:
-    case None{}:
-      Spent{}
-    case Some{why}:
-      why
-
-# k turns of the loop, or fewer if it ends: one timed accept each, and
-# the hand-off of what arrived
-def accept.run(
-  ~M: Type -> Type, ~pure: @-A: Type -> A -> M(A),
-  ~bind: @-A: Type -> @-B: Type -> M(A) -> (A -> M(B)) -> M(B), ~L: Type, ~C: Type,
-  ~E: Data, ~lsn: L -> U32 -> M(L & Result<&1, &1, U32 & String, Maybe<&1, C>>),
-  ~sig: L -> M(L & Bool), ~hand: @+env: E -> L -> C -> M(L), k: Nat, +env: E,
-  lw: L & Maybe<&2, Why>
-) -> M(L & Why):
-  match k:
-    case 0n:
-      (l, w) = lw
-      pure(L & Why, (l, accept.why(w)))
-    case 1n+j:
-      (l, w) = lw
-      match w:
-        case Some{why}:
-          pure(L & Why, (l, why))
-        case None{}:
-          bind(L & Result<&1, &1, U32 & String, Maybe<&1, C>>, L & Why, lsn(l, accept.tick()), m =>
-            bind(L & Maybe<&2, Why>, L & Why, accept.got(~M, ~pure, ~bind, ~L, ~C, ~E, ~sig,
-                ~hand, env, m), lw2 =>
-              accept.run(~M, ~pure, ~bind, ~L, ~C, ~E, ~lsn, ~sig, ~hand, j, env, lw2)))
-
-# The real world
-# ==============
-#
-# The interface's IO instance: the effects themselves, and the three
-# that answer beside the handle they were given.
-def net.now(s: Socket) -> IO(Socket & Nat):
-  IO.bind(Nat, Socket & Nat, IO.now(), t => IO.pure(Socket & Nat, (s, t)))
-
-def net.nap(s: Socket, ms: U32) -> IO(Socket):
-  IO.bind(Unit, Socket, IO.sleep(ms), u => IO.pure(Socket, s))
-
-def net.open(s: Socket, root: String, path: String) ->
-  IO(Socket & Result<&1, &1, U32 & String, File>):
-  IO.bind(Result<&1, &1, U32 & String, File>, Socket & Result<&1, &1, U32 & String, File>,
-    File.open_under(root, path), r => IO.pure(Socket & Result<&1, &1, U32 & String, File>, (s, r)))
-
-def net.sig(l: Listener) -> IO(Listener & Bool):
-  IO.bind(Bool, Listener & Bool, IO.signal_pending(15), b => IO.pure(Listener & Bool, (l, b)))
-
-# A connection ends by closing its socket and giving its slot back: the
-# semaphore is a channel with as much room as connections allowed, a
-# slot is a Unit sent into it, and accepting parks on a full one.
-def fin(+sem: Chan(Unit), s: Socket) -> IO(Unit):
-  do IO<Unit>:
-    Socket.close(s)
-    got : Maybe<&1, Unit> <- Chan.recv(Unit, sem)
-    return Unit{}
-
-def start(+srv: Srv, +sem: Chan(Unit), s: Socket) -> IO(Unit):
-  do IO<Unit>:
-    s2 : Socket <- conn.start(~(A => IO(A)), ~IO.pure, ~IO.bind, ~Socket, ~File, ~TCP.poll_buf,
-      ~TCP.send_buf_poll, ~net.now, ~net.nap, ~IO.print_err, ~net.open, ~File.size,
-          ~File.read_buf,
-      ~File.close, srv, s)
-    fin(sem, s2)
-
-# what serving needs: the server, and the slots
-type Env is Data:
-  Env{srv: Srv, sem: Chan(Unit)}
-
-def net.hand(+env: Env, l: Listener, s: Socket) -> IO(Listener):
-  match env:
-    case Env{srv, sem}:
-      do IO<Listener>:
-        ok : Bool <- Chan.send(Unit, sem, Unit{})
-        IO.spawn(Unit, start(srv, sem, s))
-        return l
-
-# every slot taken back means every connection has ended
-def drain(k: Nat, +sem: Chan(Unit)) -> IO(Unit):
-  match k:
-    case 0n:
-      do IO<Unit>:
-        return Unit{}
-    case 1n+j:
-      do IO<Unit>:
-        ok : Bool <- Chan.send(Unit, sem, Unit{})
-        drain(j, sem)
-
-def grace(ms: U32) -> IO(Unit):
-  do IO<Unit>:
-    IO.sleep(ms)
-    IO.die(Unit, 0, "bend-http: stopped with connections still open")
-
-# Stopping, on SIGTERM: the listener closes so nothing more arrives, the
-# connections open finish what they are doing, and the process ends when
-# they have all ended or when the grace time is up, whichever is first.
-def stopping(+srv: Srv, +sem: Chan(Unit), l: Listener) -> IO(Unit):
-  do IO<Unit>:
-    IO.print_err("bend-http: stopping")
-    Listener.close(l)
-    IO.spawn(Unit, grace(srv.grace(srv)))
-    drain(U32.to_nat(srv.conns(srv)), sem)
-    IO.die(Unit, 0, "bend-http: stopped")
-
-# the turns one run of the loop takes before it is started again
-def accept.fuel() -> Nat:
-  U32.to_nat(1048576)
-
-# The accept loop is the one place that runs until it is told to stop,
-# so it is the one @unsafe def in the engine, and all it does is start
-# accept.run again when its turns are spent. It stops for a stop
-# request and for a listener that is no longer one.
-@unsafe
-def accept(+srv: Srv, +sem: Chan(Unit), lw: Listener & Why) -> IO(Unit):
-  (l, why) = lw
-  match why:
-    case Spent{}:
-      do IO<Unit>:
-        lw2 : Listener & Why <- accept.run(~(A => IO(A)), ~IO.pure, ~IO.bind, ~Listener,
-            ~Socket, ~Env, ~TCP.accept_poll,
-          ~net.sig, ~net.hand, accept.fuel(), Env{srv, sem}, (l, None{}))
-        accept(srv, sem, lw2)
-    case Asked{}:
-      stopping(srv, sem, l)
-    case Dead{code}:
-      stopping(srv, sem, l)
+# One connection, with the real effects (wire/effects.bend)
+def go(+srv: Srv, s: Socket) -> IO(Socket):
+  Fx.serve(~Srv, ~P, ~Ws.W, ~srv.idle, ~srv.head, ~h.plan, ~h.mid, ~resp.big(), ~plan.ws,
+    ~sse.gap(), ~sse.event, ~h.shut, ~h.fhead, ~miss, ~h.lnote, ~h.lsize, srv, p.new(), s)
 
 def scheme(m: Maybe<&2, Pem>) -> String:
   match m:
@@ -4194,20 +3210,11 @@ def listen(port: U32, shared: Bool, m: Maybe<&2, Pem>) ->
         case Pem{cert, key}:
           TLS.listen(port, text(cert), text(key))
 
-def early(stop: Bool) -> Why:
-  match stop:
-    case True{}:
-      Asked{}
-    case False{}:
-      Spent{}
-
 def run(+c: Cfg) -> IO(Unit):
   do IO<Unit>:
-    l   : Listener <- IO.try(Listener, listen(cfg.port(c), cfg.shared(c), cfg.pem(c)))
-    sem : Chan(Unit) <- Chan.new(Unit, cfg.conns(c))
+    l : Listener <- IO.try(Listener, listen(cfg.port(c), cfg.shared(c), cfg.pem(c)))
     IO.print(banner(c))
-    stop : Bool <- IO.signal_pending(15)
-    accept(srv.new(c), sem, (l, early(stop)))
+    Fx.run(~Srv, ~go, ~srv.grace, ~srv.conns, "bend-http", srv.new(c), l)
 
 # bend-http [--port N] [--root DIR] [--idle-ms N] [--head-ms N] [--max-conns N]
 #           [--grace-ms N] [--shared] [--tls-cert PEM --tls-key PEM] [--log]
