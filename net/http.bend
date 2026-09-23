@@ -90,11 +90,6 @@ type Request is Data:
   Request{method: Bytes(), path: Bytes(), query: Bytes(), headers: List<&2, Header>, body: Bytes(),
     remote: Bytes(), params: List<&2, Header>}
 
-def method(r: Request) -> Bytes():
-  match r:
-    case Request{m, p, q, hs, b, ip, ps}:
-      m
-
 def path(r: Request) -> Bytes():
   match r:
     case Request{m, p, q, hs, b, ip, ps}:
@@ -124,6 +119,11 @@ def params(r: Request) -> List<&2, Header>:
   match r:
     case Request{m, p, q, hs, b, ip, ps}:
       ps
+
+def method(r: Request) -> Bytes():
+  match r:
+    case Request{m, p, q, hs, b, ip, ps}:
+      m
 
 # a request field's value (the name in any case)
 def header(r: Request, n: Bytes()) -> Maybe<&2, Bytes()>:
