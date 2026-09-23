@@ -327,6 +327,9 @@ def File.open(path: String, mode: String) ->
   import "./effs/file_open.js"
 
 # path read-only below the directory root, never through a symbolic link
+# Contract (demos/io_http_engine/world.bend, fopen.ok): Done only for a
+# regular file; a missing name, a symbolic link, a directory and a path
+# that climbs out of root all fail.
 def File.open_under(root: String, path: String) ->
   IO(Result<&1, &1, U32 & String, File>):
   import "./effs/file_open_under.c"
@@ -419,6 +422,11 @@ def TCP.accept(listener: Listener) ->
   import "./effs/tcp_accept.c"
   import "./effs/tcp_accept.js"
 
+# Contract (demos/io_http_engine/world.bend, lsn.ok): Some{socket} for a
+# connection; None{} once ms have passed with none, or after shedding an
+# arrival it had no descriptor for; Fail only for a listener that is no
+# longer one, never with a code of the passing set (EMFILE, ENFILE,
+# ECONNABORTED, ENOBUFS, ENOMEM, ...), which it answers itself.
 def TCP.accept_poll(listener: Listener, ms: U32) ->
   IO(Listener & Result<&1, &1, U32 & String, Maybe<&1, Socket>>):
   import "./effs/tcp_accept_poll.c"
@@ -478,16 +486,26 @@ def TCP.send_buf(sock: Socket, data: Bytes()) ->
 
 # TCP.send_buf with a deadline: a send that makes no progress for ms
 # fails with ETIMEDOUT, so a peer that stops reading cannot hold it.
+# Contract (demos/io_http_engine/world.bend, tx.ok): to a peer that
+# reads, each piece within ms of the last, Done once every byte is out
+# however long the whole takes; to one that stops reading, Fail with
+# ETIMEDOUT after at least ms; to one that resets, Fail. An empty send
+# is Done at once.
 def TCP.send_buf_poll(sock: Socket, data: Bytes(), ms: U32) ->
   IO(Socket & Result<&1, &1, U32 & String, Unit>):
   import "./effs/tcp_send_buf_poll.c"
   import "./effs/tcp_send_buf_poll.js"
 
+# Contract (demos/io_http_engine/world.bend, rx.ok): None{} only once ms
+# have passed with nothing to read; Some{bytes} within ms, at most max
+# of them, the empty Bytes being the peer's FIN; Fail at any time.
 def TCP.poll_buf(sock: Socket, max: U32, ms: U32) ->
   IO(Socket & Result<&1, &1, U32 & String, Maybe<&1, Bytes()>>):
   import "./effs/tcp_poll_buf.c"
   import "./effs/tcp_poll_buf.js"
 
+# Contract (demos/io_http_engine/world.bend, fread.ok): at most max bytes
+# and at most what is left, none only at the end of the file.
 def File.read_buf(file: File, max: U32) ->
   IO(File & Result<&1, &1, U32 & String, Bytes()>):
   import "./effs/file_read_buf.c"

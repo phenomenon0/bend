@@ -13,6 +13,7 @@ import ./sha1.bend as Sha1
 import ./b64.bend as B64
 import ./ws.bend as Ws
 import ./spec.bend as Spec
+import ./world.bend as W
 import ./LAWS.bend as Laws
 
 def Laws.feed_split(a, b, p):
@@ -1612,3 +1613,1047 @@ def Laws.parse_version_13():
 
 def Laws.parse_version_other():
   {==}
+
+# The world
+# =========
+#
+# The loops in world.bend's model are pure functions, so most of these
+# compute once the right thing is generalised. A value the proof cannot
+# see (a send's answer, a comparison with the cap, a Bool the premise
+# pins) is made a variable by a lemma quantified over it, with the
+# equation that says what it was. end_is_last, stop_is_last and
+# go_order compute; fail_* take the send's answer apart; the buffering
+# laws walk the writer (send.hold, send.raw, and a file through
+# fopen, fsize, page.start and the pump) with the comparison with the
+# cap generalised; refuse_* walk answer.go one request at a time, and
+# plan.ans through the owed replies; segs_wire walks send.go with the
+# held batch, and the peer's appends reassociated; stall_ends shows
+# that a turn at the mute peer always plans Stop (or, for a stream,
+# plans one event whose send must fail), so that fuel past three turns
+# is never used; accept_* walk accept.run one event at a time.
+
+def Laws.end_is_last(srv, w, out, hw, g, v):
+  {==}
+
+def Laws.stop_is_last(srv, w, hw, g, v):
+  {==}
+
+def Laws.go_order(srv, w, out, p2, hw, g, v):
+  {==}
+
+def Laws.fail_go(srv, g, v, m, p, hw, e):
+  match g:
+    case 0n:
+      (s, r) = m
+      match r:
+        case Fail{x}:
+          {==}
+        case Done{u}:
+          no({W.sim.conn(0n, srv, W.sim.turn(srv, (s, Done{u}), p, hw), v) == s : W.World},
+            Equal.sym(Bool, True{}, False{}, e))
+    case 1n+h:
+      (s, r) = m
+      match r:
+        case Fail{x}:
+          {==}
+        case Done{u}:
+          no({W.sim.conn(1n+h, srv, W.sim.turn(srv, (s, Done{u}), p, hw), v) == s : W.World},
+            Equal.sym(Bool, True{}, False{}, e))
+
+def Laws.fail_ws(srv, g, v, m, wr, e):
+  match g:
+    case 0n:
+      (s, r) = m
+      match r:
+        case Fail{x}:
+          {==}
+        case Done{u}:
+          no({W.sim.conn(0n, srv, (W.sim.turn.ws(srv, (s, Done{u}), wr), Eng.NoHead{}), v) == s :
+            W.World}, Equal.sym(Bool, True{}, False{}, e))
+    case 1n+h:
+      (s, r) = m
+      match r:
+        case Fail{x}:
+          {==}
+        case Done{u}:
+          no({W.sim.conn(1n+h, srv, (W.sim.turn.ws(srv, (s, Done{u}), wr), Eng.NoHead{}), v) ==
+            s : W.World}, Equal.sym(Bool, True{}, False{}, e))
+
+def Laws.fail_feed(srv, g, v, m, n, e):
+  match g:
+    case 0n:
+      (s, r) = m
+      match r:
+        case Fail{x}:
+          {==}
+        case Done{u}:
+          no({W.sim.conn(0n, srv, (W.sim.tick((s, Done{u}), n), Eng.NoHead{}), v) ==
+            W.w.nap(s, Eng.sse.gap()) : W.World}, Equal.sym(Bool, True{}, False{}, e))
+    case 1n+h:
+      (s, r) = m
+      match r:
+        case Fail{x}:
+          {==}
+        case Done{u}:
+          no({W.sim.conn(1n+h, srv, (W.sim.tick((s, Done{u}), n), Eng.NoHead{}), v) ==
+            W.w.nap(s, Eng.sse.gap()) : W.World}, Equal.sym(Bool, True{}, False{}, e))
+
+def Laws.head_expires(srv, w, p, t0, n, e):
+  %Equal.sym(Bool, Nat.is_lt(Nat.sub(W.w.now(w), t0), U32.to_nat(Eng.srv.head(srv))), False{}, e) :
+    {W.sim.left(srv, w, p, t0, n, Nat.sub(W.w.now(w), t0), _) == ((w, Eng.Stop{}), Eng.NoHead{}) :
+      (W.World & Eng.Plan) & Eng.Hw}
+  {==}
+
+law wl.head_sized:
+  for +srv: Eng.Srv
+  for w: W.World
+  for buf: Bytes()
+  for p: Eng.P
+  for t0: Nat
+  for +k: U32
+  for big: Bool
+  for e: {big == U32.is_lt(Eng.head.cap(), k) : Bool}
+  {W.hw.fine(W.hw.of(Eng.plan.sized(W.World, srv, w, buf, p, t0, k, big))) == True{} : Bool}
+
+def wl.head_sized(srv, w, buf, p, t0, k, big, e):
+  match big:
+    case True{}:
+      {==}
+    case False{}:
+      %e : {Bool.not(_) == True{} : Bool}
+      {==}
+
+def Laws.head_capped(srv, w, may, p, t0, n):
+  match may:
+    case None{}:
+      {==}
+    case Some{+buf}:
+      wl.head_sized(srv, w, buf, p, t0, (n + U32.from_nat(Bytes.len(buf)) : U32),
+        U32.is_lt(Eng.head.cap(), (n + U32.from_nat(Bytes.len(buf)) : U32)), {==})
+
+law wl.flushed_fine:
+  for m: Eng.Put(W.World)
+  {W.em.fine(W.sim.flushed(m)) == True{} : Bool}
+
+def wl.flushed_fine(m):
+  (s, r) = m
+  match r:
+    case Done{u}:
+      {==}
+    case Fail{e}:
+      {==}
+
+law wl.held_fine:
+  for +ms: U32
+  for s: W.World
+  for +acc: Bytes()
+  for c: Cmp
+  for e: {c == U32.cmp(U32.from_nat(Bytes.len(acc)), Eng.send.cap()) : Cmp}
+  {W.em.fine(W.sim.held(ms, s, acc, c)) == True{} : Bool}
+
+def wl.held_fine(ms, s, acc, c, e):
+  match c:
+    case LT{}:
+      %e : {Cmp.is_lt(_) == True{} : Bool}
+      {==}
+    case EQ{}:
+      wl.flushed_fine(W.w.tx(s, acc, ms))
+    case GT{}:
+      wl.flushed_fine(W.w.tx(s, acc, ms))
+
+def Laws.hold_fine(ms, s, acc):
+  wl.held_fine(ms, s, acc, U32.cmp(U32.from_nat(Bytes.len(acc)), Eng.send.cap()), {==})
+
+def Laws.raw_fine(ms, may, bs, st):
+  match st:
+    case Eng.Em{s, acc, ok}:
+      match ok:
+        case False{}:
+          {==}
+        case True{}:
+          Laws.hold_fine(ms, s, Bytes.append(acc, W.sim.note(may, bs)))
+
+law wl.pleft_fine:
+  for +ms: U32
+  for f: Bytes()
+  for left: U32
+  for s: W.World
+  for pre: Bytes()
+  for done: Bool
+  {W.pump.fine(W.sim.pleft(ms, f, left, s, pre, done)) == True{} : Bool}
+
+def wl.pleft_fine(ms, f, left, s, pre, done):
+  match done:
+    case True{}:
+      Laws.hold_fine(ms, s, pre)
+    case False{}:
+      {==}
+
+law wl.psent_fine:
+  for +ms: U32
+  for m: Eng.Put(W.World)
+  for f: Bytes()
+  for +left: U32
+  {W.pump.fine(W.sim.psent(ms, m, f, left)) == True{} : Bool}
+
+def wl.psent_fine(ms, m, f, left):
+  (s, r) = m
+  match r:
+    case Fail{e}:
+      {==}
+    case Done{u}:
+      wl.pleft_fine(ms, f, left, s, "", U32.is_zero(left))
+
+law wl.pblock_fine:
+  for +ms: U32
+  for f: Bytes()
+  for +left: U32
+  for s: W.World
+  for pre: Bytes()
+  for bs: Bytes()
+  for +n: U32
+  for empty: Bool
+  {W.pump.fine(W.sim.pblock(ms, f, left, s, pre, bs, n, empty)) == True{} : Bool}
+
+def wl.pblock_fine(ms, f, left, s, pre, bs, n, empty):
+  match empty:
+    case True{}:
+      {==}
+    case False{}:
+      wl.psent_fine(ms, W.w.tx(s, Bytes.append(pre, bs), ms), f, (left - n : U32))
+
+law wl.pgot_fine:
+  for +ms: U32
+  for got: Bytes() & Result<&1, &1, U32 & String, Bytes()>
+  for left: U32
+  for s: W.World
+  for pre: Bytes()
+  {W.pump.fine(W.sim.pgot(ms, got, left, s, pre)) == True{} : Bool}
+
+def wl.pgot_fine(ms, got, left, s, pre):
+  (f, r) = got
+  match r:
+    case Fail{e}:
+      {==}
+    case Done{+bs}:
+      wl.pblock_fine(ms, f, left, s, pre, bs, U32.from_nat(Bytes.len(bs)),
+        U32.is_zero(U32.from_nat(Bytes.len(bs))))
+
+law wl.pump_fine:
+  for k: Nat
+  for +ms: U32
+  for p: Eng.Pump<W.World, Bytes()>
+  for e: {W.pump.fine(p) == True{} : Bool}
+  {W.em.fine(W.sim.pump(k, ms, p)) == True{} : Bool}
+
+def wl.pump_fine(k, ms, p, e):
+  match k:
+    case 0n:
+      match p:
+        case Eng.Going{f, left, s, pre}:
+          {==}
+        case Eng.Over{em}:
+          e
+    case 1n+j:
+      match p:
+        case Eng.Over{em}:
+          e
+        case Eng.Going{+f, +left, +s, +pre}:
+          wl.pump_fine(j, ms, W.sim.pgot(ms, W.w.fread(f, U32.min(Eng.page.chunk(), left)), left, s, pre),
+            wl.pgot_fine(ms, W.w.fread(f, U32.min(Eng.page.chunk(), left)), left, s, pre))
+
+law wl.miss_fine:
+  for +ms: U32
+  for head: Bool
+  for may: Maybe<&2, Bytes()>
+  for sh: Bool
+  for s: W.World
+  for acc: Bytes()
+  {W.em.fine(W.sim.miss(ms, head, may, sh, s, acc)) == True{} : Bool}
+
+def wl.miss_fine(ms, head, may, sh, s, acc):
+  Laws.hold_fine(ms, s, Bytes.append(acc, W.sim.note(may, Eng.flat.shut(sh, Eng.miss(head)))))
+
+law wl.pstart_fine:
+  for +ms: U32
+  for +f: Bytes()
+  for +n: U32
+  for +hd: Bytes()
+  for head: Bool
+  for may: Maybe<&2, Bytes()>
+  for +s: W.World
+  for +acc: Bytes()
+  {W.em.fine(W.sim.pstart(ms, f, n, hd, head, may, s, acc)) == True{} : Bool}
+
+def wl.pstart_fine(ms, f, n, hd, head, may, s, acc):
+  match head:
+    case True{}:
+      Laws.hold_fine(ms, s, Bytes.append(acc, hd))
+    case False{}:
+      wl.pump_fine(U32.to_nat((n / Eng.page.chunk() + 64 : U32)), ms,
+        W.sim.pleft(ms, f, n, s, Bytes.append(acc, hd), U32.is_zero(n)),
+        wl.pleft_fine(ms, f, n, s, Bytes.append(acc, hd), U32.is_zero(n)))
+
+law wl.psized_fine:
+  for +ms: U32
+  for got: Bytes() & Result<&1, &1, U32 & String, U32>
+  for ct: List<&2, U32>
+  for head: Bool
+  for may: Maybe<&2, Bytes()>
+  for sh: Bool
+  for s: W.World
+  for acc: Bytes()
+  {W.em.fine(W.sim.psized(ms, got, ct, head, may, sh, s, acc)) == True{} : Bool}
+
+def wl.psized_fine(ms, got, ct, head, may, sh, s, acc):
+  (f, r) = got
+  match r:
+    case Fail{e}:
+      wl.miss_fine(ms, head, may, sh, s, acc)
+    case Done{+n}:
+      wl.pstart_fine(ms, f, n, Eng.flat.shut(sh, Eng.reply.n.head("200 OK", ct, n)), head, may, s,
+        acc)
+
+law wl.opened_fine:
+  for +ms: U32
+  for m: W.World & Result<&1, &1, U32 & String, Bytes()>
+  for ct: List<&2, U32>
+  for head: Bool
+  for may: Maybe<&2, Bytes()>
+  for sh: Bool
+  for acc: Bytes()
+  {W.em.fine(W.sim.opened(ms, m, ct, head, may, sh, acc)) == True{} : Bool}
+
+def wl.opened_fine(ms, m, ct, head, may, sh, acc):
+  (s, r) = m
+  match r:
+    case Fail{e}:
+      wl.miss_fine(ms, head, may, sh, s, acc)
+    case Done{f}:
+      wl.psized_fine(ms, W.w.fsize(f), ct, head, may, sh, s, acc)
+
+def Laws.page_fine(ms, root, path, ct, head, may, sh, st):
+  match st:
+    case Eng.Em{s, acc, ok}:
+      match ok:
+        case False{}:
+          {==}
+        case True{}:
+          wl.opened_fine(ms, W.w.fopen(s, Eng.text(root), Eng.text(path)), ct, head, may, sh, acc)
+
+def wl.and_l(a: Bool, b: Bool, e: {Bool.and(a, b) == True{} : Bool}) -> {a == True{} : Bool}:
+  match a:
+    case True{}:
+      {==}
+    case False{}:
+      no({False{} == True{} : Bool}, e)
+
+def wl.and_r(a: Bool, b: Bool, e: {Bool.and(a, b) == True{} : Bool}) -> {b == True{} : Bool}:
+  match a:
+    case True{}:
+      e
+    case False{}:
+      no({b == True{} : Bool}, e)
+
+def Laws.accept_calm(k, evs, served, e):
+  match k:
+    case 0n:
+      {==}
+    case 1n+j:
+      match evs:
+        case Nil{}:
+          Laws.accept_calm(j, Nil{}, served, {==})
+        case Con{ev, t}:
+          match ev:
+            case W.Come{}:
+              Laws.accept_calm(j, t, 1n+served, e)
+            case W.Idle{}:
+              Laws.accept_calm(j, t, served, e)
+            case W.Term{}:
+              no({W.why.of(W.sim.accept(1n+j, W.Lw{Con{W.Term{}, t}, False{}, served})) ==
+                Eng.Spent{} : Eng.Why}, e)
+            case W.Err{+code}:
+              %Equal.sym(Bool, Eng.accept.soft(code), True{},
+                wl.and_l(Eng.accept.soft(code), W.calm(t), e)) :
+                {W.why.of(W.sim.acc.dead(j, W.Lw{t, False{}, served}, code, _)) == Eng.Spent{} :
+                  Eng.Why}
+              Laws.accept_calm(j, t, served, wl.and_r(Eng.accept.soft(code), W.calm(t), e))
+
+# a loop told why it ended answers that, whatever turns it had left
+law wl.some_ends:
+  for j: Nat
+  for l: W.Lw
+  for +why: Eng.Why
+  for e: {W.ok.end(why) == True{} : Bool}
+  {W.ok.end(W.why.of(W.sim.acc.run(j, (l, Some{why})))) == True{} : Bool}
+
+def wl.some_ends(j, l, why, e):
+  match j:
+    case 0n:
+      e
+    case 1n+i:
+      e
+
+law wl.err_stopped:
+  for j: Nat
+  for +t: List<&2, W.Ac>
+  for +served: Nat
+  for +code: U32
+  for sb: Bool
+  for e: {sb == Eng.accept.soft(code) : Bool}
+  {W.ok.end(W.why.of(W.sim.acc.dead(j, W.Lw{t, True{}, served}, code, sb))) == True{} : Bool}
+
+def wl.err_stopped(j, t, served, code, sb, e):
+  match sb:
+    case True{}:
+      wl.some_ends(j, W.Lw{t, True{}, served}, Eng.Asked{}, {==})
+    case False{}:
+      wl.some_ends(j, W.Lw{t, True{}, served}, Eng.Dead{code},
+        (%e : {Bool.not(_) == True{} : Bool}
+         {==}))
+
+law wl.err_going:
+  for j: Nat
+  for +t: List<&2, W.Ac>
+  for +served: Nat
+  for +code: U32
+  for sb: Bool
+  for e: {sb == Eng.accept.soft(code) : Bool}
+  for ih: {W.ok.end(W.why.of(W.sim.accept(j, W.Lw{t, False{}, served}))) == True{} : Bool}
+  {W.ok.end(W.why.of(W.sim.acc.dead(j, W.Lw{t, False{}, served}, code, sb))) == True{} : Bool}
+
+def wl.err_going(j, t, served, code, sb, e, ih):
+  match sb:
+    case True{}:
+      ih
+    case False{}:
+      wl.some_ends(j, W.Lw{t, False{}, served}, Eng.Dead{code},
+        (%e : {Bool.not(_) == True{} : Bool}
+         {==}))
+
+def Laws.accept_ends(k, sp, evs, served):
+  match k:
+    case 0n:
+      {==}
+    case 1n+j:
+      match sp evs:
+        case True{} Nil{}:
+          wl.some_ends(j, W.Lw{Nil{}, True{}, served}, Eng.Asked{}, {==})
+        case True{} Con{W.Come{}, t}:
+          wl.some_ends(j, W.Lw{t, True{}, 1n+served}, Eng.Asked{}, {==})
+        case True{} Con{W.Idle{}, t}:
+          wl.some_ends(j, W.Lw{t, True{}, served}, Eng.Asked{}, {==})
+        case True{} Con{W.Term{}, t}:
+          wl.some_ends(j, W.Lw{t, True{}, served}, Eng.Asked{}, {==})
+        case True{} Con{W.Err{+code}, t}:
+          wl.err_stopped(j, t, served, code, Eng.accept.soft(code), {==})
+        case False{} Nil{}:
+          Laws.accept_ends(j, False{}, Nil{}, served)
+        case False{} Con{W.Come{}, t}:
+          Laws.accept_ends(j, False{}, t, 1n+served)
+        case False{} Con{W.Idle{}, t}:
+          Laws.accept_ends(j, False{}, t, served)
+        case False{} Con{W.Term{}, t}:
+          wl.some_ends(j, W.Lw{t, True{}, served}, Eng.Asked{}, {==})
+        case False{} Con{W.Err{+code}, t}:
+          wl.err_going(j, t, served, code, Eng.accept.soft(code), {==},
+            Laws.accept_ends(j, False{}, t, served))
+
+# one request's step through answer.go, when its reply keeps the
+# connection: the reply joins the batch as it was, and the walk goes on
+law wl.ag_step:
+  for +srv: Eng.Srv
+  for +t: List<&2, Eng.Req>
+  for c: Bool
+  for +s: U32
+  for k: Bool
+  for +o: List<&2, Eng.Seg>
+  for +acc: List<&2, List<&2, Eng.Seg>>
+  for e: {Bool.not(c || k || Bool.not(U32.is_zero(s))) == True{} : Bool}
+  for ih: {Eng.answer.go(srv, t, True{}, True{}, c, s, k, Con{o, acc}) ==
+    Eng.Ans{Eng.answer.flat(Con{o, acc}, W.owed(srv, t, W.bad.reply())), True{}, 0, False{}} : Eng.Ans}
+  {Eng.answer.go(srv, t, True{}, Bool.not(c || k || Bool.not(U32.is_zero(s))), c, s, k,
+    Con{Eng.answer.shut(o, c && U32.is_zero(s) && Bool.not(k)), acc}) ==
+    Eng.Ans{Eng.answer.flat(Con{o, acc}, W.owed(srv, t, W.bad.reply())), True{}, 0, False{}} : Eng.Ans}
+
+def wl.ag_step(srv, t, c, s, k, o, acc, e, ih):
+  match c:
+    case True{}:
+      no({Eng.answer.go(srv, t, True{}, False{}, True{}, s, k,
+        Con{Eng.answer.shut(o, U32.is_zero(s) && Bool.not(k)), acc}) ==
+        Eng.Ans{Eng.answer.flat(Con{o, acc}, W.owed(srv, t, W.bad.reply())), True{}, 0, False{}} :
+        Eng.Ans}, e)
+    case False{}:
+      match k:
+        case True{}:
+          no({Eng.answer.go(srv, t, True{}, False{}, False{}, s, True{}, Con{o, acc}) ==
+            Eng.Ans{Eng.answer.flat(Con{o, acc}, W.owed(srv, t, W.bad.reply())), True{}, 0, False{}} :
+            Eng.Ans}, e)
+        case False{}:
+          %Equal.sym(Bool, Bool.not(Bool.not(U32.is_zero(s))), True{}, e) :
+            {Eng.answer.go(srv, t, True{}, _, False{}, s, False{}, Con{o, acc}) ==
+              Eng.Ans{Eng.answer.flat(Con{o, acc}, W.owed(srv, t, W.bad.reply())), True{}, 0, False{}} :
+              Eng.Ans}
+          ih
+
+# a read whose requests all keep the connection, and whose grammar then
+# broke, is answered with every reply they are owed, in order, then the
+# 400, and nothing else; the answer closes
+law wl.ag_owed:
+  for +srv: Eng.Srv
+  for +rs: List<&2, Eng.Req>
+  for c: Bool
+  for +s: U32
+  for k: Bool
+  for +acc: List<&2, List<&2, Eng.Seg>>
+  for +e: {W.all.keep(srv, rs) == True{} : Bool}
+  {Eng.answer.go(srv, rs, True{}, True{}, c, s, k, acc) ==
+    Eng.Ans{Eng.answer.flat(acc, W.owed(srv, rs, W.bad.reply())), True{}, 0, False{}} : Eng.Ans}
+
+def wl.ag_owed(srv, rs, c, s, k, acc, e):
+  match rs:
+    case Nil{}:
+      {==}
+    case Con{+r, +t}:
+      wl.ag_step(srv, t, W.ag.c(srv, r), W.ag.s(srv, r), W.ag.k(srv, r), W.ag.o(srv, r), acc,
+        wl.and_l(W.keeps(srv, r), W.all.keep(srv, t), e),
+        wl.ag_owed(srv, t, W.ag.c(srv, r), W.ag.s(srv, r), W.ag.k(srv, r), Con{W.ag.o(srv, r), acc},
+          wl.and_r(W.keeps(srv, r), W.all.keep(srv, t), e)))
+
+law wl.ans_end_app:
+  for xs: List<&2, Eng.Seg>
+  for +ys: List<&2, Eng.Seg>
+  for +q: Eng.P
+  for e: {Eng.plan.ans(Eng.Ans{ys, True{}, 0, False{}}, q) == Eng.End{ys} : Eng.Plan}
+  {Eng.plan.ans(Eng.Ans{List.append(&2, Eng.Seg, xs, ys), True{}, 0, False{}}, q) ==
+    Eng.End{List.append(&2, Eng.Seg, xs, ys)} : Eng.Plan}
+
+def wl.ans_end_app(xs, ys, q, e):
+  match xs:
+    case Nil{}:
+      e
+    case Con{h, t}:
+      {==}
+
+law wl.ans_end_owed:
+  for +srv: Eng.Srv
+  for +rs: List<&2, Eng.Req>
+  for +q: Eng.P
+  {Eng.plan.ans(Eng.Ans{W.owed(srv, rs, W.bad.reply()), True{}, 0, False{}}, q) ==
+    Eng.End{W.owed(srv, rs, W.bad.reply())} : Eng.Plan}
+
+def wl.ans_end_owed(srv, rs, q):
+  match rs:
+    case Nil{}:
+      {==}
+    case Con{+r, +t}:
+      wl.ans_end_app(W.ag.o(srv, r), W.owed(srv, t, W.bad.reply()), q, wl.ans_end_owed(srv, t, q))
+
+def Laws.refuse_plan(srv, rs, q, e):
+  %Equal.sym(Eng.Ans, Eng.answer.go(srv, rs, True{}, True{}, False{}, 0, False{}, Nil{}),
+    Eng.Ans{Eng.answer.flat(Nil{}, W.owed(srv, rs, W.bad.reply())), True{}, 0, False{}},
+    wl.ag_owed(srv, rs, False{}, 0, False{}, Nil{}, e)) :
+    {Eng.plan.ans(_, q) == Eng.End{W.owed(srv, rs, W.bad.reply())} : Eng.Plan}
+  wl.ans_end_owed(srv, rs, q)
+
+def Laws.refuse_conn(srv, w, q, rs, hw, g, v, e):
+  %Equal.sym(Eng.Plan, Eng.plan.take(srv, (q, rs), True{}), Eng.End{W.owed(srv, rs, W.bad.reply())},
+    Laws.refuse_plan(srv, rs, q, e)) :
+    {W.sim.conn(1n+g, srv, ((w, _), hw), v) ==
+      Eng.put.s(W.World, W.sim.segs(w, W.owed(srv, rs, W.bad.reply()), Eng.srv.idle(srv))) : W.World}
+  {==}
+
+def wl.app_nil(+a: Bytes()) -> {Bytes.append(a, "") == a : Bytes()}:
+  match a:
+    case SNil{}:
+      {==}
+    case SCon{+h, +t}:
+      Equal.cong(Bytes(), Bytes(), x => SCon{h, x}, Bytes.append(t, ""), t, wl.app_nil(t))
+
+def wl.app_assoc(+a: Bytes(), +b: Bytes(), +c: Bytes()) ->
+  {Bytes.append(Bytes.append(a, b), c) == Bytes.append(a, Bytes.append(b, c)) : Bytes()}:
+  match a:
+    case SNil{}:
+      {==}
+    case SCon{+h, +t}:
+      Equal.cong(Bytes(), Bytes(), x => SCon{h, x}, Bytes.append(Bytes.append(t, b), c),
+        Bytes.append(t, Bytes.append(b, c)), wl.app_assoc(t, b, c))
+
+# a send to a peer that takes everything puts the whole buffer on the
+# wire after what was there, and succeeds
+law wl.tx_eager:
+  for +rd: List<&2, W.Rd>
+  for +now: Nat
+  for +fs: List<&2, W.Fil>
+  for +out: Bytes()
+  for +a: Bytes()
+  for +ms: U32
+  {W.w.tx(W.eager(rd, now, fs, out), a, ms) == W.sent(rd, now, fs, Bytes.append(out, a)) :
+    Eng.Put(W.World)}
+
+def wl.tx_eager(rd, now, fs, out, a, ms):
+  match a:
+    case SNil{}:
+      %Equal.sym(Bytes(), Bytes.append(out, ""), out, wl.app_nil(out)) :
+        {W.sent(rd, now, fs, out) == W.sent(rd, now, fs, _) : Eng.Put(W.World)}
+      {==}
+    case SCon{h, t}:
+      {==}
+
+def wl.note_is(may: Maybe<&2, Bytes()>, +x: Bytes()) -> {W.sim.note(may, x) == x : Bytes()}:
+  match may:
+    case None{}:
+      {==}
+    case Some{n}:
+      {==}
+
+law wl.held_eager:
+  for +t: List<&2, Eng.Seg>
+  for +ms: U32
+  for +rd: List<&2, W.Rd>
+  for +now: Nat
+  for +fs: List<&2, W.Fil>
+  for +out: Bytes()
+  for +a: Bytes()
+  for c: Cmp
+  for ih1: {W.sim.go(t, ms, None{}, False{}, Eng.Em{W.eager(rd, now, fs, out), a, True{}}) ==
+    W.sent(rd, now, fs, Bytes.append(out, Bytes.append(a, W.wire(t, False{})))) :
+    Eng.Put(W.World)}
+  for ih2: {W.sim.go(t, ms, None{}, False{},
+    Eng.Em{W.eager(rd, now, fs, Bytes.append(out, a)), "", True{}}) ==
+    W.sent(rd, now, fs, Bytes.append(Bytes.append(out, a), W.wire(t, False{}))) :
+    Eng.Put(W.World)}
+  {W.sim.go(t, ms, None{}, False{}, W.sim.held(ms, W.eager(rd, now, fs, out), a, c)) ==
+    W.sent(rd, now, fs, Bytes.append(out, Bytes.append(a, W.wire(t, False{})))) :
+    Eng.Put(W.World)}
+
+def wl.held_eager(t, ms, rd, now, fs, out, a, c, ih1, ih2):
+  match c:
+    case LT{}:
+      ih1
+    case EQ{}:
+      %Equal.sym(Eng.Put(W.World), W.w.tx(W.eager(rd, now, fs, out), a, ms),
+        W.sent(rd, now, fs, Bytes.append(out, a)), wl.tx_eager(rd, now, fs, out, a, ms)) :
+        {W.sim.go(t, ms, None{}, False{}, W.sim.flushed(_)) ==
+          W.sent(rd, now, fs, Bytes.append(out, Bytes.append(a, W.wire(t, False{})))) :
+          Eng.Put(W.World)}
+      Equal.trans(Eng.Put(W.World),
+        W.sim.go(t, ms, None{}, False{}, Eng.Em{W.eager(rd, now, fs, Bytes.append(out, a)), "", True{}}),
+        W.sent(rd, now, fs, Bytes.append(Bytes.append(out, a), W.wire(t, False{}))),
+        W.sent(rd, now, fs, Bytes.append(out, Bytes.append(a, W.wire(t, False{})))),
+        ih2,
+        Equal.cong(Bytes(), Eng.Put(W.World), o => W.sent(rd, now, fs, o),
+          Bytes.append(Bytes.append(out, a), W.wire(t, False{})),
+          Bytes.append(out, Bytes.append(a, W.wire(t, False{}))),
+          wl.app_assoc(out, a, W.wire(t, False{}))))
+    case GT{}:
+      %Equal.sym(Eng.Put(W.World), W.w.tx(W.eager(rd, now, fs, out), a, ms),
+        W.sent(rd, now, fs, Bytes.append(out, a)), wl.tx_eager(rd, now, fs, out, a, ms)) :
+        {W.sim.go(t, ms, None{}, False{}, W.sim.flushed(_)) ==
+          W.sent(rd, now, fs, Bytes.append(out, Bytes.append(a, W.wire(t, False{})))) :
+          Eng.Put(W.World)}
+      Equal.trans(Eng.Put(W.World),
+        W.sim.go(t, ms, None{}, False{}, Eng.Em{W.eager(rd, now, fs, Bytes.append(out, a)), "", True{}}),
+        W.sent(rd, now, fs, Bytes.append(Bytes.append(out, a), W.wire(t, False{}))),
+        W.sent(rd, now, fs, Bytes.append(out, Bytes.append(a, W.wire(t, False{})))),
+        ih2,
+        Equal.cong(Bytes(), Eng.Put(W.World), o => W.sent(rd, now, fs, o),
+          Bytes.append(Bytes.append(out, a), W.wire(t, False{})),
+          Bytes.append(out, Bytes.append(a, W.wire(t, False{}))),
+          wl.app_assoc(out, a, W.wire(t, False{}))))
+
+law wl.go_wire:
+  for +xs: List<&2, Eng.Seg>
+  for +ms: U32
+  for may: Maybe<&2, Bytes()>
+  for +sh: Bool
+  for +rd: List<&2, W.Rd>
+  for +now: Nat
+  for +fs: List<&2, W.Fil>
+  for +out: Bytes()
+  for +acc: Bytes()
+  for +e: {W.raws(xs) == True{} : Bool}
+  {W.sim.go(xs, ms, may, sh, Eng.Em{W.eager(rd, now, fs, out), acc, True{}}) ==
+    W.sent(rd, now, fs, Bytes.append(out, Bytes.append(acc, W.wire(xs, sh)))) :
+    Eng.Put(W.World)}
+
+def wl.go_wire(xs, ms, may, sh, rd, now, fs, out, acc, e):
+  match xs:
+    case Nil{}:
+      %Equal.sym(Eng.Put(W.World), W.w.tx(W.eager(rd, now, fs, out), acc, ms),
+        W.sent(rd, now, fs, Bytes.append(out, acc)), wl.tx_eager(rd, now, fs, out, acc, ms)) :
+        {Eng.send.fin(~W.Id, ~W.Id.pure, ~W.Id.bind, ~W.World, _, True{}) ==
+          W.sent(rd, now, fs, Bytes.append(out, Bytes.append(acc, ""))) : Eng.Put(W.World)}
+      %Equal.sym(Bytes(), Bytes.append(acc, ""), acc, wl.app_nil(acc)) :
+        {W.sent(rd, now, fs, Bytes.append(out, acc)) ==
+          W.sent(rd, now, fs, Bytes.append(out, _)) : Eng.Put(W.World)}
+      {==}
+    case Con{+g, +t}:
+      match g:
+        case Eng.Raw{+bs}:
+          %Equal.sym(Bytes(), W.sim.note(may, Eng.flat.shut(sh, bs)), Eng.flat.shut(sh, bs),
+            wl.note_is(may, Eng.flat.shut(sh, bs))) :
+            {W.sim.go(t, ms, None{}, False{},
+              W.sim.hold(ms, W.eager(rd, now, fs, out), Bytes.append(acc, _))) ==
+              W.sent(rd, now, fs, Bytes.append(out, Bytes.append(acc,
+                Bytes.append(Eng.flat.shut(sh, bs), W.wire(t, False{}))))) : Eng.Put(W.World)}
+          Equal.trans(Eng.Put(W.World),
+            W.sim.go(t, ms, None{}, False{},
+              W.sim.hold(ms, W.eager(rd, now, fs, out), Bytes.append(acc, Eng.flat.shut(sh, bs)))),
+            W.sent(rd, now, fs, Bytes.append(out, Bytes.append(Bytes.append(acc, Eng.flat.shut(sh, bs)),
+              W.wire(t, False{})))),
+            W.sent(rd, now, fs, Bytes.append(out, Bytes.append(acc,
+              Bytes.append(Eng.flat.shut(sh, bs), W.wire(t, False{}))))),
+            wl.held_eager(t, ms, rd, now, fs, out, Bytes.append(acc, Eng.flat.shut(sh, bs)),
+              U32.cmp(U32.from_nat(Bytes.len(Bytes.append(acc, Eng.flat.shut(sh, bs)))),
+                Eng.send.cap()),
+              wl.go_wire(t, ms, None{}, False{}, rd, now, fs, out,
+                Bytes.append(acc, Eng.flat.shut(sh, bs)), e),
+              wl.go_wire(t, ms, None{}, False{}, rd, now, fs,
+                Bytes.append(out, Bytes.append(acc, Eng.flat.shut(sh, bs))), "", e)),
+            Equal.cong(Bytes(), Eng.Put(W.World), o => W.sent(rd, now, fs, Bytes.append(out, o)),
+              Bytes.append(Bytes.append(acc, Eng.flat.shut(sh, bs)), W.wire(t, False{})),
+              Bytes.append(acc, Bytes.append(Eng.flat.shut(sh, bs), W.wire(t, False{}))),
+              wl.app_assoc(acc, Eng.flat.shut(sh, bs), W.wire(t, False{}))))
+        case Eng.Note{bs}:
+          wl.go_wire(t, ms, Some{bs}, sh, rd, now, fs, out, acc, e)
+        case Eng.Shut{}:
+          wl.go_wire(t, ms, may, True{}, rd, now, fs, out, acc, e)
+        case Eng.Page{root, path, ct, head}:
+          no({W.sim.go(Con{Eng.Page{root, path, ct, head}, t}, ms, may, sh,
+            Eng.Em{W.eager(rd, now, fs, out), acc, True{}}) ==
+            W.sent(rd, now, fs, Bytes.append(out, Bytes.append(acc,
+              W.wire(Con{Eng.Page{root, path, ct, head}, t}, sh)))) : Eng.Put(W.World)}, e)
+
+def Laws.segs_wire(xs, ms, rd, now, fs, out, e):
+  wl.go_wire(xs, ms, None{}, False{}, rd, now, fs, out, "", e)
+
+# a turn at a stopped peer ends the connection: one more turn of fuel
+# does nothing more
+law wl.mute_left:
+  for +srv: Eng.Srv
+  for s: W.World
+  for p: Eng.P
+  for t0: Nat
+  for n: U32
+  for +el: Nat
+  for ok: Bool
+  for g: Nat
+  for v: Nat
+  {W.mute.conn(1n+g, srv, W.mute.left(srv, s, p, t0, n, el, ok), v) ==
+    W.mute.conn(1n, srv, W.mute.left(srv, s, p, t0, n, el, ok), v) : W.World}
+
+def wl.mute_left(srv, s, p, t0, n, el, ok, g, v):
+  match ok:
+    case True{}:
+      {==}
+    case False{}:
+      {==}
+
+law wl.mute_turn_h:
+  for +srv: Eng.Srv
+  for +s: W.World
+  for p: Eng.P
+  for hw: Eng.Hw
+  for g: Nat
+  for v: Nat
+  {W.mute.conn(1n+g, srv, W.mute.turn.h(srv, s, p, hw), v) ==
+    W.mute.conn(1n, srv, W.mute.turn.h(srv, s, p, hw), v) : W.World}
+
+def wl.mute_turn_h(srv, s, p, hw, g, v):
+  match hw:
+    case Eng.NoHead{}:
+      {==}
+    case Eng.Begun{}:
+      wl.mute_left(srv, s, p, W.w.now(s), 0, Nat.sub(W.w.now(s), W.w.now(s)),
+        Nat.is_lt(Nat.sub(W.w.now(s), W.w.now(s)), U32.to_nat(Eng.srv.head(srv))), g, v)
+    case Eng.Since{+t0, n}:
+      wl.mute_left(srv, s, p, t0, n, Nat.sub(W.w.now(s), t0),
+        Nat.is_lt(Nat.sub(W.w.now(s), t0), U32.to_nat(Eng.srv.head(srv))), g, v)
+
+law wl.mute_turn:
+  for +srv: Eng.Srv
+  for m: Eng.Put(W.World)
+  for p: Eng.P
+  for hw: Eng.Hw
+  for g: Nat
+  for v: Nat
+  {W.mute.conn(1n+g, srv, W.mute.turn(srv, m, p, hw), v) ==
+    W.mute.conn(1n, srv, W.mute.turn(srv, m, p, hw), v) : W.World}
+
+def wl.mute_turn(srv, m, p, hw, g, v):
+  (s, r) = m
+  match r:
+    case Fail{e}:
+      {==}
+    case Done{u}:
+      wl.mute_turn_h(srv, s, p, hw, g, v)
+
+law wl.mute_ws:
+  for +srv: Eng.Srv
+  for m: Eng.Put(W.World)
+  for wr: Ws.W
+  for g: Nat
+  for v: Nat
+  {W.mute.conn(1n+g, srv, (W.mute.turn.ws(srv, m, wr), Eng.NoHead{}), v) ==
+    W.mute.conn(1n, srv, (W.mute.turn.ws(srv, m, wr), Eng.NoHead{}), v) : W.World}
+
+def wl.mute_ws(srv, m, wr, g, v):
+  (s, r) = m
+  match r:
+    case Fail{e}:
+      {==}
+    case Done{u}:
+      {==}
+
+# a send of bytes to a stopped peer fails; of none, succeeds
+law wl.mute_held:
+  for +ms: U32
+  for s: W.World
+  for h: Char
+  for t: Bytes()
+  for c: Cmp
+  {W.put.done(W.mute.go(Nil{}, ms, None{}, False{}, W.mute.held(ms, s, SCon{h, t}, c))) ==
+    False{} : Bool}
+
+def wl.mute_held(ms, s, h, t, c):
+  match c:
+    case LT{}:
+      {==}
+    case EQ{}:
+      {==}
+    case GT{}:
+      {==}
+
+law wl.mute_raw:
+  for +ms: U32
+  for s: W.World
+  for +bs: Bytes()
+  {W.put.done(W.mute.segs(s, [Eng.Raw{bs}], ms)) == W.empty(bs) : Bool}
+
+def wl.mute_raw(ms, s, bs):
+  match bs:
+    case SNil{}:
+      {==}
+    case SCon{+h, +t}:
+      wl.mute_held(ms, s, h, t, U32.cmp(U32.from_nat(Bytes.len(SCon{h, t})), Eng.send.cap()))
+
+law wl.mute_tick_failed:
+  for +srv: Eng.Srv
+  for m: Eng.Put(W.World)
+  for n: U32
+  for g: Nat
+  for v: Nat
+  for e: {W.put.done(m) == False{} : Bool}
+  {W.mute.conn(1n+g, srv, (W.mute.tick(m, n), Eng.NoHead{}), v) ==
+    W.mute.conn(1n, srv, (W.mute.tick(m, n), Eng.NoHead{}), v) : W.World}
+
+def wl.mute_tick_failed(srv, m, n, g, v, e):
+  (s, r) = m
+  match r:
+    case Fail{x}:
+      {==}
+    case Done{u}:
+      no({W.mute.conn(1n+g, srv, (W.mute.tick((s, Done{u}), n), Eng.NoHead{}), v) ==
+        W.mute.conn(1n, srv, (W.mute.tick((s, Done{u}), n), Eng.NoHead{}), v) : W.World},
+        Equal.sym(Bool, True{}, False{}, e))
+
+law wl.mute_more:
+  for +srv: Eng.Srv
+  for +s: W.World
+  for +n: U32
+  for z: Bool
+  for g: Nat
+  for v: Nat
+  {W.mute.conn(1n+1n+g, srv, (Eng.plan.more(W.World, s, n, z), Eng.NoHead{}), v) ==
+    W.mute.conn(1n+1n, srv, (Eng.plan.more(W.World, s, n, z), Eng.NoHead{}), v) : W.World}
+
+def wl.mute_more(srv, s, n, z, g, v):
+  match z:
+    case True{}:
+      {==}
+    case False{}:
+      wl.mute_tick_failed(srv, W.mute.segs(s, [Eng.Raw{Eng.sse.event(n)}], Eng.srv.idle(srv)),
+        (n - 1 : U32), g, Eng.conn.waits(),
+        wl.mute_raw(Eng.srv.idle(srv), s, Eng.sse.event(n)))
+
+law wl.mute_tick:
+  for +srv: Eng.Srv
+  for m: Eng.Put(W.World)
+  for +n: U32
+  for g: Nat
+  for v: Nat
+  {W.mute.conn(1n+1n+g, srv, (W.mute.tick(m, n), Eng.NoHead{}), v) ==
+    W.mute.conn(1n+1n, srv, (W.mute.tick(m, n), Eng.NoHead{}), v) : W.World}
+
+def wl.mute_tick(srv, m, n, g, v):
+  (s, r) = m
+  match r:
+    case Fail{e}:
+      {==}
+    case Done{u}:
+      wl.mute_more(srv, s, n, U32.is_zero(n), g, v)
+
+def Laws.stall_ends(srv, w, pl, hw, g, v):
+  match pl:
+    case Eng.Stop{}:
+      {==}
+    case Eng.End{out}:
+      {==}
+    case Eng.Go{+out, +p2}:
+      Equal.trans(W.World,
+        W.mute.conn(1n+1n+g, srv, W.mute.turn(srv, W.mute.segs(w, out, Eng.srv.idle(srv)), p2,
+          Eng.hw.next(Eng.p.head(p2), Eng.NoHead{})), Eng.conn.waits()),
+        W.mute.conn(1n, srv, W.mute.turn(srv, W.mute.segs(w, out, Eng.srv.idle(srv)), p2,
+          Eng.hw.next(Eng.p.head(p2), Eng.NoHead{})), Eng.conn.waits()),
+        W.mute.conn(1n+1n, srv, W.mute.turn(srv, W.mute.segs(w, out, Eng.srv.idle(srv)), p2,
+          Eng.hw.next(Eng.p.head(p2), Eng.NoHead{})), Eng.conn.waits()),
+        wl.mute_turn(srv, W.mute.segs(w, out, Eng.srv.idle(srv)), p2,
+          Eng.hw.next(Eng.p.head(p2), Eng.NoHead{}), 1n+g, Eng.conn.waits()),
+        Equal.sym(W.World,
+          W.mute.conn(1n+1n, srv, W.mute.turn(srv, W.mute.segs(w, out, Eng.srv.idle(srv)), p2,
+            Eng.hw.next(Eng.p.head(p2), Eng.NoHead{})), Eng.conn.waits()),
+          W.mute.conn(1n, srv, W.mute.turn(srv, W.mute.segs(w, out, Eng.srv.idle(srv)), p2,
+            Eng.hw.next(Eng.p.head(p2), Eng.NoHead{})), Eng.conn.waits()),
+          wl.mute_turn(srv, W.mute.segs(w, out, Eng.srv.idle(srv)), p2,
+            Eng.hw.next(Eng.p.head(p2), Eng.NoHead{}), 1n, Eng.conn.waits())))
+    case Eng.Wait{+p2}:
+      match v:
+        case 0n:
+          {==}
+        case 1n+u:
+          Equal.trans(W.World,
+            W.mute.conn(1n+1n+g, srv, W.mute.turn.h(srv, w, p2, Eng.hw.next(Eng.p.head(p2), hw)), u),
+            W.mute.conn(1n, srv, W.mute.turn.h(srv, w, p2, Eng.hw.next(Eng.p.head(p2), hw)), u),
+            W.mute.conn(1n+1n, srv, W.mute.turn.h(srv, w, p2, Eng.hw.next(Eng.p.head(p2), hw)), u),
+            wl.mute_turn_h(srv, w, p2, Eng.hw.next(Eng.p.head(p2), hw), 1n+g, u),
+            Equal.sym(W.World,
+              W.mute.conn(1n+1n, srv, W.mute.turn.h(srv, w, p2, Eng.hw.next(Eng.p.head(p2), hw)), u),
+              W.mute.conn(1n, srv, W.mute.turn.h(srv, w, p2, Eng.hw.next(Eng.p.head(p2), hw)), u),
+              wl.mute_turn_h(srv, w, p2, Eng.hw.next(Eng.p.head(p2), hw), 1n, u)))
+    case Eng.Feed{+out, +n}:
+      wl.mute_tick(srv, W.mute.segs(w, out, Eng.srv.idle(srv)), n, g, Eng.conn.waits())
+    case Eng.Sock{+out, +wr}:
+      Equal.trans(W.World,
+        W.mute.conn(1n+1n+g, srv, (W.mute.turn.ws(srv, W.mute.segs(w, out, Eng.srv.idle(srv)), wr),
+          Eng.NoHead{}), Eng.conn.waits()),
+        W.mute.conn(1n, srv, (W.mute.turn.ws(srv, W.mute.segs(w, out, Eng.srv.idle(srv)), wr),
+          Eng.NoHead{}), Eng.conn.waits()),
+        W.mute.conn(1n+1n, srv, (W.mute.turn.ws(srv, W.mute.segs(w, out, Eng.srv.idle(srv)), wr),
+          Eng.NoHead{}), Eng.conn.waits()),
+        wl.mute_ws(srv, W.mute.segs(w, out, Eng.srv.idle(srv)), wr, 1n+g, Eng.conn.waits()),
+        Equal.sym(W.World,
+          W.mute.conn(1n+1n, srv, (W.mute.turn.ws(srv, W.mute.segs(w, out, Eng.srv.idle(srv)), wr),
+            Eng.NoHead{}), Eng.conn.waits()),
+          W.mute.conn(1n, srv, (W.mute.turn.ws(srv, W.mute.segs(w, out, Eng.srv.idle(srv)), wr),
+            Eng.NoHead{}), Eng.conn.waits()),
+          wl.mute_ws(srv, W.mute.segs(w, out, Eng.srv.idle(srv)), wr, 1n, Eng.conn.waits())))
+    case Eng.Hold{wr}:
+      match v:
+        case 0n:
+          {==}
+        case 1n+u:
+          {==}
+
+def wl.sub_add(+a: Nat, +b: Nat) -> {Nat.sub(Nat.add(a, b), a) == b : Nat}:
+  match a:
+    case 0n:
+      match b:
+        case 0n:
+          {==}
+        case 1n+q:
+          {==}
+    case 1n+p:
+      wl.sub_add(p, b)
+
+def wl.le_refl(+n: Nat) -> {Nat.is_le(n, n) == True{} : Bool}:
+  match n:
+    case 0n:
+      {==}
+    case 1n+p:
+      wl.le_refl(p)
+
+def wl.lt_le(+a: Nat, +b: Nat, e: {Nat.is_lt(a, b) == True{} : Bool}) ->
+  {Nat.is_le(a, b) == True{} : Bool}:
+  match a b:
+    case 0n 0n:
+      no({True{} == True{} : Bool}, e)
+    case 0n 1n+q:
+      {==}
+    case 1n+p 0n:
+      no({False{} == True{} : Bool}, e)
+    case 1n+p 1n+q:
+      wl.lt_le(p, q, e)
+
+# a read that waited out its time: took exactly ms
+def wl.waited(+now: Nat, +ms: U32) ->
+  {Nat.is_le(U32.to_nat(ms), Nat.sub(Nat.add(now, U32.to_nat(ms)), now)) == True{} : Bool}:
+  %Equal.sym(Nat, Nat.sub(Nat.add(now, U32.to_nat(ms)), now), U32.to_nat(ms),
+    wl.sub_add(now, U32.to_nat(ms))) :
+    {Nat.is_le(U32.to_nat(ms), _) == True{} : Bool}
+  wl.le_refl(U32.to_nat(ms))
+
+law wl.give_model:
+  for +t: List<&2, W.Rd>
+  for +wait: Nat
+  for +bs: Bytes()
+  for +ms: U32
+  for +wr: List<&2, W.Wr>
+  for +eager: Bool
+  for +now: Nat
+  for +fs: List<&2, W.Fil>
+  for +out: Bytes()
+  for +max: U32
+  for soon: Bool
+  for es: {soon == Nat.is_lt(wait, U32.to_nat(ms)) : Bool}
+  for ef: {U32.is_le(U32.from_nat(Bytes.len(bs)), max) == True{} : Bool}
+  {W.rx.seen(max, ms, now, W.w.rx.give(t, wait, bs, ms, wr, eager, now, fs, out, soon)) ==
+    True{} : Bool}
+
+def wl.give_model(t, wait, bs, ms, wr, eager, now, fs, out, max, soon, es, ef):
+  match soon:
+    case True{}:
+      %Equal.sym(Bool, U32.is_le(U32.from_nat(Bytes.len(bs)), max), True{}, ef) :
+        {_ && Nat.is_le(Nat.sub(Nat.add(now, wait), now), U32.to_nat(ms)) == True{} : Bool}
+      %Equal.sym(Nat, Nat.sub(Nat.add(now, wait), now), wait, wl.sub_add(now, wait)) :
+        {Nat.is_le(_, U32.to_nat(ms)) == True{} : Bool}
+      wl.lt_le(wait, U32.to_nat(ms), Equal.sym(Bool, True{}, Nat.is_lt(wait, U32.to_nat(ms)), es))
+    case False{}:
+      wl.waited(now, ms)
+
+def Laws.rx_model(rd, wr, eager, now, fs, out, max, ms, e):
+  match rd:
+    case Nil{}:
+      wl.waited(now, ms)
+    case Con{ev, t}:
+      match ev:
+        case W.Hush{}:
+          wl.waited(now, ms)
+        case W.Cut{code}:
+          {==}
+        case W.Give{+wait, +bs}:
+          wl.give_model(t, wait, bs, ms, wr, eager, now, fs, out, max,
+            Nat.is_lt(wait, U32.to_nat(ms)), {==}, e)
+
+def Laws.tx_stalled(rd, now, fs, out, h, t, ms):
+  wl.waited(now, ms)
+
+def Laws.tx_served(rd, now, fs, out, a, ms):
+  %Equal.sym(Eng.Put(W.World), W.w.tx(W.eager(rd, now, fs, out), a, ms),
+    W.sent(rd, now, fs, Bytes.append(out, a)), wl.tx_eager(rd, now, fs, out, a, ms)) :
+    {W.tx.seen(ms, W.Reads{}, now, _) == True{} : Bool}
+  {==}
+
+def Laws.fread_model(f, n):
+  match f n:
+    case SNil{} 0n:
+      {==}
+    case SNil{} 1n+q:
+      {==}
+    case SCon{h, t} 0n:
+      {==}
+    case SCon{+h, +t} 1n+p:
+      %Equal.sym(Nat, String.length.go(String.take(t, p), 1n),
+        1n+String.length.go(String.take(t, p), 0n), Bytes.len.shift(String.take(t, p), 0n)) :
+        {Nat.is_le(_, 1n+p) == True{} : Bool}
+      Laws.fread_model(t, p)

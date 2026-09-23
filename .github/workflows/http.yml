@@ -42,6 +42,10 @@ jobs:
             bun bend2/main.ts "$f" --export proof.core
             kernel/target/release/bend-kernel -q proof.core || { echo "$f: the kernel refuses it"; exit 1; }
           done
+      # each mutant breaks the loop as one of the review's bugs did, and
+      # the laws of the world must refuse every one
+      - name: the laws are not vacuous
+        run: python3 demos/io_http_engine/mutants.py
       - name: the server builds
         run: |
           bun bend2/main.ts demos/io_http_engine/main.bend -o httpd
@@ -84,6 +88,14 @@ jobs:
           (ulimit -n 64; exec ./httpd --root www --idle-ms 1000 --head-ms 1500 --grace-ms 3000) & up 8080
           $C/check 8080 $! --files --guard
           wait $! || true
+      # the bridge between the proofs and C: each effect the model makes
+      # assumptions of, driven through its contract's cases and judged by
+      # world.bend's relations, with conform.c as its peer
+      - name: the effects keep their contracts
+        run: |
+          bun bend2/main.ts demos/io_http_engine/conform.bend -o conform
+          cc -std=c11 -O2 -Wall demos/io_http_engine/conform.c -o conform-peer
+          ./conform-peer ./conform 8095 "$PWD/conform-root/root"
       - name: the engine and the control agree on 500 random streams
         run: |
           up() { for i in $(seq 1 50); do (exec 3<>/dev/tcp/127.0.0.1/$1) 2>/dev/null && return 0; sleep 0.1; done; return 1; }
