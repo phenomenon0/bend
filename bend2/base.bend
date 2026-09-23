@@ -342,13 +342,13 @@ def File.read(file: File, max: U32) ->
 
 def File.read_bytes(file: File, max: U32) ->
   IO(File & Result<&1, &1, U32 & String, List<&2, U32>>):
-  import "./effs/file_read_bytes.c"
-  import "./effs/file_read_bytes.js"
+  import "./effs/file_read.c"
+  import "./effs/file_read.js"
 
 def File.read_at(file: File, offset: U32, max: U32) ->
   IO(File & Result<&1, &1, U32 & String, List<&2, U32>>):
-  import "./effs/file_read_at.c"
-  import "./effs/file_read_at.js"
+  import "./effs/file_read.c"
+  import "./effs/file_read.js"
 
 def File.size(file: File) ->
   IO(File & Result<&1, &1, U32 & String, U32>):
@@ -397,8 +397,8 @@ def File.write(file: File, data: String) ->
 
 def File.write_bytes(file: File, data: List<&2, U32>) ->
   IO(File & Result<&1, &1, U32 & String, Unit>):
-  import "./effs/file_write_bytes.c"
-  import "./effs/file_write_bytes.js"
+  import "./effs/file_write.c"
+  import "./effs/file_write.js"
 
 def File.close(file: File) -> IO(Unit):
   import "./effs/file_close.c"
@@ -570,15 +570,15 @@ def Window.close(window: Window) -> IO(Unit):
   import "./effs/window_close.js"
 
 def Audio.open(rate: U32) -> IO(Result<&1, &1, U32 & String, Audio>):
-  import "./effs/audio_open.c"
+  import "./effs/audio.c"
   import "./effs/audio_open.js"
 
 def Audio.write(audio: Audio, samples: List<&2, F32>) -> IO(Audio & U32):
-  import "./effs/audio_write.c"
+  import "./effs/audio.c"
   import "./effs/audio_write.js"
 
 def Audio.close(audio: Audio) -> IO(Unit):
-  import "./effs/audio_close.c"
+  import "./effs/audio.c"
   import "./effs/audio_close.js"
 
 # Equal
@@ -1649,6 +1649,17 @@ def U32.from_nat(n: Nat) -> U32:
       0
     case 1n+p:
       U32.inc(U32.from_nat(p))
+
+def U32.log2.go(+k: Nat, +n: U32, +d: Nat) -> Nat:
+  match k:
+    case 0n:
+      d
+    case 1n+p:
+      U32.log2.go(p, U32.shr(n),
+        Nat.add(d, U32.to_nat(Bool.to_u32(U32.is_lt(1, n)))))
+
+def U32.log2(+n: U32) -> Nat:
+  U32.log2.go(32n, n, 0n)
 
 def U32.divmod.go.fin(-p: Nat, q: Word(p), s: U32, b: U32, g: Bool) ->
   Word(1n+p) & U32:
@@ -4800,6 +4811,74 @@ def Array.clone(-T: Data, a: Array<T>) -> Array<T> & Array<T>:
     case ANode{xs, ys}:
       Array.clone.node(T, Array.clone(T, xs), Array.clone(T, ys))
 
+# A fork is two handles to one array in O(1). Both read and write the
+# same cells, so racing writes go through the atomics; a match on a
+# handle copies its part, as a clone does. An atomic takes an Array<U32>
+# (fadd an Array<F32>) and returns the array with the old value.
+
+@unsafe
+def Array.fork(-T: Type, +a: Array<T>) -> Array<T> & Array<T>:
+  (a, a)
+
+@unsafe
+def Array.join(-T: Type, a: Array<T>, b: Array<T>) -> Array<T>:
+  a
+
+law Array.atomic.add:
+  for  a: Array<U32>
+  for +i: U32
+  for +v: U32
+  Array<U32> & U32
+
+law Array.atomic.min:
+  for  a: Array<U32>
+  for +i: U32
+  for +v: U32
+  Array<U32> & U32
+
+law Array.atomic.max:
+  for  a: Array<U32>
+  for +i: U32
+  for +v: U32
+  Array<U32> & U32
+
+law Array.atomic.and:
+  for  a: Array<U32>
+  for +i: U32
+  for +v: U32
+  Array<U32> & U32
+
+law Array.atomic.or:
+  for  a: Array<U32>
+  for +i: U32
+  for +v: U32
+  Array<U32> & U32
+
+law Array.atomic.xor:
+  for  a: Array<U32>
+  for +i: U32
+  for +v: U32
+  Array<U32> & U32
+
+law Array.atomic.exch:
+  for  a: Array<U32>
+  for +i: U32
+  for +v: U32
+  Array<U32> & U32
+
+law Array.atomic.cas:
+  for  a: Array<U32>
+  for +i: U32
+  for +x: U32
+  for +v: U32
+  Array<U32> & U32
+
+law Array.atomic.fadd:
+  for  a: Array<F32>
+  for +i: U32
+  for +v: F32
+  Array<F32> & F32
+
 def Array.new(-T: Data, +d: Nat, +v: T) -> Array<T>:
   match d:
     case 0n:
@@ -4855,13 +4934,32 @@ def Array.to_list.go(~T: Type, a: Array<T>, acc: List<T>) -> List<T>:
 def Array.to_list(~T: Type, a: Array<T>) -> List<T>:
   Array.to_list.go(~T, a, Nil{})
 
-def Array.map(~T: Type, ~U: Type, ~f: T -> U, a: Array<T>) -> Array<U>:
-  match a:
-    case ALeaf{x}:
-      ALeaf{f(x)}
-    case ANode{xs, ys}:
-      l r = Array.map(~T, ~U, ~f, xs) Array.map(~T, ~U, ~f, ys)
-      ANode{l, r}
+def Array.map.go(
+  ~T: Data, ~U: Data, ~f: T -> U, +n: Nat, +i: U32, b: Array<U>,
+  r: Array<T> & T
+) -> Array<U>:
+  match n:
+    case 0n:
+      b
+    case 1n+p:
+      (a, x) = r
+      +j = U32.inc(i)
+      Array.map.go(~T, ~U, ~f, p, j, Array.set(U, b, i, f(x)),
+        Array.get(T, a, j))
+
+def Array.map.at(
+  ~T: Data, ~U: Data, ~f: T -> U, v: U, an: Array<T> & U32
+) -> Array<U>:
+  (a, +n) = an
+  Array.map.go(~T, ~U, ~f, U32.to_nat(U32.sub(n, 1)), 1,
+    Array.new(U, U32.log2(n), v), Array.get(T, a, 1))
+
+def Array.map.seed(~T: Data, ~U: Data, ~f: T -> U, r: Array<T> & T) -> Array<U>:
+  (a, x) = r
+  Array.map.at(~T, ~U, ~f, f(x), Array.size(T, a))
+
+def Array.map(~T: Data, ~U: Data, ~f: T -> U, a: Array<T>) -> Array<U>:
+  Array.map.seed(~T, ~U, ~f, Array.get(T, a, 0))
 
 # Map
 # ---
