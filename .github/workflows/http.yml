@@ -79,9 +79,10 @@ jobs:
         run: python3 wire/client_mutants.py
       # each of the proxy's mutants passes the client's bytes through,
       # forwards a hop-by-hop field, reads on after a refusal, sends a
-      # request unchecked or with a length not its body's, and the
-      # proxy's laws (forward_canonical, no_smuggle, hop_by_hop_removed,
-      # scan_is_spec) must refuse every one
+      # request or a response unchecked, with a length not its body's or
+      # a body its framing says it has not, and the proxy's laws
+      # (forward_canonical, no_smuggle, hop_by_hop_removed, scan_is_spec,
+      # rsp_reframed) must refuse every one
       - name: the proxy's laws are not vacuous
         run: python3 demos/io_proxy/mutants.py
       - name: the server builds
