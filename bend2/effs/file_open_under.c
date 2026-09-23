@@ -65,23 +65,49 @@ static bool file_open_under_shape(const char* p) {
   }
 }
 
+// The root's descriptor is kept, per thread, for up to a second: a root
+// renamed or swapped (a deploy that repoints a link) is seen within it.
+typedef struct {
+  char* root;
+  int   fd;
+  u64   until;
+} FileTop;
+
+static __thread FileTop file_open_under_top = { NULL, -1, 0 };
+
+static int file_open_under_dir(const char* root) {
+  FileTop* t   = &file_open_under_top;
+  u64      now = io_tick();
+  if (t->fd >= 0 && now < t->until && strcmp(t->root, root) == 0) {
+    return t->fd;
+  }
+  if (t->fd >= 0) {
+    close(t->fd);
+    free(t->root);
+    t->fd = -1;
+  }
+  int dir = open(root, O_PATH | O_DIRECTORY | O_CLOEXEC);
+  if (dir >= 0) {
+    t->root  = io_mem(strdup(root));
+    t->fd    = dir;
+    t->until = now + 1000000000ull;
+  }
+  return dir;
+}
+
 static int file_open_under_two(const char* root, const char* at) {
   if (!file_open_under_shape(at)) {
     errno = EACCES;
     return -1;
   }
-  int dir = open(root, O_PATH | O_DIRECTORY | O_CLOEXEC);
+  int dir = file_open_under_dir(root);
   if (dir < 0) {
     return -1;
   }
   struct { u64 flags, mode, resolve; } how = {
     O_RDONLY | O_NOFOLLOW | O_CLOEXEC | O_NOCTTY | O_NONBLOCK, 0,
     0x08 | 0x04 | 0x02 };  // RESOLVE_BENEATH, NO_SYMLINKS, NO_MAGICLINKS
-  int fd = (int)syscall(SYS_openat2, dir, at, &how, sizeof how);
-  int no = errno;
-  close(dir);
-  errno = no;
-  return fd;
+  return (int)syscall(SYS_openat2, dir, at, &how, sizeof how);
 }
 #endif
 
@@ -192,42 +218,160 @@ static Term file_get_under_body(Env e, int fd, u64 n, bool* held) {
   return str_view_owned(e, p);
 }
 
-Term file_get_under_run(Env e, Term* f, IoWork* w) {
-  u64   rn = 0, pn = 0;
-  char* root = io_cstr(e, f[0], &rn);
-  char* path = io_cstr(e, f[1], &pn);
-  u64   small = (u64)(u32)f[2];
-  int   fd = -1;
-  struct stat st;
-  errno = EILSEQ;
-  if (!io_nul(root, rn) && !io_nul(path, pn)) {
-    fd = file_open_under_stat(root, path, &st);
+// The memo: what get_under last read of a file under small bytes, per
+// thread, by root and path, answered again without a syscall for up to
+// a second after it was read (as nginx's open_file_cache answers within
+// its valid time). Past that the file is opened and fstat'ed again, and
+// its bytes are kept when its inode, size and mtime are what they were,
+// read again when not. A slot holds one file; a new one takes the slot
+// its name hashes to, so the memo never holds more than FILE_MEMO_N
+// files, each under small bytes. Only a regular file that opened is
+// kept: a refusal is asked of the file system every time.
+#define FILE_MEMO_N  256
+#define FILE_MEMO_NS 1000000000ull
+
+typedef struct {
+  char* key;
+  u64   kn;
+  u64   at;
+  u64   dev, ino, mns;
+  u32   size, mtime;
+  char* body;
+} FileMemo;
+
+static __thread FileMemo* file_memo;
+
+static FileMemo* file_memo_slot(const char* key, u64 kn) {
+  if (file_memo == NULL) {
+    file_memo = io_mem(calloc(FILE_MEMO_N, sizeof(FileMemo)));
   }
-  int no = errno;
-  free(root);
-  free(path);
+  u64 h = 1469598103934665603ull;
+  for (u64 i = 0; i < kn; i++) {
+    h = (h ^ (u8)key[i]) * 1099511628211ull;
+  }
+  return &file_memo[h & (FILE_MEMO_N - 1)];
+}
+
+static bool file_memo_is(FileMemo* m, const char* key, u64 kn) {
+  return m->key != NULL && m->kn == kn && memcmp(m->key, key, kn) == 0;
+}
+
+static u64 file_memo_mns(struct stat* st) {
+#if defined(__APPLE__)
+  return (u64)st->st_mtimespec.tv_sec * 1000000000ull + (u64)st->st_mtimespec.tv_nsec;
+#else
+  return (u64)st->st_mtim.tv_sec * 1000000000ull + (u64)st->st_mtim.tv_nsec;
+#endif
+}
+
+static bool file_memo_same(FileMemo* m, struct stat* st) {
+  return m->dev == (u64)st->st_dev && m->ino == (u64)st->st_ino
+    && m->size == (u64)st->st_size && m->mns == file_memo_mns(st);
+}
+
+static void file_memo_put(FileMemo* m, const char* key, u64 kn, struct stat* st,
+  const char* body, u64 at) {
+  free(m->key);
+  free(m->body);
+  m->key  = io_mem(malloc(kn));
+  m->body = io_mem(malloc(st->st_size + 1));
+  memcpy(m->key, key, kn);
+  memcpy(m->body, body, (size_t)st->st_size);
+  m->kn    = kn;
+  m->at    = at;
+  m->dev   = (u64)st->st_dev;
+  m->ino   = (u64)st->st_ino;
+  m->mns   = file_memo_mns(st);
+  m->size  = (u32)st->st_size;
+  m->mtime = (u32)st->st_mtime;
+}
+
+static Term file_get_under_done(Env e, u32 n, u32 mtime, Term file, Term body) {
+  return io_done(e, io_tup(e, n, io_tup(e, mtime, io_tup(e, file, body))));
+}
+
+// root and path as the key, "root\0path\0", which is both C strings;
+// NULL for a byte past 255 or a NUL in either
+static char* file_get_under_key(Env e, Term root, Term path, u64* rn, u64* kn) {
+  u32         an = 0, bn = 0;
+  char*       ao = NULL;
+  char*       bo = NULL;
+  const char* a  = io_buf_ptr(e, root, &an, &ao);
+  const char* b  = io_buf_ptr(e, path, &bn, &bo);
+  char*       k  = NULL;
+  if (a && b && !memchr(a, 0, an) && !memchr(b, 0, bn)) {
+    k = io_mem(malloc((u64)an + bn + 2));
+    memcpy(k, a, an);
+    k[an] = 0;
+    memcpy(k + an + 1, b, bn);
+    k[an + 1 + bn] = 0;
+  }
+  free(ao);
+  free(bo);
+  term_sink(e, root);
+  term_sink(e, path);
+  *rn = an;
+  *kn = (u64)an + 1 + bn;
+  return k;
+}
+
+Term file_get_under_run(Env e, Term* f, IoWork* w) {
+  u64   rn = 0, kn = 0;
+  char* key = file_get_under_key(e, f[0], f[1], &rn, &kn);
+  u64   small = (u64)(u32)f[2];
+  (void)w;
+  if (key == NULL) {
+    return io_fail(e, EILSEQ, NULL);
+  }
+  char* root = key;
+  char* path = key + rn + 1;
+  u64       now = io_tick();
+  FileMemo* m   = file_memo_slot(key, kn);
+  bool      is  = file_memo_is(m, key, kn);
+  if (is && now - m->at < FILE_MEMO_NS && m->size < small) {
+    free(key);
+    return file_get_under_done(e, m->size, m->mtime, term_pak(CID_NONE, 0),
+      io_buf(e, m->body, m->size));
+  }
+  struct stat st;
+  char* at = io_mem(strdup(path));
+  int   fd = file_open_under_stat(root, at, &st);
+  int   no = errno;
+  free(at);
   if (fd >= 0 && st.st_size > (off_t)UINT32_MAX) {
     close(fd);
     fd = -1;
     no = EOVERFLOW;
   }
   if (fd < 0) {
+    free(key);
     return io_fail(e, (u32)no, NULL);
   }
-  u64  n    = (u64)st.st_size;
+  u64 n = (u64)st.st_size;
+  if (n < small && is && file_memo_same(m, &st)) {
+    close(fd);
+    free(key);
+    m->at = now;
+    return file_get_under_done(e, m->size, m->mtime, term_pak(CID_NONE, 0),
+      io_buf(e, m->body, m->size));
+  }
   bool held = false;
   Term body = n < small ? file_get_under_body(e, fd, n, &held)
     : term_pak(CID_SNIL, 0);
   Term file = term_pak(CID_NONE, 0);
   if (held) {
     close(fd);
+    StrParts p = str_peek(e, body);
+    if (p.len == n && (n == 0 || str_nar(p) == 2)) {
+      file_memo_put(m, key, kn, &st,
+        n ? (const char*)(e.mem + term_peek(e, p.data)) + p.off : "", now);
+    }
   } else {
     fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) & ~O_NONBLOCK);
     file = io_box(e, CID_SOME, io_hand(fd));
   }
-  (void)w;
-  return io_done(e, io_tup(e, (u32)n, io_tup(e, (u32)st.st_mtime,
-    io_tup(e, file, body))));
+  free(key);
+  return file_get_under_done(e, (u32)n, (u32)st.st_mtime, file, body);
 }
 
 static void __attribute__((constructor)) file_get_under_use(void) {
