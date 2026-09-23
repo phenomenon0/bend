@@ -1,0 +1,27 @@
+[
+ {
+  "headers": [
+   [
+    ":method",
+    "GET"
+   ],
+   [
+    ":path",
+    "/"
+   ],
+   [
+    ":scheme",
+    "http"
+   ],
+   [
+    ":authority",
+    "a"
+   ],
+   [
+    "x-smuggle",
+    "a\r\nGET /admin HTTP/1.1\r\nHost: a"
+   ]
+  ],
+  "end_stream": true
+ }
+]
