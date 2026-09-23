@@ -886,8 +886,129 @@ def frames.ok(+max: Nat, +bs: List<&2, U32>, pr: Sp.Pre, h: RPre(max, Fm.feed(bs
 def Laws.frame_sim(max, bs):
   frames.ok(max, bs, Sp.pre(Sp.preface(), bs), pre_ok(bs, max, 80, Wr.bytes("RI * HTTP/2.0\r\n\r\nSM\r\n\r\n")))
 
+# The frame reader's moves (the kit's obligation): a payload taken whole
+# lands where its bytes stepped one at a time do, and every other move
+# is one byte.
+def fslow(s: Bytes(), r: Fm.Rd) -> Fm.Rd:
+  Wr.feed_buf.slow(~Unit, ~Fm.Rd, ~Fm.wstep, Unit{}, s, r)
+
+def flast(q: Fm.Rd & Bytes()) -> Fm.Rd:
+  Wr.feed_buf.last(~Unit, ~Fm.Rd, ~Fm.wstep, Unit{}, q)
+
+def fr.app_nil(a: Bytes()) -> {Bytes.append(a, "") == a : Bytes()}:
+  match a:
+    case SNil{}:
+      {==}
+    case SCon{h, t}:
+      %fr.app_nil(t) : {SCon{h, Bytes.append(t, "")} == SCon{h, _} : Bytes()}
+      {==}
+
+def fr.app_assoc(a: Bytes(), -b: Bytes(), -c: Bytes()) ->
+  {Bytes.append(Bytes.append(a, b), c) == Bytes.append(a, Bytes.append(b, c)) : Bytes()}:
+  match a:
+    case SNil{}:
+      {==}
+    case SCon{h, t}:
+      %fr.app_assoc(t, b, c) : {SCon{h, Bytes.append(Bytes.append(t, b), c)} == SCon{h, _} : Bytes()}
+      {==}
+
+# a payload grown by one byte, then by more, is the payload grown by all
+def fr.push_app(acc: Bytes(), -c: U32, -x: Bytes()) ->
+  {Bytes.append(Bytes.push(acc, c), x) == Bytes.append(acc, SCon{Chr{c}, x}) : Bytes()}:
+  fr.app_assoc(acc, SCon{Chr{c}, SNil{}}, x)
+
+def fr.take0(t: Bytes()) -> {String.take(t, 0n) == "" : Bytes()}:
+  match t:
+    case SNil{}:
+      {==}
+    case SCon{h, u}:
+      {==}
+
+def fr.drop0(t: Bytes()) -> {String.drop(t, 0n) == t : Bytes()}:
+  match t:
+    case SNil{}:
+      {==}
+    case SCon{h, u}:
+      {==}
+
+def fr.len_shift(t: Bytes()) -> {String.length.go(t, 1n) == 1n+String.length.go(t, 0n) : Nat}:
+  Bytes.len.shift(t, 0n)
+
+def fr.pay.at(+ty: U32, +fl: U32, +sid: U32, +q: Nat, +acc: Bytes(), +c: U32, +t: Bytes(), +max: Nat,
+  +out: List<&2, Fm.Frm>, d: Bool) ->
+  {flast(Fm.pay.at(ty, fl, sid, 1n+q, acc, SCon{Chr{c}, t}, max, out, d)) ==
+    flast(Fm.pay.at(ty, fl, sid, q, Bytes.push(acc, c), t, max, out, d)) : Fm.Rd}:
+  match d:
+    case False{}:
+      %Equal.sym(Nat, String.length.go(t, 1n), 1n+String.length.go(t, 0n), fr.len_shift(t)) :
+        {Fm.Rd{Fm.FPay{ty, fl, sid, Nat.sub(1n+q, _), Bytes.append(acc, SCon{Chr{c}, t})}, max, out} ==
+          Fm.Rd{Fm.FPay{ty, fl, sid, Nat.sub(q, String.length.go(t, 0n)), Bytes.append(Bytes.push(acc, c), t)},
+            max, out} : Fm.Rd}
+      %fr.push_app(acc, c, t) :
+        {Fm.Rd{Fm.FPay{ty, fl, sid, Nat.sub(q, String.length.go(t, 0n)), _}, max, out} ==
+          Fm.Rd{Fm.FPay{ty, fl, sid, Nat.sub(q, String.length.go(t, 0n)), Bytes.append(Bytes.push(acc, c), t)},
+            max, out} : Fm.Rd}
+      {==}
+    case True{}:
+      %fr.push_app(acc, c, String.take(t, 1n+q)) :
+        {fslow(String.drop(t, 1n+q), Fm.Rd{Fm.hd.start(), max, Con{Fm.Frm{ty, fl, sid, _}, out}}) ==
+          fslow(String.drop(t, 1n+q), Fm.Rd{Fm.hd.start(), max,
+            Con{Fm.Frm{ty, fl, sid, Bytes.append(Bytes.push(acc, c), String.take(t, 1n+q))}, out}}) : Fm.Rd}
+      {==}
+
+def fr.pay(+s: Bytes(), +ty: U32, +fl: U32, +sid: U32, +left: Nat, +acc: Bytes(), +max: Nat,
+  +out: List<&2, Fm.Frm>) ->
+  {flast(Fm.pay.go(ty, fl, sid, left, acc, s, max, out)) ==
+    fslow(s, Fm.Rd{Fm.FPay{ty, fl, sid, left, acc}, max, out}) : Fm.Rd}:
+  match s left:
+    case SNil{} 0n:
+      %Equal.sym(Bytes(), Bytes.append(acc, ""), acc, fr.app_nil(acc)) :
+        {Fm.Rd{Fm.FPay{ty, fl, sid, 0n, _}, max, out} == Fm.Rd{Fm.FPay{ty, fl, sid, 0n, acc}, max, out} : Fm.Rd}
+      {==}
+    case SNil{} 1n+q:
+      %Equal.sym(Bytes(), Bytes.append(acc, ""), acc, fr.app_nil(acc)) :
+        {Fm.Rd{Fm.FPay{ty, fl, sid, 1n+q, _}, max, out} == Fm.Rd{Fm.FPay{ty, fl, sid, 1n+q, acc}, max, out} : Fm.Rd}
+      {==}
+    case SCon{Chr{c}, t} 0n:
+      %Equal.sym(Nat, String.length.go(t, 1n), 1n+String.length.go(t, 0n), fr.len_shift(t)) :
+        {flast(Fm.pay.at(ty, fl, sid, 0n, acc, SCon{Chr{c}, t}, max, out, Nat.is_lt(0n, _))) ==
+          fslow(t, Fm.Rd{Fm.hd.start(), max, Con{Fm.Frm{ty, fl, sid, Bytes.push(acc, c)}, out}}) : Fm.Rd}
+      %Equal.sym(Bytes(), String.take(t, 0n), "", fr.take0(t)) :
+        {fslow(String.drop(t, 0n), Fm.Rd{Fm.hd.start(), max,
+          Con{Fm.Frm{ty, fl, sid, Bytes.append(acc, SCon{Chr{c}, _})}, out}}) ==
+          fslow(t, Fm.Rd{Fm.hd.start(), max, Con{Fm.Frm{ty, fl, sid, Bytes.push(acc, c)}, out}}) : Fm.Rd}
+      %Equal.sym(Bytes(), String.drop(t, 0n), t, fr.drop0(t)) :
+        {fslow(_, Fm.Rd{Fm.hd.start(), max, Con{Fm.Frm{ty, fl, sid, Bytes.push(acc, c)}, out}}) ==
+          fslow(t, Fm.Rd{Fm.hd.start(), max, Con{Fm.Frm{ty, fl, sid, Bytes.push(acc, c)}, out}}) : Fm.Rd}
+      {==}
+    case SCon{Chr{c}, t} 1n+q:
+      %Equal.sym(Nat, String.length.go(t, 1n), 1n+String.length.go(t, 0n), fr.len_shift(t)) :
+        {flast(Fm.pay.at(ty, fl, sid, 1n+q, acc, SCon{Chr{c}, t}, max, out, Nat.is_lt(1n+q, _))) ==
+          fslow(t, Fm.Rd{Fm.FPay{ty, fl, sid, q, Bytes.push(acc, c)}, max, out}) : Fm.Rd}
+      Equal.trans(Fm.Rd,
+        flast(Fm.pay.at(ty, fl, sid, 1n+q, acc, SCon{Chr{c}, t}, max, out, Nat.is_lt(q, String.length.go(t, 0n)))),
+        flast(Fm.pay.at(ty, fl, sid, q, Bytes.push(acc, c), t, max, out, Nat.is_lt(q, String.length.go(t, 0n)))),
+        fslow(t, Fm.Rd{Fm.FPay{ty, fl, sid, q, Bytes.push(acc, c)}, max, out}),
+        fr.pay.at(ty, fl, sid, q, acc, c, t, max, out, Nat.is_lt(q, String.length.go(t, 0n))),
+        fr.pay(t, ty, fl, sid, q, Bytes.push(acc, c), max, out))
+
+def fr.adv_ok(+u: Unit, +s: Bytes(), r: Fm.Rd) ->
+  {Wr.feed_buf.last(~Unit, ~Fm.Rd, ~Fm.wstep, u, Fm.wadv(u, s, r)) ==
+    Wr.feed_buf.slow(~Unit, ~Fm.Rd, ~Fm.wstep, u, s, r) : Fm.Rd}:
+  match u r:
+    case Unit{} Fm.Rd{at, max, out}:
+      match at:
+        case Fm.FPay{ty, fl, sid, left, acc}:
+          fr.pay(s, ty, fl, sid, left, acc, max, out)
+        case Fm.FPre{ps}:
+          Wr.one.step_ok(~Unit, ~Fm.Rd, ~Fm.wstep, Unit{}, s, Fm.Rd{Fm.FPre{ps}, max, out})
+        case Fm.FHd{left, h}:
+          Wr.one.step_ok(~Unit, ~Fm.Rd, ~Fm.wstep, Unit{}, s, Fm.Rd{Fm.FHd{left, h}, max, out})
+        case Fm.FBad{why}:
+          Wr.one.step_ok(~Unit, ~Fm.Rd, ~Fm.wstep, Unit{}, s, Fm.Rd{Fm.FBad{why}, max, out})
+
 def feed_buf_is(+b: Bytes(), +r: Fm.Rd) -> {Fm.feed_buf(b, r) == Fm.feed(Bytes.to_list(b), r) : Fm.Rd}:
-  Wr.feed_buf_is_feed(~Unit, ~Fm.Rd, ~Fm.wstep, ~Fm.wadv, ~Wr.one.step_ok(~Unit, ~Fm.Rd, ~Fm.wstep), Unit{}, b, r)
+  Wr.feed_buf_is_feed(~Unit, ~Fm.Rd, ~Fm.wstep, ~Fm.wadv, ~fr.adv_ok, Unit{}, b, r)
 
 def Laws.frame_sim_buf(max, b):
   %Equal.sym(Fm.Rd, Fm.feed_buf(b, Fm.new(max)), Fm.feed(Bytes.to_list(b), Fm.new(max)), feed_buf_is(b, Fm.new(max))) :
@@ -896,7 +1017,7 @@ def Laws.frame_sim_buf(max, b):
 
 def Laws.frame_sim_reads(max, rs):
   %Equal.sym(Fm.Rd, Laws.reads(rs, Fm.new(max)), Fm.feed(Bytes.to_list(Bytes.concat(rs)), Fm.new(max)),
-      Wr.reads_is(~Unit, ~Fm.Rd, ~Fm.wstep, ~Fm.wadv, ~Wr.one.step_ok(~Unit, ~Fm.Rd, ~Fm.wstep), Unit{}, rs,
+      Wr.reads_is(~Unit, ~Fm.Rd, ~Fm.wstep, ~Fm.wadv, ~fr.adv_ok, Unit{}, rs,
         Fm.new(max))) :
     Laws.agree(_, max, Sp.frames(max, Bytes.to_list(Bytes.concat(rs))))
   Laws.frame_sim(max, Bytes.to_list(Bytes.concat(rs)))

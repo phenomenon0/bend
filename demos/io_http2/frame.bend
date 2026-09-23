@@ -125,12 +125,46 @@ def step(r: Rd, +c: U32) -> Rd:
         case FBad{why}:
           Rd{FBad{why}, max, out}
 
-# The walk, from the kit: nothing beside the state, one byte a move.
+# The walk, from the kit: nothing beside the state; a payload's bytes
+# taken whole (all of the read when the payload goes on past it, else
+# the left + 1 bytes that end it, the frame with them), anything else a
+# byte a move. PROOF.bend proves a move lands where stepping its bytes
+# one at a time does.
 def wstep(u: Unit, r: Rd, c: U32) -> Rd:
   step(r, c)
 
+def pay.took(+ty: U32, +fl: U32, +sid: U32, acc: Bytes(), +max: Nat, out: List<&2, Frm>,
+  xy: Bytes() & Bytes()) -> Rd & Bytes():
+  (x, y) = xy
+  (Rd{hd.start(), max, Con{Frm{ty, fl, sid, Bytes.append(acc, x)}, out}}, y)
+
+def pay.at(+ty: U32, +fl: U32, +sid: U32, +left: Nat, acc: Bytes(), +s: Bytes(), +max: Nat,
+  out: List<&2, Frm>, done: Bool) -> Rd & Bytes():
+  match done:
+    case False{}:
+      (Rd{FPay{ty, fl, sid, Nat.sub(left, Bytes.len(s)), Bytes.append(acc, s)}, max, out}, "")
+    case True{}:
+      pay.took(ty, fl, sid, acc, max, out, String.cut(s, 1n+left))
+
+def pay.go(+ty: U32, +fl: U32, +sid: U32, +left: Nat, acc: Bytes(), +s: Bytes(), +max: Nat,
+  out: List<&2, Frm>) -> Rd & Bytes():
+  pay.at(ty, fl, sid, left, acc, s, max, out, Nat.is_lt(left, Bytes.len(s)))
+
+def adv(r: Rd, s: Bytes()) -> Rd & Bytes():
+  match r:
+    case Rd{at, max, out}:
+      match at:
+        case FPay{ty, fl, sid, left, acc}:
+          pay.go(ty, fl, sid, left, acc, s, max, out)
+        case FPre{ps}:
+          Wr.one.step(~Unit, ~Rd, ~wstep, Unit{}, s, Rd{FPre{ps}, max, out})
+        case FHd{left, h}:
+          Wr.one.step(~Unit, ~Rd, ~wstep, Unit{}, s, Rd{FHd{left, h}, max, out})
+        case FBad{why}:
+          Wr.one.step(~Unit, ~Rd, ~wstep, Unit{}, s, Rd{FBad{why}, max, out})
+
 def wadv(u: Unit, s: Bytes(), r: Rd) -> Rd & Bytes():
-  Wr.one.step(~Unit, ~Rd, ~wstep, u, s, r)
+  adv(r, s)
 
 def feed(bs: List<&2, U32>, r: Rd) -> Rd:
   Wr.feed(~Unit, ~Rd, ~wstep, Unit{}, bs, r)
