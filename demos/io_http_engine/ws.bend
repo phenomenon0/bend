@@ -9,6 +9,7 @@
 # it is read. It runs the echo service: text and binary come back as
 # they came, a ping is answered with a pong, a close with a close.
 import Base
+import ../../wire/reader.bend as Wr
 import ./sha1.bend as Sha1
 import ./b64.bend as B64
 
@@ -199,25 +200,21 @@ def step(w: W, b: U32) -> W:
     case W{st, out}:
       step.at(st, out, b)
 
+# The walk is the reader kit's (wire/reader.bend), at this step.
+def wstep(u: Unit, w: W, b: U32) -> W:
+  step(w, b)
+
 # one structural walk over a chunk; the state that comes out is the
 # state to feed the next chunk. This is the reader's spec, over a list.
 def feed(bs: List<&2, U32>, w: W) -> W:
-  match bs:
-    case Nil{}:
-      w
-    case Con{b, t}:
-      feed(t, step(w, b))
+  Wr.feed(~Unit, ~W, ~wstep, Unit{}, bs, w)
 
 # the same walk over a byte buffer, the one a connection reads: it
 # steps the same machine, so it is feed of the buffer's bytes (LAWS.bend,
 # ws_feed_buf). An uncons of a buffer nothing else holds advances it in
 # place, so the walk allocates no cell per byte.
 def feed_buf(b: Bytes(), w: W) -> W:
-  match b:
-    case SNil{}:
-      w
-    case SCon{Chr{c}, t}:
-      feed_buf(t, step(w, c))
+  Wr.feed_buf.slow(~Unit, ~W, ~wstep, Unit{}, b, w)
 
 # the frames completed so far, oldest first, and the reader emptied
 def take(w: W) -> W & List<&2, Frm>:

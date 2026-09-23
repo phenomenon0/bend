@@ -13,47 +13,13 @@
 # array's length and on how deep nesting may go. Anything else is Bad{}
 # and never left, as in the HTTP reader and for the same reason.
 import Base
+import ../../wire/reader.bend as Wr
 
 # Bytes
 # =====
-
-# an ASCII literal as bytes
-def bytes(s: String) -> List<&2, U32>:
-  match s:
-    case SNil{}:
-      Nil{}
-    case SCon{Chr{c}, t}:
-      Con{c, bytes(t)}
-
-def cat(a: List<&2, U32>, b: List<&2, U32>) -> List<&2, U32>:
-  List.append(&2, U32, a, b)
-
-def rev(a: List<&2, U32>) -> List<&2, U32>:
-  List.reverse(&2, U32, a)
-
-def beq(a: List<&2, U32>, b: List<&2, U32>, acc: Bool) -> Bool:
-  match a b:
-    case Nil{} Nil{}:
-      acc
-    case Nil{} Con{y, u}:
-      False{}
-    case Con{x, t} Nil{}:
-      False{}
-    case Con{x, t} Con{y, u}:
-      beq(t, u, acc && U32.is_eq(x, y))
-
-def digit(+c: U32) -> Bool:
-  U32.is_le(48, c) && U32.is_le(c, 57)
-
-def lower.go(+c: U32, up: Bool) -> U32:
-  match up:
-    case True{}:
-      (c + 32 : U32)
-    case False{}:
-      c
-
-def lower(+c: U32) -> U32:
-  lower.go(c, U32.is_le(65, c) && U32.is_le(c, 90))
+#
+# The byte helpers (an ASCII literal, joining, reversing, comparing) are
+# the reader kit's: wire/reader.bend.
 
 # Values
 # ======
@@ -234,7 +200,7 @@ def step.len(
   arr: Bool, n: U32, neg: Bool, +any: Bool, up: List<&2, Fr>, deep: U32,
   out: List<&2, Val>, +c: U32
 ) -> Rd:
-  step.len.go(arr, n, neg, any, up, deep, out, c, U32.is_eq(c, 13), digit(c),
+  step.len.go(arr, n, neg, any, up, deep, out, c, U32.is_eq(c, 13), Wr.digit(c),
     U32.is_eq(c, 45) && Bool.not(any))
 
 # a length past the cap is refused as it is read, so a huge one never
@@ -274,7 +240,7 @@ def step.body.go(
 ) -> Rd:
   match last:
     case True{}:
-      Rd{BodyC{rev(Con{c, acc})}, up, deep, out}
+      Rd{BodyC{Wr.rev(Con{c, acc})}, up, deep, out}
     case False{}:
       Rd{Body{(rem - 1 : U32), Con{c, acc}}, up, deep, out}
 
@@ -300,7 +266,7 @@ def step.at.go(
     case LineC{k, acc}:
       match lf:
         case True{}:
-          close(up, deep, val.line(k, rev(acc)), out)
+          close(up, deep, val.line(k, Wr.rev(acc)), out)
         case False{}:
           Rd{Bad{}, Nil{}, 0, out}
     case Len{arr, n, neg, any}:
@@ -338,14 +304,25 @@ def step(r: Rd, c: U32) -> Rd:
     case Rd{at, up, deep, out}:
       step.at(at, up, deep, out, c)
 
+# The walk, from the kit: the step as the kit takes it (no dialect, so
+# Unit beside the state), and feed and feed_buf over it. RESP takes no
+# runs, so its block walk moves one byte at a time (Wr.one.step), and
+# the kit's one.step_ok is its obligation. LAWS.bend states the kit's
+# laws of these.
+def wstep(u: Unit, r: Rd, c: U32) -> Rd:
+  step(r, c)
+
+def wadv(u: Unit, s: Bytes(), r: Rd) -> Rd & Bytes():
+  Wr.one.step(~Unit, ~Rd, ~wstep, u, s, r)
+
 # one structural walk over a chunk: the state that comes out is the
 # state to feed the next chunk, and LAWS.bend says so
 def feed(bs: List<&2, U32>, r: Rd) -> Rd:
-  match bs:
-    case Nil{}:
-      r
-    case Con{c, t}:
-      feed(t, step(r, c))
+  Wr.feed(~Unit, ~Rd, ~wstep, Unit{}, bs, r)
+
+# the same walk over a read as the socket hands it
+def feed_buf(+s: Bytes(), r: Rd) -> Rd:
+  Wr.feed_buf(~Unit, ~Rd, ~wstep, ~wadv, Unit{}, s, r)
 
 # the values finished so far, oldest first, and the reader emptied
 def take(r: Rd) -> Rd & List<&2, Val>:
@@ -386,31 +363,31 @@ def crlf() -> List<&2, U32>:
   [13, 10]
 
 def line(tag: U32, bs: List<&2, U32>) -> List<&2, U32>:
-  Con{tag, cat(bs, crlf())}
+  Con{tag, Wr.cat(bs, crlf())}
 
 def simple(s: String) -> List<&2, U32>:
-  line(43, bytes(s))
+  line(43, Wr.bytes(s))
 
 def error(s: String) -> List<&2, U32>:
-  line(45, bytes(s))
+  line(45, Wr.bytes(s))
 
 def integer(+n: U32) -> List<&2, U32>:
-  line(58, bytes(U32.show(n)))
+  line(58, Wr.bytes(U32.show(n)))
 
 def nil() -> List<&2, U32>:
-  bytes("$-1\r\n")
+  Wr.bytes("$-1\r\n")
 
 # a bulk carries its own length, so it is the one reply that has to
 # measure what it is sending
 def bulk(+bs: List<&2, U32>) -> List<&2, U32>:
-  cat(line(36, bytes(Nat.show(List.length(&2, U32, bs)))), cat(bs, crlf()))
+  Wr.cat(line(36, Wr.bytes(Nat.show(List.length(&2, U32, bs)))), Wr.cat(bs, crlf()))
 
 def array.go(xs: List<&2, List<&2, U32>>) -> List<&2, U32>:
   match xs:
     case Nil{}:
       Nil{}
     case Con{h, t}:
-      cat(h, array.go(t))
+      Wr.cat(h, array.go(t))
 
 def array(+xs: List<&2, List<&2, U32>>) -> List<&2, U32>:
-  cat(line(42, bytes(Nat.show(List.length(&2, List<&2, U32>, xs)))), array.go(xs))
+  Wr.cat(line(42, Wr.bytes(Nat.show(List.length(&2, List<&2, U32>, xs)))), array.go(xs))

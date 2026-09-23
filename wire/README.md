@@ -1,0 +1,172 @@
+# bend-wire
+
+A protocol server in Bend is three things: a reader that walks whatever
+bytes a read hands it, a planner that turns what a read completed into
+replies, and a loop that runs them against a socket under deadlines and
+budgets. The first two are the protocol's. The loop, and the laws every
+such reader and every such loop has, are this library's, written once
+and proven once, polymorphically: a law here holds for every protocol
+that plugs into it, and a protocol states it for its own code as a
+one-line instance.
+
+    wire/reader.bend    the reader kit: feed, feed_buf and their laws
+    wire/loop.bend      the connection loop, the writer, the accept loop
+    wire/world.bend     a pure model of the socket world, the effects'
+                        contracts, and the loops' laws in it
+    wire/effects.bend   the loops over IO and the real effects: serve,
+                        run (a connection limit, SIGTERM, a grace time)
+    wire/conform.bend   the real effects judged by the contracts, with
+    wire/conform.c      conform.c as the peer
+
+Its users: `demos/io_http_engine` (HTTP/1.1, WebSocket, SSE, files),
+`demos/io_resp` (RESP, below) and `power/csv.bend` (the reader kit only).
+
+## The reader
+
+A reader is a byte-step machine, handed in as template arguments:
+
+    ~E: Data                    what a step reads beside the state (CSV's
+                                dialect; Unit when there is none)
+    ~S: Data                    the state
+    ~step: E -> S -> U32 -> S   one byte
+    ~adv: E -> Bytes() -> S -> S & Bytes()
+                                one move of the block walk: a run the
+                                protocol takes whole, or one byte
+                                (Wr.one.step takes one byte)
+
+`Wr.feed` walks a list of bytes, `Wr.feed_buf.slow` a block a byte at a
+time, `Wr.feed_buf` a block by the protocol's moves (the run-cutting fast
+path), and `Wr.reads` a stream's reads in turn.
+
+**Obligations**, each proved by the protocol and handed in as a template
+argument:
+
+| obligation | statement | who |
+|---|---|---|
+| `adv_ok` | `feed_buf.last(e, adv(e, s, p)) == feed_buf.slow(e, s, p)` | a protocol with runs (HTTP's `lem.adv`, CSV's); `Wr.one.step_ok` for one byte a move |
+| `absorbs` | `step(e, bad(x), c) == bad(x)` for the refused states `bad(x)` | every protocol; usually `{==}` |
+
+**Laws you get**: `feed_split` (chunking never changes a read),
+`bad_feeds`, `bad_feeds_buf`, `bad_feeds_slow` (a refusal is never
+left), `slow_is_feed`, `go_is_slow`, `feed_buf_is_feed` (the block walk
+is the byte machine), `feed_buf_split`, `slow_split` (chunking, on
+blocks), `reads_is` and `reads_split` (any list of reads reads as their
+concatenation).
+
+## The loop
+
+A server hands `wire/loop.bend` its hooks (the names are the loop's
+template parameters):
+
+| hook | what |
+|---|---|
+| `~E: Data`, `+srv: E` | what serving needs (a configuration) |
+| `~P: Data`, `p0: P` | a connection's state between reads, and a fresh one's |
+| `~U: Data` | an upgraded connection's state (Unit when none) |
+| `~idle`, `~hdms` | the idle time and a head's time, from `srv` |
+| `~plan: E -> Bytes() -> P -> Plan<P, U>` | a read's bytes (never empty: the peer's FIN ends the connection first) to what next |
+| `~mid: P -> Bool` | a head is in progress: the next read is under its budget |
+| `~big` | the reply to a head past `head.cap()` |
+| `~uplan` | `~plan` for an upgraded connection |
+| `~gap`, `~event` | a stream: the wait between events, and the n-th |
+| `~shut`, `~fhead`, `~miss` | a reply marked last, a file's head, a missing file |
+| `~lnote`, `~lsize` | access log lines |
+
+`L.no.*` are the hooks of a protocol that uses less: no head budget, no
+upgrade, no stream, no files, no log. A `Plan` is `Go{out, p2}` (write,
+read again), `Wait{p2}` (read again), `End{out}` (write, close),
+`Feed{out, n}` (write, stream n events), `Sock{out, u}`/`Hold{u}`
+(upgrade), or `Stop{}`. The replies are `Seg`s: `Raw{bytes}`, `Page{...}`
+(a file, streamed), `Note{...}` (a log line), `Shut{}`.
+
+The budgets are the loop's: a read takes at most `chunk()` bytes; a head
+in progress at most `head.cap()` bytes past the read it began in, and
+`hdms(srv)` of the clock; replies wait in one batch that goes out at
+`send.cap()`; every send has `idle(srv)` as its deadline; a connection
+reads at most `conn.fuel()` times, and at most `conn.waits()` times in a
+row without finishing anything.
+
+**The one obligation**: `event_ok`, an event is never empty once framed,
+`empty(shut(False{}, event(n))) == False{}` (HTTP's computes;
+`WW.no.event_ok` is the default's).
+
+**Laws you get** (`wire/world.bend`, for every hook): `end_is_last` and
+`stop_is_last` (an ending plan is the last act), `go_order` (replies go
+out before the next read), `fail_go`, `fail_up`, `fail_feed` (nothing
+after a failed send), `segs_wire` (replies reach a reading peer byte for
+byte, in order), `hold_fine`, `raw_fine`, `page_fine`, `batch_under`
+(the batch stays under its cap), `head_capped`, `head_expires`,
+`hw_rest`, `hw_keeps` (the head's budget and deadline), `stall_ends` (a
+stopped peer is let go within three turns, from any state),
+`accept_calm` and `accept_ends` (the accept loop stays up, and ends
+only as it may); and of the model against the effects' contracts,
+`rx_model`, `tx_stalled`, `tx_served`, `fread_model`. `conform.bend`
+checks the real effects keep the same contracts.
+
+## A protocol on the kit: RESP
+
+`demos/io_resp` is the worked example. Its reader (`resp.bend`) is a
+step function over one state node, with the stack of arrays it is
+inside:
+
+    def wstep(u: Unit, r: Rd, c: U32) -> Rd:
+      step(r, c)
+
+    def wadv(u: Unit, s: Bytes(), r: Rd) -> Rd & Bytes():
+      Wr.one.step(~Unit, ~Rd, ~wstep, u, s, r)
+
+    def feed_buf(+s: Bytes(), r: Rd) -> Rd:
+      Wr.feed_buf(~Unit, ~Rd, ~wstep, ~wadv, Unit{}, s, r)
+
+and its chunking laws are the kit's, one line each (`PROOF.bend`):
+
+    def Laws.feed_split(a, b, r):
+      Wr.feed_split(~Unit, ~R.Rd, ~R.wstep, Unit{}, a, b, r)
+
+    def Laws.feed_buf_is_feed(b, r):
+      Wr.feed_buf_is_feed(~Unit, ~R.Rd, ~R.wstep, ~R.wadv,
+        ~Wr.one.step_ok(~Unit, ~R.Rd, ~R.wstep), Unit{}, b, r)
+
+The server (`main.bend`) is its planner -- a read's bytes through the
+reader, the finished values through the commands, the replies as one
+`Raw` -- and the hooks:
+
+    def plan(cfg: Cfg, buf: Bytes(), c: Conn) -> Plan():
+      match c:
+        case Conn{r, kv}:
+          plan.took(kv, R.take(R.feed_buf(buf, r)))
+
+    def go(+cfg: Cfg, s: Socket) -> IO(Socket):
+      Fx.serve(~Cfg, ~Conn, ~Unit, ~idle, ~idle, ~plan, ~L.no.mid(~Conn), ~L.no.big(),
+        ~L.no.uplan(~Conn, ~Unit), ~L.no.gap(), ~L.no.event, ~L.no.shut, ~L.no.fhead,
+        ~L.no.miss, ~L.no.lnote, ~L.no.lsize, cfg, conn.new(), s)
+
+    def main() -> IO(Unit):
+      ...
+      Fx.run(~Cfg, ~go, ~grace, ~conns, "bend-resp", Cfg{300000, 3000, 1024}, l)
+
+and it has the loop's laws at its hooks, each a one-line instance
+(`LAWS.bend` states `end_is_last`, `go_order`, `fail_go`, `segs_wire`,
+`stall_ends`), besides its own (`refuse_ends`: a refused stream is
+answered with what its values earned, then the error, and the
+connection ends).
+
+**What it cost.** Before bend-wire, RESP's server was 147 lines (121 of
+code) of connection-loop shape copied from the HTTP engine: a plan type,
+a read and a send each unwrapped by hand, a fuelled loop, an accept loop,
+with no head or batch budget, no connection limit, no SIGTERM and no
+laws. On the kit it is 102 lines (69 of code): the planner is 36 lines
+of code, the rest a configuration record and the hooks. It gets the
+loop's budgets, the connection limit, graceful stopping and the loop's
+laws for nothing. The measure the HTTP engine's HANDOFF set -- an hour
+rather than an afternoon -- is honest only in lines: the protocol-
+specific part of the server went from 121 lines of code, all of them
+loop shape, to 36 of planner. What the rebuild did cost was Bend's
+rules on shape, not the loop's: two scrutinees out of binder order, and
+the checker unfolding a literal idle time (below).
+
+**One thing to know.** A law at a protocol's hooks is re-checked with
+the hooks filled in, so a hook that computes to a large number -- an
+idle time written as a literal `300000` -- makes the checker unfold
+`U32.to_nat` of it. Keep budgets in `srv` (RESP's `Cfg`), where the
+checker sees a variable.

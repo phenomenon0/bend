@@ -1,19 +1,24 @@
 # The proofs of power/csv_laws.bend.
 #
-# feed_split and bad_feeds are inductions on the input. feed_buf_is_feed
-# follows the walk move by move: one byte is one step; a run is its
-# bytes stepped one by one, each keeping the field's mode and adding
-# itself (lem.stay), and the run stops where run.len says; a field
-# entered by a run steps its first byte as the empty unquoted field
-# does (lem.ent.step); after a refusal every byte is ignored. The fuel
-# never matters. csv_sim is an induction on a fuel that bounds the
-# input: at every byte, from every mode, the reader and csv_spec.bend's
-# grammar land in states the claim relates again (STEP), and at the end
-# of input they read the same (END). The cases where the grammar reads
-# CRLF as one symbol, or a byte of a field against its room, or a line
-# end against the record's width, go through one lemma each (ECR, QCR,
-# PUT, LE); their leaves are written out case by case.
+# feed_split, bad_feeds, feed_buf_is_feed, feed_buf_split and the reads'
+# walk are the reader kit's laws (wire/reader.bend), proven once there
+# for every reader and instantiated here at Csv.step. What is csv's own
+# is the kit's obligation for the block walk, lem.adv: every move lands
+# where stepping its bytes one at a time does. One byte is one step; a
+# run is its bytes stepped one by one, each keeping the field's mode and
+# adding itself (lem.stay), and the run stops where run.len says; a
+# field entered by a run steps its first byte as the empty unquoted
+# field does (lem.ent.step); after a refusal every byte is ignored. The
+# fuel never matters (the kit's go_is_slow). csv_sim is an induction on
+# a fuel that bounds the input: at every byte, from every mode, the
+# reader and csv_spec.bend's grammar land in states the claim relates
+# again (STEP), and at the end of input they read the same (END). The
+# cases where the grammar reads CRLF as one symbol, or a byte of a field
+# against its room, or a line end against the record's width, go through
+# one lemma each (ECR, QCR, PUT, LE); their leaves are written out case
+# by case.
 import Base
+import ../wire/reader.bend as Wr
 import ./csv.bend as Csv
 import ./csv_spec.bend as Spec
 import ./csv_laws.bend as Laws
@@ -22,29 +27,30 @@ import ./csv_laws.bend as Laws
 # =========
 
 def Laws.feed_split(d, a, b, p):
-  match a:
-    case Nil{}:
+  Wr.feed_split(~Csv.Dialect, ~Csv.P, ~Csv.wstep, d, a, b, p)
+
+# a refusal, as the kit's absorbing states: bad(x) for every x a
+# refusal carries, each a fixed point of the step
+type BadAt is Data:
+  BadAt{at: Nat, why: Csv.Why, fl: Nat, cur: List<&2, Bytes()>,
+    out: List<&2, List<&2, Bytes()>>, w: Maybe<&2, Nat>, pos: Nat}
+
+def bad(x: BadAt) -> Csv.P:
+  match x:
+    case BadAt{at, why, fl, cur, out, w, pos}:
+      Csv.P{Csv.Bad{at, why}, fl, cur, out, w, pos}
+
+def absorbs(+d: Csv.Dialect, +x: BadAt, +c: U32) -> {Csv.wstep(d, bad(x), c) == bad(x) : Csv.P}:
+  match x:
+    case BadAt{at, why, fl, cur, out, w, pos}:
       {==}
-    case Con{c, t}:
-      Laws.feed_split(d, t, b, Csv.step(d, p, c))
 
 def Laws.bad_feeds(d, s, at, why, fl, cur, out, w, pos):
-  match s:
-    case Nil{}:
-      {==}
-    case Con{c, t}:
-      Laws.bad_feeds(d, t, at, why, fl, cur, out, w, pos)
+  Wr.bad_feeds(~Csv.Dialect, ~Csv.P, ~Csv.wstep, ~BadAt, ~bad, ~absorbs, d, s,
+    BadAt{at, why, fl, cur, out, w, pos})
 
 # The walk
 # --------
-
-def slow_is_feed(+d: Csv.Dialect, s: Bytes(), p: Csv.P) ->
-  {Csv.feed_buf.slow(d, s, p) == Csv.feed(d, Bytes.to_list(s), p) : Csv.P}:
-  match s:
-    case SNil{}:
-      {==}
-    case SCon{Chr{c}, t}:
-      slow_is_feed(d, t, Csv.step(d, p, c))
 
 def app_nil(a: Bytes()) -> {Bytes.append(a, "") == a : Bytes()}:
   match a:
@@ -666,45 +672,23 @@ def lem.adv(+d: Csv.Dialect, +s: Bytes(), p: Csv.P) ->
     case Csv.P{m, fl, cur, out, w, pos}:
       lem.adv.at(d, m, s, fl, cur, out, w, pos)
 
-# the fuel never matters
+# the kit's obligation: every move lands where stepping its bytes does
+def adv_ok(+d: Csv.Dialect, +s: Bytes(), p: Csv.P) ->
+  {Wr.feed_buf.last(~Csv.Dialect, ~Csv.P, ~Csv.wstep, d, Csv.wadv(d, s, p)) ==
+    Wr.feed_buf.slow(~Csv.Dialect, ~Csv.P, ~Csv.wstep, d, s, p) : Csv.P}:
+  lem.adv(d, s, p)
+
+# the fuel never matters (the kit's go_is_slow)
 def lem.go(+d: Csv.Dialect, n: Nat, q: Csv.P & Bytes()) ->
-  {Csv.feed_buf.go(d, n, q) == Csv.feed_buf.last(d, q) : Csv.P}:
-  match n:
-    case 0n:
-      {==}
-    case 1n+m:
-      match q:
-        case (p, SNil{}):
-          {==}
-        case (+p, SCon{+h, +t}):
-          Equal.trans(Csv.P, Csv.feed_buf.go(d, m, Csv.adv(d, SCon{h, t}, p)),
-            Csv.feed_buf.last(d, Csv.adv(d, SCon{h, t}, p)), Csv.feed_buf.slow(d, SCon{h, t}, p),
-            lem.go(d, m, Csv.adv(d, SCon{h, t}, p)), lem.adv(d, SCon{h, t}, p))
+  {Wr.feed_buf.go(~Csv.Dialect, ~Csv.P, ~Csv.wstep, ~Csv.wadv, d, n, q) == Csv.feed_buf.last(d, q) :
+    Csv.P}:
+  Wr.go_is_slow(~Csv.Dialect, ~Csv.P, ~Csv.wstep, ~Csv.wadv, ~adv_ok, d, n, q)
 
 def Laws.feed_buf_is_feed(d, b, p):
-  Equal.trans(Csv.P, Csv.feed_buf(d, b, p), Csv.feed_buf.slow(d, b, p), Csv.feed(d, Bytes.to_list(b), p),
-    lem.go(d, Bytes.len(b), (p, b)), slow_is_feed(d, b, p))
-
-def split.buf(+d: Csv.Dialect, +a: Bytes(), +b: Bytes(), +p: Csv.P) ->
-  {Csv.feed(d, Bytes.to_list(Bytes.append(a, b)), p) == Csv.feed_buf(d, b, Csv.feed_buf(d, a, p)) :
-    Csv.P}:
-  %Equal.sym(Csv.P, Csv.feed_buf(d, a, p), Csv.feed(d, Bytes.to_list(a), p),
-    Laws.feed_buf_is_feed(d, a, p)) :
-    {Csv.feed(d, Bytes.to_list(Bytes.append(a, b)), p) == Csv.feed_buf(d, b, _) : Csv.P}
-  %Equal.sym(Csv.P, Csv.feed_buf(d, b, Csv.feed(d, Bytes.to_list(a), p)),
-    Csv.feed(d, Bytes.to_list(b), Csv.feed(d, Bytes.to_list(a), p)),
-    Laws.feed_buf_is_feed(d, b, Csv.feed(d, Bytes.to_list(a), p))) :
-    {Csv.feed(d, Bytes.to_list(Bytes.append(a, b)), p) == _ : Csv.P}
-  %Equal.sym(List<&2, U32>, Bytes.to_list(Bytes.append(a, b)),
-    List.append(&2, U32, Bytes.to_list(a), Bytes.to_list(b)), Bytes.to_list_append(a, b)) :
-    {Csv.feed(d, _, p) == Csv.feed(d, Bytes.to_list(b), Csv.feed(d, Bytes.to_list(a), p)) : Csv.P}
-  Laws.feed_split(d, Bytes.to_list(a), Bytes.to_list(b), p)
+  Wr.feed_buf_is_feed(~Csv.Dialect, ~Csv.P, ~Csv.wstep, ~Csv.wadv, ~adv_ok, d, b, p)
 
 def Laws.feed_buf_split(d, a, b, p):
-  Equal.trans(Csv.P, Csv.feed_buf(d, Bytes.append(a, b), p),
-    Csv.feed(d, Bytes.to_list(Bytes.append(a, b)), p), Csv.feed_buf(d, b, Csv.feed_buf(d, a, p)),
-    Laws.feed_buf_is_feed(d, Bytes.append(a, b), p),
-    split.buf(d, a, b, p))
+  Wr.feed_buf_split(~Csv.Dialect, ~Csv.P, ~Csv.wstep, ~Csv.wadv, ~adv_ok, d, a, b, p)
 
 # The grammar
 # ===========
@@ -1689,34 +1673,11 @@ def Laws.csv_sim_buf(d, b):
     {Csv.result(d, Csv.finish(d, _)) == Spec.parse(Bytes.to_list(b), d) : Csv.Out}
   Laws.csv_sim(d, Bytes.to_list(b))
 
-# reads fed one after another are their bytes fed at once
+# reads fed one after another are their bytes fed at once (the kit's
+# reads_is)
 def reads.is(+d: Csv.Dialect, rs: List<&2, Bytes()>, +p: Csv.P) ->
   {Laws.reads(d, rs, p) == Csv.feed(d, Bytes.to_list(Bytes.concat(rs)), p) : Csv.P}:
-  match rs:
-    case Nil{}:
-      {==}
-    case Con{+r, +t}:
-      Equal.trans(Csv.P, Laws.reads(d, t, Csv.feed_buf(d, r, p)),
-        Csv.feed(d, Bytes.to_list(Bytes.concat(t)), Csv.feed_buf(d, r, p)),
-        Csv.feed(d, Bytes.to_list(Bytes.append(r, Bytes.concat(t))), p),
-        reads.is(d, t, Csv.feed_buf(d, r, p)),
-        Equal.trans(Csv.P, Csv.feed(d, Bytes.to_list(Bytes.concat(t)), Csv.feed_buf(d, r, p)),
-          Csv.feed(d, Bytes.to_list(Bytes.concat(t)), Csv.feed(d, Bytes.to_list(r), p)),
-          Csv.feed(d, Bytes.to_list(Bytes.append(r, Bytes.concat(t))), p),
-          Equal.cong(Csv.P, Csv.P, x => Csv.feed(d, Bytes.to_list(Bytes.concat(t)), x), Csv.feed_buf(d, r, p),
-            Csv.feed(d, Bytes.to_list(r), p), Laws.feed_buf_is_feed(d, r, p)),
-          Equal.trans(Csv.P, Csv.feed(d, Bytes.to_list(Bytes.concat(t)), Csv.feed(d, Bytes.to_list(r), p)),
-            Csv.feed(d, List.append(&2, U32, Bytes.to_list(r), Bytes.to_list(Bytes.concat(t))), p),
-            Csv.feed(d, Bytes.to_list(Bytes.append(r, Bytes.concat(t))), p),
-            Equal.sym(Csv.P, Csv.feed(d, List.append(&2, U32, Bytes.to_list(r), Bytes.to_list(Bytes.concat(t))), p),
-              Csv.feed(d, Bytes.to_list(Bytes.concat(t)), Csv.feed(d, Bytes.to_list(r), p)),
-              Laws.feed_split(d, Bytes.to_list(r), Bytes.to_list(Bytes.concat(t)), p)),
-            Equal.cong(List<&2, U32>, Csv.P, x => Csv.feed(d, x, p),
-              List.append(&2, U32, Bytes.to_list(r), Bytes.to_list(Bytes.concat(t))),
-              Bytes.to_list(Bytes.append(r, Bytes.concat(t))),
-              Equal.sym(List<&2, U32>, Bytes.to_list(Bytes.append(r, Bytes.concat(t))),
-                List.append(&2, U32, Bytes.to_list(r), Bytes.to_list(Bytes.concat(t))),
-                Bytes.to_list_append(r, Bytes.concat(t)))))))
+  Wr.reads_is(~Csv.Dialect, ~Csv.P, ~Csv.wstep, ~Csv.wadv, ~adv_ok, d, rs, p)
 
 def Laws.csv_sim_reads(d, rs):
   %Equal.sym(Csv.P, Laws.reads(d, rs, Csv.new(d)), Csv.feed(d, Bytes.to_list(Bytes.concat(rs)), Csv.new(d)),

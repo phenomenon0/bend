@@ -1,10 +1,10 @@
 # Conformance: the real effects against the contracts the model assumes.
 #
 # world.bend states, as relations, what the model of the socket world
-# assumes of each effect the engine uses (rx.ok for TCP.poll_buf, tx.ok
+# assumes of each effect the loops use (rx.ok for TCP.poll_buf, tx.ok
 # for TCP.send_buf_poll, lsn.ok for TCP.accept_poll, fopen.ok for
-# File.open_under, fread.ok for File.read_buf), and LAWS.bend proves the
-# model keeps them. This program drives each real effect through its
+# File.open_under, fread.ok for File.read_buf), and proves the model
+# keeps them (rx_model, tx_stalled, tx_served, fread_model). This program drives each real effect through its
 # contract's cases -- a read that waits out its time, one that parks
 # and wakes, one asked for fewer bytes than came, a FIN, a reset; a
 # send that crawls through a small window, one to a peer that stopped
@@ -15,11 +15,10 @@
 # descriptor limit, plays each case's peer in the same order, and checks
 # what it sees from its side.
 #
-#   bend demos/io_http_engine/conform.bend -o conform
-#   cc -std=c11 -O2 -Wall demos/io_http_engine/conform.c -o conform-peer
+#   bend wire/conform.bend -o conform
+#   cc -std=c11 -O2 -Wall wire/conform.c -o conform-peer
 #   ./conform-peer ./conform 19120 /tmp/conform-root
 import Base
-import ./main.bend as Eng
 import ./world.bend as W
 
 # What a read answered, as data, so it can be judged twice

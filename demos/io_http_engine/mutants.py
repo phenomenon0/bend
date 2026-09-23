@@ -4,7 +4,9 @@
 #
 # - the world's: each breaks the loop the way one of the review's bugs
 #   did (or would), and PROOF.bend must then fail, naming a law of the
-#   world. Applied to main.bend in place.
+#   world. Applied in place to bend-wire's loop (wire/loop.bend), whose
+#   laws PROOF.bend states at the engine's hooks, or to main.bend's
+#   planner.
 #
 # - the framing's: each breaks the reader (or the spec) the way a
 #   smuggling or framing bug would, and must be refused by frame_sim
@@ -12,60 +14,67 @@
 #   keeps only frame_sim, frame_sim_buf, frame_sim_reads and the laws
 #   their proofs stand on -- every rule-by-rule law and every vector is
 #   removed, with its proof, and so are the world's -- so a kill there
-#   is frame_sim's and no other law's. The copy is checked clean first.
+#   is frame_sim's and no other law's. The copy (beside a copy of wire/,
+#   which it imports) is checked clean first.
 #
 #   python3 demos/io_http_engine/mutants.py        (from the repo root)
 import os, re, shutil, subprocess, sys, tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(HERE))
+LOOP = os.path.join(ROOT, 'wire', 'loop.bend')
 MAIN = os.path.join(HERE, 'main.bend')
 
+# the world's mutants: (what, file, before, after). The loops are
+# bend-wire's (wire/loop.bend), and their laws are proven there for
+# every protocol; PROOF.bend states them at the engine's hooks and must
+# refuse each broken loop.
 MUTANTS = [
-  ('no head deadline: a head out of time is read again',
-    '''    Nat.is_lt(el, U32.to_nat(srv.head(srv))))''',
-    '''    True{})'''),
-  ('no batch cap: a reply joins the batch whatever its size',
+  ('no head deadline: a head out of time is read again', LOOP,
+    '''    el, Nat.is_lt(el, U32.to_nat(hdms(srv))))''',
+    '''    el, True{})'''),
+  ('no batch cap: a reply joins the batch whatever its size', LOOP,
     '''    U32.cmp(U32.from_nat(Bytes.len(acc)), send.cap()))''',
     '''    LT{})'''),
-  ('a reply after close: End writes one more 400 after its segments',
-    '''~fread, ~fclose, s, out, srv.idle(srv)), m => pure(S, put.s(S, m)))''',
-    '''~fread, ~fclose, s, out, srv.idle(srv)), m =>
-            bind(Put(S), S, tx(put.s(S, m), resp.bad(), srv.idle(srv)), m2 =>
+  ('a reply after close: End writes one more reply after its segments', LOOP,
+    '''~lsize, s, out, idle(srv)), m =>
+            pure(S, put.s(S, m)))''',
+    '''~lsize, s, out, idle(srv)), m =>
+            bind(Put(S), S, tx(put.s(S, m), big, idle(srv)), m2 =>
               pure(S, put.s(S, m2))))'''),
-  ('a queued reply skipped on refusal: the 400 goes out alone',
-    '''      Ans{answer.flat(acc, [Raw{resp.bad()}]), True{}, 0, False{}}''',
-    '''      Ans{[Raw{resp.bad()}], True{}, 0, False{}}'''),
-  ('the accept loop exits on EMFILE',
+  ('a queued reply skipped on refusal: the 400 goes out alone', MAIN,
+    '''      Ans{answer.flat(acc, [L.Raw{resp.bad()}]), True{}, 0, False{}}''',
+    '''      Ans{[L.Raw{resp.bad()}], True{}, 0, False{}}'''),
+  ('the accept loop exits on EMFILE', LOOP,
     '''  accept.dead(~M, ~pure, ~bind, ~L, ~sig, l, code, accept.soft(code))''',
     '''  accept.dead(~M, ~pure, ~bind, ~L, ~sig, l, code,
     accept.soft(code) && Bool.not(U32.is_eq(code, 24)))'''),
-  ('replies out of order: a reply goes out before the batch it follows',
+  ('replies out of order: a reply goes out before the batch it follows', LOOP,
     '''            send.hold(~M, ~pure, ~bind, ~S, ~tx, ms, s, Bytes.append(acc, out)))
 ''',
     '''            send.hold(~M, ~pure, ~bind, ~S, ~tx, ms, s, Bytes.append(out, acc)))
 '''),
-  ('a WebSocket reads on after its send failed (as first written)',
+  ('a WebSocket reads on after its send failed (as first written)', LOOP,
     '''    case Fail{e}:
-      pure(S & Plan, (s, Stop{}))
+      pure(S & Plan<P, U>, (s, Stop{}))
     case Done{u}:
       turn.wr(''',
     '''    case Fail{e}:
-      turn.wr(~M, ~pure, ~bind, ~S, ~rx, srv, s, wr)
+      turn.wr(~M, ~pure, ~bind, ~S, ~rx, ~E, ~P, ~U, ~idle, ~uplan, srv, s, wr)
     case Done{u}:
       turn.wr('''),
-  ('a silent peer is waited on again, not let go',
+  ('a silent peer is waited on again, not let go', LOOP,
     '''  match may:
     case None{}:
       (s, Stop{})
     case Some{buf}:
-      (s, plan.chunk(srv, buf, p))''',
+      (s, plan.read(~E, ~P, ~U, ~plan, srv, buf, p))''',
     '''  match may:
     case None{}:
       (s, Wait{p})
     case Some{buf}:
-      (s, plan.chunk(srv, buf, p))'''),
-  ('an emptied file leaves its head to the batch uncapped (as first written)',
+      (s, plan.read(~E, ~P, ~U, ~plan, srv, buf, p))'''),
+  ('an emptied file leaves its head to the batch uncapped (as first written)', LOOP,
     '''        bind(Em<S>, Pump<S, F>, send.hold(~M, ~pure, ~bind, ~S, ~tx, ms, s, pre), em =>
           pure(Pump<S, F>, Over{em})))''',
     '''        pure(Pump<S, F>, Over{Em{s, pre, True{}}}))'''),
@@ -161,21 +170,27 @@ def strip(d):
 def main():
   bad = 0
   total = len(MUTANTS) + len(FRAMING)
-  orig = open(MAIN).read()
+  origs = {f: open(f).read() for f in (LOOP, MAIN)}
   try:
-    for name, a, b in MUTANTS:
+    for name, f, a, b in MUTANTS:
+      orig = origs[f]
       if orig.count(a) != 1:
         print('MISSING  %s' % name); bad += 1; continue
-      open(MAIN, 'w').write(orig.replace(a, b))
+      open(f, 'w').write(orig.replace(a, b))
       out = check('demos/io_http_engine/PROOF.bend')
+      open(f, 'w').write(orig)
       if out == 'All terms check.':
         print('SURVIVED %s' % name); bad += 1
       else:
         print('KILLED   %s -- %s' % (name, where(out)))
   finally:
-    open(MAIN, 'w').write(orig)
-  d = tempfile.mkdtemp(prefix='frame_sim_')
+    for f, orig in origs.items():
+      open(f, 'w').write(orig)
+  top = tempfile.mkdtemp(prefix='frame_sim_')
+  d = os.path.join(top, 'demos', 'io_http_engine')
   try:
+    os.makedirs(d)
+    shutil.copytree(os.path.join(ROOT, 'wire'), os.path.join(top, 'wire'))
     for f in os.listdir(HERE):
       if f.endswith('.bend'):
         shutil.copy(os.path.join(HERE, f), d)
@@ -198,7 +213,7 @@ def main():
       else:
         print('KILLED   %s -- %s' % (name, where(out)))
   finally:
-    shutil.rmtree(d, ignore_errors=True)
+    shutil.rmtree(top, ignore_errors=True)
   print('mutants: %d / %d killed' % (total - bad, total))
   sys.exit(1 if bad else 0)
 

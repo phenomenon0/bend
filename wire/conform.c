@@ -1,7 +1,7 @@
 // The peer for conform.bend: the bridge between the proofs and C.
 //
 // world.bend states what the model of the socket world assumes of each
-// effect (a relation per effect), LAWS.bend proves the model keeps it,
+// effect (a relation per effect) and proves the model keeps it,
 // and conform.bend judges the real effects by those same relations. This
 // program plays the other end: it lays out the files, starts conform
 // under a descriptor limit low enough to run out, and for each case, in
@@ -13,8 +13,8 @@
 // refused), echoes conform's verdicts, and exits 0 only when both
 // sides passed.
 //
-//   bend demos/io_http_engine/conform.bend -o conform
-//   cc -std=c11 -O2 -Wall demos/io_http_engine/conform.c -o conform-peer
+//   bend wire/conform.bend -o conform
+//   cc -std=c11 -O2 -Wall wire/conform.c -o conform-peer
 //   ./conform-peer ./conform 19120 /tmp/conform-root
 #define _GNU_SOURCE
 #include <errno.h>

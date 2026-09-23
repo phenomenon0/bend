@@ -4,11 +4,15 @@
 # enough for redis-cli and redis-benchmark to exercise the protocol and
 # is not enough to be a database. The protocol is the point.
 #
-# The connection loop is the HTTP engine's, with the parser swapped:
-# fuel rather than @unsafe, a timed read so a silent peer is dropped,
-# an empty chunk ending the connection, and the accept loop the one
-# unsafe def.
+# The server is bend-wire's (wire/): the connection loop, its budgets
+# and the accept loop, with a connection limit and SIGTERM, are the
+# library's, proven there for every protocol; what is RESP's is the
+# planner at the end of this file, from a read's bytes to the replies
+# they earn. LAWS.bend states the loop's laws at its hooks.
 import Base
+import ../../wire/reader.bend as Wr
+import ../../wire/loop.bend as L
+import ../../wire/effects.bend as Fx
 import ./resp.bend as R
 
 # The store
@@ -35,7 +39,7 @@ def find.put(
 ) -> Maybe<&2, List<&2, U32>>:
   match e:
     case Kv{k, v}:
-      find.pick(v, rest, R.beq(k, key, True{}))
+      find.pick(v, rest, Wr.beq(k, key, True{}))
 
 def find(kv: List<&2, Kv>, +key: List<&2, U32>) -> Maybe<&2, List<&2, U32>>:
   match kv:
@@ -56,7 +60,7 @@ def drop.pick(e: Kv, rest: List<&2, Kv>, hit: Bool) -> List<&2, Kv>:
 def drop.put(e: Kv, +key: List<&2, U32>, rest: List<&2, Kv>) -> List<&2, Kv>:
   match e:
     case Kv{+k, v}:
-      drop.pick(Kv{k, v}, rest, R.beq(k, key, True{}))
+      drop.pick(Kv{k, v}, rest, Wr.beq(k, key, True{}))
 
 def drop(kv: List<&2, Kv>, +key: List<&2, U32>) -> List<&2, Kv>:
   match kv:
@@ -190,9 +194,9 @@ def run(
 
 def dispatch(kv: List<&2, Kv>, +xs: List<&2, R.Val>, +name: List<&2, U32>) -> Ans:
   run(kv, xs, name,
-    R.beq(name, R.bytes("PING"), True{}), R.beq(name, R.bytes("ECHO"), True{}),
-    R.beq(name, R.bytes("SET"), True{}), R.beq(name, R.bytes("GET"), True{}),
-    R.beq(name, R.bytes("COMMAND"), True{}), R.beq(name, R.bytes("QUIT"), True{}))
+    Wr.beq(name, Wr.bytes("PING"), True{}), Wr.beq(name, Wr.bytes("ECHO"), True{}),
+    Wr.beq(name, Wr.bytes("SET"), True{}), Wr.beq(name, Wr.bytes("GET"), True{}),
+    Wr.beq(name, Wr.bytes("COMMAND"), True{}), Wr.beq(name, Wr.bytes("QUIT"), True{}))
 
 def named(
   kv: List<&2, Kv>, +xs: List<&2, R.Val>, m: Maybe<&2, List<&2, U32>>
@@ -227,7 +231,7 @@ def one(kv: List<&2, Kv>, v: R.Val) -> Ans:
 def answer.cat(out: List<&2, U32>, a: Ans) -> Ans:
   match a:
     case Ans{more, kv, close}:
-      Ans{R.cat(out, more), kv, close}
+      Ans{Wr.cat(out, more), kv, close}
 
 def answer(vs: List<&2, R.Val>, a: Ans) -> Ans:
   match vs:
@@ -248,146 +252,101 @@ def answer.all(kv: List<&2, Kv>, vs: List<&2, R.Val>) -> Ans:
 # The server
 # ==========
 
-def chunk() -> U32:
-  16384
+# What serving needs: the idle time (ms), the grace time on SIGTERM
+# (ms) and the most connections at once.
+type Cfg is Data:
+  Cfg{idle: U32, grace: U32, conns: U32}
 
-def idle() -> U32:
-  300000
+# A connection's state between reads: its reader and its store.
+type Conn is Data:
+  Conn{r: R.Rd, kv: List<&2, Kv>}
 
-def fuel() -> Nat:
-  U32.to_nat(1048576)
+def conn.new() -> Conn:
+  Conn{R.new(), Nil{}}
 
-# what the connection does next
-type Plan is Data:
-  Send{out: List<&2, U32>, r: R.Rd, kv: List<&2, Kv>}
-  Last{out: List<&2, U32>}
-  Stop{}
+def Plan() -> Data:
+  L.Plan<Conn, Unit>
 
-def plan.fin(
-  out: List<&2, U32>, r: R.Rd, kv: List<&2, Kv>, close: Bool
-) -> Plan:
-  match close:
-    case True{}:
-      Last{out}
-    case False{}:
-      Send{out, r, kv}
+# what a read's values earn: their replies and read on, or after a QUIT
+# the replies and the close; nothing yet (a value still arriving) reads
+# on without a write
+def plan.fin(close: Bool, out: List<&2, U32>, r: R.Rd, kv: List<&2, Kv>) -> Plan():
+  match close out:
+    case True{} _:
+      L.End{[L.Raw{Bytes.from_list(out)}]}
+    case False{} Nil{}:
+      L.Wait{Conn{r, kv}}
+    case False{} Con{h, t}:
+      L.Go{[L.Raw{Bytes.from_list(Con{h, t})}], Conn{r, kv}}
 
-def plan.ans(a: Ans, r: R.Rd) -> Plan:
+def plan.ans(a: Ans, r: R.Rd) -> Plan():
   match a:
     case Ans{out, kv, close}:
-      plan.fin(out, r, kv, close)
+      plan.fin(close, out, r, kv)
 
-def plan.bad(a: Ans, r: R.Rd, bad: Bool) -> Plan:
+def ans.out(a: Ans) -> List<&2, U32>:
+  match a:
+    case Ans{out, kv, close}:
+      out
+
+# a refused stream is answered with the replies its values earned
+# before the refusal, then the error, and the connection ends
+def plan.bad(bad: Bool, a: Ans, r: R.Rd) -> Plan():
   match bad:
     case True{}:
-      Last{R.error("ERR protocol error")}
+      L.End{[L.Raw{Bytes.from_list(Wr.cat(ans.out(a), R.error("ERR protocol error")))}]}
     case False{}:
       plan.ans(a, r)
 
-def plan.dead(kv: List<&2, Kv>, vs: List<&2, R.Val>, d: R.Rd & Bool) -> Plan:
+def plan.dead(kv: List<&2, Kv>, vs: List<&2, R.Val>, d: R.Rd & Bool) -> Plan():
   (r, bad) = d
-  plan.bad(answer.all(kv, vs), r, bad)
+  plan.bad(bad, answer.all(kv, vs), r)
 
-def plan.took(kv: List<&2, Kv>, t: R.Rd & List<&2, R.Val>) -> Plan:
+def plan.took(kv: List<&2, Kv>, t: R.Rd & List<&2, R.Val>) -> Plan():
   (r, vs) = t
   plan.dead(kv, vs, R.dead(r))
 
-def plan.chunk(kv: List<&2, Kv>, bs: List<&2, U32>, r: R.Rd) -> Plan:
-  match bs:
+# The hooks (wire/loop.bend names each): the planner, and the budgets
+# out of Cfg. RESP has no head to budget, no upgrade, no stream, no
+# files and no access log, so the rest are the loop's defaults (L.no.*).
+def plan(cfg: Cfg, buf: Bytes(), c: Conn) -> Plan():
+  match c:
+    case Conn{r, kv}:
+      plan.took(kv, R.take(R.feed_buf(buf, r)))
+
+def idle(c: Cfg) -> U32:
+  match c:
+    case Cfg{idle, grace, conns}:
+      idle
+
+def grace(c: Cfg) -> U32:
+  match c:
+    case Cfg{idle, grace, conns}:
+      grace
+
+def conns(c: Cfg) -> U32:
+  match c:
+    case Cfg{idle, grace, conns}:
+      conns
+
+# one connection, with the real effects
+def go(+cfg: Cfg, s: Socket) -> IO(Socket):
+  Fx.serve(~Cfg, ~Conn, ~Unit, ~idle, ~idle, ~plan, ~L.no.mid(~Conn), ~L.no.big(),
+    ~L.no.uplan(~Conn, ~Unit), ~L.no.gap(), ~L.no.event, ~L.no.shut, ~L.no.fhead, ~L.no.miss,
+    ~L.no.lnote, ~L.no.lsize, cfg, conn.new(), s)
+
+# bend-resp [PORT], 6380 by default
+def port(xs: List<String>) -> U32:
+  match xs:
     case Nil{}:
-      Stop{}
-    case Con{c, t}:
-      plan.took(kv, R.take(R.feed(Con{c, t}, r)))
-
-def plan.may(
-  s: Socket, kv: List<&2, Kv>, m: Maybe<&1, List<&2, U32>>, r: R.Rd
-) -> Socket & Plan:
-  match m:
-    case None{}:
-      (s, Stop{})
-    case Some{bs}:
-      (s, plan.chunk(kv, bs, r))
-
-def plan.res(
-  s: Socket, kv: List<&2, Kv>,
-  res: Result<&1, &1, U32 & String, Maybe<&1, List<&2, U32>>>, r: R.Rd
-) -> Socket & Plan:
-  match res:
-    case Done{m}:
-      plan.may(s, kv, m, r)
-    case Fail{e}:
-      (s, Stop{})
-
-def plan.read(
-  kv: List<&2, Kv>,
-  m: Socket & Result<&1, &1, U32 & String, Maybe<&1, List<&2, U32>>>, r: R.Rd
-) -> Socket & Plan:
-  (s, res) = m
-  plan.res(s, kv, res, r)
-
-def turn(kv: List<&2, Kv>, s: Socket, r: R.Rd) -> IO(Socket & Plan):
-  do IO<Socket & Plan>:
-    m : Socket & Result<&1, &1, U32 & String, Maybe<&1, List<&2, U32>>> <-
-      TCP.poll_bytes(s, chunk(), idle())
-    return plan.read(kv, m, r)
-
-def sent(m: Socket & Result<&1, &1, U32 & String, Unit>) -> IO(Unit):
-  (s, r) = m
-  Socket.close(s)
-
-def turn.sent(
-  kv: List<&2, Kv>, m: Socket & Result<&1, &1, U32 & String, Unit>, r: R.Rd
-) -> IO(Socket & Plan):
-  (s, res) = m
-  turn(kv, s, r)
-
-def conn(f: Nat, sp: Socket & Plan) -> IO(Unit):
-  match f:
-    case 0n:
-      (s, pl) = sp
-      Socket.close(s)
-    case 1n+g:
-      (s, pl) = sp
-      match pl:
-        case Stop{}:
-          Socket.close(s)
-        case Last{out}:
-          do IO<Unit>:
-            m : Socket & Result<&1, &1, U32 & String, Unit> <-
-              TCP.send_bytes(s, out)
-            sent(m)
-        case Send{out, r, kv}:
-          do IO<Unit>:
-            m   : Socket & Result<&1, &1, U32 & String, Unit> <-
-              TCP.send_bytes(s, out)
-            sp2 : Socket & Plan <- turn.sent(kv, m, r)
-            conn(g, sp2)
-
-def start(s: Socket) -> IO(Unit):
-  do IO<Unit>:
-    sp : Socket & Plan <- turn(Nil{}, s, R.new())
-    conn(fuel(), sp)
-
-def accept.one(m: Listener & Result<&1, &1, U32 & String, Socket>) ->
-  IO(Listener):
-  (l, r) = m
-  do IO<Listener>:
-    s : Socket <- IO.pass(Socket, r)
-    IO.spawn(Unit, start(s))
-    return l
-
-@unsafe
-def accept(l: Listener) -> IO(Unit):
-  do IO<Unit>:
-    m  : Listener & Result<&1, &1, U32 & String, Socket> <- TCP.accept(l)
-    l2 : Listener <- accept.one(m)
-    accept(l2)
-
-def port() -> U32:
-  6380
+      6380
+    case Con{a, t}:
+      Maybe.default(&2, U32, U32.read(a), 6380)
 
 def main() -> IO(Unit):
   do IO<Unit>:
-    l : Listener <- IO.try(Listener, TCP.listen(port()))
-    IO.print("bend-resp on redis://127.0.0.1:6380")
-    accept(l)
+    xs : List<String> <- IO.args()
+    +n : U32 = port(xs)
+    l : Listener <- IO.try(Listener, TCP.listen(n))
+    IO.print("bend-resp on redis://127.0.0.1:" ++ U32.show(n))
+    Fx.run(~Cfg, ~go, ~grace, ~conns, "bend-resp", Cfg{300000, 3000, 1024}, l)
