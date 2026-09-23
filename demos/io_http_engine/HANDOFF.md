@@ -55,8 +55,13 @@ test whether the approach generalises (see **What is unfinished**).
 Four gates, and it is worth knowing what each one is for, because they
 catch different things and three of them have caught real bugs:
 
-- **`PROOF.bend`** -- 95 laws. 23 are theorems quantified over all
-  inputs (chunking never changes a parse; a refused message is never
+- **`PROOF.bend`** -- 165 laws, re-checked by a second, independent
+  kernel (`kernel/`). The headline is `frame_sim`: for every input, cut
+  into reads any way, the reader frames exactly what `Spec.frame` (RFC
+  9112, written apart) frames. The laws of the world (`world.bend`)
+  prove the loops' order, budgets and deadlines against a pure model of
+  the sockets. The count below is from before those two. 23 are theorems
+  quantified over all inputs (chunking never changes a parse; a refused message is never
   revived; a field is known by its bytes, and every framing ambiguity
   a request is smuggled with is refused in every message state; no
   request target opens a path outside the root, a dotfile or a name
