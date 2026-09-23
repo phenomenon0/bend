@@ -192,6 +192,59 @@ def Conns(c: Conn, f: PScanned) -> Type:
     case Conn{ts, t}:
       Scans(X.Scanned{ts, t}, f)
 
+# The reference framing is frame()
+# --------------------------------
+#
+# The requests a framing took, and how its end reads against frame()'s:
+# waiting where frame() ends as the walk it waits with ends, refused
+# where frame() refuses, after an upgrade where frame() says upgraded.
+
+def took.reqs(ts: List<&2, PTook>) -> List<&2, Eng.Req>:
+  match ts:
+    case Nil{}:
+      Nil{}
+    case Con{t, r}:
+      match t:
+        case PTook{raw, q}:
+          Con{q, took.reqs(r)}
+
+def wend(w: Spec.W) -> Spec.End:
+  match w:
+    case Spec.W{m, x, s}:
+      Spec.finish.end(m, s)
+
+def is.up(e: Spec.End) -> Bool:
+  match e:
+    case Spec.Upgraded{b}:
+      True{}
+    case _:
+      False{}
+
+def Ends(u: PTail, e: Spec.End) -> Type:
+  match u:
+    case PWait{w, raw}:
+      {wend(w) == e : Spec.End}
+    case PRefused{}:
+      {e == Spec.Refused{} : Spec.End}
+    case PUpgraded{}:
+      {is.up(e) == True{} : Bool}
+
+def Agrees(f: PScanned, g: Spec.Frames) -> Type:
+  match f g:
+    case PScanned{us, u} Spec.Frames{rs, e}:
+      {took.reqs(us) == rs : List<&2, Eng.Req>} & Ends(u, e)
+
+# LAW: the framing a request at a time is frame(). For every input, the
+# requests the reference framing takes, restarting after each, are
+# exactly the requests spec.bend's frame() frames, in order, and the two
+# end alike: frame() is refused exactly where the framing refuses,
+# upgraded where it upgrades, and otherwise ends as the walk the framing
+# waits with. (A walk never looks at the requests it has done, so
+# restarting after one is walking on.)
+law frames_agree:
+  for +bs: List<&2, U32>
+  Agrees(frame(bs), Spec.frame(bs))
+
 # LAW: the proxy frames as the spec does. For every stream a client
 # sends, however TCP cuts it into reads, the requests the proxy takes
 # are the reference framing's -- the same bytes for each, the same
