@@ -25,6 +25,7 @@ one() {
     0) v=pass ;;
     1) if grep -q '^REJECT [^[]*:' "$OUT/$n.k.txt"; then v=reject
        elif grep -q '^UNSUPPORTED [^[]*:' "$OUT/$n.k.txt"; then v=unsupported
+       elif grep -q '^OPEN ' "$OUT/$n.k.txt"; then v=open-or-unsafe-law
        else v=leans-on-refused-base; fi ;;
     *) v=crash ;;
   esac

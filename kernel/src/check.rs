@@ -4,6 +4,23 @@
 // term the declarative judgment types only through a guess (a constructor
 // or a match outside a goal) is refused as "cannot infer", as a checker
 // must. Types are values (eval.rs); conversion is compare LE / EQ.
+//
+// Where this reading departs from Part I, and why:
+// - check-lam kinds the binder's domain only when it binds Many (a + mark
+//   or a + arrow): the one case the Data wall rests on; other domains
+//   come from goals the checker formed and kinded
+// - a constructor node carries its fields only; check-ctr reads the
+//   family's parameters off the goal, and conversion compares fields
+// - a template (~ parameters, which Part I does not model) checks once
+//   with its ~ parameters opaque constants; a live call from outside a
+//   template is the instance at its closed ~ arguments, minted and
+//   checked as a definition of its own
+// - a live call to a def filled later (Part I refuses it; bend.ts lets
+//   base do it unchecked) is held as a site and checked when the callee
+//   checks: every cycle through the helper must descend against the
+//   callee's columns, the helper's arguments composed with the callee's
+// - @unsafe, foreign (returning base IO) and bodiless base defs are
+//   axioms: their types check, their bodies are trusted and listed
 
 use std::collections::BTreeSet;
 use std::panic::{self, AssertUnwindSafe};
