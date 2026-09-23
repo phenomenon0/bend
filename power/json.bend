@@ -14,7 +14,11 @@
 # Whitespace and structural bytes spend saturating, so an exhausted budget is
 # reported at the next value token rather than mid-brace.
 #
-# Errors are an event, not a Result: the state owns an affine Bytes, which
+# The document is Base's Bytes(), the buffer TCP.recv_buf and File.read_buf
+# hand back, so a span is a view of it (raw) and json_value.bend builds a tree
+# over the same bytes without copying a number or an unescaped string.
+#
+# Errors are an event, not a Result: the state owns an affine Bitset, which
 # cannot sit inside Result's Data payload. Bad{at, why} is terminal -- every
 # later next() returns the same event, so a driver loop needs no flag.
 import Base
@@ -876,6 +880,12 @@ def budget(s: St) -> St & U32:
     case St{b, at, n, dep, ks, md, left}:
       budget.mk(b, at, n, dep, ks, md, left)
 
+# the offset the next step starts from: just past the last event's bytes
+def cursor(s: St) -> St & U32:
+  match s:
+    case St{b, +at, n, dep, ks, md, left}:
+      (St{b, at, n, dep, ks, md, left}, at)
+
 def depth(s: St) -> St & U32:
   match s:
     case St{b, at, n, +dep, ks, md, left}:
@@ -989,32 +999,12 @@ def skip(s: St) -> St & Event:
 
 # -- reading a span ----------------------------------------------------------
 
-type Raw is Type:
-  Raw{b: Bytes(), s: String}
-
-def raw.cons(r: Bytes() & U32, s: String) -> Raw:
-  (b, c) = r
-  Raw{b, SCon{Chr{c}, s}}
-
-def raw.go(k: Nat, +i: U32, r: Raw) -> Raw:
-  match k:
-    case 0n:
-      r
-    case 1n++p:
-      match r:
-        case Raw{b, s}:
-          raw.go(p, U32.sub(i, 1), raw.cons(Bytes.at(b, U32.sub(i, 1)), s))
-
-def raw.out(r: Raw) -> Bytes() & String:
-  match r:
-    case Raw{b, s}:
-      (b, s)
-
-# the span exactly as it sits in the input, one Char per byte: escapes are not
-# applied and non-ascii is not decoded, because a span is what the parser
-# promises and unescaping is the consumer's choice
-def raw(b: Bytes(), +at: U32, +len: U32) -> Bytes() & String:
-  raw.out(raw.go(U32.to_nat(len), U32.add(at, len), Raw{b, SNil{}}))
+# the span exactly as it sits in the input: escapes are not applied and
+# non-ascii is not decoded, because a span is what the parser promises and
+# unescaping is the consumer's choice (json_value.bend makes it). A view of
+# the caller's buffer: nothing is copied.
+def raw(+b: Bytes(), +at: U32, +len: U32) -> Bytes() & String:
+  (b, Bytes.slice(b, U32.to_nat(at), U32.to_nat(len)))
 
 # -- showing it --------------------------------------------------------------
 
