@@ -15,12 +15,16 @@
 # wants.
 #
 # What it accepts is deliberately small, because a framing disagreement
-# is how requests get smuggled: HTTP/1.1 only, exactly one Host,
-# Content-Length only, that length all digits and the same wherever it
-# is repeated, no Transfer-Encoding at all, and every field name known by
-# its bytes. A space before a colon, a folded line, a bare LF, a control
-# byte are each refused, and Bad{} is never left. LAWS.bend states those
-# as laws and PROOF.bend proves them.
+# is how requests get smuggled: HTTP/1.1 with exactly one Host, or
+# HTTP/1.0 with at most one (closed after its reply unless it asked to
+# keep alive); a body framed by a Content-Length, all digits and the
+# same wherever it is repeated, or by Transfer-Encoding: chunked, named
+# exactly and once, and never both; a chunked body read by RFC 9112
+# 7.1's grammar, its extensions and trailer read and dropped, all of it
+# under the body's cap; and every field name known by its bytes. A space
+# before a colon, a folded line, a bare LF, a control byte are each
+# refused, and Bad{} is never left. LAWS.bend states those as laws and
+# PROOF.bend proves them.
 #
 # Every byte on the wire is a byte. TCP.recv and TCP.send carry String,
 # and a String is decoded as UTF-8, so a body that is not text comes
@@ -309,6 +313,13 @@ def meth.head(m: Meth) -> Bool:
 def ver.lit() -> Bytes():
   "HTTP/1.1"
 
+def ver10.lit() -> Bytes():
+  "HTTP/1.0"
+
+# the one transfer coding this engine decodes
+def te.lit() -> Bytes():
+  "chunked"
+
 # the list members this engine acts on: close and upgrade in a
 # Connection, websocket in an Upgrade
 def tok.close() -> Bytes():
@@ -319,6 +330,9 @@ def tok.upgrade() -> Bytes():
 
 def tok.websocket() -> Bytes():
   "websocket"
+
+def tok.keepalive() -> Bytes():
+  "keep-alive"
 
 # Requests
 # ========
@@ -416,25 +430,39 @@ type Hosts is Data:
   H1{}
   H2{}
 
+# What the request line and the framing fields said: whether the line
+# was HTTP/1.0, whether a Connection named keep-alive, and whether a
+# Transfer-Encoding said chunked.
+type Fx is Data:
+  Fx{v10: Bool, ka: Bool, te: Bool}
+
 # The fields of the message being read. It is rebuilt only when a token
 # closes, so an ordinary byte leaves it untouched and shares it.
 type Pend is Data:
   Pend{meth: Meth, path: Bytes(), cl: Cl, close: Bool, host: Hosts,
-    ws: Up}
+    ws: Up, fx: Fx}
 
 def pend.new() -> Pend:
-  Pend{MOther{}, "", NoCl{}, False{}, H0{}, Plain{}}
+  Pend{MOther{}, "", NoCl{}, False{}, H0{}, Plain{}, Fx{False{}, False{}, False{}}}
 
 # a new method token starts a new message, so the rest resets with it
 def pend.meth(pd: Pend, m: Meth) -> Pend:
   match pd:
-    case Pend{meth, path, cl, close, host, ws}:
-      Pend{m, "", NoCl{}, False{}, H0{}, Plain{}}
+    case Pend{meth, path, cl, close, host, ws, fx}:
+      Pend{m, "", NoCl{}, False{}, H0{}, Plain{}, Fx{False{}, False{}, False{}}}
 
 def pend.path(pd: Pend, p: Bytes()) -> Pend:
   match pd:
-    case Pend{meth, path, cl, close, host, ws}:
-      Pend{meth, p, cl, close, host, ws}
+    case Pend{meth, path, cl, close, host, ws, fx}:
+      Pend{meth, p, cl, close, host, ws, fx}
+
+# the request line said HTTP/1.0
+def pend.v10(pd: Pend) -> Pend:
+  match pd:
+    case Pend{meth, path, cl, close, host, ws, fx}:
+      match fx:
+        case Fx{v10, ka, te}:
+          Pend{meth, path, cl, close, host, ws, Fx{True{}, ka, te}}
 
 def hosts.more(h: Hosts) -> Hosts:
   match h:
@@ -447,41 +475,349 @@ def hosts.more(h: Hosts) -> Hosts:
 
 def pend.host(pd: Pend) -> Pend:
   match pd:
-    case Pend{meth, path, cl, close, host, ws}:
-      Pend{meth, path, cl, close, hosts.more(host), ws}
+    case Pend{meth, path, cl, close, host, ws, fx}:
+      Pend{meth, path, cl, close, hosts.more(host), ws, fx}
+
+def fx.ka(fx: Fx, k: Bool) -> Fx:
+  match fx:
+    case Fx{v10, ka, te}:
+      Fx{v10, ka || k, te}
 
 # a Connection value closes: close anywhere in its list asks to close,
-# upgrade anywhere asks to upgrade
-def pend.conn(pd: Pend, cl: Bool, up: Bool) -> Pend:
+# upgrade anywhere asks to upgrade, keep-alive anywhere asks an
+# HTTP/1.0 connection to stay open
+def pend.conn(pd: Pend, cl: Bool, up: Bool, ka: Bool) -> Pend:
   match pd:
-    case Pend{meth, path, c, close, host, ws}:
-      Pend{meth, path, c, close || cl, host, up.cu(ws, up)}
+    case Pend{meth, path, c, close, host, ws, fx}:
+      Pend{meth, path, c, close || cl, host, up.cu(ws, up), fx.ka(fx, ka)}
 
 def pend.up(pd: Pend, v: Bool) -> Pend:
   match pd:
-    case Pend{meth, path, cl, close, host, ws}:
-      Pend{meth, path, cl, close, host, up.up(ws, v)}
+    case Pend{meth, path, cl, close, host, ws, fx}:
+      Pend{meth, path, cl, close, host, up.up(ws, v), fx}
 
 def pend.key(pd: Pend, k: Bytes()) -> Pend:
   match pd:
-    case Pend{meth, path, cl, close, host, ws}:
-      Pend{meth, path, cl, close, host, up.key(ws, k)}
+    case Pend{meth, path, cl, close, host, ws, fx}:
+      Pend{meth, path, cl, close, host, up.key(ws, k), fx}
 
 def pend.ver(pd: Pend, v: Bool) -> Pend:
   match pd:
-    case Pend{meth, path, cl, close, host, ws}:
-      Pend{meth, path, cl, close, host, up.ver(ws, v)}
+    case Pend{meth, path, cl, close, host, ws, fx}:
+      Pend{meth, path, cl, close, host, up.ver(ws, v), fx}
 
 def pend.req.go(
-  meth: Meth, path: Bytes(), body: Bytes(), close: Bool, asked: Bool & Bytes()
+  meth: Meth, path: Bytes(), body: Bytes(), close: Bool, gate: Bool, asked: Bool & Bytes()
 ) -> Req:
   (ws, key) = asked
-  Req{meth, path, body, close, ws, key}
+  Req{meth, path, body, close, gate && ws, key}
+
+# an HTTP/1.0 request closes after its reply unless it asked to keep
+# alive (RFC 9112 9.3), and never upgrades: a server MUST ignore an
+# Upgrade in HTTP/1.0 (RFC 9110 7.8)
+def pend.req.fx(meth: Meth, path: Bytes(), body: Bytes(), close: Bool, ws: Up, fx: Fx) -> Req:
+  match fx:
+    case Fx{+v10, ka, te}:
+      pend.req.go(meth, path, body, close || (v10 && Bool.not(ka)), Bool.not(v10), up.asked(ws))
 
 def pend.req(pd: Pend, body: Bytes()) -> Req:
   match pd:
-    case Pend{meth, path, cl, close, host, ws}:
-      pend.req.go(meth, path, body, close, up.asked(ws))
+    case Pend{meth, path, cl, close, host, ws, fx}:
+      pend.req.fx(meth, path, body, close, ws, fx)
+
+# The chunked body
+# ================
+#
+# RFC 9112 7.1. Where in a chunk's framing the reader is: a chunk-size
+# before its first digit or in it; BWS before a ";"; after ";" and BWS,
+# before an extension's name, or in it; BWS after the name; after "="
+# and BWS, before its value; in a token value, in a quoted-string or
+# after its "\", after its closing quote; the LF of a chunk line; the
+# CRLF after a chunk's data; and the trailer: the start of a field line,
+# in its name or value, its LF, and the LF of the last, empty line.
+type ChPos is Data:
+  CSize0{}
+  CSize{}
+  CBws{}
+  CName0{}
+  CName{}
+  CNameWs{}
+  CVal0{}
+  CToken{}
+  CQuoted{}
+  CEscape{}
+  CClosed{}
+  CLf{}
+  CDataCr{}
+  CDataLf{}
+  CTrail{}
+  CTName{}
+  CTVal{}
+  CTLf{}
+  CEnd{}
+
+# What a byte is to a chunk's framing: its class, and within the class
+# a hex digit (with its value), ";", "=", DQUOTE and "\" apart.
+type XK is Data:
+  XHex{d: U32}
+  XTok{}
+  XWs{}
+  XSemi{}
+  XEq{}
+  XQuote{}
+  XBack{}
+  XColon{}
+  XCr{}
+  XLf{}
+  XVis{}
+  XCtl{}
+
+def hex.pick(b: Bool, i: U32, r: Maybe<&2, U32>) -> Maybe<&2, U32>:
+  match b:
+    case True{}:
+      Some{i}
+    case False{}:
+      r
+
+def hex.in(+c: U32, xs: List<&2, U32>, +i: U32) -> Maybe<&2, U32>:
+  match xs:
+    case Nil{}:
+      None{}
+    case Con{x, t}:
+      hex.pick(U32.is_eq(c, x), i, hex.in(c, t, (i + 1 : U32)))
+
+# a hex digit's value, case aside
+def hex(+c: U32) -> Maybe<&2, U32>:
+  hex.in(lower(c), bytes("0123456789abcdef"), 0)
+
+def xk.hex(m: Maybe<&2, U32>) -> XK:
+  match m:
+    case Some{d}:
+      XHex{d}
+    case None{}:
+      XTok{}
+
+def xk.vc(semi: Bool, eq: Bool, quote: Bool, back: Bool) -> XK:
+  match semi:
+    case True{}:
+      XSemi{}
+    case False{}:
+      match eq:
+        case True{}:
+          XEq{}
+        case False{}:
+          match quote:
+            case True{}:
+              XQuote{}
+            case False{}:
+              match back:
+                case True{}:
+                  XBack{}
+                case False{}:
+                  XVis{}
+
+def xk.of(k: Cls, +c: U32) -> XK:
+  match k:
+    case KSp{}:
+      XWs{}
+    case KHt{}:
+      XWs{}
+    case KCr{}:
+      XCr{}
+    case KLf{}:
+      XLf{}
+    case KCo{}:
+      XColon{}
+    case KCm{}:
+      XVis{}
+    case KDg{}:
+      xk.hex(hex(c))
+    case KTk{}:
+      xk.hex(hex(c))
+    case KVc{}:
+      xk.vc(U32.is_eq(c, 59), U32.is_eq(c, 61), U32.is_eq(c, 34), U32.is_eq(c, 92))
+    case KCt{}:
+      XCtl{}
+
+# What a byte does there: breaks the grammar; moves on, and whether it
+# is paid from the budget; is one more digit of the size; ends a chunk
+# line; ends the body.
+type Mv is Data:
+  MvBad{}
+  MvTo{pos: ChPos, paid: Bool}
+  MvDigit{d: U32}
+  MvLine{}
+  MvDone{}
+
+def chk.tchar(x: XK, pos: ChPos, paid: Bool) -> Mv:
+  match x:
+    case XHex{d}:
+      MvTo{pos, paid}
+    case XTok{}:
+      MvTo{pos, paid}
+    case _:
+      MvBad{}
+
+def chk.next(pos: ChPos, x: XK) -> Mv:
+  match pos:
+    case CSize0{}:
+      match x:
+        case XHex{d}:
+          MvDigit{d}
+        case _:
+          MvBad{}
+    case CSize{}:
+      match x:
+        case XHex{d}:
+          MvDigit{d}
+        case XSemi{}:
+          MvTo{CName0{}, True{}}
+        case XWs{}:
+          MvTo{CBws{}, True{}}
+        case XCr{}:
+          MvTo{CLf{}, False{}}
+        case _:
+          MvBad{}
+    case CBws{}:
+      match x:
+        case XWs{}:
+          MvTo{CBws{}, True{}}
+        case XSemi{}:
+          MvTo{CName0{}, True{}}
+        case _:
+          MvBad{}
+    case CName0{}:
+      match x:
+        case XWs{}:
+          MvTo{CName0{}, True{}}
+        case _:
+          chk.tchar(x, CName{}, True{})
+    case CName{}:
+      match x:
+        case XWs{}:
+          MvTo{CNameWs{}, True{}}
+        case XEq{}:
+          MvTo{CVal0{}, True{}}
+        case XSemi{}:
+          MvTo{CName0{}, True{}}
+        case XCr{}:
+          MvTo{CLf{}, False{}}
+        case _:
+          chk.tchar(x, CName{}, True{})
+    case CNameWs{}:
+      match x:
+        case XWs{}:
+          MvTo{CNameWs{}, True{}}
+        case XEq{}:
+          MvTo{CVal0{}, True{}}
+        case XSemi{}:
+          MvTo{CName0{}, True{}}
+        case _:
+          MvBad{}
+    case CVal0{}:
+      match x:
+        case XWs{}:
+          MvTo{CVal0{}, True{}}
+        case XQuote{}:
+          MvTo{CQuoted{}, True{}}
+        case _:
+          chk.tchar(x, CToken{}, True{})
+    case CToken{}:
+      match x:
+        case XSemi{}:
+          MvTo{CName0{}, True{}}
+        case XWs{}:
+          MvTo{CBws{}, True{}}
+        case XCr{}:
+          MvTo{CLf{}, False{}}
+        case _:
+          chk.tchar(x, CToken{}, True{})
+    case CQuoted{}:
+      match x:
+        case XBack{}:
+          MvTo{CEscape{}, True{}}
+        case XQuote{}:
+          MvTo{CClosed{}, True{}}
+        case XCr{}:
+          MvBad{}
+        case XLf{}:
+          MvBad{}
+        case XCtl{}:
+          MvBad{}
+        case _:
+          MvTo{CQuoted{}, True{}}
+    case CEscape{}:
+      match x:
+        case XCr{}:
+          MvBad{}
+        case XLf{}:
+          MvBad{}
+        case XCtl{}:
+          MvBad{}
+        case _:
+          MvTo{CQuoted{}, True{}}
+    case CClosed{}:
+      match x:
+        case XSemi{}:
+          MvTo{CName0{}, True{}}
+        case XWs{}:
+          MvTo{CBws{}, True{}}
+        case XCr{}:
+          MvTo{CLf{}, False{}}
+        case _:
+          MvBad{}
+    case CLf{}:
+      match x:
+        case XLf{}:
+          MvLine{}
+        case _:
+          MvBad{}
+    case CDataCr{}:
+      match x:
+        case XCr{}:
+          MvTo{CDataLf{}, False{}}
+        case _:
+          MvBad{}
+    case CDataLf{}:
+      match x:
+        case XLf{}:
+          MvTo{CSize0{}, False{}}
+        case _:
+          MvBad{}
+    case CTrail{}:
+      match x:
+        case XCr{}:
+          MvTo{CEnd{}, False{}}
+        case _:
+          chk.tchar(x, CTName{}, False{})
+    case CTName{}:
+      match x:
+        case XColon{}:
+          MvTo{CTVal{}, False{}}
+        case _:
+          chk.tchar(x, CTName{}, False{})
+    case CTVal{}:
+      match x:
+        case XCr{}:
+          MvTo{CTLf{}, False{}}
+        case XLf{}:
+          MvBad{}
+        case XCtl{}:
+          MvBad{}
+        case _:
+          MvTo{CTVal{}, False{}}
+    case CTLf{}:
+      match x:
+        case XLf{}:
+          MvTo{CTrail{}, False{}}
+        case _:
+          MvBad{}
+    case CEnd{}:
+      match x:
+        case XLf{}:
+          MvDone{}
+        case _:
+          MvBad{}
 
 # The reader
 # ==========
@@ -495,8 +831,12 @@ def pend.req(pd: Pend, body: Bytes()) -> Req:
 #                                         being read, close and upgrade seen
 # InLu an Upgrade list, websocket    InLk0/InLk a Sec-WebSocket-Key value
 # InLv a Sec-WebSocket-Version value InLx any other value, skipped
+# InLe0/InLe a Transfer-Encoding's coding
 # CrL  the CR of the blank line      Bod  the body so far, and r more
 #                                         bytes after the next one
+# Chk  a chunked body's framing: where, the chunk's size n, the body so
+#      far and the budget left       Chd  a chunk's data, r more after
+#                                         the next byte
 # Rest what follows a request that asked to upgrade, for the frame reader
 # Bad  the grammar broke; absorbing, and never left
 type St is Data:
@@ -511,14 +851,18 @@ type St is Data:
   InL0{}
   InL{v: U32}
   InLt{v: U32}
-  InLc{t: Bytes(), cl: Bool, up: Bool}
+  InLc{t: Bytes(), cl: Bool, up: Bool, ka: Bool}
   InLu{t: Bytes(), ws: Bool}
   InLk0{}
   InLk{k: Bytes()}
   InLv{v: Bytes()}
   InLx{}
+  InLe0{}
+  InLe{v: Bytes()}
   CrL{}
   Bod{r: Nat, b: Bytes()}
+  Chk{pos: ChPos, n: U32, b: Bytes(), left: U32}
+  Chd{r: Nat, b: Bytes(), left: U32}
   Rest{bs: Bytes()}
   Bad{}
 
@@ -560,25 +904,26 @@ def step.target(p: Bytes(), pd: Pend, out: List<&2, Req>) -> P:
     case SCon{c, t}:
       P{InV{""}, pend.path(pd, SCon{c, t}), out}
 
-# the version token must read exactly HTTP/1.1
-def step.ver(ok: Bool, pd: Pend, out: List<&2, Req>) -> P:
-  match ok:
-    case True{}:
+# the version token must read exactly HTTP/1.1 or HTTP/1.0
+def step.ver(v11: Bool, v10: Bool, pd: Pend, out: List<&2, Req>) -> P:
+  match v11 v10:
+    case True{} _:
       P{CrM{}, pd, out}
-    case False{}:
+    case False{} True{}:
+      P{CrM{}, pend.v10(pd), out}
+    case False{} False{}:
       P{Bad{}, pd, out}
 
-# a name closes at its colon. A Transfer-Encoding is refused there,
-# whatever it says: this engine frames by length only, and a message
-# that names a second framing is how requests get smuggled.
+# a name closes at its colon, and the field it is decides how its value
+# is read
 def step.name(f: Fld, pd: Pend, out: List<&2, Req>) -> P:
   match f:
     case FTe{}:
-      P{Bad{}, pd, out}
+      P{InLe0{}, pd, out}
     case FCl{}:
       P{InL0{}, pd, out}
     case FConn{}:
-      P{InLc{"", False{}, False{}}, pd, out}
+      P{InLc{"", False{}, False{}, False{}}, pd, out}
     case FUp{}:
       P{InLu{"", False{}}, pd, out}
     case FKey{}:
@@ -619,27 +964,29 @@ def step.clen.dup(pd: Pend, out: List<&2, Req>, agree: Bool) -> P:
       P{Bad{}, pd, out}
 
 def step.clen.go(
-  meth: Meth, path: Bytes(), cl: Cl, close: Bool, host: Hosts, ws: Up,
+  meth: Meth, path: Bytes(), cl: Cl, close: Bool, host: Hosts, ws: Up, fx: Fx,
   +v: U32, out: List<&2, Req>
 ) -> P:
   match cl:
     case NoCl{}:
-      P{CrM{}, Pend{meth, path, Has{v}, close, host, ws}, out}
+      P{CrM{}, Pend{meth, path, Has{v}, close, host, ws, fx}, out}
     case Has{+w}:
-      step.clen.dup(Pend{meth, path, Has{w}, close, host, ws}, out, U32.is_eq(v, w))
+      step.clen.dup(Pend{meth, path, Has{w}, close, host, ws, fx}, out, U32.is_eq(v, w))
 
 # a Content-Length value closes
 def step.clen(+v: U32, pd: Pend, out: List<&2, Req>) -> P:
   match pd:
-    case Pend{meth, path, cl, close, host, ws}:
-      step.clen.go(meth, path, cl, close, host, ws, v, out)
+    case Pend{meth, path, cl, close, host, ws, fx}:
+      step.clen.go(meth, path, cl, close, host, ws, fx, v, out)
 
 # a list member closes at a comma, a space or the line's end
-def step.conn(+t: Bytes(), cl: Bool, up: Bool, pd: Pend, out: List<&2, Req>) -> P:
-  P{CrM{}, pend.conn(pd, cl || bytes.eq(t, tok.close()), up || bytes.eq(t, tok.upgrade())), out}
+def step.conn(+t: Bytes(), cl: Bool, up: Bool, ka: Bool, pd: Pend, out: List<&2, Req>) -> P:
+  P{CrM{}, pend.conn(pd, cl || bytes.eq(t, tok.close()), up || bytes.eq(t, tok.upgrade()),
+    ka || bytes.eq(t, tok.keepalive())), out}
 
-def tok.conn(+t: Bytes(), cl: Bool, up: Bool) -> St:
-  InLc{"", cl || bytes.eq(t, tok.close()), up || bytes.eq(t, tok.upgrade())}
+def tok.conn(+t: Bytes(), cl: Bool, up: Bool, ka: Bool) -> St:
+  InLc{"", cl || bytes.eq(t, tok.close()), up || bytes.eq(t, tok.upgrade()),
+    ka || bytes.eq(t, tok.keepalive())}
 
 def step.upv(+t: Bytes(), ws: Bool, pd: Pend, out: List<&2, Req>) -> P:
   P{CrM{}, pend.up(pd, ws || bytes.eq(t, tok.websocket())), out}
@@ -698,6 +1045,28 @@ def step.key(k: Bytes(), pd: Pend, out: List<&2, Req>) -> P:
 def step.wsv(v: Bytes(), pd: Pend, out: List<&2, Req>) -> P:
   P{CrM{}, pend.ver(pd, bytes.eq(trim(v), "13")), out}
 
+# a Transfer-Encoding value closes: it must be chunked, exactly and
+# case aside, and the first (RFC 9112 6.1, 7: chunked is applied once,
+# last). Any other coding, a list, or whitespace after it is refused
+# here, and so is a second Transfer-Encoding.
+def step.te.go(ok: Bool, meth: Meth, path: Bytes(), cl: Cl, close: Bool, host: Hosts, ws: Up,
+  v10: Bool, ka: Bool, out: List<&2, Req>, te: Bool) -> P:
+  match ok:
+    case True{}:
+      P{CrM{}, Pend{meth, path, cl, close, host, ws, Fx{v10, ka, True{}}}, out}
+    case False{}:
+      P{Bad{}, Pend{meth, path, cl, close, host, ws, Fx{v10, ka, te}}, out}
+
+def step.te.at(ok: Bool, pd: Pend, out: List<&2, Req>) -> P:
+  match pd:
+    case Pend{meth, path, cl, close, host, ws, fx}:
+      match fx:
+        case Fx{v10, ka, +te}:
+          step.te.go(ok && Bool.not(te), meth, path, cl, close, host, ws, v10, ka, out, te)
+
+def step.te(v: Bytes(), pd: Pend, out: List<&2, Req>) -> P:
+  step.te.at(bytes.eq(lows(v), te.lit()), pd, out)
+
 # a body of v bytes: none emits the message now; otherwise the count is
 # of the bytes after the next one, so the last byte is the one it finds
 # at zero
@@ -708,22 +1077,121 @@ def step.head.len(pd: Pend, +v: U32, out: List<&2, Req>, z: Bool) -> P:
     case False{}:
       P{Bod{Nat.sub(U32.to_nat(v), 1n), ""}, pd, out}
 
-def step.head.at(pd: Pend, cl: Cl, host: Hosts, out: List<&2, Req>) -> P:
-  match cl host:
-    case NoCl{} H1{}:
-      emit(pd, "", out)
-    case Has{+v} H1{}:
-      step.head.len(pd, v, out, U32.is_zero(v))
-    case _ _:
-      P{Bad{}, pd, out}
+# how many Host fields a request may carry: HTTP/1.1 exactly one (RFC
+# 9112 3.2), HTTP/1.0 at most one
+def hosts.ok(v10: Bool, h: Hosts) -> Bool:
+  match v10 h:
+    case True{} H2{}:
+      False{}
+    case True{} _:
+      True{}
+    case False{} H1{}:
+      True{}
+    case False{} _:
+      False{}
 
-# the blank line closes the head: a message without exactly one Host is
-# refused (RFC 9112 3.2); one without a length has no body; one with a
-# length starts counting it down
+# how the body is framed: not at all, by a length, chunked, or two ways
+# at once -- a Transfer-Encoding with a Content-Length, which is how a
+# request is smuggled, or one in HTTP/1.0, which RFC 9112 6.1 calls
+# faulty framing -- and refused
+type Bd is Data:
+  BdNone{}
+  BdLen{v: U32}
+  BdChunked{}
+  BdBad{}
+
+def body.kind(te: Bool, v10: Bool, cl: Cl) -> Bd:
+  match te v10 cl:
+    case False{} _ NoCl{}:
+      BdNone{}
+    case False{} _ Has{v}:
+      BdLen{v}
+    case True{} True{} _:
+      BdBad{}
+    case True{} False{} NoCl{}:
+      BdChunked{}
+    case True{} False{} Has{v}:
+      BdBad{}
+
+def step.head.at(pd: Pend, ok: Bool, bd: Bd, out: List<&2, Req>) -> P:
+  match ok bd:
+    case False{} _:
+      P{Bad{}, pd, out}
+    case True{} BdBad{}:
+      P{Bad{}, pd, out}
+    case True{} BdNone{}:
+      emit(pd, "", out)
+    case True{} BdLen{+v}:
+      step.head.len(pd, v, out, U32.is_zero(v))
+    case True{} BdChunked{}:
+      P{Chk{CSize0{}, 0, "", body.cap()}, pd, out}
+
+def step.head.fx(pd: Pend, host: Hosts, cl: Cl, fx: Fx, out: List<&2, Req>) -> P:
+  match fx:
+    case Fx{+v10, ka, te}:
+      step.head.at(pd, hosts.ok(v10, host), body.kind(te, v10, cl), out)
+
+# the blank line closes the head: a message with a Host too many or too
+# few is refused; then its body is framed as body.kind says
 def step.head(pd: Pend, out: List<&2, Req>) -> P:
   match pd:
-    case Pend{meth, path, +cl, close, +host, ws}:
-      step.head.at(Pend{meth, path, cl, close, host, ws}, cl, host, out)
+    case Pend{meth, path, +cl, close, +host, ws, +fx}:
+      step.head.fx(Pend{meth, path, cl, close, host, ws, fx}, host, cl, fx, out)
+
+# A chunk's framing, one byte: where the grammar takes it, and the
+# budget. Every byte of a chunk line before its CR is paid from the
+# budget left of body.cap(), and so is every byte of the chunk's data:
+# a paid byte, and a digit that grows the size, are refused where the
+# budget could no longer hold them and the chunk's data after them. So
+# a size never wraps (it is at most the budget, and the budget is at
+# most body.cap()), an extension is never longer than the budget, and
+# a body, however chunked, is never more than body.cap().
+def chk.paid(over: Bool, pos: ChPos, n: U32, b: Bytes(), left: U32, pd: Pend,
+  out: List<&2, Req>) -> P:
+  match over:
+    case True{}:
+      P{Bad{}, pd, out}
+    case False{}:
+      P{Chk{pos, n, b, (left - 1 : U32)}, pd, out}
+
+def chk.to(paid: Bool, pos: ChPos, +n: U32, b: Bytes(), +left: U32, pd: Pend,
+  out: List<&2, Req>) -> P:
+  match paid:
+    case True{}:
+      chk.paid(U32.is_le(left, n), pos, n, b, left, pd, out)
+    case False{}:
+      P{Chk{pos, n, b, left}, pd, out}
+
+# a chunk line's LF: the last chunk (size 0) leads to the trailer, any
+# other to its data, whose size the budget pays now
+def chk.line(z: Bool, +n: U32, b: Bytes(), +left: U32, pd: Pend, out: List<&2, Req>) -> P:
+  match z:
+    case True{}:
+      P{Chk{CTrail{}, 0, b, left}, pd, out}
+    case False{}:
+      P{Chd{Nat.sub(U32.to_nat(n), 1n), b, (left - n : U32)}, pd, out}
+
+def step.chk(mv: Mv, +n: U32, b: Bytes(), +left: U32, pd: Pend, out: List<&2, Req>) -> P:
+  match mv:
+    case MvBad{}:
+      P{Bad{}, pd, out}
+    case MvTo{pos, paid}:
+      chk.to(paid, pos, n, b, left, pd, out)
+    case MvDigit{+d}:
+      +n2 = (n * 16 + d : U32)
+      chk.paid(U32.is_le(left, n2), CSize{}, n2, b, left, pd, out)
+    case MvLine{}:
+      chk.line(U32.is_zero(n), n, b, left, pd, out)
+    case MvDone{}:
+      emit(pd, b, out)
+
+# a byte of a chunk's data: the last one leaves the chunk's CRLF to come
+def step.chd(r: Nat, b: Bytes(), c: U32, left: U32, pd: Pend, out: List<&2, Req>) -> P:
+  match r:
+    case 0n:
+      P{Chk{CDataCr{}, 0, push(b, c), left}, pd, out}
+    case 1n+q:
+      P{Chd{q, push(b, c), left}, pd, out}
 
 # one body byte: the last one emits the message, the rest accumulate
 def step.body(r: Nat, b: Bytes(), c: U32, pd: Pend, out: List<&2, Req>) -> P:
@@ -774,7 +1242,7 @@ def step.at(st: St, k: Cls, +c: U32, pd: Pend, out: List<&2, Req>) -> P:
     case InT{p} _:
       P{InT{push(p, c)}, pd, out}
     case InV{+v} KCr{}:
-      step.ver(bytes.eq(v, ver.lit()), pd, out)
+      step.ver(bytes.eq(v, ver.lit()), bytes.eq(v, ver10.lit()), pd, out)
     case InV{v} KTk{}:
       P{InV{push(v, c)}, pd, out}
     case InV{v} KDg{}:
@@ -829,20 +1297,20 @@ def step.at(st: St, k: Cls, +c: U32, pd: Pend, out: List<&2, Req>) -> P:
       step.clen(v, pd, out)
     case InLt{v} _:
       P{Bad{}, pd, out}
-    case InLc{t, a, b} KCr{}:
-      step.conn(t, a, b, pd, out)
-    case InLc{t, a, b} KSp{}:
-      P{tok.conn(t, a, b), pd, out}
-    case InLc{t, a, b} KHt{}:
-      P{tok.conn(t, a, b), pd, out}
-    case InLc{t, a, b} KCm{}:
-      P{tok.conn(t, a, b), pd, out}
-    case InLc{t, a, b} KLf{}:
+    case InLc{t, a, b, e} KCr{}:
+      step.conn(t, a, b, e, pd, out)
+    case InLc{t, a, b, e} KSp{}:
+      P{tok.conn(t, a, b, e), pd, out}
+    case InLc{t, a, b, e} KHt{}:
+      P{tok.conn(t, a, b, e), pd, out}
+    case InLc{t, a, b, e} KCm{}:
+      P{tok.conn(t, a, b, e), pd, out}
+    case InLc{t, a, b, e} KLf{}:
       P{Bad{}, pd, out}
-    case InLc{t, a, b} KCt{}:
+    case InLc{t, a, b, e} KCt{}:
       P{Bad{}, pd, out}
-    case InLc{t, a, b} _:
-      P{InLc{push(t, lower(c)), a, b}, pd, out}
+    case InLc{t, a, b, e} _:
+      P{InLc{push(t, lower(c)), a, b, e}, pd, out}
     case InLu{t, w} KCr{}:
       step.upv(t, w, pd, out)
     case InLu{t, w} KSp{}:
@@ -893,12 +1361,36 @@ def step.at(st: St, k: Cls, +c: U32, pd: Pend, out: List<&2, Req>) -> P:
       P{Bad{}, pd, out}
     case InLx{} _:
       P{InLx{}, pd, out}
+    case InLe0{} KSp{}:
+      P{InLe0{}, pd, out}
+    case InLe0{} KHt{}:
+      P{InLe0{}, pd, out}
+    case InLe0{} KCr{}:
+      P{Bad{}, pd, out}
+    case InLe0{} KLf{}:
+      P{Bad{}, pd, out}
+    case InLe0{} KCt{}:
+      P{Bad{}, pd, out}
+    case InLe0{} _:
+      P{InLe{one(c)}, pd, out}
+    case InLe{v} KCr{}:
+      step.te(v, pd, out)
+    case InLe{v} KLf{}:
+      P{Bad{}, pd, out}
+    case InLe{v} KCt{}:
+      P{Bad{}, pd, out}
+    case InLe{v} _:
+      P{InLe{push(v, c)}, pd, out}
     case CrL{} KLf{}:
       step.head(pd, out)
     case CrL{} _:
       P{Bad{}, pd, out}
     case Bod{r, b} _:
       step.body(r, b, c, pd, out)
+    case Chk{pos, n, b, left} x:
+      step.chk(chk.next(pos, xk.of(x, c)), n, b, left, pd, out)
+    case Chd{r, b, left} _:
+      step.chd(r, b, c, left, pd, out)
     case Rest{bs} _:
       P{Rest{push(bs, c)}, pd, out}
     case Bad{} _:
@@ -1117,6 +1609,25 @@ def bod.at(+r: Nat, b: Bytes(), +s: Bytes(), pd: Pend, out: List<&2, Req>, done:
 def bod.go(+r: Nat, b: Bytes(), +s: Bytes(), pd: Pend, out: List<&2, Req>) -> P & Bytes():
   bod.at(r, b, s, pd, out, Nat.is_lt(r, Bytes.len(s)))
 
+# a chunk's data, the same way: all of the read when the chunk goes on
+# past it, else the r + 1 bytes that end it, with its CRLF to come
+def chd.took(pd: Pend, out: List<&2, Req>, b: Bytes(), left: U32, xy: Bytes() & Bytes()) ->
+  P & Bytes():
+  (x, y) = xy
+  (P{Chk{CDataCr{}, 0, Bytes.append(b, x), left}, pd, out}, y)
+
+def chd.at(+r: Nat, b: Bytes(), +s: Bytes(), left: U32, pd: Pend, out: List<&2, Req>,
+  done: Bool) -> P & Bytes():
+  match done:
+    case False{}:
+      (P{Chd{Nat.sub(r, Bytes.len(s)), Bytes.append(b, s), left}, pd, out}, "")
+    case True{}:
+      chd.took(pd, out, b, left, String.cut(s, 1n+r))
+
+def chd.go(+r: Nat, b: Bytes(), +s: Bytes(), left: U32, pd: Pend, out: List<&2, Req>) ->
+  P & Bytes():
+  chd.at(r, b, s, left, pd, out, Nat.is_lt(r, Bytes.len(s)))
+
 # one move of the walk: a run, a body, the rest after an upgrade, or
 # one byte
 def adv.at(st: St, s: Bytes(), pd: Pend, out: List<&2, Req>) -> P & Bytes():
@@ -1135,6 +1646,14 @@ def adv.at(st: St, s: Bytes(), pd: Pend, out: List<&2, Req>) -> P & Bytes():
       skip(s, True{}, 0, pd, out)
     case Bod{r, b}:
       bod.go(r, b, s, pd, out)
+    case Chd{r, b, left}:
+      chd.go(r, b, s, left, pd, out)
+    case Chk{pos, n, b, left}:
+      one.step(P{Chk{pos, n, b, left}, pd, out}, s)
+    case InLe0{}:
+      one.step(P{InLe0{}, pd, out}, s)
+    case InLe{v}:
+      one.step(P{InLe{v}, pd, out}, s)
     case Rest{bs}:
       (P{Rest{Bytes.append(bs, s)}, pd, out}, "")
     case Pre{}:
@@ -1151,8 +1670,8 @@ def adv.at(st: St, s: Bytes(), pd: Pend, out: List<&2, Req>) -> P & Bytes():
       one.step(P{InL{v}, pd, out}, s)
     case InLt{v}:
       one.step(P{InLt{v}, pd, out}, s)
-    case InLc{t, a, b}:
-      one.step(P{InLc{t, a, b}, pd, out}, s)
+    case InLc{t, a, b, e}:
+      one.step(P{InLc{t, a, b, e}, pd, out}, s)
     case InLu{t, w}:
       one.step(P{InLu{t, w}, pd, out}, s)
     case InLk0{}:
@@ -1223,8 +1742,16 @@ def st.dead(st: St) -> St & Bool:
       (InL{v}, False{})
     case InLt{v}:
       (InLt{v}, False{})
-    case InLc{t, a, b}:
-      (InLc{t, a, b}, False{})
+    case InLc{t, a, b, e}:
+      (InLc{t, a, b, e}, False{})
+    case InLe0{}:
+      (InLe0{}, False{})
+    case InLe{v}:
+      (InLe{v}, False{})
+    case Chk{pos, n, b, left}:
+      (Chk{pos, n, b, left}, False{})
+    case Chd{r, b, left}:
+      (Chd{r, b, left}, False{})
     case InLu{t, w}:
       (InLu{t, w}, False{})
     case InLk0{}:
@@ -1276,8 +1803,27 @@ def parse.of(pb: P & Bool) -> List<&2, Req> & Bool:
 def parse(bs: Bytes()) -> List<&2, Req> & Bool:
   parse.of(p.dead(feed_buf(bs, p.new())))
 
+# whether a place in a chunked body is its trailer, which is a head's
+# field lines again and is held to the head's budget; a chunk line and
+# its data are the body's, which body.cap() bounds
+def chk.head(pos: ChPos) -> Bool:
+  match pos:
+    case CTrail{}:
+      True{}
+    case CTName{}:
+      True{}
+    case CTVal{}:
+      True{}
+    case CTLf{}:
+      True{}
+    case CEnd{}:
+      True{}
+    case _:
+      False{}
+
 # whether the reader is part way through a head: past the first byte of
-# a request line and short of its blank line. A body is not a head.
+# a request line and short of its blank line, or in a trailer. A body
+# is not a head.
 def st.head(st: St) -> Bool:
   match st:
     case Pre{}:
@@ -1286,6 +1832,10 @@ def st.head(st: St) -> Bool:
       False{}
     case Bod{r, b}:
       False{}
+    case Chd{r, b, left}:
+      False{}
+    case Chk{pos, n, b, left}:
+      chk.head(pos)
     case Rest{bs}:
       False{}
     case Bad{}:

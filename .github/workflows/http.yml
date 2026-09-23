@@ -12,7 +12,7 @@ on:
 jobs:
   engine:
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 45
     defaults:
       run:
         shell: bash
@@ -43,7 +43,8 @@ jobs:
             kernel/target/release/bend-kernel -q proof.core || { echo "$f: the kernel refuses it"; exit 1; }
           done
       # each mutant breaks the loop as one of the review's bugs did, and
-      # the laws of the world must refuse every one
+      # the laws of the world must refuse every one; each of the framing's
+      # breaks the reader or the spec, and frame_sim alone must refuse it
       - name: the laws are not vacuous
         run: python3 demos/io_http_engine/mutants.py
       - name: the server builds

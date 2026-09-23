@@ -1,9 +1,12 @@
 // C control for main.bend: the same engine, written the way a C server
 // is written. One epoll loop, one parser state per connection, the same
 // states and the same byte-at-a-time transitions, the same routes and
-// byte-identical replies, the same policy (HTTP/1.1 only, one Host,
-// Content-Length only, all digits, agreeing when repeated, no
-// Transfer-Encoding, names compared as bytes).
+// byte-identical replies, the same policy (HTTP/1.1 with one Host, or
+// HTTP/1.0 with at most one, closed unless it asks to keep alive; a
+// Content-Length, all digits, agreeing when repeated, or a
+// Transfer-Encoding that is chunked exactly and once, never both; a
+// chunked body by RFC 9112 7.1 under one budget; names compared as
+// bytes).
 // It is the control for demos/io_http_engine: whatever it measures is
 // what the Bend engine is measured against.
 //
@@ -23,9 +26,14 @@
 // the byte classes and states of main.bend's step.at, one for one
 enum { K_SP, K_HT, K_CR, K_LF, K_CO, K_CM, K_DG, K_TK, K_VC, K_CT };
 enum { PRE, PRE_LF, IN_M, IN_T, IN_V, CR_M, LIN, IN_N, IN_L0, IN_L, IN_LT,
-  IN_LC, IN_LX, CR_L, BOD, BAD };
+  IN_LC, IN_LX, IN_LE0, IN_LE, CR_L, BOD, CHK, CHD, BAD };
 enum { M_OTHER, M_GET, M_HEAD };
 enum { F_OTHER, F_TE, F_CL, F_CONN };
+// a chunked body's places (main.bend's ChPos) and what a byte is there
+// (its XK)
+enum { C_SIZE0, C_SIZE, C_BWS, C_NAME0, C_NAME, C_NAMEWS, C_VAL0, C_TOKEN, C_QUOTED,
+  C_ESCAPE, C_CLOSED, C_LF, C_DATACR, C_DATALF, C_TRAIL, C_TNAME, C_TVAL, C_TLF, C_END };
+enum { X_HEX, X_TOK, X_WS, X_SEMI, X_EQ, X_QUOTE, X_BACK, X_COLON, X_CR, X_LF, X_VIS, X_CTL };
 
 #define CHUNK 16384
 #define MAXPATH 512
@@ -36,6 +44,10 @@ typedef struct {
   int fd, st, used;
   uint32_t v, clen, bodn;
   int meth, hascl, close, hosts, plen, tn;
+  int v10, ka, te;                // HTTP/1.0; keep-alive named; chunked named
+  int pos;                        // where in a chunked body's framing
+  uint32_t csz, left;             // the chunk's size, the budget left
+  uint32_t crem;                  // a chunk's data still to come
   int shut;                       // a served message asked to close
   char tok[MAXTOK + 1];           // the method, version, name or list member
   char path[MAXPATH], body[MAXBODY];
@@ -104,20 +116,165 @@ static void serve(Conn* k) {
 // refused at the digit that crosses it
 #define BODY_CAP 1048576u
 
+// the head's end: HTTP/1.1 carries one Host and HTTP/1.0 at most one; a
+// Transfer-Encoding with a length, or in HTTP/1.0, is refused; chunked
+// is a chunked body under the budget; a length is that many bytes
 static void head_done(Conn* k) {
-  if (k->hosts != 1) { k->st = BAD; return; }
+  if (k->v10 ? k->hosts > 1 : k->hosts != 1) { k->st = BAD; return; }
+  if (k->v10 && !k->ka) k->close = 1;
   k->bodn = 0;
+  if (k->te) {
+    if (k->hascl || k->v10) { k->st = BAD; return; }
+    k->st = CHK; k->pos = C_SIZE0; k->csz = 0; k->left = BODY_CAP;
+    return;
+  }
   if (k->clen == 0) serve(k); else k->st = BOD;
 }
 
-// a name closes at its colon, compared by its bytes; a
-// Transfer-Encoding is refused there
+// a name closes at its colon, compared by its bytes
 static void name_done(Conn* k) {
   int f = is(k, "transfer-encoding") ? F_TE : is(k, "content-length") ? F_CL
     : is(k, "connection") ? F_CONN : F_OTHER;
   if (is(k, "host")) k->hosts++;
-  k->st = f == F_TE ? BAD : f == F_CL ? IN_L0 : f == F_CONN ? IN_LC : IN_LX;
+  k->st = f == F_TE ? IN_LE0 : f == F_CL ? IN_L0 : f == F_CONN ? IN_LC : IN_LX;
   k->tn = 0;
+}
+
+// a Transfer-Encoding closes: chunked, exactly and once
+static void te_done(Conn* k) {
+  if (is(k, "chunked") && !k->te) { k->te = 1; k->st = CR_M; } else k->st = BAD;
+}
+
+// a byte's kind in a chunked body's framing, as main.bend's xk.of says
+static int xk(uint8_t c, uint32_t* d) {
+  int t = cls(c);
+  if (t == K_SP || t == K_HT) return X_WS;
+  if (t == K_CR) return X_CR;
+  if (t == K_LF) return X_LF;
+  if (t == K_CO) return X_COLON;
+  if (t == K_CM) return X_VIS;
+  if (t == K_CT) return X_CTL;
+  if (t == K_DG || t == K_TK) {
+    uint32_t l = lower(c);
+    if (l >= 48 && l <= 57) { *d = l - 48; return X_HEX; }
+    if (l >= 97 && l <= 102) { *d = l - 87; return X_HEX; }
+    return X_TOK;
+  }
+  return c == ';' ? X_SEMI : c == '=' ? X_EQ : c == '"' ? X_QUOTE : c == '\\' ? X_BACK : X_VIS;
+}
+
+// one byte of a chunked body's framing: RFC 9112 7.1's table, row by
+// row as main.bend's chk.next has it. A move to a place is paid from the
+// budget when the byte is part of a chunk line; a digit grows the size;
+// a line's LF starts its data or the trailer; the last LF ends the body.
+enum { MV_BAD, MV_TO, MV_DIGIT, MV_LINE, MV_DONE };
+static int chk_next(int pos, int x, int* to, int* paid) {
+  int tch = x == X_HEX || x == X_TOK;
+  *paid = 1;
+#define TO(p) do { *to = (p); return MV_TO; } while (0)
+#define FREE(p) do { *paid = 0; *to = (p); return MV_TO; } while (0)
+  switch (pos) {
+    case C_SIZE0: return x == X_HEX ? MV_DIGIT : MV_BAD;
+    case C_SIZE:
+      if (x == X_HEX) return MV_DIGIT;
+      if (x == X_SEMI) TO(C_NAME0);
+      if (x == X_WS) TO(C_BWS);
+      if (x == X_CR) FREE(C_LF);
+      return MV_BAD;
+    case C_BWS:
+      if (x == X_WS) TO(C_BWS);
+      if (x == X_SEMI) TO(C_NAME0);
+      return MV_BAD;
+    case C_NAME0:
+      if (x == X_WS) TO(C_NAME0);
+      if (tch) TO(C_NAME);
+      return MV_BAD;
+    case C_NAME:
+      if (x == X_WS) TO(C_NAMEWS);
+      if (x == X_EQ) TO(C_VAL0);
+      if (x == X_SEMI) TO(C_NAME0);
+      if (x == X_CR) FREE(C_LF);
+      if (tch) TO(C_NAME);
+      return MV_BAD;
+    case C_NAMEWS:
+      if (x == X_WS) TO(C_NAMEWS);
+      if (x == X_EQ) TO(C_VAL0);
+      if (x == X_SEMI) TO(C_NAME0);
+      return MV_BAD;
+    case C_VAL0:
+      if (x == X_WS) TO(C_VAL0);
+      if (x == X_QUOTE) TO(C_QUOTED);
+      if (tch) TO(C_TOKEN);
+      return MV_BAD;
+    case C_TOKEN:
+      if (x == X_SEMI) TO(C_NAME0);
+      if (x == X_WS) TO(C_BWS);
+      if (x == X_CR) FREE(C_LF);
+      if (tch) TO(C_TOKEN);
+      return MV_BAD;
+    case C_QUOTED:
+      if (x == X_BACK) TO(C_ESCAPE);
+      if (x == X_QUOTE) TO(C_CLOSED);
+      if (x == X_CR || x == X_LF || x == X_CTL) return MV_BAD;
+      TO(C_QUOTED);
+    case C_ESCAPE:
+      if (x == X_CR || x == X_LF || x == X_CTL) return MV_BAD;
+      TO(C_QUOTED);
+    case C_CLOSED:
+      if (x == X_SEMI) TO(C_NAME0);
+      if (x == X_WS) TO(C_BWS);
+      if (x == X_CR) FREE(C_LF);
+      return MV_BAD;
+    case C_LF: return x == X_LF ? MV_LINE : MV_BAD;
+    case C_DATACR: if (x == X_CR) FREE(C_DATALF); return MV_BAD;
+    case C_DATALF: if (x == X_LF) FREE(C_SIZE0); return MV_BAD;
+    case C_TRAIL:
+      if (x == X_CR) FREE(C_END);
+      if (tch) FREE(C_TNAME);
+      return MV_BAD;
+    case C_TNAME:
+      if (x == X_COLON) FREE(C_TVAL);
+      if (tch) FREE(C_TNAME);
+      return MV_BAD;
+    case C_TVAL:
+      if (x == X_CR) FREE(C_TLF);
+      if (x == X_LF || x == X_CTL) return MV_BAD;
+      FREE(C_TVAL);
+    case C_TLF: if (x == X_LF) FREE(C_TRAIL); return MV_BAD;
+    case C_END: return x == X_LF ? MV_DONE : MV_BAD;
+  }
+#undef TO
+#undef FREE
+  return MV_BAD;
+}
+
+// the budget: a paid byte, and a digit that grows the size, are refused
+// where what is left could no longer hold them and the chunk's data
+static void chk_step(Conn* k, uint8_t c) {
+  uint32_t d = 0;
+  int to = 0, paid = 0;
+  int x = xk(c, &d);
+  switch (chk_next(k->pos, x, &to, &paid)) {
+    case MV_BAD: k->st = BAD; return;
+    case MV_TO:
+      if (paid) {
+        if (k->left <= k->csz) { k->st = BAD; return; }
+        k->left -= 1;
+      }
+      k->pos = to;
+      return;
+    case MV_DIGIT: {
+      uint32_t n2 = k->csz * 16 + d;
+      if (k->left <= n2) { k->st = BAD; return; }
+      k->left -= 1; k->csz = n2; k->pos = C_SIZE;
+      return;
+    }
+    case MV_LINE:
+      if (k->csz == 0) { k->pos = C_TRAIL; return; }
+      k->left -= k->csz; k->crem = k->csz; k->csz = 0; k->st = CHD;
+      return;
+    case MV_DONE: serve(k); return;
+  }
 }
 
 // a Content-Length value closes: a second one must agree with the first
@@ -127,7 +284,11 @@ static void clen_done(Conn* k) {
 }
 
 // a member of a Connection list closes
-static void member(Conn* k) { if (is(k, "close")) k->close = 1; k->tn = 0; }
+static void member(Conn* k) {
+  if (is(k, "close")) k->close = 1;
+  if (is(k, "keep-alive")) k->ka = 1;
+  k->tn = 0;
+}
 
 // one byte, the same transition table as main.bend's step.at
 static void step(Conn* k, uint8_t c) {
@@ -143,6 +304,7 @@ static void step(Conn* k, uint8_t c) {
       if (t == K_SP) {
         k->meth = is(k, "GET") ? M_GET : is(k, "HEAD") ? M_HEAD : M_OTHER;
         k->plen = 0; k->clen = 0; k->hascl = 0; k->close = 0; k->hosts = 0;
+        k->v10 = 0; k->ka = 0; k->te = 0;
         k->st = IN_T;
       } else if (token(t)) keep(k, c);
       else k->st = BAD;
@@ -153,7 +315,11 @@ static void step(Conn* k, uint8_t c) {
       else if (k->plen < MAXPATH) k->path[k->plen++] = (char)c;
       break;
     case IN_V:
-      if (t == K_CR) k->st = is(k, "HTTP/1.1") ? CR_M : BAD;
+      if (t == K_CR) {
+        if (is(k, "HTTP/1.1")) k->st = CR_M;
+        else if (is(k, "HTTP/1.0")) { k->v10 = 1; k->st = CR_M; }
+        else k->st = BAD;
+      }
       else if (token(t) || t == K_VC) keep(k, c);
       else k->st = BAD;
       break;
@@ -192,11 +358,27 @@ static void step(Conn* k, uint8_t c) {
       if (t == K_CR) k->st = CR_M;
       else if (t == K_LF || t == K_CT) k->st = BAD;
       break;
+    case IN_LE0:
+      if (t == K_SP || t == K_HT) break;
+      if (t == K_CR || t == K_LF || t == K_CT) { k->st = BAD; break; }
+      k->tn = 0; keep(k, (uint8_t)lower(c)); k->st = IN_LE;
+      break;
+    case IN_LE:
+      if (t == K_CR) te_done(k);
+      else if (t == K_LF || t == K_CT) k->st = BAD;
+      else keep(k, (uint8_t)lower(c));
+      break;
     case CR_L: if (t == K_LF) head_done(k); else k->st = BAD; break;
     case BOD:
       if (k->bodn < MAXBODY) k->body[k->bodn] = (char)c;
       k->bodn += 1;
       if (k->bodn >= k->clen) serve(k);
+      break;
+    case CHK: chk_step(k, c); break;
+    case CHD:
+      if (k->bodn < MAXBODY) k->body[k->bodn] = (char)c;
+      k->bodn += 1;
+      if (--k->crem == 0) { k->st = CHK; k->pos = C_DATACR; }
       break;
     default: break;
   }

@@ -96,14 +96,124 @@ law field_by_bytes:
   for +k: Bytes()
   {Eng.fld.of(k) == Spec.field(k) : Eng.Fld}
 
-# LAW: a Transfer-Encoding is refused at its colon, in whatever case it
-# was written, whatever message it is in and whatever came before it.
-law te_refused:
-  for +k: Bytes()
+# LAW: the one transfer coding is chunked, exactly. A Transfer-Encoding
+# whose value is anything else when lowercased -- another coding, a
+# list ("chunked, identity"), "xchunked", "chunked " with whitespace
+# after it -- is refused where its line ends, in every message.
+law te_chunked_only:
+  for +v: Bytes()
   for +pd: Eng.Pend
   for +out: List<&2, Eng.Req>
-  for e: {Spec.eq(Eng.lows(k), Spec.name("transfer-encoding")) == True{} : Bool}
-  {Eng.step(Eng.P{Eng.InN{k}, pd, out}, 58) == Eng.P{Eng.Bad{}, pd, out} : Eng.P}
+  for e: {Spec.eq(Eng.lows(v), "chunked") == False{} : Bool}
+  {Eng.step(Eng.P{Eng.InLe{v}, pd, out}, 13) == Eng.P{Eng.Bad{}, pd, out} : Eng.P}
+
+# LAW: and it is named once: a Transfer-Encoding after one that said
+# chunked is refused where its line ends, whatever it says (chunked is
+# applied once, and last: RFC 9112 7).
+law te_once:
+  for +v: Bytes()
+  for +m: Eng.Meth
+  for +path: Bytes()
+  for +l: Eng.Cl
+  for +cl: Bool
+  for +h: Eng.Hosts
+  for +ws: Eng.Up
+  for +v10: Bool
+  for +ka: Bool
+  for +out: List<&2, Eng.Req>
+  {Eng.step(Eng.P{Eng.InLe{v}, Eng.Pend{m, path, l, cl, h, ws, Eng.Fx{v10, ka, True{}}}, out}, 13) ==
+    Eng.P{Eng.Bad{}, Eng.Pend{m, path, l, cl, h, ws, Eng.Fx{v10, ka, True{}}}, out} : Eng.P}
+
+# LAW: a head that framed its body two ways -- a Transfer-Encoding and a
+# Content-Length, in either order -- is refused at its blank line
+# (RFC 9112 6.3), whatever else it carried.
+law te_cl_refused:
+  for +m: Eng.Meth
+  for +path: Bytes()
+  for +v: U32
+  for +cl: Bool
+  for +h: Eng.Hosts
+  for +ws: Eng.Up
+  for +v10: Bool
+  for +ka: Bool
+  for +out: List<&2, Eng.Req>
+  {Eng.step(Eng.P{Eng.CrL{}, Eng.Pend{m, path, Eng.Has{v}, cl, h, ws, Eng.Fx{v10, ka, True{}}}, out}, 10) ==
+    Eng.P{Eng.Bad{}, Eng.Pend{m, path, Eng.Has{v}, cl, h, ws, Eng.Fx{v10, ka, True{}}}, out} : Eng.P}
+
+# LAW: and so is an HTTP/1.0 head with a Transfer-Encoding (RFC 9112
+# 6.1: faulty framing), whatever else it carried.
+law te_10_refused:
+  for +m: Eng.Meth
+  for +path: Bytes()
+  for +l: Eng.Cl
+  for +cl: Bool
+  for +h: Eng.Hosts
+  for +ws: Eng.Up
+  for +ka: Bool
+  for +out: List<&2, Eng.Req>
+  {Eng.step(Eng.P{Eng.CrL{}, Eng.Pend{m, path, l, cl, h, ws, Eng.Fx{True{}, ka, True{}}}, out}, 10) ==
+    Eng.P{Eng.Bad{}, Eng.Pend{m, path, l, cl, h, ws, Eng.Fx{True{}, ka, True{}}}, out} : Eng.P}
+
+# LAW: a chunk-size is refused at the digit that takes it past what the
+# body's budget has left: for every size so far, every budget, every
+# body so far and every message, a HEXDIG (as the reference reads one)
+# that makes the size at least the budget is refused where it stands.
+# The size so far is below the budget, which is at most body.cap(), so
+# sixteen times it plus a digit never wraps.
+law chunk_size_capped:
+  for +c: U32
+  for +d: U32
+  for +n: U32
+  for +b: Bytes()
+  for +left: U32
+  for +pd: Eng.Pend
+  for +out: List<&2, Eng.Req>
+  for e: {Spec.xk.of(Spec.cls(c), c) == Eng.XHex{d} : Eng.XK}
+  for f: {U32.is_le(left, (n * 16 + d : U32)) == True{} : Bool}
+  {Eng.step(Eng.P{Eng.Chk{Eng.CSize{}, n, b, left}, pd, out}, c) == Eng.P{Eng.Bad{}, pd, out} : Eng.P}
+
+# LAW: and every other byte of a chunk line the budget pays for -- an
+# extension's, its whitespace, a ";" -- is refused where the budget
+# can no longer hold it and the chunk's data, wherever in the line it
+# is: an extension is never longer than the body may be.
+law chunk_ext_capped:
+  for +c: U32
+  for +pos: Eng.ChPos
+  for +to: Eng.ChPos
+  for +n: U32
+  for +b: Bytes()
+  for +left: U32
+  for +pd: Eng.Pend
+  for +out: List<&2, Eng.Req>
+  for e: {Eng.chk.next(pos, Spec.xk.of(Spec.cls(c), c)) == Eng.MvTo{to, True{}} : Eng.Mv}
+  for f: {U32.is_le(left, n) == True{} : Bool}
+  {Eng.step(Eng.P{Eng.Chk{pos, n, b, left}, pd, out}, c) == Eng.P{Eng.Bad{}, pd, out} : Eng.P}
+
+# LAW: a chunk line, its data's end and a trailer line each end in CR LF:
+# a bare LF anywhere in a chunked body's framing but right after its CR
+# is refused, whatever the size, the body so far or the budget.
+def lf.due(pos: Eng.ChPos) -> Bool:
+  match pos:
+    case Eng.CLf{}:
+      True{}
+    case Eng.CDataLf{}:
+      True{}
+    case Eng.CTLf{}:
+      True{}
+    case Eng.CEnd{}:
+      True{}
+    case _:
+      False{}
+
+law chunk_bare_lf:
+  for +pos: Eng.ChPos
+  for +n: U32
+  for +b: Bytes()
+  for +left: U32
+  for +pd: Eng.Pend
+  for +out: List<&2, Eng.Req>
+  for e: {lf.due(pos) == False{} : Bool}
+  {Eng.step(Eng.P{Eng.Chk{pos, n, b, left}, pd, out}, 10) == Eng.P{Eng.Bad{}, pd, out} : Eng.P}
 
 # LAW: a name is a token and ends at its colon. Any other byte in it --
 # a space or a tab before the colon, a CR with no colon, a bare LF, a
@@ -147,10 +257,11 @@ law clen_disagree:
   for +cl: Bool
   for +h: Eng.Hosts
   for +ws: Eng.Up
+  for +fx: Eng.Fx
   for +out: List<&2, Eng.Req>
   for e: {U32.is_eq(w, v) == False{} : Bool}
-  {Eng.step(Eng.P{Eng.InL{w}, Eng.Pend{m, path, Eng.Has{v}, cl, h, ws}, out}, 13) ==
-    Eng.P{Eng.Bad{}, Eng.Pend{m, path, Eng.Has{v}, cl, h, ws}, out} : Eng.P}
+  {Eng.step(Eng.P{Eng.InL{w}, Eng.Pend{m, path, Eng.Has{v}, cl, h, ws, fx}, out}, 13) ==
+    Eng.P{Eng.Bad{}, Eng.Pend{m, path, Eng.Has{v}, cl, h, ws, fx}, out} : Eng.P}
 
 # LAW: the target carries no control, tab or line end: a CR, LF or NUL
 # in it is refused, so none reaches a route or the log.
@@ -177,13 +288,15 @@ law conn_refuses:
   for +t: Bytes()
   for +a: Bool
   for +b: Bool
+  for +k: Bool
   for +pd: Eng.Pend
   for +out: List<&2, Eng.Req>
   for e: {Spec.in.value(Eng.cls(c)) == False{} : Bool}
-  {Eng.step(Eng.P{Eng.InLc{t, a, b}, pd, out}, c) == Eng.P{Eng.Bad{}, pd, out} : Eng.P}
+  {Eng.step(Eng.P{Eng.InLc{t, a, b, k}, pd, out}, c) == Eng.P{Eng.Bad{}, pd, out} : Eng.P}
 
-# LAW: a head without exactly one Host is refused at its blank line
-# (RFC 9112 3.2), whatever else it carried.
+# LAW: an HTTP/1.1 head without exactly one Host, and an HTTP/1.0 head
+# with more than one, is refused at its blank line (RFC 9112 3.2),
+# whatever else it carried.
 law host_once:
   for +m: Eng.Meth
   for +path: Bytes()
@@ -191,10 +304,13 @@ law host_once:
   for +cl: Bool
   for +h: Eng.Hosts
   for +ws: Eng.Up
+  for +v10: Bool
+  for +ka: Bool
+  for +te: Bool
   for +out: List<&2, Eng.Req>
-  for e: {Spec.one(h) == False{} : Bool}
-  {Eng.step(Eng.P{Eng.CrL{}, Eng.Pend{m, path, l, cl, h, ws}, out}, 10) ==
-    Eng.P{Eng.Bad{}, Eng.Pend{m, path, l, cl, h, ws}, out} : Eng.P}
+  for e: {Spec.hosts.fit(v10, h) == False{} : Bool}
+  {Eng.step(Eng.P{Eng.CrL{}, Eng.Pend{m, path, l, cl, h, ws, Eng.Fx{v10, ka, te}}, out}, 10) ==
+    Eng.P{Eng.Bad{}, Eng.Pend{m, path, l, cl, h, ws, Eng.Fx{v10, ka, te}}, out} : Eng.P}
 
 # LAW: after a request that asked to upgrade, nothing is read as HTTP:
 # every byte is kept, in order, for the frame reader, and no message
@@ -243,6 +359,39 @@ law parse_upgrade:
     ([Eng.Req{Eng.MGet{}, "/ws", "", False{}, True{}, "k"}], False{}) :
     List<&2, Eng.Req> & Bool}
 
+# HTTP/1.0: no Host needed; it closes after its reply unless it asked to
+# keep alive, and close still wins over keep-alive; an Upgrade in it is
+# not one (RFC 9110 7.8)
+law parse_10:
+  {Eng.parse("GET /health HTTP/1.0\r\n\r\n") ==
+    ([Eng.Req{Eng.MGet{}, "/health", "", True{}, False{}, ""}], False{}) :
+    List<&2, Eng.Req> & Bool}
+
+law parse_10_keepalive:
+  {Eng.parse("GET /health HTTP/1.0\r\nHost: x\r\nConnection: Keep-Alive\r\n\r\nHEAD / HTTP/1.0\r\nConnection: keep-alive, close\r\n\r\n") ==
+    ([Eng.Req{Eng.MGet{}, "/health", "", False{}, False{}, ""},
+      Eng.Req{Eng.MHead{}, "/", "", True{}, False{}, ""}], False{}) :
+    List<&2, Eng.Req> & Bool}
+
+law parse_10_upgrade:
+  {Eng.parse("GET /ws HTTP/1.0\r\nUpgrade: websocket\r\nConnection: keep-alive, Upgrade\r\nSec-WebSocket-Key: k\r\n\r\nGET / HTTP/1.1\r\nHost: x\r\n\r\n") ==
+    ([Eng.Req{Eng.MGet{}, "/ws", "", False{}, False{}, "k"},
+      Eng.Req{Eng.MGet{}, "/", "", False{}, False{}, ""}], False{}) :
+    List<&2, Eng.Req> & Bool}
+
+# a chunked body, decoded: chunks joined, extensions and the trailer
+# read by their grammar and dropped, the next request after it
+law parse_chunked:
+  {Eng.parse("GET /echo HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nhello\r\n0\r\n\r\nGET / HTTP/1.1\r\nHost: x\r\n\r\n") ==
+    ([Eng.Req{Eng.MGet{}, "/echo", "hello", False{}, False{}, ""},
+      Eng.Req{Eng.MGet{}, "/", "", False{}, False{}, ""}], False{}) :
+    List<&2, Eng.Req> & Bool}
+
+law parse_chunked_ext:
+  {Eng.parse("GET /echo HTTP/1.1\r\nHost: x\r\ntransfer-encoding: CHUNKED\r\n\r\n5 ;a=b; c = \"q\\\"x\"\r\nhello\r\nA;z\r\n, world!!!\r\n000;x\r\nX-T: y\r\nZ:\r\n\r\n") ==
+    ([Eng.Req{Eng.MGet{}, "/echo", "hello, world!!!", False{}, False{}, ""}], False{}) :
+    List<&2, Eng.Req> & Bool}
+
 law rest_upgrade:
   {Eng.p.rest(Eng.feed_buf(Bytes.append("GET /ws HTTP/1.1\r\nHost: x\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: k\r\n\r\n", Bytes.from_list([129, 128])), Eng.p.new())) ==
     Bytes.from_list([129, 128]) : Bytes()}
@@ -257,8 +406,79 @@ law refuse_te_space_colon:
   {Eng.parse("GET /echo HTTP/1.1\r\nHost: x\r\nTransfer-Encoding : chunked\r\nContent-Length: 5\r\n\r\nhello") ==
     (Nil{}, True{}) : List<&2, Eng.Req> & Bool}
 
+# CL.TE: a length, then a coding; and TE.CL, the other way round
 law refuse_te:
   {Eng.parse("GET /echo HTTP/1.1\r\nHost: x\r\nContent-Length: 5\r\nTRANSFER-encoding: chunked\r\n\r\n0\r\n\r\n") ==
+    (Nil{}, True{}) : List<&2, Eng.Req> & Bool}
+
+law refuse_te_cl:
+  {Eng.parse("GET /echo HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: chunked\r\nContent-Length: 3\r\n\r\n8\r\nSMUGGLED\r\n0\r\n\r\n") ==
+    (Nil{}, True{}) : List<&2, Eng.Req> & Bool}
+
+# TE.TE: the coding dressed up so one reader takes it and another does
+# not, and two of them
+law refuse_te_space:
+  {Eng.parse("GET /echo HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: chunked \r\n\r\n0\r\n\r\n") ==
+    (Nil{}, True{}) : List<&2, Eng.Req> & Bool}
+
+law refuse_te_xchunked:
+  {Eng.parse("GET /echo HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: xchunked\r\n\r\n0\r\n\r\n") ==
+    (Nil{}, True{}) : List<&2, Eng.Req> & Bool}
+
+law refuse_te_list:
+  {Eng.parse("GET /echo HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: chunked, identity\r\n\r\n0\r\n\r\n") ==
+    (Nil{}, True{}) : List<&2, Eng.Req> & Bool}
+
+law refuse_te_te:
+  {Eng.parse("GET /echo HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: chunked\r\nTransfer-Encoding: identity\r\n\r\n0\r\n\r\n") ==
+    (Nil{}, True{}) : List<&2, Eng.Req> & Bool}
+
+law refuse_te_twice:
+  {Eng.parse("GET /echo HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: chunked\r\ntransfer-encoding: chunked\r\n\r\n0\r\n\r\n") ==
+    (Nil{}, True{}) : List<&2, Eng.Req> & Bool}
+
+law refuse_te_10:
+  {Eng.parse("GET /echo HTTP/1.0\r\nTransfer-Encoding: chunked\r\n\r\n0\r\n\r\n") ==
+    (Nil{}, True{}) : List<&2, Eng.Req> & Bool}
+
+# a chunked body's framing broken: a bare LF after a size, data not
+# followed by its CRLF, whitespace before a size line's CR, a line with
+# no size, a size past the cap and one that would wrap, a folded
+# trailer line
+law refuse_chunk_bare_lf:
+  {Eng.parse("GET /echo HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: chunked\r\n\r\n5\nhello\r\n0\r\n\r\n") ==
+    (Nil{}, True{}) : List<&2, Eng.Req> & Bool}
+
+law refuse_chunk_data_lf:
+  {Eng.parse("GET /echo HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nhello\n0\r\n\r\n") ==
+    (Nil{}, True{}) : List<&2, Eng.Req> & Bool}
+
+law refuse_chunk_long:
+  {Eng.parse("GET /echo HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: chunked\r\n\r\n3\r\nhello\r\n0\r\n\r\n") ==
+    (Nil{}, True{}) : List<&2, Eng.Req> & Bool}
+
+law refuse_chunk_ws:
+  {Eng.parse("GET /echo HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: chunked\r\n\r\n5 \r\nhello\r\n0\r\n\r\n") ==
+    (Nil{}, True{}) : List<&2, Eng.Req> & Bool}
+
+law refuse_chunk_no_size:
+  {Eng.parse("GET /echo HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: chunked\r\n\r\n;a=b\r\n\r\n") ==
+    (Nil{}, True{}) : List<&2, Eng.Req> & Bool}
+
+law refuse_chunk_past_cap:
+  {Eng.parse("GET /echo HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: chunked\r\n\r\n100000") ==
+    (Nil{}, True{}) : List<&2, Eng.Req> & Bool}
+
+law refuse_chunk_wrap:
+  {Eng.parse("GET /echo HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: chunked\r\n\r\n100000005\r\nhello\r\n0\r\n\r\n") ==
+    (Nil{}, True{}) : List<&2, Eng.Req> & Bool}
+
+law refuse_chunk_ext:
+  {Eng.parse("GET /echo HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: chunked\r\n\r\n5;a=\"b\r\nhello\r\n0\r\n\r\n") ==
+    (Nil{}, True{}) : List<&2, Eng.Req> & Bool}
+
+law refuse_trailer_fold:
+  {Eng.parse("GET /echo HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: chunked\r\n\r\n0\r\nX: a\r\n b\r\n\r\n") ==
     (Nil{}, True{}) : List<&2, Eng.Req> & Bool}
 
 law refuse_two_lengths:
@@ -306,7 +526,11 @@ law refuse_two_hosts:
     (Nil{}, True{}) : List<&2, Eng.Req> & Bool}
 
 law refuse_version:
-  {Eng.parse("GET /health HTTP/1.0\r\nHost: x\r\n\r\n") ==
+  {Eng.parse("GET /health HTTP/1.2\r\nHost: x\r\n\r\n") ==
+    (Nil{}, True{}) : List<&2, Eng.Req> & Bool}
+
+law refuse_10_two_hosts:
+  {Eng.parse("GET /health HTTP/1.0\r\nHost: a\r\nHost: a\r\n\r\n") ==
     (Nil{}, True{}) : List<&2, Eng.Req> & Bool}
 
 # a refusal does not take back the message completed before it: its
@@ -403,6 +627,29 @@ law frame_sim_reads:
   for +rs: List<&2, Bytes()>
   agree(reads(rs, Eng.p.new()), Spec.frame(Bytes.to_list(Bytes.concat(rs))))
 
+# every byte a read of its own
+def each(s: Bytes()) -> List<&2, Bytes()>:
+  match s:
+    case SNil{}:
+      Nil{}
+    case SCon{c, t}:
+      Con{SCon{c, SNil{}}, each(t)}
+
+# the same body cut at every awkward place a read could end: inside the
+# size, inside a CRLF, inside an extension, inside the trailer
+law chunk_cuts:
+  {look(reads(["GET /echo HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: chunked\r\n\r\n1", "0;e", "xt=\"a\\", "\"b\"\r", "\n0123456789abcdef\r", "\n0\r\nX-", "Tr: v", "\r", "\n\r", "\n"],
+    Eng.p.new())) ==
+    ([Eng.Req{Eng.MGet{}, "/echo", "0123456789abcdef", False{}, False{}, ""}], Reading{}) :
+    List<&2, Eng.Req> & Look}
+
+law chunk_bytes:
+  {look(reads(each("GET /echo HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: chunked\r\n\r\n3;a=\"\\\"\"\r\nabc\r\n0\r\nT: v\r\n\r\n"),
+    Eng.p.new())) ==
+    ([Eng.Req{Eng.MGet{}, "/echo", "abc", False{}, False{}, ""}], Reading{}) :
+    List<&2, Eng.Req> & Look}
+
+
 # LAW: and frame() itself, on three vectors: a request served with the
 # next one begun, one that upgrades, and a folded line refused.
 law frame_get:
@@ -417,6 +664,15 @@ law frame_upgrade:
 law frame_refuse_fold:
   {Spec.frame(Eng.bytes("GET / HTTP/1.1\r\nHost: x\r\n Content-Length: 5\r\n\r\nhello")) ==
     Spec.Frames{Nil{}, Spec.Refused{}} : Spec.Frames}
+
+law frame_chunked:
+  {Spec.frame(Eng.bytes("GET /echo HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: chunked\r\n\r\n2;x=y\r\nhi\r\n0\r\nT: v\r\n\r\nGET /")) ==
+    Spec.Frames{[Eng.Req{Eng.MGet{}, "/echo", "hi", False{}, False{}, ""}],
+      Spec.Open{Eng.bytes("GET /")}} : Spec.Frames}
+
+law frame_10:
+  {Spec.frame(Eng.bytes("GET / HTTP/1.0\r\n\r\n")) ==
+    Spec.Frames{[Eng.Req{Eng.MGet{}, "/", "", True{}, False{}, ""}], Spec.Open{Nil{}}} : Spec.Frames}
 
 # LAW: a query is no part of the path a target routes by.
 law path_query:
@@ -1221,7 +1477,11 @@ law page_fine:
 # progress leaves it with at most head.cap() bytes since the read it
 # began in; one that would take it past is answered with a 431 and the
 # connection ends. With a read at most chunk() bytes, a head held is at
-# most chunk() + head.cap(); a body, body.cap() (the reader's).
+# most chunk() + head.cap(); a body, body.cap() (the reader's). A
+# chunked body keeps the same two bounds: its data, its chunk lines and
+# their extensions are paid from one budget of body.cap() (only the data
+# is held; chunk_size_capped, chunk_ext_capped), and its trailer is a
+# head's field lines again, read under this cap and dropped.
 law head_capped:
   for +srv: Eng.Srv
   for w: W.World

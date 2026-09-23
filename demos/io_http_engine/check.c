@@ -403,12 +403,39 @@ int main(int argc, char** argv) {
   check("a field name is case-insensitive",
     has(b, n, "200 OK") && has(b, n, "abc"), b, n);
 
-  n = one(TEXT("GET /health HTTP/1.1\r\nHost: x\r\ntransfer-encoding: chunked"
-    "\r\n\r\n0\r\n\r\n"), b, sizeof(b), 0);
-  check("Transfer-Encoding is refused", has(b, n, "400 Bad Request"), b, n);
+  // Chunked bodies (RFC 9112 7.1): decoded, and echoed with a length
+  n = one(TEXT("GET /echo HTTP/1.1\r\nHost: x\r\ntransfer-encoding: chunked"
+    "\r\n\r\n5\r\nhello\r\n6\r\n world\r\n0\r\n\r\n"), b, sizeof(b), 114);
+  check("a chunked body comes back decoded, with a length",
+    has(b, n, "200 OK") && has(b, n, "content-length: 11") && has(b, n, "\r\n\r\nhello world"), b, n);
 
-  n = one(TEXT("GET /health HTTP/1.0\r\nHost: x\r\n\r\n"), b, sizeof(b), 0);
-  check("HTTP/1.0 is refused", has(b, n, "400 Bad Request"), b, n);
+  n = one(TEXT("GET /echo HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: CHUNKED\r\n\r\n"
+    "5 ;a=b; q = \"x\\\"y\"\r\nhello\r\n000;z\r\nX-T: v\r\nY:\r\n\r\n"
+    "GET /health HTTP/1.1\r\nHost: x\r\n\r\n"), b, sizeof(b), 213);
+  check("extensions and a trailer are read and dropped, and the next request is served",
+    has(b, n, "content-length: 5") && has(b, n, "\r\n\r\nhello") && has(b, n, "{\"ok\":true}"), b, n);
+
+  {
+    const char* p[6] = { "GET /echo HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: chunked\r\n\r\n1",
+      "0;e=\"a\\", "\"b\"\r", "\n0123456789abcdef\r", "\n0\r\nX-", "Tr: v\r\n\r\n" };
+    int l[6];
+    for (int i = 0; i < 6; i++) l[i] = (int)strlen(p[i]);
+    n = ask(p, l, 6, b, sizeof(b), 119);
+    check("a chunked body cut inside its size, an extension, a CRLF and the trailer",
+      has(b, n, "content-length: 16") && has(b, n, "0123456789abcdef"), b, n);
+  }
+
+  // HTTP/1.0: no Host needed; answered as HTTP/1.1 (RFC 9112 2.5 lets a
+  // server), and closed unless it asked to keep alive
+  n = one(TEXT("GET /health HTTP/1.0\r\n\r\n"), b, sizeof(b), 0);
+  check("HTTP/1.0 is answered, then closed",
+    has(b, n, "HTTP/1.1 200 OK") && has(b, n, "connection: close") && has(b, n, "{\"ok\":true}"), b, n);
+
+  n = one(TEXT("GET /health HTTP/1.0\r\nConnection: keep-alive\r\n\r\nGET / HTTP/1.0\r\nHost: x\r\n\r\n"
+    "GET /nope HTTP/1.0\r\n\r\n"), b, sizeof(b), 0);
+  check("HTTP/1.0 with keep-alive stays open for the next, which closes",
+    has(b, n, "{\"ok\":true}") && has(b, n, "connection: keep-alive") && has(b, n, root_body)
+    && has(b, n, "connection: close") && !has(b, n, "404"), b, n);
 
   n = one(TEXT("GET /echo HTTP/1.1\r\nHost: x\r\ncontent-length: 5x\r\n\r\n"),
     b, sizeof(b), 0);
@@ -466,7 +493,31 @@ int main(int argc, char** argv) {
     { "a line without a colon", "GET /echo HTTP/1.1\r\nHost: x\r\nFoo\r\nContent-Length: 5\r\n\r\nhello" },
     { "a CR in the target", "GET /a\rb HTTP/1.1\r\nHost: x\r\n\r\n" },
     { "no Host", "GET /health HTTP/1.1\r\n\r\n" },
-    { "two Hosts", "GET /health HTTP/1.1\r\nHost: a\r\nHost: b\r\n\r\n" } };
+    { "two Hosts", "GET /health HTTP/1.1\r\nHost: a\r\nHost: b\r\n\r\n" },
+    { "CL.TE: a length, then a chunked coding",
+      "GET /echo HTTP/1.1\r\nHost: x\r\nContent-Length: 6\r\nTransfer-Encoding: chunked\r\n\r\n0\r\n\r\nG" },
+    { "TE.CL: a chunked coding, then a length",
+      "GET /echo HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: chunked\r\nContent-Length: 3\r\n\r\n8\r\nSMUGGLED\r\n0\r\n\r\n" },
+    { "TE.TE: chunked with whitespace after it",
+      "GET /echo HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: chunked \r\n\r\n0\r\n\r\n" },
+    { "TE.TE: xchunked", "GET /echo HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: xchunked\r\n\r\n0\r\n\r\n" },
+    { "TE.TE: chunked, identity",
+      "GET /echo HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: chunked, identity\r\n\r\n0\r\n\r\n" },
+    { "TE.TE: two Transfer-Encodings",
+      "GET /echo HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: chunked\r\nTransfer-Encoding: identity\r\n\r\n0\r\n\r\n" },
+    { "a Transfer-Encoding in HTTP/1.0", "GET /echo HTTP/1.0\r\nTransfer-Encoding: chunked\r\n\r\n0\r\n\r\n" },
+    { "a bare LF after a chunk size",
+      "GET /echo HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: chunked\r\n\r\n5\nhello\r\n0\r\n\r\n" },
+    { "a chunk longer than its size",
+      "GET /echo HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: chunked\r\n\r\n3\r\nhello\r\n0\r\n\r\n" },
+    { "a chunk size past the body cap",
+      "GET /echo HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: chunked\r\n\r\n100001\r\n" },
+    { "a chunk size that would wrap",
+      "GET /echo HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: chunked\r\n\r\n1000000000000005\r\nhello\r\n0\r\n\r\n" },
+    { "a folded trailer line",
+      "GET /echo HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: chunked\r\n\r\n0\r\nX: a\r\n b\r\n\r\n" },
+    { "two Hosts in HTTP/1.0", "GET /health HTTP/1.0\r\nHost: a\r\nHost: a\r\n\r\n" },
+    { "a version that is neither 1.1 nor 1.0", "GET /health HTTP/1.2\r\nHost: x\r\n\r\n" } };
   for (int i = 0; i < (int)(sizeof(smuggled) / sizeof(smuggled[0])); i++) {
     char what[96];
     snprintf(what, sizeof(what), "%s is refused", smuggled[i][0]);
