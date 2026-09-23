@@ -305,13 +305,25 @@ def allf(host: Bytes(), fs: List<&2, Wr.Field>, +framed: Bool, +body: Bytes()) -
 def rl.ser(meth: Bytes(), target: Bytes()) -> Bytes():
   Bytes.append(meth, Bytes.append(" ", Bytes.append(target, " HTTP/1.1")))
 
-# the bytes that go upstream: the request line rebuilt, a field a line,
-# the blank line, the body
+# the field lines, built onto the end of acc: each piece joins the end
+# of what is built so far, which no one else holds, so the buffer grows
+# in place (acc, then fls.ser's bytes)
+def fls.put(fs: List<&2, Wr.Field>, acc: Bytes()) -> Bytes():
+  match fs:
+    case Nil{}:
+      acc
+    case Con{f, t}:
+      match f:
+        case Wr.Field{n, v}:
+          fls.put(t, Bytes.append(Bytes.append(Bytes.append(Bytes.append(acc, n), ": "), v), "\r\n"))
+
+# the bytes that go upstream, one buffer built front to back: the
+# request line rebuilt, a field a line, the blank line, the body
 def ser(m: Msg) -> Bytes():
   match m:
     case Msg{meth, target, host, fs, +body, +framed}:
-      Bytes.append(rl.ser(meth, target),
-        Bytes.append("\r\n", Bytes.append(fls.ser(allf(host, fs, framed, body)), Bytes.append("\r\n", body))))
+      Bytes.append(Bytes.append(fls.put(allf(host, fs, framed, body), Bytes.append(Bytes.append(Bytes.append(
+        Bytes.append(meth, " "), target), " HTTP/1.1"), "\r\n")), "\r\n"), body)
 
 # What the upstream's framing needs of a request to read back exactly
 # it (LAWS.bend's no_smuggle), checked before it goes: a method of token
@@ -744,9 +756,8 @@ def sl.ser(code: Bytes(), why: Bytes()) -> Bytes():
 def rser(r: Rsp, +conn: Bytes()) -> Bytes():
   match r:
     case Rsp{code, why, fs, clen, +body, +bodyless}:
-      Bytes.append(sl.ser(code, why),
-        Bytes.append("\r\n", Bytes.append(fls.ser(rall(fs, clen, conn)),
-          Bytes.append("\r\n", Bool.pick(Bytes(), bodyless, "", body)))))
+      Bytes.append(Bytes.append(fls.put(rall(fs, clen, conn), Bytes.append(Bytes.append(Bytes.append(
+        Bytes.append("HTTP/1.1 ", code), " "), why), "\r\n")), "\r\n"), Bool.pick(Bytes(), bodyless, "", body))
 
 # the Connection a response goes back with: close when the connection
 # ends after it; keep-alive to an HTTP/1.0 client that stays

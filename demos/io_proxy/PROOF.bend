@@ -4483,7 +4483,75 @@ def SERl(m: X.Msg) -> List<&2, U32>:
       List.append(&2, U32, RLl(meth, target),
         Con{13, Con{10, List.append(&2, U32, FLSl(X.allf(host, fs, framed, body)), Con{13, Con{10, Bytes.to_list(body)}})}})
 
-def ser.list(m: X.Msg) -> {Bytes.to_list(X.ser(m)) == SERl(m) : List<&2, U32>}:
+# One buffer, built front to back
+# -------------------------------
+#
+# core.bend builds a request (and a response) in one buffer, each piece
+# joined at its end; the bytes are those of the pieces joined as the
+# laws read them (ser.old, rser.old), by the associativity of append.
+
+def bapp.nil(a: Bytes()) -> {Bytes.append(a, "") == a : Bytes()}:
+  match a:
+    case SNil{}:
+      {==}
+    case SCon{h, t}:
+      %bapp.nil(t) : {SCon{h, Bytes.append(t, "")} == SCon{h, _} : Bytes()}
+      {==}
+
+def bapp.assoc(a: Bytes(), -b: Bytes(), -c: Bytes()) ->
+  {Bytes.append(Bytes.append(a, b), c) == Bytes.append(a, Bytes.append(b, c)) : Bytes()}:
+  match a:
+    case SNil{}:
+      {==}
+    case SCon{h, t}:
+      %bapp.assoc(t, b, c) : {SCon{h, Bytes.append(Bytes.append(t, b), c)} == SCon{h, _} : Bytes()}
+      {==}
+
+def put.line(+acc: Bytes(), +n: Bytes(), +v: Bytes(), +tt: Bytes()) ->
+  {Bytes.append(Bytes.append(Bytes.append(Bytes.append(Bytes.append(acc, n), ": "), v), "\r\n"), tt) == Bytes.append(acc, Bytes.append(Bytes.append(n, Bytes.append(": ", v)), Bytes.append("\r\n", tt))) : Bytes()}:
+  Equal.trans(Bytes(), Bytes.append(Bytes.append(Bytes.append(Bytes.append(Bytes.append(acc, n), ": "), v), "\r\n"), tt), Bytes.append(acc, Bytes.append(n, Bytes.append(": ", Bytes.append(v, Bytes.append("\r\n", tt))))), Bytes.append(acc, Bytes.append(Bytes.append(n, Bytes.append(": ", v)), Bytes.append("\r\n", tt))), Equal.trans(Bytes(), Bytes.append(Bytes.append(Bytes.append(Bytes.append(Bytes.append(acc, n), ": "), v), "\r\n"), tt), Bytes.append(Bytes.append(Bytes.append(Bytes.append(acc, n), ": "), v), Bytes.append("\r\n", tt)), Bytes.append(acc, Bytes.append(n, Bytes.append(": ", Bytes.append(v, Bytes.append("\r\n", tt))))), bapp.assoc(Bytes.append(Bytes.append(Bytes.append(acc, n), ": "), v), "\r\n", tt), Equal.trans(Bytes(), Bytes.append(Bytes.append(Bytes.append(Bytes.append(acc, n), ": "), v), Bytes.append("\r\n", tt)), Bytes.append(Bytes.append(Bytes.append(acc, n), ": "), Bytes.append(v, Bytes.append("\r\n", tt))), Bytes.append(acc, Bytes.append(n, Bytes.append(": ", Bytes.append(v, Bytes.append("\r\n", tt))))), bapp.assoc(Bytes.append(Bytes.append(acc, n), ": "), v, Bytes.append("\r\n", tt)), Equal.trans(Bytes(), Bytes.append(Bytes.append(Bytes.append(acc, n), ": "), Bytes.append(v, Bytes.append("\r\n", tt))), Bytes.append(Bytes.append(acc, n), Bytes.append(": ", Bytes.append(v, Bytes.append("\r\n", tt)))), Bytes.append(acc, Bytes.append(n, Bytes.append(": ", Bytes.append(v, Bytes.append("\r\n", tt))))), bapp.assoc(Bytes.append(acc, n), ": ", Bytes.append(v, Bytes.append("\r\n", tt))), bapp.assoc(acc, n, Bytes.append(": ", Bytes.append(v, Bytes.append("\r\n", tt))))))), Equal.sym(Bytes(), Bytes.append(acc, Bytes.append(Bytes.append(n, Bytes.append(": ", v)), Bytes.append("\r\n", tt))), Bytes.append(acc, Bytes.append(n, Bytes.append(": ", Bytes.append(v, Bytes.append("\r\n", tt))))), Equal.cong(Bytes(), Bytes(), x => Bytes.append(acc, x), Bytes.append(Bytes.append(n, Bytes.append(": ", v)), Bytes.append("\r\n", tt)), Bytes.append(n, Bytes.append(": ", Bytes.append(v, Bytes.append("\r\n", tt)))), Equal.trans(Bytes(), Bytes.append(Bytes.append(n, Bytes.append(": ", v)), Bytes.append("\r\n", tt)), Bytes.append(n, Bytes.append(Bytes.append(": ", v), Bytes.append("\r\n", tt))), Bytes.append(n, Bytes.append(": ", Bytes.append(v, Bytes.append("\r\n", tt)))), bapp.assoc(n, Bytes.append(": ", v), Bytes.append("\r\n", tt)), Equal.cong(Bytes(), Bytes(), x => Bytes.append(n, x), Bytes.append(Bytes.append(": ", v), Bytes.append("\r\n", tt)), Bytes.append(": ", Bytes.append(v, Bytes.append("\r\n", tt))), bapp.assoc(": ", v, Bytes.append("\r\n", tt)))))))
+
+def fls.put.is(fs: List<&2, Wr.Field>, +acc: Bytes()) ->
+  {X.fls.put(fs, acc) == Bytes.append(acc, X.fls.ser(fs)) : Bytes()}:
+  match fs:
+    case Nil{}:
+      Equal.sym(Bytes(), Bytes.append(acc, ""), acc, bapp.nil(acc))
+    case Con{f, +t}:
+      match f:
+        case Wr.Field{+n, +v}:
+          +a4 = Bytes.append(Bytes.append(Bytes.append(Bytes.append(acc, n), ": "), v), "\r\n")
+          Equal.trans(Bytes(), X.fls.put(t, a4), Bytes.append(a4, X.fls.ser(t)),
+            Bytes.append(acc, X.fls.ser(Con{Wr.Field{n, v}, t})),
+            fls.put.is(t, a4), put.line(acc, n, v, X.fls.ser(t)))
+
+def head4(+fs: List<&2, Wr.Field>, +a: Bytes(), +b: Bytes(), +c: Bytes(), +d: Bytes(), +bb: Bytes()) ->
+  {Bytes.append(Bytes.append(X.fls.put(fs, Bytes.append(Bytes.append(Bytes.append(Bytes.append(a, b), c), d), "\r\n")), "\r\n"), bb) == Bytes.append(Bytes.append(a, Bytes.append(b, Bytes.append(c, d))), Bytes.append("\r\n", Bytes.append(X.fls.ser(fs), Bytes.append("\r\n", bb)))) : Bytes()}:
+  Equal.trans(Bytes(), Bytes.append(Bytes.append(X.fls.put(fs, Bytes.append(Bytes.append(Bytes.append(Bytes.append(a, b), c), d), "\r\n")), "\r\n"), bb), Bytes.append(a, Bytes.append(b, Bytes.append(c, Bytes.append(d, Bytes.append("\r\n", Bytes.append(X.fls.ser(fs), Bytes.append("\r\n", bb))))))), Bytes.append(Bytes.append(a, Bytes.append(b, Bytes.append(c, d))), Bytes.append("\r\n", Bytes.append(X.fls.ser(fs), Bytes.append("\r\n", bb)))), Equal.trans(Bytes(), Bytes.append(Bytes.append(X.fls.put(fs, Bytes.append(Bytes.append(Bytes.append(Bytes.append(a, b), c), d), "\r\n")), "\r\n"), bb), Bytes.append(Bytes.append(Bytes.append(Bytes.append(Bytes.append(Bytes.append(Bytes.append(a, b), c), d), "\r\n"), X.fls.ser(fs)), "\r\n"), bb), Bytes.append(a, Bytes.append(b, Bytes.append(c, Bytes.append(d, Bytes.append("\r\n", Bytes.append(X.fls.ser(fs), Bytes.append("\r\n", bb))))))), Equal.cong(Bytes(), Bytes(), x => Bytes.append(Bytes.append(x, "\r\n"), bb), X.fls.put(fs, Bytes.append(Bytes.append(Bytes.append(Bytes.append(a, b), c), d), "\r\n")), Bytes.append(Bytes.append(Bytes.append(Bytes.append(Bytes.append(a, b), c), d), "\r\n"), X.fls.ser(fs)), fls.put.is(fs, Bytes.append(Bytes.append(Bytes.append(Bytes.append(a, b), c), d), "\r\n"))), Equal.trans(Bytes(), Bytes.append(Bytes.append(Bytes.append(Bytes.append(Bytes.append(Bytes.append(Bytes.append(a, b), c), d), "\r\n"), X.fls.ser(fs)), "\r\n"), bb), Bytes.append(Bytes.append(Bytes.append(Bytes.append(Bytes.append(Bytes.append(a, b), c), d), "\r\n"), X.fls.ser(fs)), Bytes.append("\r\n", bb)), Bytes.append(a, Bytes.append(b, Bytes.append(c, Bytes.append(d, Bytes.append("\r\n", Bytes.append(X.fls.ser(fs), Bytes.append("\r\n", bb))))))), bapp.assoc(Bytes.append(Bytes.append(Bytes.append(Bytes.append(Bytes.append(a, b), c), d), "\r\n"), X.fls.ser(fs)), "\r\n", bb), Equal.trans(Bytes(), Bytes.append(Bytes.append(Bytes.append(Bytes.append(Bytes.append(Bytes.append(a, b), c), d), "\r\n"), X.fls.ser(fs)), Bytes.append("\r\n", bb)), Bytes.append(Bytes.append(Bytes.append(Bytes.append(Bytes.append(a, b), c), d), "\r\n"), Bytes.append(X.fls.ser(fs), Bytes.append("\r\n", bb))), Bytes.append(a, Bytes.append(b, Bytes.append(c, Bytes.append(d, Bytes.append("\r\n", Bytes.append(X.fls.ser(fs), Bytes.append("\r\n", bb))))))), bapp.assoc(Bytes.append(Bytes.append(Bytes.append(Bytes.append(a, b), c), d), "\r\n"), X.fls.ser(fs), Bytes.append("\r\n", bb)), Equal.trans(Bytes(), Bytes.append(Bytes.append(Bytes.append(Bytes.append(Bytes.append(a, b), c), d), "\r\n"), Bytes.append(X.fls.ser(fs), Bytes.append("\r\n", bb))), Bytes.append(Bytes.append(Bytes.append(Bytes.append(a, b), c), d), Bytes.append("\r\n", Bytes.append(X.fls.ser(fs), Bytes.append("\r\n", bb)))), Bytes.append(a, Bytes.append(b, Bytes.append(c, Bytes.append(d, Bytes.append("\r\n", Bytes.append(X.fls.ser(fs), Bytes.append("\r\n", bb))))))), bapp.assoc(Bytes.append(Bytes.append(Bytes.append(a, b), c), d), "\r\n", Bytes.append(X.fls.ser(fs), Bytes.append("\r\n", bb))), Equal.trans(Bytes(), Bytes.append(Bytes.append(Bytes.append(Bytes.append(a, b), c), d), Bytes.append("\r\n", Bytes.append(X.fls.ser(fs), Bytes.append("\r\n", bb)))), Bytes.append(Bytes.append(Bytes.append(a, b), c), Bytes.append(d, Bytes.append("\r\n", Bytes.append(X.fls.ser(fs), Bytes.append("\r\n", bb))))), Bytes.append(a, Bytes.append(b, Bytes.append(c, Bytes.append(d, Bytes.append("\r\n", Bytes.append(X.fls.ser(fs), Bytes.append("\r\n", bb))))))), bapp.assoc(Bytes.append(Bytes.append(a, b), c), d, Bytes.append("\r\n", Bytes.append(X.fls.ser(fs), Bytes.append("\r\n", bb)))), Equal.trans(Bytes(), Bytes.append(Bytes.append(Bytes.append(a, b), c), Bytes.append(d, Bytes.append("\r\n", Bytes.append(X.fls.ser(fs), Bytes.append("\r\n", bb))))), Bytes.append(Bytes.append(a, b), Bytes.append(c, Bytes.append(d, Bytes.append("\r\n", Bytes.append(X.fls.ser(fs), Bytes.append("\r\n", bb)))))), Bytes.append(a, Bytes.append(b, Bytes.append(c, Bytes.append(d, Bytes.append("\r\n", Bytes.append(X.fls.ser(fs), Bytes.append("\r\n", bb))))))), bapp.assoc(Bytes.append(a, b), c, Bytes.append(d, Bytes.append("\r\n", Bytes.append(X.fls.ser(fs), Bytes.append("\r\n", bb))))), bapp.assoc(a, b, Bytes.append(c, Bytes.append(d, Bytes.append("\r\n", Bytes.append(X.fls.ser(fs), Bytes.append("\r\n", bb)))))))))))), Equal.sym(Bytes(), Bytes.append(Bytes.append(a, Bytes.append(b, Bytes.append(c, d))), Bytes.append("\r\n", Bytes.append(X.fls.ser(fs), Bytes.append("\r\n", bb)))), Bytes.append(a, Bytes.append(b, Bytes.append(c, Bytes.append(d, Bytes.append("\r\n", Bytes.append(X.fls.ser(fs), Bytes.append("\r\n", bb))))))), Equal.trans(Bytes(), Bytes.append(Bytes.append(a, Bytes.append(b, Bytes.append(c, d))), Bytes.append("\r\n", Bytes.append(X.fls.ser(fs), Bytes.append("\r\n", bb)))), Bytes.append(a, Bytes.append(Bytes.append(b, Bytes.append(c, d)), Bytes.append("\r\n", Bytes.append(X.fls.ser(fs), Bytes.append("\r\n", bb))))), Bytes.append(a, Bytes.append(b, Bytes.append(c, Bytes.append(d, Bytes.append("\r\n", Bytes.append(X.fls.ser(fs), Bytes.append("\r\n", bb))))))), bapp.assoc(a, Bytes.append(b, Bytes.append(c, d)), Bytes.append("\r\n", Bytes.append(X.fls.ser(fs), Bytes.append("\r\n", bb)))), Equal.cong(Bytes(), Bytes(), x => Bytes.append(a, x), Bytes.append(Bytes.append(b, Bytes.append(c, d)), Bytes.append("\r\n", Bytes.append(X.fls.ser(fs), Bytes.append("\r\n", bb)))), Bytes.append(b, Bytes.append(c, Bytes.append(d, Bytes.append("\r\n", Bytes.append(X.fls.ser(fs), Bytes.append("\r\n", bb)))))), Equal.trans(Bytes(), Bytes.append(Bytes.append(b, Bytes.append(c, d)), Bytes.append("\r\n", Bytes.append(X.fls.ser(fs), Bytes.append("\r\n", bb)))), Bytes.append(b, Bytes.append(Bytes.append(c, d), Bytes.append("\r\n", Bytes.append(X.fls.ser(fs), Bytes.append("\r\n", bb))))), Bytes.append(b, Bytes.append(c, Bytes.append(d, Bytes.append("\r\n", Bytes.append(X.fls.ser(fs), Bytes.append("\r\n", bb)))))), bapp.assoc(b, Bytes.append(c, d), Bytes.append("\r\n", Bytes.append(X.fls.ser(fs), Bytes.append("\r\n", bb)))), Equal.cong(Bytes(), Bytes(), x => Bytes.append(b, x), Bytes.append(Bytes.append(c, d), Bytes.append("\r\n", Bytes.append(X.fls.ser(fs), Bytes.append("\r\n", bb)))), Bytes.append(c, Bytes.append(d, Bytes.append("\r\n", Bytes.append(X.fls.ser(fs), Bytes.append("\r\n", bb))))), bapp.assoc(c, d, Bytes.append("\r\n", Bytes.append(X.fls.ser(fs), Bytes.append("\r\n", bb))))))))))
+
+def ser.old(m: X.Msg) -> Bytes():
+  match m:
+    case X.Msg{meth, target, host, fs, +body, +framed}:
+      Bytes.append(X.rl.ser(meth, target),
+        Bytes.append("\r\n", Bytes.append(X.fls.ser(X.allf(host, fs, framed, body)), Bytes.append("\r\n", body))))
+
+def ser.is(m: X.Msg) -> {X.ser(m) == ser.old(m) : Bytes()}:
+  match m:
+    case X.Msg{+meth, +target, +host, +fs, +body, +framed}:
+      head4(X.allf(host, fs, framed, body), meth, " ", target, " HTTP/1.1", body)
+
+def rser.old(r: X.Rsp, +conn: Bytes()) -> Bytes():
+  match r:
+    case X.Rsp{code, why, fs, clen, +body, +bodyless}:
+      Bytes.append(X.sl.ser(code, why),
+        Bytes.append("\r\n", Bytes.append(X.fls.ser(X.rall(fs, clen, conn)),
+          Bytes.append("\r\n", Bool.pick(Bytes(), bodyless, "", body)))))
+
+def rser.is(r: X.Rsp, +conn: Bytes()) -> {X.rser(r, conn) == rser.old(r, conn) : Bytes()}:
+  match r:
+    case X.Rsp{+code, +why, +fs, +clen, +body, +bl}:
+      head4(X.rall(fs, clen, conn), "HTTP/1.1 ", code, " ", why, Bool.pick(Bytes(), bl, "", body))
+
+def ser.old.list(m: X.Msg) -> {Bytes.to_list(ser.old(m)) == SERl(m) : List<&2, U32>}:
   match m:
     case X.Msg{+meth, +target, +host, +fs, +body, +framed}:
       +fls = X.fls.ser(X.allf(host, fs, framed, body))
@@ -4505,6 +4573,10 @@ def ser.list(m: X.Msg) -> {Bytes.to_list(X.ser(m)) == SERl(m) : List<&2, U32>}:
         {List.append(&2, U32, RLl(meth, target), Con{13, Con{10, List.append(&2, U32, _, Con{13, Con{10, Bytes.to_list(body)}})}}) ==
           SERl(X.Msg{meth, target, host, fs, body, framed}) : List<&2, U32>}
       {==}
+
+def ser.list(+m: X.Msg) -> {Bytes.to_list(X.ser(m)) == SERl(m) : List<&2, U32>}:
+  Equal.trans(List<&2, U32>, Bytes.to_list(X.ser(m)), Bytes.to_list(ser.old(m)), SERl(m),
+    Equal.cong(Bytes(), List<&2, U32>, x => Bytes.to_list(x), X.ser(m), ser.old(m), ser.is(m)), ser.old.list(m))
 
 # The lines read back
 # -------------------
@@ -6303,12 +6375,12 @@ def RSERl(+cd: Bytes(), +why: Bytes(), fs: List<&2, Wr.Field>, clen: Bytes(), +c
   List.append(&2, U32, SLl(cd, why),
     Con{13, Con{10, List.append(&2, U32, FLSl(X.rall(fs, clen, conn)), Con{13, Con{10, Bytes.to_list(b)}})}})
 
-def rser.list(+cd: Bytes(), +why: Bytes(), +fs: List<&2, Wr.Field>, +clen: Bytes(), +conn: Bytes(), +body: Bytes(), +bl: Bool) ->
-  {Bytes.to_list(X.rser(X.Rsp{cd, why, fs, clen, body, bl}, conn)) ==
+def rser.old.list(+cd: Bytes(), +why: Bytes(), +fs: List<&2, Wr.Field>, +clen: Bytes(), +conn: Bytes(), +body: Bytes(), +bl: Bool) ->
+  {Bytes.to_list(rser.old(X.Rsp{cd, why, fs, clen, body, bl}, conn)) ==
     RSERl(cd, why, fs, clen, conn, Bool.pick(Bytes(), bl, "", body)) : List<&2, U32>}:
   +f = X.fls.ser(X.rall(fs, clen, conn))
   +b = Bool.pick(Bytes(), bl, "", body)
-  Equal.trans(List<&2, U32>, Bytes.to_list(X.rser(X.Rsp{cd, why, fs, clen, body, bl}, conn)),
+  Equal.trans(List<&2, U32>, Bytes.to_list(rser.old(X.Rsp{cd, why, fs, clen, body, bl}, conn)),
     List.append(&2, U32, Bytes.to_list(X.sl.ser(cd, why)), Bytes.to_list(Bytes.append("\r\n", Bytes.append(f, Bytes.append("\r\n", b))))),
     RSERl(cd, why, fs, clen, conn, b),
     tl.app(X.sl.ser(cd, why), Bytes.append("\r\n", Bytes.append(f, Bytes.append("\r\n", b)))),
@@ -6328,6 +6400,16 @@ def rser.list(+cd: Bytes(), +why: Bytes(), +fs: List<&2, Wr.Field>, +clen: Bytes
           tl.app(f, Bytes.append("\r\n", b)),
           Equal.cong(List<&2, U32>, List<&2, U32>, l => List.append(&2, U32, l, Con{13, Con{10, Bytes.to_list(b)}}),
             Bytes.to_list(f), FLSl(X.rall(fs, clen, conn)), fls.list(X.rall(fs, clen, conn)))))))
+
+def rser.list(+cd: Bytes(), +why: Bytes(), +fs: List<&2, Wr.Field>, +clen: Bytes(), +conn: Bytes(), +body: Bytes(), +bl: Bool) ->
+  {Bytes.to_list(X.rser(X.Rsp{cd, why, fs, clen, body, bl}, conn)) ==
+    RSERl(cd, why, fs, clen, conn, Bool.pick(Bytes(), bl, "", body)) : List<&2, U32>}:
+  Equal.trans(List<&2, U32>, Bytes.to_list(X.rser(X.Rsp{cd, why, fs, clen, body, bl}, conn)),
+    Bytes.to_list(rser.old(X.Rsp{cd, why, fs, clen, body, bl}, conn)),
+    RSERl(cd, why, fs, clen, conn, Bool.pick(Bytes(), bl, "", body)),
+    Equal.cong(Bytes(), List<&2, U32>, x => Bytes.to_list(x), X.rser(X.Rsp{cd, why, fs, clen, body, bl}, conn),
+      rser.old(X.Rsp{cd, why, fs, clen, body, bl}, conn), rser.is(X.Rsp{cd, why, fs, clen, body, bl}, conn)),
+    rser.old.list(cd, why, fs, clen, conn, body, bl))
 
 def T5(a: Bool, b: Bool, c: Bool, d: Bool, e: Bool) -> Type:
   {a == True{} : Bool} & {b == True{} : Bool} & {c == True{} : Bool} & {d == True{} : Bool} & {e == True{} : Bool}
