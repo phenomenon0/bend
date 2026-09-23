@@ -2663,3 +2663,2352 @@ def Laws.fread_model(f, n):
         1n+String.length.go(String.take(t, p), 0n), Bytes.len.shift(String.take(t, p), 0n)) :
         {Nat.is_le(_, 1n+p) == True{} : Bool}
       Laws.fread_model(t, p)
+
+# Bytes, bridged
+# --------------
+#
+# The reader classes and lowercases every U32 as the reference does,
+# not only the 256 bytes cls_is_spec runs: a U32 is its 32 bits, and one
+# with a bit set past the low eight compares GT with every byte, so both
+# sides call it a visible byte and leave its case alone -- the reader by
+# adding a zero (add0). The low eight bits are 256 closed cases.
+# Generated; every leaf is a computation.
+
+# a word plus zero is the word
+def add0(n: Nat, w: Word(n)) -> {Word.adc(n, w, Word.zero(n), False{}, False{}) == w : Word(n)}:
+  match n:
+    case 0n:
+      match w:
+        case WNil{}:
+          {==}
+    case 1n+p:
+      match w:
+        case WCon{b, t}:
+          match b:
+            case True{}:
+              Equal.cong(Word(p), Word(1n+p), x => WCon{True{}, x},
+                Word.adc(p, t, Word.zero(p), False{}, False{}), t, add0(p, t))
+            case False{}:
+              Equal.cong(Word(p), Word(1n+p), x => WCon{False{}, x},
+                Word.adc(p, t, Word.zero(p), False{}, False{}), t, add0(p, t))
+
+# lowercasing a U32 past the bytes adds zero to it
+def low.hi(w: Word(32n)) ->
+  {Chr{U32{w}} == Chr{U32{Word.adc(32n, w, Word.zero(32n), False{}, False{})}} : Char}:
+  Equal.sym(Char, Chr{U32{Word.adc(32n, w, Word.zero(32n), False{}, False{})}}, Chr{U32{w}},
+    Equal.cong(Word(32n), Char, x => Chr{U32{x}},
+      Word.adc(32n, w, Word.zero(32n), False{}, False{}), w, add0(32n, w)))
+
+def br.cls.lo(b7: Bool, b6: Bool, b5: Bool, b4: Bool, b3: Bool, b2: Bool, b1: Bool, b0: Bool) ->
+  {Spec.cls(U32{WCon{b0, WCon{b1, WCon{b2, WCon{b3, WCon{b4, WCon{b5, WCon{b6, WCon{b7,
+      WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+      WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+      WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+      WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+      WNil{}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}) == Eng.cls(U32{WCon{b0, WCon{b1, WCon{b2, WCon{b3,
+      WCon{b4, WCon{b5, WCon{b6, WCon{b7, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+      WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+      WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+      WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+      WCon{False{}, WCon{False{}, WNil{}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}) : Eng.Cls}:
+  match b7 b6 b5 b4 b3 b2 b1 b0:
+    case False{} False{} False{} False{} False{} False{} False{} False{}:
+      {==}
+    case False{} False{} False{} False{} False{} False{} False{} True{}:
+      {==}
+    case False{} False{} False{} False{} False{} False{} True{} False{}:
+      {==}
+    case False{} False{} False{} False{} False{} False{} True{} True{}:
+      {==}
+    case False{} False{} False{} False{} False{} True{} False{} False{}:
+      {==}
+    case False{} False{} False{} False{} False{} True{} False{} True{}:
+      {==}
+    case False{} False{} False{} False{} False{} True{} True{} False{}:
+      {==}
+    case False{} False{} False{} False{} False{} True{} True{} True{}:
+      {==}
+    case False{} False{} False{} False{} True{} False{} False{} False{}:
+      {==}
+    case False{} False{} False{} False{} True{} False{} False{} True{}:
+      {==}
+    case False{} False{} False{} False{} True{} False{} True{} False{}:
+      {==}
+    case False{} False{} False{} False{} True{} False{} True{} True{}:
+      {==}
+    case False{} False{} False{} False{} True{} True{} False{} False{}:
+      {==}
+    case False{} False{} False{} False{} True{} True{} False{} True{}:
+      {==}
+    case False{} False{} False{} False{} True{} True{} True{} False{}:
+      {==}
+    case False{} False{} False{} False{} True{} True{} True{} True{}:
+      {==}
+    case False{} False{} False{} True{} False{} False{} False{} False{}:
+      {==}
+    case False{} False{} False{} True{} False{} False{} False{} True{}:
+      {==}
+    case False{} False{} False{} True{} False{} False{} True{} False{}:
+      {==}
+    case False{} False{} False{} True{} False{} False{} True{} True{}:
+      {==}
+    case False{} False{} False{} True{} False{} True{} False{} False{}:
+      {==}
+    case False{} False{} False{} True{} False{} True{} False{} True{}:
+      {==}
+    case False{} False{} False{} True{} False{} True{} True{} False{}:
+      {==}
+    case False{} False{} False{} True{} False{} True{} True{} True{}:
+      {==}
+    case False{} False{} False{} True{} True{} False{} False{} False{}:
+      {==}
+    case False{} False{} False{} True{} True{} False{} False{} True{}:
+      {==}
+    case False{} False{} False{} True{} True{} False{} True{} False{}:
+      {==}
+    case False{} False{} False{} True{} True{} False{} True{} True{}:
+      {==}
+    case False{} False{} False{} True{} True{} True{} False{} False{}:
+      {==}
+    case False{} False{} False{} True{} True{} True{} False{} True{}:
+      {==}
+    case False{} False{} False{} True{} True{} True{} True{} False{}:
+      {==}
+    case False{} False{} False{} True{} True{} True{} True{} True{}:
+      {==}
+    case False{} False{} True{} False{} False{} False{} False{} False{}:
+      {==}
+    case False{} False{} True{} False{} False{} False{} False{} True{}:
+      {==}
+    case False{} False{} True{} False{} False{} False{} True{} False{}:
+      {==}
+    case False{} False{} True{} False{} False{} False{} True{} True{}:
+      {==}
+    case False{} False{} True{} False{} False{} True{} False{} False{}:
+      {==}
+    case False{} False{} True{} False{} False{} True{} False{} True{}:
+      {==}
+    case False{} False{} True{} False{} False{} True{} True{} False{}:
+      {==}
+    case False{} False{} True{} False{} False{} True{} True{} True{}:
+      {==}
+    case False{} False{} True{} False{} True{} False{} False{} False{}:
+      {==}
+    case False{} False{} True{} False{} True{} False{} False{} True{}:
+      {==}
+    case False{} False{} True{} False{} True{} False{} True{} False{}:
+      {==}
+    case False{} False{} True{} False{} True{} False{} True{} True{}:
+      {==}
+    case False{} False{} True{} False{} True{} True{} False{} False{}:
+      {==}
+    case False{} False{} True{} False{} True{} True{} False{} True{}:
+      {==}
+    case False{} False{} True{} False{} True{} True{} True{} False{}:
+      {==}
+    case False{} False{} True{} False{} True{} True{} True{} True{}:
+      {==}
+    case False{} False{} True{} True{} False{} False{} False{} False{}:
+      {==}
+    case False{} False{} True{} True{} False{} False{} False{} True{}:
+      {==}
+    case False{} False{} True{} True{} False{} False{} True{} False{}:
+      {==}
+    case False{} False{} True{} True{} False{} False{} True{} True{}:
+      {==}
+    case False{} False{} True{} True{} False{} True{} False{} False{}:
+      {==}
+    case False{} False{} True{} True{} False{} True{} False{} True{}:
+      {==}
+    case False{} False{} True{} True{} False{} True{} True{} False{}:
+      {==}
+    case False{} False{} True{} True{} False{} True{} True{} True{}:
+      {==}
+    case False{} False{} True{} True{} True{} False{} False{} False{}:
+      {==}
+    case False{} False{} True{} True{} True{} False{} False{} True{}:
+      {==}
+    case False{} False{} True{} True{} True{} False{} True{} False{}:
+      {==}
+    case False{} False{} True{} True{} True{} False{} True{} True{}:
+      {==}
+    case False{} False{} True{} True{} True{} True{} False{} False{}:
+      {==}
+    case False{} False{} True{} True{} True{} True{} False{} True{}:
+      {==}
+    case False{} False{} True{} True{} True{} True{} True{} False{}:
+      {==}
+    case False{} False{} True{} True{} True{} True{} True{} True{}:
+      {==}
+    case False{} True{} False{} False{} False{} False{} False{} False{}:
+      {==}
+    case False{} True{} False{} False{} False{} False{} False{} True{}:
+      {==}
+    case False{} True{} False{} False{} False{} False{} True{} False{}:
+      {==}
+    case False{} True{} False{} False{} False{} False{} True{} True{}:
+      {==}
+    case False{} True{} False{} False{} False{} True{} False{} False{}:
+      {==}
+    case False{} True{} False{} False{} False{} True{} False{} True{}:
+      {==}
+    case False{} True{} False{} False{} False{} True{} True{} False{}:
+      {==}
+    case False{} True{} False{} False{} False{} True{} True{} True{}:
+      {==}
+    case False{} True{} False{} False{} True{} False{} False{} False{}:
+      {==}
+    case False{} True{} False{} False{} True{} False{} False{} True{}:
+      {==}
+    case False{} True{} False{} False{} True{} False{} True{} False{}:
+      {==}
+    case False{} True{} False{} False{} True{} False{} True{} True{}:
+      {==}
+    case False{} True{} False{} False{} True{} True{} False{} False{}:
+      {==}
+    case False{} True{} False{} False{} True{} True{} False{} True{}:
+      {==}
+    case False{} True{} False{} False{} True{} True{} True{} False{}:
+      {==}
+    case False{} True{} False{} False{} True{} True{} True{} True{}:
+      {==}
+    case False{} True{} False{} True{} False{} False{} False{} False{}:
+      {==}
+    case False{} True{} False{} True{} False{} False{} False{} True{}:
+      {==}
+    case False{} True{} False{} True{} False{} False{} True{} False{}:
+      {==}
+    case False{} True{} False{} True{} False{} False{} True{} True{}:
+      {==}
+    case False{} True{} False{} True{} False{} True{} False{} False{}:
+      {==}
+    case False{} True{} False{} True{} False{} True{} False{} True{}:
+      {==}
+    case False{} True{} False{} True{} False{} True{} True{} False{}:
+      {==}
+    case False{} True{} False{} True{} False{} True{} True{} True{}:
+      {==}
+    case False{} True{} False{} True{} True{} False{} False{} False{}:
+      {==}
+    case False{} True{} False{} True{} True{} False{} False{} True{}:
+      {==}
+    case False{} True{} False{} True{} True{} False{} True{} False{}:
+      {==}
+    case False{} True{} False{} True{} True{} False{} True{} True{}:
+      {==}
+    case False{} True{} False{} True{} True{} True{} False{} False{}:
+      {==}
+    case False{} True{} False{} True{} True{} True{} False{} True{}:
+      {==}
+    case False{} True{} False{} True{} True{} True{} True{} False{}:
+      {==}
+    case False{} True{} False{} True{} True{} True{} True{} True{}:
+      {==}
+    case False{} True{} True{} False{} False{} False{} False{} False{}:
+      {==}
+    case False{} True{} True{} False{} False{} False{} False{} True{}:
+      {==}
+    case False{} True{} True{} False{} False{} False{} True{} False{}:
+      {==}
+    case False{} True{} True{} False{} False{} False{} True{} True{}:
+      {==}
+    case False{} True{} True{} False{} False{} True{} False{} False{}:
+      {==}
+    case False{} True{} True{} False{} False{} True{} False{} True{}:
+      {==}
+    case False{} True{} True{} False{} False{} True{} True{} False{}:
+      {==}
+    case False{} True{} True{} False{} False{} True{} True{} True{}:
+      {==}
+    case False{} True{} True{} False{} True{} False{} False{} False{}:
+      {==}
+    case False{} True{} True{} False{} True{} False{} False{} True{}:
+      {==}
+    case False{} True{} True{} False{} True{} False{} True{} False{}:
+      {==}
+    case False{} True{} True{} False{} True{} False{} True{} True{}:
+      {==}
+    case False{} True{} True{} False{} True{} True{} False{} False{}:
+      {==}
+    case False{} True{} True{} False{} True{} True{} False{} True{}:
+      {==}
+    case False{} True{} True{} False{} True{} True{} True{} False{}:
+      {==}
+    case False{} True{} True{} False{} True{} True{} True{} True{}:
+      {==}
+    case False{} True{} True{} True{} False{} False{} False{} False{}:
+      {==}
+    case False{} True{} True{} True{} False{} False{} False{} True{}:
+      {==}
+    case False{} True{} True{} True{} False{} False{} True{} False{}:
+      {==}
+    case False{} True{} True{} True{} False{} False{} True{} True{}:
+      {==}
+    case False{} True{} True{} True{} False{} True{} False{} False{}:
+      {==}
+    case False{} True{} True{} True{} False{} True{} False{} True{}:
+      {==}
+    case False{} True{} True{} True{} False{} True{} True{} False{}:
+      {==}
+    case False{} True{} True{} True{} False{} True{} True{} True{}:
+      {==}
+    case False{} True{} True{} True{} True{} False{} False{} False{}:
+      {==}
+    case False{} True{} True{} True{} True{} False{} False{} True{}:
+      {==}
+    case False{} True{} True{} True{} True{} False{} True{} False{}:
+      {==}
+    case False{} True{} True{} True{} True{} False{} True{} True{}:
+      {==}
+    case False{} True{} True{} True{} True{} True{} False{} False{}:
+      {==}
+    case False{} True{} True{} True{} True{} True{} False{} True{}:
+      {==}
+    case False{} True{} True{} True{} True{} True{} True{} False{}:
+      {==}
+    case False{} True{} True{} True{} True{} True{} True{} True{}:
+      {==}
+    case True{} False{} False{} False{} False{} False{} False{} False{}:
+      {==}
+    case True{} False{} False{} False{} False{} False{} False{} True{}:
+      {==}
+    case True{} False{} False{} False{} False{} False{} True{} False{}:
+      {==}
+    case True{} False{} False{} False{} False{} False{} True{} True{}:
+      {==}
+    case True{} False{} False{} False{} False{} True{} False{} False{}:
+      {==}
+    case True{} False{} False{} False{} False{} True{} False{} True{}:
+      {==}
+    case True{} False{} False{} False{} False{} True{} True{} False{}:
+      {==}
+    case True{} False{} False{} False{} False{} True{} True{} True{}:
+      {==}
+    case True{} False{} False{} False{} True{} False{} False{} False{}:
+      {==}
+    case True{} False{} False{} False{} True{} False{} False{} True{}:
+      {==}
+    case True{} False{} False{} False{} True{} False{} True{} False{}:
+      {==}
+    case True{} False{} False{} False{} True{} False{} True{} True{}:
+      {==}
+    case True{} False{} False{} False{} True{} True{} False{} False{}:
+      {==}
+    case True{} False{} False{} False{} True{} True{} False{} True{}:
+      {==}
+    case True{} False{} False{} False{} True{} True{} True{} False{}:
+      {==}
+    case True{} False{} False{} False{} True{} True{} True{} True{}:
+      {==}
+    case True{} False{} False{} True{} False{} False{} False{} False{}:
+      {==}
+    case True{} False{} False{} True{} False{} False{} False{} True{}:
+      {==}
+    case True{} False{} False{} True{} False{} False{} True{} False{}:
+      {==}
+    case True{} False{} False{} True{} False{} False{} True{} True{}:
+      {==}
+    case True{} False{} False{} True{} False{} True{} False{} False{}:
+      {==}
+    case True{} False{} False{} True{} False{} True{} False{} True{}:
+      {==}
+    case True{} False{} False{} True{} False{} True{} True{} False{}:
+      {==}
+    case True{} False{} False{} True{} False{} True{} True{} True{}:
+      {==}
+    case True{} False{} False{} True{} True{} False{} False{} False{}:
+      {==}
+    case True{} False{} False{} True{} True{} False{} False{} True{}:
+      {==}
+    case True{} False{} False{} True{} True{} False{} True{} False{}:
+      {==}
+    case True{} False{} False{} True{} True{} False{} True{} True{}:
+      {==}
+    case True{} False{} False{} True{} True{} True{} False{} False{}:
+      {==}
+    case True{} False{} False{} True{} True{} True{} False{} True{}:
+      {==}
+    case True{} False{} False{} True{} True{} True{} True{} False{}:
+      {==}
+    case True{} False{} False{} True{} True{} True{} True{} True{}:
+      {==}
+    case True{} False{} True{} False{} False{} False{} False{} False{}:
+      {==}
+    case True{} False{} True{} False{} False{} False{} False{} True{}:
+      {==}
+    case True{} False{} True{} False{} False{} False{} True{} False{}:
+      {==}
+    case True{} False{} True{} False{} False{} False{} True{} True{}:
+      {==}
+    case True{} False{} True{} False{} False{} True{} False{} False{}:
+      {==}
+    case True{} False{} True{} False{} False{} True{} False{} True{}:
+      {==}
+    case True{} False{} True{} False{} False{} True{} True{} False{}:
+      {==}
+    case True{} False{} True{} False{} False{} True{} True{} True{}:
+      {==}
+    case True{} False{} True{} False{} True{} False{} False{} False{}:
+      {==}
+    case True{} False{} True{} False{} True{} False{} False{} True{}:
+      {==}
+    case True{} False{} True{} False{} True{} False{} True{} False{}:
+      {==}
+    case True{} False{} True{} False{} True{} False{} True{} True{}:
+      {==}
+    case True{} False{} True{} False{} True{} True{} False{} False{}:
+      {==}
+    case True{} False{} True{} False{} True{} True{} False{} True{}:
+      {==}
+    case True{} False{} True{} False{} True{} True{} True{} False{}:
+      {==}
+    case True{} False{} True{} False{} True{} True{} True{} True{}:
+      {==}
+    case True{} False{} True{} True{} False{} False{} False{} False{}:
+      {==}
+    case True{} False{} True{} True{} False{} False{} False{} True{}:
+      {==}
+    case True{} False{} True{} True{} False{} False{} True{} False{}:
+      {==}
+    case True{} False{} True{} True{} False{} False{} True{} True{}:
+      {==}
+    case True{} False{} True{} True{} False{} True{} False{} False{}:
+      {==}
+    case True{} False{} True{} True{} False{} True{} False{} True{}:
+      {==}
+    case True{} False{} True{} True{} False{} True{} True{} False{}:
+      {==}
+    case True{} False{} True{} True{} False{} True{} True{} True{}:
+      {==}
+    case True{} False{} True{} True{} True{} False{} False{} False{}:
+      {==}
+    case True{} False{} True{} True{} True{} False{} False{} True{}:
+      {==}
+    case True{} False{} True{} True{} True{} False{} True{} False{}:
+      {==}
+    case True{} False{} True{} True{} True{} False{} True{} True{}:
+      {==}
+    case True{} False{} True{} True{} True{} True{} False{} False{}:
+      {==}
+    case True{} False{} True{} True{} True{} True{} False{} True{}:
+      {==}
+    case True{} False{} True{} True{} True{} True{} True{} False{}:
+      {==}
+    case True{} False{} True{} True{} True{} True{} True{} True{}:
+      {==}
+    case True{} True{} False{} False{} False{} False{} False{} False{}:
+      {==}
+    case True{} True{} False{} False{} False{} False{} False{} True{}:
+      {==}
+    case True{} True{} False{} False{} False{} False{} True{} False{}:
+      {==}
+    case True{} True{} False{} False{} False{} False{} True{} True{}:
+      {==}
+    case True{} True{} False{} False{} False{} True{} False{} False{}:
+      {==}
+    case True{} True{} False{} False{} False{} True{} False{} True{}:
+      {==}
+    case True{} True{} False{} False{} False{} True{} True{} False{}:
+      {==}
+    case True{} True{} False{} False{} False{} True{} True{} True{}:
+      {==}
+    case True{} True{} False{} False{} True{} False{} False{} False{}:
+      {==}
+    case True{} True{} False{} False{} True{} False{} False{} True{}:
+      {==}
+    case True{} True{} False{} False{} True{} False{} True{} False{}:
+      {==}
+    case True{} True{} False{} False{} True{} False{} True{} True{}:
+      {==}
+    case True{} True{} False{} False{} True{} True{} False{} False{}:
+      {==}
+    case True{} True{} False{} False{} True{} True{} False{} True{}:
+      {==}
+    case True{} True{} False{} False{} True{} True{} True{} False{}:
+      {==}
+    case True{} True{} False{} False{} True{} True{} True{} True{}:
+      {==}
+    case True{} True{} False{} True{} False{} False{} False{} False{}:
+      {==}
+    case True{} True{} False{} True{} False{} False{} False{} True{}:
+      {==}
+    case True{} True{} False{} True{} False{} False{} True{} False{}:
+      {==}
+    case True{} True{} False{} True{} False{} False{} True{} True{}:
+      {==}
+    case True{} True{} False{} True{} False{} True{} False{} False{}:
+      {==}
+    case True{} True{} False{} True{} False{} True{} False{} True{}:
+      {==}
+    case True{} True{} False{} True{} False{} True{} True{} False{}:
+      {==}
+    case True{} True{} False{} True{} False{} True{} True{} True{}:
+      {==}
+    case True{} True{} False{} True{} True{} False{} False{} False{}:
+      {==}
+    case True{} True{} False{} True{} True{} False{} False{} True{}:
+      {==}
+    case True{} True{} False{} True{} True{} False{} True{} False{}:
+      {==}
+    case True{} True{} False{} True{} True{} False{} True{} True{}:
+      {==}
+    case True{} True{} False{} True{} True{} True{} False{} False{}:
+      {==}
+    case True{} True{} False{} True{} True{} True{} False{} True{}:
+      {==}
+    case True{} True{} False{} True{} True{} True{} True{} False{}:
+      {==}
+    case True{} True{} False{} True{} True{} True{} True{} True{}:
+      {==}
+    case True{} True{} True{} False{} False{} False{} False{} False{}:
+      {==}
+    case True{} True{} True{} False{} False{} False{} False{} True{}:
+      {==}
+    case True{} True{} True{} False{} False{} False{} True{} False{}:
+      {==}
+    case True{} True{} True{} False{} False{} False{} True{} True{}:
+      {==}
+    case True{} True{} True{} False{} False{} True{} False{} False{}:
+      {==}
+    case True{} True{} True{} False{} False{} True{} False{} True{}:
+      {==}
+    case True{} True{} True{} False{} False{} True{} True{} False{}:
+      {==}
+    case True{} True{} True{} False{} False{} True{} True{} True{}:
+      {==}
+    case True{} True{} True{} False{} True{} False{} False{} False{}:
+      {==}
+    case True{} True{} True{} False{} True{} False{} False{} True{}:
+      {==}
+    case True{} True{} True{} False{} True{} False{} True{} False{}:
+      {==}
+    case True{} True{} True{} False{} True{} False{} True{} True{}:
+      {==}
+    case True{} True{} True{} False{} True{} True{} False{} False{}:
+      {==}
+    case True{} True{} True{} False{} True{} True{} False{} True{}:
+      {==}
+    case True{} True{} True{} False{} True{} True{} True{} False{}:
+      {==}
+    case True{} True{} True{} False{} True{} True{} True{} True{}:
+      {==}
+    case True{} True{} True{} True{} False{} False{} False{} False{}:
+      {==}
+    case True{} True{} True{} True{} False{} False{} False{} True{}:
+      {==}
+    case True{} True{} True{} True{} False{} False{} True{} False{}:
+      {==}
+    case True{} True{} True{} True{} False{} False{} True{} True{}:
+      {==}
+    case True{} True{} True{} True{} False{} True{} False{} False{}:
+      {==}
+    case True{} True{} True{} True{} False{} True{} False{} True{}:
+      {==}
+    case True{} True{} True{} True{} False{} True{} True{} False{}:
+      {==}
+    case True{} True{} True{} True{} False{} True{} True{} True{}:
+      {==}
+    case True{} True{} True{} True{} True{} False{} False{} False{}:
+      {==}
+    case True{} True{} True{} True{} True{} False{} False{} True{}:
+      {==}
+    case True{} True{} True{} True{} True{} False{} True{} False{}:
+      {==}
+    case True{} True{} True{} True{} True{} False{} True{} True{}:
+      {==}
+    case True{} True{} True{} True{} True{} True{} False{} False{}:
+      {==}
+    case True{} True{} True{} True{} True{} True{} False{} True{}:
+      {==}
+    case True{} True{} True{} True{} True{} True{} True{} False{}:
+      {==}
+    case True{} True{} True{} True{} True{} True{} True{} True{}:
+      {==}
+
+def br.cls.hi8(b8: Bool, b7: Bool, b6: Bool, b5: Bool, b4: Bool, b3: Bool, b2: Bool, b1: Bool,
+    b0: Bool) ->
+  {Spec.cls(U32{WCon{b0, WCon{b1, WCon{b2, WCon{b3, WCon{b4, WCon{b5, WCon{b6, WCon{b7, WCon{b8,
+      WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+      WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+      WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+      WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+      WNil{}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}) == Eng.cls(U32{WCon{b0, WCon{b1, WCon{b2, WCon{b3,
+      WCon{b4, WCon{b5, WCon{b6, WCon{b7, WCon{b8, WCon{False{}, WCon{False{}, WCon{False{},
+      WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+      WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+      WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+      WCon{False{}, WCon{False{}, WNil{}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}) : Eng.Cls}:
+  match b8:
+    case True{}:
+      {==}
+    case False{}:
+      br.cls.lo(b7, b6, b5, b4, b3, b2, b1, b0)
+
+def br.cls.hi9(b9: Bool, b8: Bool, b7: Bool, b6: Bool, b5: Bool, b4: Bool, b3: Bool, b2: Bool,
+    b1: Bool, b0: Bool) ->
+  {Spec.cls(U32{WCon{b0, WCon{b1, WCon{b2, WCon{b3, WCon{b4, WCon{b5, WCon{b6, WCon{b7, WCon{b8,
+      WCon{b9, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+      WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+      WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+      WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+      WNil{}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}) == Eng.cls(U32{WCon{b0, WCon{b1, WCon{b2, WCon{b3,
+      WCon{b4, WCon{b5, WCon{b6, WCon{b7, WCon{b8, WCon{b9, WCon{False{}, WCon{False{},
+      WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+      WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+      WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+      WCon{False{}, WCon{False{}, WNil{}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}) : Eng.Cls}:
+  match b9:
+    case True{}:
+      {==}
+    case False{}:
+      br.cls.hi8(b8, b7, b6, b5, b4, b3, b2, b1, b0)
+
+def br.cls.hi10(b10: Bool, b9: Bool, b8: Bool, b7: Bool, b6: Bool, b5: Bool, b4: Bool, b3: Bool,
+    b2: Bool, b1: Bool, b0: Bool) ->
+  {Spec.cls(U32{WCon{b0, WCon{b1, WCon{b2, WCon{b3, WCon{b4, WCon{b5, WCon{b6, WCon{b7, WCon{b8,
+      WCon{b9, WCon{b10, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+      WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+      WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+      WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+      WNil{}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}) == Eng.cls(U32{WCon{b0, WCon{b1, WCon{b2, WCon{b3,
+      WCon{b4, WCon{b5, WCon{b6, WCon{b7, WCon{b8, WCon{b9, WCon{b10, WCon{False{}, WCon{False{},
+      WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+      WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+      WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+      WCon{False{}, WNil{}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}) : Eng.Cls}:
+  match b10:
+    case True{}:
+      {==}
+    case False{}:
+      br.cls.hi9(b9, b8, b7, b6, b5, b4, b3, b2, b1, b0)
+
+def br.cls.hi11(b11: Bool, b10: Bool, b9: Bool, b8: Bool, b7: Bool, b6: Bool, b5: Bool, b4: Bool,
+    b3: Bool, b2: Bool, b1: Bool, b0: Bool) ->
+  {Spec.cls(U32{WCon{b0, WCon{b1, WCon{b2, WCon{b3, WCon{b4, WCon{b5, WCon{b6, WCon{b7, WCon{b8,
+      WCon{b9, WCon{b10, WCon{b11, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+      WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+      WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+      WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+      WNil{}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}) == Eng.cls(U32{WCon{b0, WCon{b1, WCon{b2, WCon{b3,
+      WCon{b4, WCon{b5, WCon{b6, WCon{b7, WCon{b8, WCon{b9, WCon{b10, WCon{b11, WCon{False{},
+      WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+      WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+      WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+      WCon{False{}, WNil{}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}) : Eng.Cls}:
+  match b11:
+    case True{}:
+      {==}
+    case False{}:
+      br.cls.hi10(b10, b9, b8, b7, b6, b5, b4, b3, b2, b1, b0)
+
+def br.cls.hi12(b12: Bool, b11: Bool, b10: Bool, b9: Bool, b8: Bool, b7: Bool, b6: Bool, b5: Bool,
+    b4: Bool, b3: Bool, b2: Bool, b1: Bool, b0: Bool) ->
+  {Spec.cls(U32{WCon{b0, WCon{b1, WCon{b2, WCon{b3, WCon{b4, WCon{b5, WCon{b6, WCon{b7, WCon{b8,
+      WCon{b9, WCon{b10, WCon{b11, WCon{b12, WCon{False{}, WCon{False{}, WCon{False{},
+      WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+      WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+      WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+      WNil{}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}) == Eng.cls(U32{WCon{b0, WCon{b1, WCon{b2, WCon{b3,
+      WCon{b4, WCon{b5, WCon{b6, WCon{b7, WCon{b8, WCon{b9, WCon{b10, WCon{b11, WCon{b12,
+      WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+      WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+      WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+      WCon{False{}, WNil{}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}) : Eng.Cls}:
+  match b12:
+    case True{}:
+      {==}
+    case False{}:
+      br.cls.hi11(b11, b10, b9, b8, b7, b6, b5, b4, b3, b2, b1, b0)
+
+def br.cls.hi13(b13: Bool, b12: Bool, b11: Bool, b10: Bool, b9: Bool, b8: Bool, b7: Bool, b6: Bool,
+    b5: Bool, b4: Bool, b3: Bool, b2: Bool, b1: Bool, b0: Bool) ->
+  {Spec.cls(U32{WCon{b0, WCon{b1, WCon{b2, WCon{b3, WCon{b4, WCon{b5, WCon{b6, WCon{b7, WCon{b8,
+      WCon{b9, WCon{b10, WCon{b11, WCon{b12, WCon{b13, WCon{False{}, WCon{False{}, WCon{False{},
+      WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+      WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+      WCon{False{}, WCon{False{}, WCon{False{},
+      WNil{}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}) == Eng.cls(U32{WCon{b0, WCon{b1, WCon{b2, WCon{b3,
+      WCon{b4, WCon{b5, WCon{b6, WCon{b7, WCon{b8, WCon{b9, WCon{b10, WCon{b11, WCon{b12, WCon{b13,
+      WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+      WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+      WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+      WNil{}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}) : Eng.Cls}:
+  match b13:
+    case True{}:
+      {==}
+    case False{}:
+      br.cls.hi12(b12, b11, b10, b9, b8, b7, b6, b5, b4, b3, b2, b1, b0)
+
+def br.cls.hi14(b14: Bool, b13: Bool, b12: Bool, b11: Bool, b10: Bool, b9: Bool, b8: Bool,
+    b7: Bool, b6: Bool, b5: Bool, b4: Bool, b3: Bool, b2: Bool, b1: Bool, b0: Bool) ->
+  {Spec.cls(U32{WCon{b0, WCon{b1, WCon{b2, WCon{b3, WCon{b4, WCon{b5, WCon{b6, WCon{b7, WCon{b8,
+      WCon{b9, WCon{b10, WCon{b11, WCon{b12, WCon{b13, WCon{b14, WCon{False{}, WCon{False{},
+      WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+      WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+      WCon{False{}, WCon{False{}, WCon{False{},
+      WNil{}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}) == Eng.cls(U32{WCon{b0, WCon{b1, WCon{b2, WCon{b3,
+      WCon{b4, WCon{b5, WCon{b6, WCon{b7, WCon{b8, WCon{b9, WCon{b10, WCon{b11, WCon{b12, WCon{b13,
+      WCon{b14, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+      WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+      WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+      WNil{}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}) : Eng.Cls}:
+  match b14:
+    case True{}:
+      {==}
+    case False{}:
+      br.cls.hi13(b13, b12, b11, b10, b9, b8, b7, b6, b5, b4, b3, b2, b1, b0)
+
+def br.cls.hi15(b15: Bool, b14: Bool, b13: Bool, b12: Bool, b11: Bool, b10: Bool, b9: Bool,
+    b8: Bool, b7: Bool, b6: Bool, b5: Bool, b4: Bool, b3: Bool, b2: Bool, b1: Bool, b0: Bool) ->
+  {Spec.cls(U32{WCon{b0, WCon{b1, WCon{b2, WCon{b3, WCon{b4, WCon{b5, WCon{b6, WCon{b7, WCon{b8,
+      WCon{b9, WCon{b10, WCon{b11, WCon{b12, WCon{b13, WCon{b14, WCon{b15, WCon{False{},
+      WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+      WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+      WCon{False{}, WCon{False{}, WCon{False{},
+      WNil{}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}) == Eng.cls(U32{WCon{b0, WCon{b1, WCon{b2, WCon{b3,
+      WCon{b4, WCon{b5, WCon{b6, WCon{b7, WCon{b8, WCon{b9, WCon{b10, WCon{b11, WCon{b12, WCon{b13,
+      WCon{b14, WCon{b15, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+      WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+      WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+      WNil{}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}) : Eng.Cls}:
+  match b15:
+    case True{}:
+      {==}
+    case False{}:
+      br.cls.hi14(b14, b13, b12, b11, b10, b9, b8, b7, b6, b5, b4, b3, b2, b1, b0)
+
+def br.cls.hi16(b16: Bool, b15: Bool, b14: Bool, b13: Bool, b12: Bool, b11: Bool, b10: Bool,
+    b9: Bool, b8: Bool, b7: Bool, b6: Bool, b5: Bool, b4: Bool, b3: Bool, b2: Bool, b1: Bool,
+    b0: Bool) ->
+  {Spec.cls(U32{WCon{b0, WCon{b1, WCon{b2, WCon{b3, WCon{b4, WCon{b5, WCon{b6, WCon{b7, WCon{b8,
+      WCon{b9, WCon{b10, WCon{b11, WCon{b12, WCon{b13, WCon{b14, WCon{b15, WCon{b16, WCon{False{},
+      WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+      WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+      WCon{False{}, WCon{False{}, WNil{}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}) == Eng.cls(U32{WCon{b0,
+      WCon{b1, WCon{b2, WCon{b3, WCon{b4, WCon{b5, WCon{b6, WCon{b7, WCon{b8, WCon{b9, WCon{b10,
+      WCon{b11, WCon{b12, WCon{b13, WCon{b14, WCon{b15, WCon{b16, WCon{False{}, WCon{False{},
+      WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+      WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+      WCon{False{}, WNil{}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}) : Eng.Cls}:
+  match b16:
+    case True{}:
+      {==}
+    case False{}:
+      br.cls.hi15(b15, b14, b13, b12, b11, b10, b9, b8, b7, b6, b5, b4, b3, b2, b1, b0)
+
+def br.cls.hi17(b17: Bool, b16: Bool, b15: Bool, b14: Bool, b13: Bool, b12: Bool, b11: Bool,
+    b10: Bool, b9: Bool, b8: Bool, b7: Bool, b6: Bool, b5: Bool, b4: Bool, b3: Bool, b2: Bool,
+    b1: Bool, b0: Bool) ->
+  {Spec.cls(U32{WCon{b0, WCon{b1, WCon{b2, WCon{b3, WCon{b4, WCon{b5, WCon{b6, WCon{b7, WCon{b8,
+      WCon{b9, WCon{b10, WCon{b11, WCon{b12, WCon{b13, WCon{b14, WCon{b15, WCon{b16, WCon{b17,
+      WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+      WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+      WCon{False{}, WCon{False{}, WNil{}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}) == Eng.cls(U32{WCon{b0,
+      WCon{b1, WCon{b2, WCon{b3, WCon{b4, WCon{b5, WCon{b6, WCon{b7, WCon{b8, WCon{b9, WCon{b10,
+      WCon{b11, WCon{b12, WCon{b13, WCon{b14, WCon{b15, WCon{b16, WCon{b17, WCon{False{},
+      WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+      WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+      WCon{False{}, WNil{}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}) : Eng.Cls}:
+  match b17:
+    case True{}:
+      {==}
+    case False{}:
+      br.cls.hi16(b16, b15, b14, b13, b12, b11, b10, b9, b8, b7, b6, b5, b4, b3, b2, b1, b0)
+
+def br.cls.hi18(b18: Bool, b17: Bool, b16: Bool, b15: Bool, b14: Bool, b13: Bool, b12: Bool,
+    b11: Bool, b10: Bool, b9: Bool, b8: Bool, b7: Bool, b6: Bool, b5: Bool, b4: Bool, b3: Bool,
+    b2: Bool, b1: Bool, b0: Bool) ->
+  {Spec.cls(U32{WCon{b0, WCon{b1, WCon{b2, WCon{b3, WCon{b4, WCon{b5, WCon{b6, WCon{b7, WCon{b8,
+      WCon{b9, WCon{b10, WCon{b11, WCon{b12, WCon{b13, WCon{b14, WCon{b15, WCon{b16, WCon{b17,
+      WCon{b18, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+      WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+      WCon{False{}, WNil{}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}) == Eng.cls(U32{WCon{b0, WCon{b1,
+      WCon{b2, WCon{b3, WCon{b4, WCon{b5, WCon{b6, WCon{b7, WCon{b8, WCon{b9, WCon{b10, WCon{b11,
+      WCon{b12, WCon{b13, WCon{b14, WCon{b15, WCon{b16, WCon{b17, WCon{b18, WCon{False{},
+      WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+      WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+      WNil{}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}) : Eng.Cls}:
+  match b18:
+    case True{}:
+      {==}
+    case False{}:
+      br.cls.hi17(b17, b16, b15, b14, b13, b12, b11, b10, b9, b8, b7, b6, b5, b4, b3, b2, b1, b0)
+
+def br.cls.hi19(b19: Bool, b18: Bool, b17: Bool, b16: Bool, b15: Bool, b14: Bool, b13: Bool,
+    b12: Bool, b11: Bool, b10: Bool, b9: Bool, b8: Bool, b7: Bool, b6: Bool, b5: Bool, b4: Bool,
+    b3: Bool, b2: Bool, b1: Bool, b0: Bool) ->
+  {Spec.cls(U32{WCon{b0, WCon{b1, WCon{b2, WCon{b3, WCon{b4, WCon{b5, WCon{b6, WCon{b7, WCon{b8,
+      WCon{b9, WCon{b10, WCon{b11, WCon{b12, WCon{b13, WCon{b14, WCon{b15, WCon{b16, WCon{b17,
+      WCon{b18, WCon{b19, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+      WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+      WCon{False{}, WNil{}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}) == Eng.cls(U32{WCon{b0, WCon{b1,
+      WCon{b2, WCon{b3, WCon{b4, WCon{b5, WCon{b6, WCon{b7, WCon{b8, WCon{b9, WCon{b10, WCon{b11,
+      WCon{b12, WCon{b13, WCon{b14, WCon{b15, WCon{b16, WCon{b17, WCon{b18, WCon{b19, WCon{False{},
+      WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+      WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+      WNil{}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}) : Eng.Cls}:
+  match b19:
+    case True{}:
+      {==}
+    case False{}:
+      br.cls.hi18(b18, b17, b16, b15, b14, b13, b12, b11, b10, b9, b8, b7, b6, b5, b4, b3, b2, b1,
+          b0)
+
+def br.cls.hi20(b20: Bool, b19: Bool, b18: Bool, b17: Bool, b16: Bool, b15: Bool, b14: Bool,
+    b13: Bool, b12: Bool, b11: Bool, b10: Bool, b9: Bool, b8: Bool, b7: Bool, b6: Bool, b5: Bool,
+    b4: Bool, b3: Bool, b2: Bool, b1: Bool, b0: Bool) ->
+  {Spec.cls(U32{WCon{b0, WCon{b1, WCon{b2, WCon{b3, WCon{b4, WCon{b5, WCon{b6, WCon{b7, WCon{b8,
+      WCon{b9, WCon{b10, WCon{b11, WCon{b12, WCon{b13, WCon{b14, WCon{b15, WCon{b16, WCon{b17,
+      WCon{b18, WCon{b19, WCon{b20, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+      WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+      WCon{False{}, WNil{}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}) == Eng.cls(U32{WCon{b0, WCon{b1,
+      WCon{b2, WCon{b3, WCon{b4, WCon{b5, WCon{b6, WCon{b7, WCon{b8, WCon{b9, WCon{b10, WCon{b11,
+      WCon{b12, WCon{b13, WCon{b14, WCon{b15, WCon{b16, WCon{b17, WCon{b18, WCon{b19, WCon{b20,
+      WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+      WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+      WNil{}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}) : Eng.Cls}:
+  match b20:
+    case True{}:
+      {==}
+    case False{}:
+      br.cls.hi19(b19, b18, b17, b16, b15, b14, b13, b12, b11, b10, b9, b8, b7, b6, b5, b4, b3, b2,
+          b1, b0)
+
+def br.cls.hi21(b21: Bool, b20: Bool, b19: Bool, b18: Bool, b17: Bool, b16: Bool, b15: Bool,
+    b14: Bool, b13: Bool, b12: Bool, b11: Bool, b10: Bool, b9: Bool, b8: Bool, b7: Bool, b6: Bool,
+    b5: Bool, b4: Bool, b3: Bool, b2: Bool, b1: Bool, b0: Bool) ->
+  {Spec.cls(U32{WCon{b0, WCon{b1, WCon{b2, WCon{b3, WCon{b4, WCon{b5, WCon{b6, WCon{b7, WCon{b8,
+      WCon{b9, WCon{b10, WCon{b11, WCon{b12, WCon{b13, WCon{b14, WCon{b15, WCon{b16, WCon{b17,
+      WCon{b18, WCon{b19, WCon{b20, WCon{b21, WCon{False{}, WCon{False{}, WCon{False{},
+      WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+      WCon{False{}, WNil{}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}) == Eng.cls(U32{WCon{b0, WCon{b1,
+      WCon{b2, WCon{b3, WCon{b4, WCon{b5, WCon{b6, WCon{b7, WCon{b8, WCon{b9, WCon{b10, WCon{b11,
+      WCon{b12, WCon{b13, WCon{b14, WCon{b15, WCon{b16, WCon{b17, WCon{b18, WCon{b19, WCon{b20,
+      WCon{b21, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+      WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+      WNil{}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}) : Eng.Cls}:
+  match b21:
+    case True{}:
+      {==}
+    case False{}:
+      br.cls.hi20(b20, b19, b18, b17, b16, b15, b14, b13, b12, b11, b10, b9, b8, b7, b6, b5, b4,
+          b3, b2, b1, b0)
+
+def br.cls.hi22(b22: Bool, b21: Bool, b20: Bool, b19: Bool, b18: Bool, b17: Bool, b16: Bool,
+    b15: Bool, b14: Bool, b13: Bool, b12: Bool, b11: Bool, b10: Bool, b9: Bool, b8: Bool, b7: Bool,
+    b6: Bool, b5: Bool, b4: Bool, b3: Bool, b2: Bool, b1: Bool, b0: Bool) ->
+  {Spec.cls(U32{WCon{b0, WCon{b1, WCon{b2, WCon{b3, WCon{b4, WCon{b5, WCon{b6, WCon{b7, WCon{b8,
+      WCon{b9, WCon{b10, WCon{b11, WCon{b12, WCon{b13, WCon{b14, WCon{b15, WCon{b16, WCon{b17,
+      WCon{b18, WCon{b19, WCon{b20, WCon{b21, WCon{b22, WCon{False{}, WCon{False{}, WCon{False{},
+      WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+      WNil{}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}) == Eng.cls(U32{WCon{b0, WCon{b1, WCon{b2, WCon{b3,
+      WCon{b4, WCon{b5, WCon{b6, WCon{b7, WCon{b8, WCon{b9, WCon{b10, WCon{b11, WCon{b12, WCon{b13,
+      WCon{b14, WCon{b15, WCon{b16, WCon{b17, WCon{b18, WCon{b19, WCon{b20, WCon{b21, WCon{b22,
+      WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+      WCon{False{}, WCon{False{}, WCon{False{}, WNil{}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}) : Eng.Cls}:
+  match b22:
+    case True{}:
+      {==}
+    case False{}:
+      br.cls.hi21(b21, b20, b19, b18, b17, b16, b15, b14, b13, b12, b11, b10, b9, b8, b7, b6, b5,
+          b4, b3, b2, b1, b0)
+
+def br.cls.hi23(b23: Bool, b22: Bool, b21: Bool, b20: Bool, b19: Bool, b18: Bool, b17: Bool,
+    b16: Bool, b15: Bool, b14: Bool, b13: Bool, b12: Bool, b11: Bool, b10: Bool, b9: Bool,
+    b8: Bool, b7: Bool, b6: Bool, b5: Bool, b4: Bool, b3: Bool, b2: Bool, b1: Bool, b0: Bool) ->
+  {Spec.cls(U32{WCon{b0, WCon{b1, WCon{b2, WCon{b3, WCon{b4, WCon{b5, WCon{b6, WCon{b7, WCon{b8,
+      WCon{b9, WCon{b10, WCon{b11, WCon{b12, WCon{b13, WCon{b14, WCon{b15, WCon{b16, WCon{b17,
+      WCon{b18, WCon{b19, WCon{b20, WCon{b21, WCon{b22, WCon{b23, WCon{False{}, WCon{False{},
+      WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+      WNil{}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}) == Eng.cls(U32{WCon{b0, WCon{b1, WCon{b2, WCon{b3,
+      WCon{b4, WCon{b5, WCon{b6, WCon{b7, WCon{b8, WCon{b9, WCon{b10, WCon{b11, WCon{b12, WCon{b13,
+      WCon{b14, WCon{b15, WCon{b16, WCon{b17, WCon{b18, WCon{b19, WCon{b20, WCon{b21, WCon{b22,
+      WCon{b23, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+      WCon{False{}, WCon{False{}, WNil{}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}) : Eng.Cls}:
+  match b23:
+    case True{}:
+      {==}
+    case False{}:
+      br.cls.hi22(b22, b21, b20, b19, b18, b17, b16, b15, b14, b13, b12, b11, b10, b9, b8, b7, b6,
+          b5, b4, b3, b2, b1, b0)
+
+def br.cls.hi24(b24: Bool, b23: Bool, b22: Bool, b21: Bool, b20: Bool, b19: Bool, b18: Bool,
+    b17: Bool, b16: Bool, b15: Bool, b14: Bool, b13: Bool, b12: Bool, b11: Bool, b10: Bool,
+    b9: Bool, b8: Bool, b7: Bool, b6: Bool, b5: Bool, b4: Bool, b3: Bool, b2: Bool, b1: Bool,
+    b0: Bool) ->
+  {Spec.cls(U32{WCon{b0, WCon{b1, WCon{b2, WCon{b3, WCon{b4, WCon{b5, WCon{b6, WCon{b7, WCon{b8,
+      WCon{b9, WCon{b10, WCon{b11, WCon{b12, WCon{b13, WCon{b14, WCon{b15, WCon{b16, WCon{b17,
+      WCon{b18, WCon{b19, WCon{b20, WCon{b21, WCon{b22, WCon{b23, WCon{b24, WCon{False{},
+      WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+      WNil{}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}) == Eng.cls(U32{WCon{b0, WCon{b1, WCon{b2, WCon{b3,
+      WCon{b4, WCon{b5, WCon{b6, WCon{b7, WCon{b8, WCon{b9, WCon{b10, WCon{b11, WCon{b12, WCon{b13,
+      WCon{b14, WCon{b15, WCon{b16, WCon{b17, WCon{b18, WCon{b19, WCon{b20, WCon{b21, WCon{b22,
+      WCon{b23, WCon{b24, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+      WCon{False{}, WCon{False{}, WNil{}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}) : Eng.Cls}:
+  match b24:
+    case True{}:
+      {==}
+    case False{}:
+      br.cls.hi23(b23, b22, b21, b20, b19, b18, b17, b16, b15, b14, b13, b12, b11, b10, b9, b8, b7,
+          b6, b5, b4, b3, b2, b1, b0)
+
+def br.cls.hi25(b25: Bool, b24: Bool, b23: Bool, b22: Bool, b21: Bool, b20: Bool, b19: Bool,
+    b18: Bool, b17: Bool, b16: Bool, b15: Bool, b14: Bool, b13: Bool, b12: Bool, b11: Bool,
+    b10: Bool, b9: Bool, b8: Bool, b7: Bool, b6: Bool, b5: Bool, b4: Bool, b3: Bool, b2: Bool,
+    b1: Bool, b0: Bool) ->
+  {Spec.cls(U32{WCon{b0, WCon{b1, WCon{b2, WCon{b3, WCon{b4, WCon{b5, WCon{b6, WCon{b7, WCon{b8,
+      WCon{b9, WCon{b10, WCon{b11, WCon{b12, WCon{b13, WCon{b14, WCon{b15, WCon{b16, WCon{b17,
+      WCon{b18, WCon{b19, WCon{b20, WCon{b21, WCon{b22, WCon{b23, WCon{b24, WCon{b25, WCon{False{},
+      WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+      WNil{}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}) == Eng.cls(U32{WCon{b0, WCon{b1, WCon{b2, WCon{b3,
+      WCon{b4, WCon{b5, WCon{b6, WCon{b7, WCon{b8, WCon{b9, WCon{b10, WCon{b11, WCon{b12, WCon{b13,
+      WCon{b14, WCon{b15, WCon{b16, WCon{b17, WCon{b18, WCon{b19, WCon{b20, WCon{b21, WCon{b22,
+      WCon{b23, WCon{b24, WCon{b25, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+      WCon{False{}, WCon{False{}, WNil{}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}) : Eng.Cls}:
+  match b25:
+    case True{}:
+      {==}
+    case False{}:
+      br.cls.hi24(b24, b23, b22, b21, b20, b19, b18, b17, b16, b15, b14, b13, b12, b11, b10, b9,
+          b8, b7, b6, b5, b4, b3, b2, b1, b0)
+
+def br.cls.hi26(b26: Bool, b25: Bool, b24: Bool, b23: Bool, b22: Bool, b21: Bool, b20: Bool,
+    b19: Bool, b18: Bool, b17: Bool, b16: Bool, b15: Bool, b14: Bool, b13: Bool, b12: Bool,
+    b11: Bool, b10: Bool, b9: Bool, b8: Bool, b7: Bool, b6: Bool, b5: Bool, b4: Bool, b3: Bool,
+    b2: Bool, b1: Bool, b0: Bool) ->
+  {Spec.cls(U32{WCon{b0, WCon{b1, WCon{b2, WCon{b3, WCon{b4, WCon{b5, WCon{b6, WCon{b7, WCon{b8,
+      WCon{b9, WCon{b10, WCon{b11, WCon{b12, WCon{b13, WCon{b14, WCon{b15, WCon{b16, WCon{b17,
+      WCon{b18, WCon{b19, WCon{b20, WCon{b21, WCon{b22, WCon{b23, WCon{b24, WCon{b25, WCon{b26,
+      WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+      WNil{}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}) == Eng.cls(U32{WCon{b0, WCon{b1, WCon{b2, WCon{b3,
+      WCon{b4, WCon{b5, WCon{b6, WCon{b7, WCon{b8, WCon{b9, WCon{b10, WCon{b11, WCon{b12, WCon{b13,
+      WCon{b14, WCon{b15, WCon{b16, WCon{b17, WCon{b18, WCon{b19, WCon{b20, WCon{b21, WCon{b22,
+      WCon{b23, WCon{b24, WCon{b25, WCon{b26, WCon{False{}, WCon{False{}, WCon{False{},
+      WCon{False{}, WCon{False{}, WNil{}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}) : Eng.Cls}:
+  match b26:
+    case True{}:
+      {==}
+    case False{}:
+      br.cls.hi25(b25, b24, b23, b22, b21, b20, b19, b18, b17, b16, b15, b14, b13, b12, b11, b10,
+          b9, b8, b7, b6, b5, b4, b3, b2, b1, b0)
+
+def br.cls.hi27(b27: Bool, b26: Bool, b25: Bool, b24: Bool, b23: Bool, b22: Bool, b21: Bool,
+    b20: Bool, b19: Bool, b18: Bool, b17: Bool, b16: Bool, b15: Bool, b14: Bool, b13: Bool,
+    b12: Bool, b11: Bool, b10: Bool, b9: Bool, b8: Bool, b7: Bool, b6: Bool, b5: Bool, b4: Bool,
+    b3: Bool, b2: Bool, b1: Bool, b0: Bool) ->
+  {Spec.cls(U32{WCon{b0, WCon{b1, WCon{b2, WCon{b3, WCon{b4, WCon{b5, WCon{b6, WCon{b7, WCon{b8,
+      WCon{b9, WCon{b10, WCon{b11, WCon{b12, WCon{b13, WCon{b14, WCon{b15, WCon{b16, WCon{b17,
+      WCon{b18, WCon{b19, WCon{b20, WCon{b21, WCon{b22, WCon{b23, WCon{b24, WCon{b25, WCon{b26,
+      WCon{b27, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+      WNil{}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}) == Eng.cls(U32{WCon{b0, WCon{b1, WCon{b2, WCon{b3,
+      WCon{b4, WCon{b5, WCon{b6, WCon{b7, WCon{b8, WCon{b9, WCon{b10, WCon{b11, WCon{b12, WCon{b13,
+      WCon{b14, WCon{b15, WCon{b16, WCon{b17, WCon{b18, WCon{b19, WCon{b20, WCon{b21, WCon{b22,
+      WCon{b23, WCon{b24, WCon{b25, WCon{b26, WCon{b27, WCon{False{}, WCon{False{}, WCon{False{},
+      WCon{False{}, WNil{}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}) : Eng.Cls}:
+  match b27:
+    case True{}:
+      {==}
+    case False{}:
+      br.cls.hi26(b26, b25, b24, b23, b22, b21, b20, b19, b18, b17, b16, b15, b14, b13, b12, b11,
+          b10, b9, b8, b7, b6, b5, b4, b3, b2, b1, b0)
+
+def br.cls.hi28(b28: Bool, b27: Bool, b26: Bool, b25: Bool, b24: Bool, b23: Bool, b22: Bool,
+    b21: Bool, b20: Bool, b19: Bool, b18: Bool, b17: Bool, b16: Bool, b15: Bool, b14: Bool,
+    b13: Bool, b12: Bool, b11: Bool, b10: Bool, b9: Bool, b8: Bool, b7: Bool, b6: Bool, b5: Bool,
+    b4: Bool, b3: Bool, b2: Bool, b1: Bool, b0: Bool) ->
+  {Spec.cls(U32{WCon{b0, WCon{b1, WCon{b2, WCon{b3, WCon{b4, WCon{b5, WCon{b6, WCon{b7, WCon{b8,
+      WCon{b9, WCon{b10, WCon{b11, WCon{b12, WCon{b13, WCon{b14, WCon{b15, WCon{b16, WCon{b17,
+      WCon{b18, WCon{b19, WCon{b20, WCon{b21, WCon{b22, WCon{b23, WCon{b24, WCon{b25, WCon{b26,
+      WCon{b27, WCon{b28, WCon{False{}, WCon{False{}, WCon{False{},
+      WNil{}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}) == Eng.cls(U32{WCon{b0, WCon{b1, WCon{b2, WCon{b3,
+      WCon{b4, WCon{b5, WCon{b6, WCon{b7, WCon{b8, WCon{b9, WCon{b10, WCon{b11, WCon{b12, WCon{b13,
+      WCon{b14, WCon{b15, WCon{b16, WCon{b17, WCon{b18, WCon{b19, WCon{b20, WCon{b21, WCon{b22,
+      WCon{b23, WCon{b24, WCon{b25, WCon{b26, WCon{b27, WCon{b28, WCon{False{}, WCon{False{},
+      WCon{False{}, WNil{}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}) : Eng.Cls}:
+  match b28:
+    case True{}:
+      {==}
+    case False{}:
+      br.cls.hi27(b27, b26, b25, b24, b23, b22, b21, b20, b19, b18, b17, b16, b15, b14, b13, b12,
+          b11, b10, b9, b8, b7, b6, b5, b4, b3, b2, b1, b0)
+
+def br.cls.hi29(b29: Bool, b28: Bool, b27: Bool, b26: Bool, b25: Bool, b24: Bool, b23: Bool,
+    b22: Bool, b21: Bool, b20: Bool, b19: Bool, b18: Bool, b17: Bool, b16: Bool, b15: Bool,
+    b14: Bool, b13: Bool, b12: Bool, b11: Bool, b10: Bool, b9: Bool, b8: Bool, b7: Bool, b6: Bool,
+    b5: Bool, b4: Bool, b3: Bool, b2: Bool, b1: Bool, b0: Bool) ->
+  {Spec.cls(U32{WCon{b0, WCon{b1, WCon{b2, WCon{b3, WCon{b4, WCon{b5, WCon{b6, WCon{b7, WCon{b8,
+      WCon{b9, WCon{b10, WCon{b11, WCon{b12, WCon{b13, WCon{b14, WCon{b15, WCon{b16, WCon{b17,
+      WCon{b18, WCon{b19, WCon{b20, WCon{b21, WCon{b22, WCon{b23, WCon{b24, WCon{b25, WCon{b26,
+      WCon{b27, WCon{b28, WCon{b29, WCon{False{}, WCon{False{},
+      WNil{}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}) == Eng.cls(U32{WCon{b0, WCon{b1, WCon{b2, WCon{b3,
+      WCon{b4, WCon{b5, WCon{b6, WCon{b7, WCon{b8, WCon{b9, WCon{b10, WCon{b11, WCon{b12, WCon{b13,
+      WCon{b14, WCon{b15, WCon{b16, WCon{b17, WCon{b18, WCon{b19, WCon{b20, WCon{b21, WCon{b22,
+      WCon{b23, WCon{b24, WCon{b25, WCon{b26, WCon{b27, WCon{b28, WCon{b29, WCon{False{},
+      WCon{False{}, WNil{}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}) : Eng.Cls}:
+  match b29:
+    case True{}:
+      {==}
+    case False{}:
+      br.cls.hi28(b28, b27, b26, b25, b24, b23, b22, b21, b20, b19, b18, b17, b16, b15, b14, b13,
+          b12, b11, b10, b9, b8, b7, b6, b5, b4, b3, b2, b1, b0)
+
+def br.cls.hi30(b30: Bool, b29: Bool, b28: Bool, b27: Bool, b26: Bool, b25: Bool, b24: Bool,
+    b23: Bool, b22: Bool, b21: Bool, b20: Bool, b19: Bool, b18: Bool, b17: Bool, b16: Bool,
+    b15: Bool, b14: Bool, b13: Bool, b12: Bool, b11: Bool, b10: Bool, b9: Bool, b8: Bool, b7: Bool,
+    b6: Bool, b5: Bool, b4: Bool, b3: Bool, b2: Bool, b1: Bool, b0: Bool) ->
+  {Spec.cls(U32{WCon{b0, WCon{b1, WCon{b2, WCon{b3, WCon{b4, WCon{b5, WCon{b6, WCon{b7, WCon{b8,
+      WCon{b9, WCon{b10, WCon{b11, WCon{b12, WCon{b13, WCon{b14, WCon{b15, WCon{b16, WCon{b17,
+      WCon{b18, WCon{b19, WCon{b20, WCon{b21, WCon{b22, WCon{b23, WCon{b24, WCon{b25, WCon{b26,
+      WCon{b27, WCon{b28, WCon{b29, WCon{b30, WCon{False{},
+      WNil{}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}) == Eng.cls(U32{WCon{b0, WCon{b1, WCon{b2, WCon{b3,
+      WCon{b4, WCon{b5, WCon{b6, WCon{b7, WCon{b8, WCon{b9, WCon{b10, WCon{b11, WCon{b12, WCon{b13,
+      WCon{b14, WCon{b15, WCon{b16, WCon{b17, WCon{b18, WCon{b19, WCon{b20, WCon{b21, WCon{b22,
+      WCon{b23, WCon{b24, WCon{b25, WCon{b26, WCon{b27, WCon{b28, WCon{b29, WCon{b30, WCon{False{},
+      WNil{}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}) : Eng.Cls}:
+  match b30:
+    case True{}:
+      {==}
+    case False{}:
+      br.cls.hi29(b29, b28, b27, b26, b25, b24, b23, b22, b21, b20, b19, b18, b17, b16, b15, b14,
+          b13, b12, b11, b10, b9, b8, b7, b6, b5, b4, b3, b2, b1, b0)
+
+def br.cls.hi31(b31: Bool, b30: Bool, b29: Bool, b28: Bool, b27: Bool, b26: Bool, b25: Bool,
+    b24: Bool, b23: Bool, b22: Bool, b21: Bool, b20: Bool, b19: Bool, b18: Bool, b17: Bool,
+    b16: Bool, b15: Bool, b14: Bool, b13: Bool, b12: Bool, b11: Bool, b10: Bool, b9: Bool,
+    b8: Bool, b7: Bool, b6: Bool, b5: Bool, b4: Bool, b3: Bool, b2: Bool, b1: Bool, b0: Bool) ->
+  {Spec.cls(U32{WCon{b0, WCon{b1, WCon{b2, WCon{b3, WCon{b4, WCon{b5, WCon{b6, WCon{b7, WCon{b8,
+      WCon{b9, WCon{b10, WCon{b11, WCon{b12, WCon{b13, WCon{b14, WCon{b15, WCon{b16, WCon{b17,
+      WCon{b18, WCon{b19, WCon{b20, WCon{b21, WCon{b22, WCon{b23, WCon{b24, WCon{b25, WCon{b26,
+      WCon{b27, WCon{b28, WCon{b29, WCon{b30, WCon{b31,
+      WNil{}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}) == Eng.cls(U32{WCon{b0, WCon{b1, WCon{b2, WCon{b3,
+      WCon{b4, WCon{b5, WCon{b6, WCon{b7, WCon{b8, WCon{b9, WCon{b10, WCon{b11, WCon{b12, WCon{b13,
+      WCon{b14, WCon{b15, WCon{b16, WCon{b17, WCon{b18, WCon{b19, WCon{b20, WCon{b21, WCon{b22,
+      WCon{b23, WCon{b24, WCon{b25, WCon{b26, WCon{b27, WCon{b28, WCon{b29, WCon{b30, WCon{b31,
+      WNil{}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}) : Eng.Cls}:
+  match b31:
+    case True{}:
+      {==}
+    case False{}:
+      br.cls.hi30(b30, b29, b28, b27, b26, b25, b24, b23, b22, b21, b20, b19, b18, b17, b16, b15,
+          b14, b13, b12, b11, b10, b9, b8, b7, b6, b5, b4, b3, b2, b1, b0)
+
+def br.cls.p3(b0: Bool, b1: Bool, b2: Bool, b3: Bool, b4: Bool, b5: Bool, b6: Bool, b7: Bool,
+    b8: Bool, b9: Bool, b10: Bool, b11: Bool, b12: Bool, b13: Bool, b14: Bool, b15: Bool,
+    b16: Bool, b17: Bool, b18: Bool, b19: Bool, b20: Bool, b21: Bool, b22: Bool, b23: Bool,
+    w24: Word(8n)) ->
+  {Spec.cls(U32{WCon{b0, WCon{b1, WCon{b2, WCon{b3, WCon{b4, WCon{b5, WCon{b6, WCon{b7, WCon{b8,
+      WCon{b9, WCon{b10, WCon{b11, WCon{b12, WCon{b13, WCon{b14, WCon{b15, WCon{b16, WCon{b17,
+      WCon{b18, WCon{b19, WCon{b20, WCon{b21, WCon{b22, WCon{b23,
+      w24}}}}}}}}}}}}}}}}}}}}}}}}}) == Eng.cls(U32{WCon{b0, WCon{b1, WCon{b2, WCon{b3, WCon{b4,
+      WCon{b5, WCon{b6, WCon{b7, WCon{b8, WCon{b9, WCon{b10, WCon{b11, WCon{b12, WCon{b13,
+      WCon{b14, WCon{b15, WCon{b16, WCon{b17, WCon{b18, WCon{b19, WCon{b20, WCon{b21, WCon{b22,
+      WCon{b23, w24}}}}}}}}}}}}}}}}}}}}}}}}}) : Eng.Cls}:
+  match w24:
+    case WCon{b24, w25}:
+      match w25:
+        case WCon{b25, w26}:
+          match w26:
+            case WCon{b26, w27}:
+              match w27:
+                case WCon{b27, w28}:
+                  match w28:
+                    case WCon{b28, w29}:
+                      match w29:
+                        case WCon{b29, w30}:
+                          match w30:
+                            case WCon{b30, w31}:
+                              match w31:
+                                case WCon{b31, w32}:
+                                  match w32:
+                                    case WNil{}:
+                                      br.cls.hi31(b31, b30, b29, b28, b27, b26, b25, b24, b23, b22,
+                                          b21, b20, b19, b18, b17, b16, b15, b14, b13, b12, b11,
+                                          b10, b9, b8, b7, b6, b5, b4, b3, b2, b1, b0)
+
+def br.cls.p2(b0: Bool, b1: Bool, b2: Bool, b3: Bool, b4: Bool, b5: Bool, b6: Bool, b7: Bool,
+    b8: Bool, b9: Bool, b10: Bool, b11: Bool, b12: Bool, b13: Bool, b14: Bool, b15: Bool,
+    w16: Word(16n)) ->
+  {Spec.cls(U32{WCon{b0, WCon{b1, WCon{b2, WCon{b3, WCon{b4, WCon{b5, WCon{b6, WCon{b7, WCon{b8,
+      WCon{b9, WCon{b10, WCon{b11, WCon{b12, WCon{b13, WCon{b14, WCon{b15,
+      w16}}}}}}}}}}}}}}}}}) == Eng.cls(U32{WCon{b0, WCon{b1, WCon{b2, WCon{b3, WCon{b4, WCon{b5,
+      WCon{b6, WCon{b7, WCon{b8, WCon{b9, WCon{b10, WCon{b11, WCon{b12, WCon{b13, WCon{b14,
+      WCon{b15, w16}}}}}}}}}}}}}}}}}) : Eng.Cls}:
+  match w16:
+    case WCon{b16, w17}:
+      match w17:
+        case WCon{b17, w18}:
+          match w18:
+            case WCon{b18, w19}:
+              match w19:
+                case WCon{b19, w20}:
+                  match w20:
+                    case WCon{b20, w21}:
+                      match w21:
+                        case WCon{b21, w22}:
+                          match w22:
+                            case WCon{b22, w23}:
+                              match w23:
+                                case WCon{b23, w24}:
+                                  br.cls.p3(b0, b1, b2, b3, b4, b5, b6, b7, b8, b9, b10, b11, b12,
+                                      b13, b14, b15, b16, b17, b18, b19, b20, b21, b22, b23, w24)
+
+def br.cls.p1(b0: Bool, b1: Bool, b2: Bool, b3: Bool, b4: Bool, b5: Bool, b6: Bool, b7: Bool,
+    w8: Word(24n)) ->
+  {Spec.cls(U32{WCon{b0, WCon{b1, WCon{b2, WCon{b3, WCon{b4, WCon{b5, WCon{b6, WCon{b7,
+      w8}}}}}}}}}) == Eng.cls(U32{WCon{b0, WCon{b1, WCon{b2, WCon{b3, WCon{b4, WCon{b5, WCon{b6,
+      WCon{b7, w8}}}}}}}}}) : Eng.Cls}:
+  match w8:
+    case WCon{b8, w9}:
+      match w9:
+        case WCon{b9, w10}:
+          match w10:
+            case WCon{b10, w11}:
+              match w11:
+                case WCon{b11, w12}:
+                  match w12:
+                    case WCon{b12, w13}:
+                      match w13:
+                        case WCon{b13, w14}:
+                          match w14:
+                            case WCon{b14, w15}:
+                              match w15:
+                                case WCon{b15, w16}:
+                                  br.cls.p2(b0, b1, b2, b3, b4, b5, b6, b7, b8, b9, b10, b11, b12,
+                                      b13, b14, b15, w16)
+
+def br.cls(c: U32) -> {Spec.cls(c) == Eng.cls(c) : Eng.Cls}:
+  match c:
+    case U32{w0}:
+      match w0:
+        case WCon{b0, w1}:
+          match w1:
+            case WCon{b1, w2}:
+              match w2:
+                case WCon{b2, w3}:
+                  match w3:
+                    case WCon{b3, w4}:
+                      match w4:
+                        case WCon{b4, w5}:
+                          match w5:
+                            case WCon{b5, w6}:
+                              match w6:
+                                case WCon{b6, w7}:
+                                  match w7:
+                                    case WCon{b7, w8}:
+                                      br.cls.p1(b0, b1, b2, b3, b4, b5, b6, b7, w8)
+
+def br.low.lo(b7: Bool, b6: Bool, b5: Bool, b4: Bool, b3: Bool, b2: Bool, b1: Bool, b0: Bool) ->
+  {Chr{Spec.lower(U32{WCon{b0, WCon{b1, WCon{b2, WCon{b3, WCon{b4, WCon{b5, WCon{b6, WCon{b7,
+      WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+      WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+      WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+      WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+      WNil{}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}})} == Char.to_lower(Chr{U32{WCon{b0, WCon{b1, WCon{b2,
+      WCon{b3, WCon{b4, WCon{b5, WCon{b6, WCon{b7, WCon{False{}, WCon{False{}, WCon{False{},
+      WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+      WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+      WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+      WCon{False{}, WCon{False{}, WCon{False{}, WNil{}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}) : Char}:
+  match b7 b6 b5 b4 b3 b2 b1 b0:
+    case False{} False{} False{} False{} False{} False{} False{} False{}:
+      {==}
+    case False{} False{} False{} False{} False{} False{} False{} True{}:
+      {==}
+    case False{} False{} False{} False{} False{} False{} True{} False{}:
+      {==}
+    case False{} False{} False{} False{} False{} False{} True{} True{}:
+      {==}
+    case False{} False{} False{} False{} False{} True{} False{} False{}:
+      {==}
+    case False{} False{} False{} False{} False{} True{} False{} True{}:
+      {==}
+    case False{} False{} False{} False{} False{} True{} True{} False{}:
+      {==}
+    case False{} False{} False{} False{} False{} True{} True{} True{}:
+      {==}
+    case False{} False{} False{} False{} True{} False{} False{} False{}:
+      {==}
+    case False{} False{} False{} False{} True{} False{} False{} True{}:
+      {==}
+    case False{} False{} False{} False{} True{} False{} True{} False{}:
+      {==}
+    case False{} False{} False{} False{} True{} False{} True{} True{}:
+      {==}
+    case False{} False{} False{} False{} True{} True{} False{} False{}:
+      {==}
+    case False{} False{} False{} False{} True{} True{} False{} True{}:
+      {==}
+    case False{} False{} False{} False{} True{} True{} True{} False{}:
+      {==}
+    case False{} False{} False{} False{} True{} True{} True{} True{}:
+      {==}
+    case False{} False{} False{} True{} False{} False{} False{} False{}:
+      {==}
+    case False{} False{} False{} True{} False{} False{} False{} True{}:
+      {==}
+    case False{} False{} False{} True{} False{} False{} True{} False{}:
+      {==}
+    case False{} False{} False{} True{} False{} False{} True{} True{}:
+      {==}
+    case False{} False{} False{} True{} False{} True{} False{} False{}:
+      {==}
+    case False{} False{} False{} True{} False{} True{} False{} True{}:
+      {==}
+    case False{} False{} False{} True{} False{} True{} True{} False{}:
+      {==}
+    case False{} False{} False{} True{} False{} True{} True{} True{}:
+      {==}
+    case False{} False{} False{} True{} True{} False{} False{} False{}:
+      {==}
+    case False{} False{} False{} True{} True{} False{} False{} True{}:
+      {==}
+    case False{} False{} False{} True{} True{} False{} True{} False{}:
+      {==}
+    case False{} False{} False{} True{} True{} False{} True{} True{}:
+      {==}
+    case False{} False{} False{} True{} True{} True{} False{} False{}:
+      {==}
+    case False{} False{} False{} True{} True{} True{} False{} True{}:
+      {==}
+    case False{} False{} False{} True{} True{} True{} True{} False{}:
+      {==}
+    case False{} False{} False{} True{} True{} True{} True{} True{}:
+      {==}
+    case False{} False{} True{} False{} False{} False{} False{} False{}:
+      {==}
+    case False{} False{} True{} False{} False{} False{} False{} True{}:
+      {==}
+    case False{} False{} True{} False{} False{} False{} True{} False{}:
+      {==}
+    case False{} False{} True{} False{} False{} False{} True{} True{}:
+      {==}
+    case False{} False{} True{} False{} False{} True{} False{} False{}:
+      {==}
+    case False{} False{} True{} False{} False{} True{} False{} True{}:
+      {==}
+    case False{} False{} True{} False{} False{} True{} True{} False{}:
+      {==}
+    case False{} False{} True{} False{} False{} True{} True{} True{}:
+      {==}
+    case False{} False{} True{} False{} True{} False{} False{} False{}:
+      {==}
+    case False{} False{} True{} False{} True{} False{} False{} True{}:
+      {==}
+    case False{} False{} True{} False{} True{} False{} True{} False{}:
+      {==}
+    case False{} False{} True{} False{} True{} False{} True{} True{}:
+      {==}
+    case False{} False{} True{} False{} True{} True{} False{} False{}:
+      {==}
+    case False{} False{} True{} False{} True{} True{} False{} True{}:
+      {==}
+    case False{} False{} True{} False{} True{} True{} True{} False{}:
+      {==}
+    case False{} False{} True{} False{} True{} True{} True{} True{}:
+      {==}
+    case False{} False{} True{} True{} False{} False{} False{} False{}:
+      {==}
+    case False{} False{} True{} True{} False{} False{} False{} True{}:
+      {==}
+    case False{} False{} True{} True{} False{} False{} True{} False{}:
+      {==}
+    case False{} False{} True{} True{} False{} False{} True{} True{}:
+      {==}
+    case False{} False{} True{} True{} False{} True{} False{} False{}:
+      {==}
+    case False{} False{} True{} True{} False{} True{} False{} True{}:
+      {==}
+    case False{} False{} True{} True{} False{} True{} True{} False{}:
+      {==}
+    case False{} False{} True{} True{} False{} True{} True{} True{}:
+      {==}
+    case False{} False{} True{} True{} True{} False{} False{} False{}:
+      {==}
+    case False{} False{} True{} True{} True{} False{} False{} True{}:
+      {==}
+    case False{} False{} True{} True{} True{} False{} True{} False{}:
+      {==}
+    case False{} False{} True{} True{} True{} False{} True{} True{}:
+      {==}
+    case False{} False{} True{} True{} True{} True{} False{} False{}:
+      {==}
+    case False{} False{} True{} True{} True{} True{} False{} True{}:
+      {==}
+    case False{} False{} True{} True{} True{} True{} True{} False{}:
+      {==}
+    case False{} False{} True{} True{} True{} True{} True{} True{}:
+      {==}
+    case False{} True{} False{} False{} False{} False{} False{} False{}:
+      {==}
+    case False{} True{} False{} False{} False{} False{} False{} True{}:
+      {==}
+    case False{} True{} False{} False{} False{} False{} True{} False{}:
+      {==}
+    case False{} True{} False{} False{} False{} False{} True{} True{}:
+      {==}
+    case False{} True{} False{} False{} False{} True{} False{} False{}:
+      {==}
+    case False{} True{} False{} False{} False{} True{} False{} True{}:
+      {==}
+    case False{} True{} False{} False{} False{} True{} True{} False{}:
+      {==}
+    case False{} True{} False{} False{} False{} True{} True{} True{}:
+      {==}
+    case False{} True{} False{} False{} True{} False{} False{} False{}:
+      {==}
+    case False{} True{} False{} False{} True{} False{} False{} True{}:
+      {==}
+    case False{} True{} False{} False{} True{} False{} True{} False{}:
+      {==}
+    case False{} True{} False{} False{} True{} False{} True{} True{}:
+      {==}
+    case False{} True{} False{} False{} True{} True{} False{} False{}:
+      {==}
+    case False{} True{} False{} False{} True{} True{} False{} True{}:
+      {==}
+    case False{} True{} False{} False{} True{} True{} True{} False{}:
+      {==}
+    case False{} True{} False{} False{} True{} True{} True{} True{}:
+      {==}
+    case False{} True{} False{} True{} False{} False{} False{} False{}:
+      {==}
+    case False{} True{} False{} True{} False{} False{} False{} True{}:
+      {==}
+    case False{} True{} False{} True{} False{} False{} True{} False{}:
+      {==}
+    case False{} True{} False{} True{} False{} False{} True{} True{}:
+      {==}
+    case False{} True{} False{} True{} False{} True{} False{} False{}:
+      {==}
+    case False{} True{} False{} True{} False{} True{} False{} True{}:
+      {==}
+    case False{} True{} False{} True{} False{} True{} True{} False{}:
+      {==}
+    case False{} True{} False{} True{} False{} True{} True{} True{}:
+      {==}
+    case False{} True{} False{} True{} True{} False{} False{} False{}:
+      {==}
+    case False{} True{} False{} True{} True{} False{} False{} True{}:
+      {==}
+    case False{} True{} False{} True{} True{} False{} True{} False{}:
+      {==}
+    case False{} True{} False{} True{} True{} False{} True{} True{}:
+      {==}
+    case False{} True{} False{} True{} True{} True{} False{} False{}:
+      {==}
+    case False{} True{} False{} True{} True{} True{} False{} True{}:
+      {==}
+    case False{} True{} False{} True{} True{} True{} True{} False{}:
+      {==}
+    case False{} True{} False{} True{} True{} True{} True{} True{}:
+      {==}
+    case False{} True{} True{} False{} False{} False{} False{} False{}:
+      {==}
+    case False{} True{} True{} False{} False{} False{} False{} True{}:
+      {==}
+    case False{} True{} True{} False{} False{} False{} True{} False{}:
+      {==}
+    case False{} True{} True{} False{} False{} False{} True{} True{}:
+      {==}
+    case False{} True{} True{} False{} False{} True{} False{} False{}:
+      {==}
+    case False{} True{} True{} False{} False{} True{} False{} True{}:
+      {==}
+    case False{} True{} True{} False{} False{} True{} True{} False{}:
+      {==}
+    case False{} True{} True{} False{} False{} True{} True{} True{}:
+      {==}
+    case False{} True{} True{} False{} True{} False{} False{} False{}:
+      {==}
+    case False{} True{} True{} False{} True{} False{} False{} True{}:
+      {==}
+    case False{} True{} True{} False{} True{} False{} True{} False{}:
+      {==}
+    case False{} True{} True{} False{} True{} False{} True{} True{}:
+      {==}
+    case False{} True{} True{} False{} True{} True{} False{} False{}:
+      {==}
+    case False{} True{} True{} False{} True{} True{} False{} True{}:
+      {==}
+    case False{} True{} True{} False{} True{} True{} True{} False{}:
+      {==}
+    case False{} True{} True{} False{} True{} True{} True{} True{}:
+      {==}
+    case False{} True{} True{} True{} False{} False{} False{} False{}:
+      {==}
+    case False{} True{} True{} True{} False{} False{} False{} True{}:
+      {==}
+    case False{} True{} True{} True{} False{} False{} True{} False{}:
+      {==}
+    case False{} True{} True{} True{} False{} False{} True{} True{}:
+      {==}
+    case False{} True{} True{} True{} False{} True{} False{} False{}:
+      {==}
+    case False{} True{} True{} True{} False{} True{} False{} True{}:
+      {==}
+    case False{} True{} True{} True{} False{} True{} True{} False{}:
+      {==}
+    case False{} True{} True{} True{} False{} True{} True{} True{}:
+      {==}
+    case False{} True{} True{} True{} True{} False{} False{} False{}:
+      {==}
+    case False{} True{} True{} True{} True{} False{} False{} True{}:
+      {==}
+    case False{} True{} True{} True{} True{} False{} True{} False{}:
+      {==}
+    case False{} True{} True{} True{} True{} False{} True{} True{}:
+      {==}
+    case False{} True{} True{} True{} True{} True{} False{} False{}:
+      {==}
+    case False{} True{} True{} True{} True{} True{} False{} True{}:
+      {==}
+    case False{} True{} True{} True{} True{} True{} True{} False{}:
+      {==}
+    case False{} True{} True{} True{} True{} True{} True{} True{}:
+      {==}
+    case True{} False{} False{} False{} False{} False{} False{} False{}:
+      {==}
+    case True{} False{} False{} False{} False{} False{} False{} True{}:
+      {==}
+    case True{} False{} False{} False{} False{} False{} True{} False{}:
+      {==}
+    case True{} False{} False{} False{} False{} False{} True{} True{}:
+      {==}
+    case True{} False{} False{} False{} False{} True{} False{} False{}:
+      {==}
+    case True{} False{} False{} False{} False{} True{} False{} True{}:
+      {==}
+    case True{} False{} False{} False{} False{} True{} True{} False{}:
+      {==}
+    case True{} False{} False{} False{} False{} True{} True{} True{}:
+      {==}
+    case True{} False{} False{} False{} True{} False{} False{} False{}:
+      {==}
+    case True{} False{} False{} False{} True{} False{} False{} True{}:
+      {==}
+    case True{} False{} False{} False{} True{} False{} True{} False{}:
+      {==}
+    case True{} False{} False{} False{} True{} False{} True{} True{}:
+      {==}
+    case True{} False{} False{} False{} True{} True{} False{} False{}:
+      {==}
+    case True{} False{} False{} False{} True{} True{} False{} True{}:
+      {==}
+    case True{} False{} False{} False{} True{} True{} True{} False{}:
+      {==}
+    case True{} False{} False{} False{} True{} True{} True{} True{}:
+      {==}
+    case True{} False{} False{} True{} False{} False{} False{} False{}:
+      {==}
+    case True{} False{} False{} True{} False{} False{} False{} True{}:
+      {==}
+    case True{} False{} False{} True{} False{} False{} True{} False{}:
+      {==}
+    case True{} False{} False{} True{} False{} False{} True{} True{}:
+      {==}
+    case True{} False{} False{} True{} False{} True{} False{} False{}:
+      {==}
+    case True{} False{} False{} True{} False{} True{} False{} True{}:
+      {==}
+    case True{} False{} False{} True{} False{} True{} True{} False{}:
+      {==}
+    case True{} False{} False{} True{} False{} True{} True{} True{}:
+      {==}
+    case True{} False{} False{} True{} True{} False{} False{} False{}:
+      {==}
+    case True{} False{} False{} True{} True{} False{} False{} True{}:
+      {==}
+    case True{} False{} False{} True{} True{} False{} True{} False{}:
+      {==}
+    case True{} False{} False{} True{} True{} False{} True{} True{}:
+      {==}
+    case True{} False{} False{} True{} True{} True{} False{} False{}:
+      {==}
+    case True{} False{} False{} True{} True{} True{} False{} True{}:
+      {==}
+    case True{} False{} False{} True{} True{} True{} True{} False{}:
+      {==}
+    case True{} False{} False{} True{} True{} True{} True{} True{}:
+      {==}
+    case True{} False{} True{} False{} False{} False{} False{} False{}:
+      {==}
+    case True{} False{} True{} False{} False{} False{} False{} True{}:
+      {==}
+    case True{} False{} True{} False{} False{} False{} True{} False{}:
+      {==}
+    case True{} False{} True{} False{} False{} False{} True{} True{}:
+      {==}
+    case True{} False{} True{} False{} False{} True{} False{} False{}:
+      {==}
+    case True{} False{} True{} False{} False{} True{} False{} True{}:
+      {==}
+    case True{} False{} True{} False{} False{} True{} True{} False{}:
+      {==}
+    case True{} False{} True{} False{} False{} True{} True{} True{}:
+      {==}
+    case True{} False{} True{} False{} True{} False{} False{} False{}:
+      {==}
+    case True{} False{} True{} False{} True{} False{} False{} True{}:
+      {==}
+    case True{} False{} True{} False{} True{} False{} True{} False{}:
+      {==}
+    case True{} False{} True{} False{} True{} False{} True{} True{}:
+      {==}
+    case True{} False{} True{} False{} True{} True{} False{} False{}:
+      {==}
+    case True{} False{} True{} False{} True{} True{} False{} True{}:
+      {==}
+    case True{} False{} True{} False{} True{} True{} True{} False{}:
+      {==}
+    case True{} False{} True{} False{} True{} True{} True{} True{}:
+      {==}
+    case True{} False{} True{} True{} False{} False{} False{} False{}:
+      {==}
+    case True{} False{} True{} True{} False{} False{} False{} True{}:
+      {==}
+    case True{} False{} True{} True{} False{} False{} True{} False{}:
+      {==}
+    case True{} False{} True{} True{} False{} False{} True{} True{}:
+      {==}
+    case True{} False{} True{} True{} False{} True{} False{} False{}:
+      {==}
+    case True{} False{} True{} True{} False{} True{} False{} True{}:
+      {==}
+    case True{} False{} True{} True{} False{} True{} True{} False{}:
+      {==}
+    case True{} False{} True{} True{} False{} True{} True{} True{}:
+      {==}
+    case True{} False{} True{} True{} True{} False{} False{} False{}:
+      {==}
+    case True{} False{} True{} True{} True{} False{} False{} True{}:
+      {==}
+    case True{} False{} True{} True{} True{} False{} True{} False{}:
+      {==}
+    case True{} False{} True{} True{} True{} False{} True{} True{}:
+      {==}
+    case True{} False{} True{} True{} True{} True{} False{} False{}:
+      {==}
+    case True{} False{} True{} True{} True{} True{} False{} True{}:
+      {==}
+    case True{} False{} True{} True{} True{} True{} True{} False{}:
+      {==}
+    case True{} False{} True{} True{} True{} True{} True{} True{}:
+      {==}
+    case True{} True{} False{} False{} False{} False{} False{} False{}:
+      {==}
+    case True{} True{} False{} False{} False{} False{} False{} True{}:
+      {==}
+    case True{} True{} False{} False{} False{} False{} True{} False{}:
+      {==}
+    case True{} True{} False{} False{} False{} False{} True{} True{}:
+      {==}
+    case True{} True{} False{} False{} False{} True{} False{} False{}:
+      {==}
+    case True{} True{} False{} False{} False{} True{} False{} True{}:
+      {==}
+    case True{} True{} False{} False{} False{} True{} True{} False{}:
+      {==}
+    case True{} True{} False{} False{} False{} True{} True{} True{}:
+      {==}
+    case True{} True{} False{} False{} True{} False{} False{} False{}:
+      {==}
+    case True{} True{} False{} False{} True{} False{} False{} True{}:
+      {==}
+    case True{} True{} False{} False{} True{} False{} True{} False{}:
+      {==}
+    case True{} True{} False{} False{} True{} False{} True{} True{}:
+      {==}
+    case True{} True{} False{} False{} True{} True{} False{} False{}:
+      {==}
+    case True{} True{} False{} False{} True{} True{} False{} True{}:
+      {==}
+    case True{} True{} False{} False{} True{} True{} True{} False{}:
+      {==}
+    case True{} True{} False{} False{} True{} True{} True{} True{}:
+      {==}
+    case True{} True{} False{} True{} False{} False{} False{} False{}:
+      {==}
+    case True{} True{} False{} True{} False{} False{} False{} True{}:
+      {==}
+    case True{} True{} False{} True{} False{} False{} True{} False{}:
+      {==}
+    case True{} True{} False{} True{} False{} False{} True{} True{}:
+      {==}
+    case True{} True{} False{} True{} False{} True{} False{} False{}:
+      {==}
+    case True{} True{} False{} True{} False{} True{} False{} True{}:
+      {==}
+    case True{} True{} False{} True{} False{} True{} True{} False{}:
+      {==}
+    case True{} True{} False{} True{} False{} True{} True{} True{}:
+      {==}
+    case True{} True{} False{} True{} True{} False{} False{} False{}:
+      {==}
+    case True{} True{} False{} True{} True{} False{} False{} True{}:
+      {==}
+    case True{} True{} False{} True{} True{} False{} True{} False{}:
+      {==}
+    case True{} True{} False{} True{} True{} False{} True{} True{}:
+      {==}
+    case True{} True{} False{} True{} True{} True{} False{} False{}:
+      {==}
+    case True{} True{} False{} True{} True{} True{} False{} True{}:
+      {==}
+    case True{} True{} False{} True{} True{} True{} True{} False{}:
+      {==}
+    case True{} True{} False{} True{} True{} True{} True{} True{}:
+      {==}
+    case True{} True{} True{} False{} False{} False{} False{} False{}:
+      {==}
+    case True{} True{} True{} False{} False{} False{} False{} True{}:
+      {==}
+    case True{} True{} True{} False{} False{} False{} True{} False{}:
+      {==}
+    case True{} True{} True{} False{} False{} False{} True{} True{}:
+      {==}
+    case True{} True{} True{} False{} False{} True{} False{} False{}:
+      {==}
+    case True{} True{} True{} False{} False{} True{} False{} True{}:
+      {==}
+    case True{} True{} True{} False{} False{} True{} True{} False{}:
+      {==}
+    case True{} True{} True{} False{} False{} True{} True{} True{}:
+      {==}
+    case True{} True{} True{} False{} True{} False{} False{} False{}:
+      {==}
+    case True{} True{} True{} False{} True{} False{} False{} True{}:
+      {==}
+    case True{} True{} True{} False{} True{} False{} True{} False{}:
+      {==}
+    case True{} True{} True{} False{} True{} False{} True{} True{}:
+      {==}
+    case True{} True{} True{} False{} True{} True{} False{} False{}:
+      {==}
+    case True{} True{} True{} False{} True{} True{} False{} True{}:
+      {==}
+    case True{} True{} True{} False{} True{} True{} True{} False{}:
+      {==}
+    case True{} True{} True{} False{} True{} True{} True{} True{}:
+      {==}
+    case True{} True{} True{} True{} False{} False{} False{} False{}:
+      {==}
+    case True{} True{} True{} True{} False{} False{} False{} True{}:
+      {==}
+    case True{} True{} True{} True{} False{} False{} True{} False{}:
+      {==}
+    case True{} True{} True{} True{} False{} False{} True{} True{}:
+      {==}
+    case True{} True{} True{} True{} False{} True{} False{} False{}:
+      {==}
+    case True{} True{} True{} True{} False{} True{} False{} True{}:
+      {==}
+    case True{} True{} True{} True{} False{} True{} True{} False{}:
+      {==}
+    case True{} True{} True{} True{} False{} True{} True{} True{}:
+      {==}
+    case True{} True{} True{} True{} True{} False{} False{} False{}:
+      {==}
+    case True{} True{} True{} True{} True{} False{} False{} True{}:
+      {==}
+    case True{} True{} True{} True{} True{} False{} True{} False{}:
+      {==}
+    case True{} True{} True{} True{} True{} False{} True{} True{}:
+      {==}
+    case True{} True{} True{} True{} True{} True{} False{} False{}:
+      {==}
+    case True{} True{} True{} True{} True{} True{} False{} True{}:
+      {==}
+    case True{} True{} True{} True{} True{} True{} True{} False{}:
+      {==}
+    case True{} True{} True{} True{} True{} True{} True{} True{}:
+      {==}
+
+def br.low.hi8(b8: Bool, b7: Bool, b6: Bool, b5: Bool, b4: Bool, b3: Bool, b2: Bool, b1: Bool,
+    b0: Bool) ->
+  {Chr{Spec.lower(U32{WCon{b0, WCon{b1, WCon{b2, WCon{b3, WCon{b4, WCon{b5, WCon{b6, WCon{b7,
+      WCon{b8, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+      WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+      WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+      WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+      WNil{}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}})} == Char.to_lower(Chr{U32{WCon{b0, WCon{b1, WCon{b2,
+      WCon{b3, WCon{b4, WCon{b5, WCon{b6, WCon{b7, WCon{b8, WCon{False{}, WCon{False{},
+      WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+      WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+      WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+      WCon{False{}, WCon{False{}, WCon{False{}, WNil{}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}) : Char}:
+  match b8:
+    case True{}:
+      low.hi(WCon{b0, WCon{b1, WCon{b2, WCon{b3, WCon{b4, WCon{b5, WCon{b6, WCon{b7, WCon{True{},
+          WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+          WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+          WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+          WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+          WNil{}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}})
+    case False{}:
+      br.low.lo(b7, b6, b5, b4, b3, b2, b1, b0)
+
+def br.low.hi9(b9: Bool, b8: Bool, b7: Bool, b6: Bool, b5: Bool, b4: Bool, b3: Bool, b2: Bool,
+    b1: Bool, b0: Bool) ->
+  {Chr{Spec.lower(U32{WCon{b0, WCon{b1, WCon{b2, WCon{b3, WCon{b4, WCon{b5, WCon{b6, WCon{b7,
+      WCon{b8, WCon{b9, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+      WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+      WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+      WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+      WNil{}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}})} == Char.to_lower(Chr{U32{WCon{b0, WCon{b1, WCon{b2,
+      WCon{b3, WCon{b4, WCon{b5, WCon{b6, WCon{b7, WCon{b8, WCon{b9, WCon{False{}, WCon{False{},
+      WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+      WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+      WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+      WCon{False{}, WCon{False{}, WNil{}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}) : Char}:
+  match b9:
+    case True{}:
+      low.hi(WCon{b0, WCon{b1, WCon{b2, WCon{b3, WCon{b4, WCon{b5, WCon{b6, WCon{b7, WCon{b8,
+          WCon{True{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+          WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+          WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+          WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+          WNil{}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}})
+    case False{}:
+      br.low.hi8(b8, b7, b6, b5, b4, b3, b2, b1, b0)
+
+def br.low.hi10(b10: Bool, b9: Bool, b8: Bool, b7: Bool, b6: Bool, b5: Bool, b4: Bool, b3: Bool,
+    b2: Bool, b1: Bool, b0: Bool) ->
+  {Chr{Spec.lower(U32{WCon{b0, WCon{b1, WCon{b2, WCon{b3, WCon{b4, WCon{b5, WCon{b6, WCon{b7,
+      WCon{b8, WCon{b9, WCon{b10, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+      WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+      WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+      WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+      WNil{}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}})} == Char.to_lower(Chr{U32{WCon{b0, WCon{b1, WCon{b2,
+      WCon{b3, WCon{b4, WCon{b5, WCon{b6, WCon{b7, WCon{b8, WCon{b9, WCon{b10, WCon{False{},
+      WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+      WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+      WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+      WCon{False{}, WCon{False{}, WNil{}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}) : Char}:
+  match b10:
+    case True{}:
+      low.hi(WCon{b0, WCon{b1, WCon{b2, WCon{b3, WCon{b4, WCon{b5, WCon{b6, WCon{b7, WCon{b8,
+          WCon{b9, WCon{True{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+          WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+          WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+          WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+          WNil{}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}})
+    case False{}:
+      br.low.hi9(b9, b8, b7, b6, b5, b4, b3, b2, b1, b0)
+
+def br.low.hi11(b11: Bool, b10: Bool, b9: Bool, b8: Bool, b7: Bool, b6: Bool, b5: Bool, b4: Bool,
+    b3: Bool, b2: Bool, b1: Bool, b0: Bool) ->
+  {Chr{Spec.lower(U32{WCon{b0, WCon{b1, WCon{b2, WCon{b3, WCon{b4, WCon{b5, WCon{b6, WCon{b7,
+      WCon{b8, WCon{b9, WCon{b10, WCon{b11, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+      WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+      WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+      WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+      WNil{}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}})} == Char.to_lower(Chr{U32{WCon{b0, WCon{b1, WCon{b2,
+      WCon{b3, WCon{b4, WCon{b5, WCon{b6, WCon{b7, WCon{b8, WCon{b9, WCon{b10, WCon{b11,
+      WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+      WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+      WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+      WCon{False{}, WCon{False{}, WNil{}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}) : Char}:
+  match b11:
+    case True{}:
+      low.hi(WCon{b0, WCon{b1, WCon{b2, WCon{b3, WCon{b4, WCon{b5, WCon{b6, WCon{b7, WCon{b8,
+          WCon{b9, WCon{b10, WCon{True{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+          WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+          WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+          WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+          WNil{}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}})
+    case False{}:
+      br.low.hi10(b10, b9, b8, b7, b6, b5, b4, b3, b2, b1, b0)
+
+def br.low.hi12(b12: Bool, b11: Bool, b10: Bool, b9: Bool, b8: Bool, b7: Bool, b6: Bool, b5: Bool,
+    b4: Bool, b3: Bool, b2: Bool, b1: Bool, b0: Bool) ->
+  {Chr{Spec.lower(U32{WCon{b0, WCon{b1, WCon{b2, WCon{b3, WCon{b4, WCon{b5, WCon{b6, WCon{b7,
+      WCon{b8, WCon{b9, WCon{b10, WCon{b11, WCon{b12, WCon{False{}, WCon{False{}, WCon{False{},
+      WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+      WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+      WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+      WNil{}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}})} == Char.to_lower(Chr{U32{WCon{b0, WCon{b1, WCon{b2,
+      WCon{b3, WCon{b4, WCon{b5, WCon{b6, WCon{b7, WCon{b8, WCon{b9, WCon{b10, WCon{b11, WCon{b12,
+      WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+      WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+      WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+      WCon{False{}, WNil{}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}) : Char}:
+  match b12:
+    case True{}:
+      low.hi(WCon{b0, WCon{b1, WCon{b2, WCon{b3, WCon{b4, WCon{b5, WCon{b6, WCon{b7, WCon{b8,
+          WCon{b9, WCon{b10, WCon{b11, WCon{True{}, WCon{False{}, WCon{False{}, WCon{False{},
+          WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+          WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+          WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+          WNil{}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}})
+    case False{}:
+      br.low.hi11(b11, b10, b9, b8, b7, b6, b5, b4, b3, b2, b1, b0)
+
+def br.low.hi13(b13: Bool, b12: Bool, b11: Bool, b10: Bool, b9: Bool, b8: Bool, b7: Bool, b6: Bool,
+    b5: Bool, b4: Bool, b3: Bool, b2: Bool, b1: Bool, b0: Bool) ->
+  {Chr{Spec.lower(U32{WCon{b0, WCon{b1, WCon{b2, WCon{b3, WCon{b4, WCon{b5, WCon{b6, WCon{b7,
+      WCon{b8, WCon{b9, WCon{b10, WCon{b11, WCon{b12, WCon{b13, WCon{False{}, WCon{False{},
+      WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+      WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+      WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+      WNil{}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}})} == Char.to_lower(Chr{U32{WCon{b0, WCon{b1, WCon{b2,
+      WCon{b3, WCon{b4, WCon{b5, WCon{b6, WCon{b7, WCon{b8, WCon{b9, WCon{b10, WCon{b11, WCon{b12,
+      WCon{b13, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+      WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+      WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+      WNil{}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}) : Char}:
+  match b13:
+    case True{}:
+      low.hi(WCon{b0, WCon{b1, WCon{b2, WCon{b3, WCon{b4, WCon{b5, WCon{b6, WCon{b7, WCon{b8,
+          WCon{b9, WCon{b10, WCon{b11, WCon{b12, WCon{True{}, WCon{False{}, WCon{False{},
+          WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+          WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+          WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+          WNil{}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}})
+    case False{}:
+      br.low.hi12(b12, b11, b10, b9, b8, b7, b6, b5, b4, b3, b2, b1, b0)
+
+def br.low.hi14(b14: Bool, b13: Bool, b12: Bool, b11: Bool, b10: Bool, b9: Bool, b8: Bool,
+    b7: Bool, b6: Bool, b5: Bool, b4: Bool, b3: Bool, b2: Bool, b1: Bool, b0: Bool) ->
+  {Chr{Spec.lower(U32{WCon{b0, WCon{b1, WCon{b2, WCon{b3, WCon{b4, WCon{b5, WCon{b6, WCon{b7,
+      WCon{b8, WCon{b9, WCon{b10, WCon{b11, WCon{b12, WCon{b13, WCon{b14, WCon{False{},
+      WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+      WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+      WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+      WNil{}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}})} == Char.to_lower(Chr{U32{WCon{b0, WCon{b1, WCon{b2,
+      WCon{b3, WCon{b4, WCon{b5, WCon{b6, WCon{b7, WCon{b8, WCon{b9, WCon{b10, WCon{b11, WCon{b12,
+      WCon{b13, WCon{b14, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+      WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+      WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+      WNil{}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}) : Char}:
+  match b14:
+    case True{}:
+      low.hi(WCon{b0, WCon{b1, WCon{b2, WCon{b3, WCon{b4, WCon{b5, WCon{b6, WCon{b7, WCon{b8,
+          WCon{b9, WCon{b10, WCon{b11, WCon{b12, WCon{b13, WCon{True{}, WCon{False{}, WCon{False{},
+          WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+          WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+          WCon{False{}, WCon{False{}, WCon{False{}, WNil{}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}})
+    case False{}:
+      br.low.hi13(b13, b12, b11, b10, b9, b8, b7, b6, b5, b4, b3, b2, b1, b0)
+
+def br.low.hi15(b15: Bool, b14: Bool, b13: Bool, b12: Bool, b11: Bool, b10: Bool, b9: Bool,
+    b8: Bool, b7: Bool, b6: Bool, b5: Bool, b4: Bool, b3: Bool, b2: Bool, b1: Bool, b0: Bool) ->
+  {Chr{Spec.lower(U32{WCon{b0, WCon{b1, WCon{b2, WCon{b3, WCon{b4, WCon{b5, WCon{b6, WCon{b7,
+      WCon{b8, WCon{b9, WCon{b10, WCon{b11, WCon{b12, WCon{b13, WCon{b14, WCon{b15, WCon{False{},
+      WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+      WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+      WCon{False{}, WCon{False{}, WCon{False{},
+      WNil{}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}})} == Char.to_lower(Chr{U32{WCon{b0, WCon{b1, WCon{b2,
+      WCon{b3, WCon{b4, WCon{b5, WCon{b6, WCon{b7, WCon{b8, WCon{b9, WCon{b10, WCon{b11, WCon{b12,
+      WCon{b13, WCon{b14, WCon{b15, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+      WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+      WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+      WNil{}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}) : Char}:
+  match b15:
+    case True{}:
+      low.hi(WCon{b0, WCon{b1, WCon{b2, WCon{b3, WCon{b4, WCon{b5, WCon{b6, WCon{b7, WCon{b8,
+          WCon{b9, WCon{b10, WCon{b11, WCon{b12, WCon{b13, WCon{b14, WCon{True{}, WCon{False{},
+          WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+          WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+          WCon{False{}, WCon{False{}, WCon{False{}, WNil{}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}})
+    case False{}:
+      br.low.hi14(b14, b13, b12, b11, b10, b9, b8, b7, b6, b5, b4, b3, b2, b1, b0)
+
+def br.low.hi16(b16: Bool, b15: Bool, b14: Bool, b13: Bool, b12: Bool, b11: Bool, b10: Bool,
+    b9: Bool, b8: Bool, b7: Bool, b6: Bool, b5: Bool, b4: Bool, b3: Bool, b2: Bool, b1: Bool,
+    b0: Bool) ->
+  {Chr{Spec.lower(U32{WCon{b0, WCon{b1, WCon{b2, WCon{b3, WCon{b4, WCon{b5, WCon{b6, WCon{b7,
+      WCon{b8, WCon{b9, WCon{b10, WCon{b11, WCon{b12, WCon{b13, WCon{b14, WCon{b15, WCon{b16,
+      WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+      WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+      WCon{False{}, WCon{False{}, WCon{False{},
+      WNil{}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}})} == Char.to_lower(Chr{U32{WCon{b0, WCon{b1, WCon{b2,
+      WCon{b3, WCon{b4, WCon{b5, WCon{b6, WCon{b7, WCon{b8, WCon{b9, WCon{b10, WCon{b11, WCon{b12,
+      WCon{b13, WCon{b14, WCon{b15, WCon{b16, WCon{False{}, WCon{False{}, WCon{False{},
+      WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+      WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+      WNil{}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}) : Char}:
+  match b16:
+    case True{}:
+      low.hi(WCon{b0, WCon{b1, WCon{b2, WCon{b3, WCon{b4, WCon{b5, WCon{b6, WCon{b7, WCon{b8,
+          WCon{b9, WCon{b10, WCon{b11, WCon{b12, WCon{b13, WCon{b14, WCon{b15, WCon{True{},
+          WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+          WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+          WCon{False{}, WCon{False{}, WCon{False{}, WNil{}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}})
+    case False{}:
+      br.low.hi15(b15, b14, b13, b12, b11, b10, b9, b8, b7, b6, b5, b4, b3, b2, b1, b0)
+
+def br.low.hi17(b17: Bool, b16: Bool, b15: Bool, b14: Bool, b13: Bool, b12: Bool, b11: Bool,
+    b10: Bool, b9: Bool, b8: Bool, b7: Bool, b6: Bool, b5: Bool, b4: Bool, b3: Bool, b2: Bool,
+    b1: Bool, b0: Bool) ->
+  {Chr{Spec.lower(U32{WCon{b0, WCon{b1, WCon{b2, WCon{b3, WCon{b4, WCon{b5, WCon{b6, WCon{b7,
+      WCon{b8, WCon{b9, WCon{b10, WCon{b11, WCon{b12, WCon{b13, WCon{b14, WCon{b15, WCon{b16,
+      WCon{b17, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+      WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+      WCon{False{}, WCon{False{},
+      WNil{}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}})} == Char.to_lower(Chr{U32{WCon{b0, WCon{b1, WCon{b2,
+      WCon{b3, WCon{b4, WCon{b5, WCon{b6, WCon{b7, WCon{b8, WCon{b9, WCon{b10, WCon{b11, WCon{b12,
+      WCon{b13, WCon{b14, WCon{b15, WCon{b16, WCon{b17, WCon{False{}, WCon{False{}, WCon{False{},
+      WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+      WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+      WNil{}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}) : Char}:
+  match b17:
+    case True{}:
+      low.hi(WCon{b0, WCon{b1, WCon{b2, WCon{b3, WCon{b4, WCon{b5, WCon{b6, WCon{b7, WCon{b8,
+          WCon{b9, WCon{b10, WCon{b11, WCon{b12, WCon{b13, WCon{b14, WCon{b15, WCon{b16,
+          WCon{True{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+          WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+          WCon{False{}, WCon{False{}, WCon{False{}, WNil{}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}})
+    case False{}:
+      br.low.hi16(b16, b15, b14, b13, b12, b11, b10, b9, b8, b7, b6, b5, b4, b3, b2, b1, b0)
+
+def br.low.hi18(b18: Bool, b17: Bool, b16: Bool, b15: Bool, b14: Bool, b13: Bool, b12: Bool,
+    b11: Bool, b10: Bool, b9: Bool, b8: Bool, b7: Bool, b6: Bool, b5: Bool, b4: Bool, b3: Bool,
+    b2: Bool, b1: Bool, b0: Bool) ->
+  {Chr{Spec.lower(U32{WCon{b0, WCon{b1, WCon{b2, WCon{b3, WCon{b4, WCon{b5, WCon{b6, WCon{b7,
+      WCon{b8, WCon{b9, WCon{b10, WCon{b11, WCon{b12, WCon{b13, WCon{b14, WCon{b15, WCon{b16,
+      WCon{b17, WCon{b18, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+      WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+      WCon{False{}, WCon{False{},
+      WNil{}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}})} == Char.to_lower(Chr{U32{WCon{b0, WCon{b1, WCon{b2,
+      WCon{b3, WCon{b4, WCon{b5, WCon{b6, WCon{b7, WCon{b8, WCon{b9, WCon{b10, WCon{b11, WCon{b12,
+      WCon{b13, WCon{b14, WCon{b15, WCon{b16, WCon{b17, WCon{b18, WCon{False{}, WCon{False{},
+      WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+      WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+      WNil{}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}) : Char}:
+  match b18:
+    case True{}:
+      low.hi(WCon{b0, WCon{b1, WCon{b2, WCon{b3, WCon{b4, WCon{b5, WCon{b6, WCon{b7, WCon{b8,
+          WCon{b9, WCon{b10, WCon{b11, WCon{b12, WCon{b13, WCon{b14, WCon{b15, WCon{b16, WCon{b17,
+          WCon{True{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+          WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+          WCon{False{}, WCon{False{}, WNil{}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}})
+    case False{}:
+      br.low.hi17(b17, b16, b15, b14, b13, b12, b11, b10, b9, b8, b7, b6, b5, b4, b3, b2, b1, b0)
+
+def br.low.hi19(b19: Bool, b18: Bool, b17: Bool, b16: Bool, b15: Bool, b14: Bool, b13: Bool,
+    b12: Bool, b11: Bool, b10: Bool, b9: Bool, b8: Bool, b7: Bool, b6: Bool, b5: Bool, b4: Bool,
+    b3: Bool, b2: Bool, b1: Bool, b0: Bool) ->
+  {Chr{Spec.lower(U32{WCon{b0, WCon{b1, WCon{b2, WCon{b3, WCon{b4, WCon{b5, WCon{b6, WCon{b7,
+      WCon{b8, WCon{b9, WCon{b10, WCon{b11, WCon{b12, WCon{b13, WCon{b14, WCon{b15, WCon{b16,
+      WCon{b17, WCon{b18, WCon{b19, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+      WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+      WCon{False{}, WCon{False{},
+      WNil{}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}})} == Char.to_lower(Chr{U32{WCon{b0, WCon{b1, WCon{b2,
+      WCon{b3, WCon{b4, WCon{b5, WCon{b6, WCon{b7, WCon{b8, WCon{b9, WCon{b10, WCon{b11, WCon{b12,
+      WCon{b13, WCon{b14, WCon{b15, WCon{b16, WCon{b17, WCon{b18, WCon{b19, WCon{False{},
+      WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+      WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+      WNil{}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}) : Char}:
+  match b19:
+    case True{}:
+      low.hi(WCon{b0, WCon{b1, WCon{b2, WCon{b3, WCon{b4, WCon{b5, WCon{b6, WCon{b7, WCon{b8,
+          WCon{b9, WCon{b10, WCon{b11, WCon{b12, WCon{b13, WCon{b14, WCon{b15, WCon{b16, WCon{b17,
+          WCon{b18, WCon{True{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+          WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+          WCon{False{}, WCon{False{}, WNil{}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}})
+    case False{}:
+      br.low.hi18(b18, b17, b16, b15, b14, b13, b12, b11, b10, b9, b8, b7, b6, b5, b4, b3, b2, b1,
+          b0)
+
+def br.low.hi20(b20: Bool, b19: Bool, b18: Bool, b17: Bool, b16: Bool, b15: Bool, b14: Bool,
+    b13: Bool, b12: Bool, b11: Bool, b10: Bool, b9: Bool, b8: Bool, b7: Bool, b6: Bool, b5: Bool,
+    b4: Bool, b3: Bool, b2: Bool, b1: Bool, b0: Bool) ->
+  {Chr{Spec.lower(U32{WCon{b0, WCon{b1, WCon{b2, WCon{b3, WCon{b4, WCon{b5, WCon{b6, WCon{b7,
+      WCon{b8, WCon{b9, WCon{b10, WCon{b11, WCon{b12, WCon{b13, WCon{b14, WCon{b15, WCon{b16,
+      WCon{b17, WCon{b18, WCon{b19, WCon{b20, WCon{False{}, WCon{False{}, WCon{False{},
+      WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+      WCon{False{}, WCon{False{},
+      WNil{}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}})} == Char.to_lower(Chr{U32{WCon{b0, WCon{b1, WCon{b2,
+      WCon{b3, WCon{b4, WCon{b5, WCon{b6, WCon{b7, WCon{b8, WCon{b9, WCon{b10, WCon{b11, WCon{b12,
+      WCon{b13, WCon{b14, WCon{b15, WCon{b16, WCon{b17, WCon{b18, WCon{b19, WCon{b20, WCon{False{},
+      WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+      WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+      WNil{}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}) : Char}:
+  match b20:
+    case True{}:
+      low.hi(WCon{b0, WCon{b1, WCon{b2, WCon{b3, WCon{b4, WCon{b5, WCon{b6, WCon{b7, WCon{b8,
+          WCon{b9, WCon{b10, WCon{b11, WCon{b12, WCon{b13, WCon{b14, WCon{b15, WCon{b16, WCon{b17,
+          WCon{b18, WCon{b19, WCon{True{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+          WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+          WCon{False{}, WNil{}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}})
+    case False{}:
+      br.low.hi19(b19, b18, b17, b16, b15, b14, b13, b12, b11, b10, b9, b8, b7, b6, b5, b4, b3, b2,
+          b1, b0)
+
+def br.low.hi21(b21: Bool, b20: Bool, b19: Bool, b18: Bool, b17: Bool, b16: Bool, b15: Bool,
+    b14: Bool, b13: Bool, b12: Bool, b11: Bool, b10: Bool, b9: Bool, b8: Bool, b7: Bool, b6: Bool,
+    b5: Bool, b4: Bool, b3: Bool, b2: Bool, b1: Bool, b0: Bool) ->
+  {Chr{Spec.lower(U32{WCon{b0, WCon{b1, WCon{b2, WCon{b3, WCon{b4, WCon{b5, WCon{b6, WCon{b7,
+      WCon{b8, WCon{b9, WCon{b10, WCon{b11, WCon{b12, WCon{b13, WCon{b14, WCon{b15, WCon{b16,
+      WCon{b17, WCon{b18, WCon{b19, WCon{b20, WCon{b21, WCon{False{}, WCon{False{}, WCon{False{},
+      WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+      WCon{False{}, WNil{}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}})} == Char.to_lower(Chr{U32{WCon{b0,
+      WCon{b1, WCon{b2, WCon{b3, WCon{b4, WCon{b5, WCon{b6, WCon{b7, WCon{b8, WCon{b9, WCon{b10,
+      WCon{b11, WCon{b12, WCon{b13, WCon{b14, WCon{b15, WCon{b16, WCon{b17, WCon{b18, WCon{b19,
+      WCon{b20, WCon{b21, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+      WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+      WNil{}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}) : Char}:
+  match b21:
+    case True{}:
+      low.hi(WCon{b0, WCon{b1, WCon{b2, WCon{b3, WCon{b4, WCon{b5, WCon{b6, WCon{b7, WCon{b8,
+          WCon{b9, WCon{b10, WCon{b11, WCon{b12, WCon{b13, WCon{b14, WCon{b15, WCon{b16, WCon{b17,
+          WCon{b18, WCon{b19, WCon{b20, WCon{True{}, WCon{False{}, WCon{False{}, WCon{False{},
+          WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+          WCon{False{}, WNil{}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}})
+    case False{}:
+      br.low.hi20(b20, b19, b18, b17, b16, b15, b14, b13, b12, b11, b10, b9, b8, b7, b6, b5, b4,
+          b3, b2, b1, b0)
+
+def br.low.hi22(b22: Bool, b21: Bool, b20: Bool, b19: Bool, b18: Bool, b17: Bool, b16: Bool,
+    b15: Bool, b14: Bool, b13: Bool, b12: Bool, b11: Bool, b10: Bool, b9: Bool, b8: Bool, b7: Bool,
+    b6: Bool, b5: Bool, b4: Bool, b3: Bool, b2: Bool, b1: Bool, b0: Bool) ->
+  {Chr{Spec.lower(U32{WCon{b0, WCon{b1, WCon{b2, WCon{b3, WCon{b4, WCon{b5, WCon{b6, WCon{b7,
+      WCon{b8, WCon{b9, WCon{b10, WCon{b11, WCon{b12, WCon{b13, WCon{b14, WCon{b15, WCon{b16,
+      WCon{b17, WCon{b18, WCon{b19, WCon{b20, WCon{b21, WCon{b22, WCon{False{}, WCon{False{},
+      WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+      WCon{False{}, WNil{}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}})} == Char.to_lower(Chr{U32{WCon{b0,
+      WCon{b1, WCon{b2, WCon{b3, WCon{b4, WCon{b5, WCon{b6, WCon{b7, WCon{b8, WCon{b9, WCon{b10,
+      WCon{b11, WCon{b12, WCon{b13, WCon{b14, WCon{b15, WCon{b16, WCon{b17, WCon{b18, WCon{b19,
+      WCon{b20, WCon{b21, WCon{b22, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+      WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+      WNil{}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}) : Char}:
+  match b22:
+    case True{}:
+      low.hi(WCon{b0, WCon{b1, WCon{b2, WCon{b3, WCon{b4, WCon{b5, WCon{b6, WCon{b7, WCon{b8,
+          WCon{b9, WCon{b10, WCon{b11, WCon{b12, WCon{b13, WCon{b14, WCon{b15, WCon{b16, WCon{b17,
+          WCon{b18, WCon{b19, WCon{b20, WCon{b21, WCon{True{}, WCon{False{}, WCon{False{},
+          WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+          WCon{False{}, WNil{}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}})
+    case False{}:
+      br.low.hi21(b21, b20, b19, b18, b17, b16, b15, b14, b13, b12, b11, b10, b9, b8, b7, b6, b5,
+          b4, b3, b2, b1, b0)
+
+def br.low.hi23(b23: Bool, b22: Bool, b21: Bool, b20: Bool, b19: Bool, b18: Bool, b17: Bool,
+    b16: Bool, b15: Bool, b14: Bool, b13: Bool, b12: Bool, b11: Bool, b10: Bool, b9: Bool,
+    b8: Bool, b7: Bool, b6: Bool, b5: Bool, b4: Bool, b3: Bool, b2: Bool, b1: Bool, b0: Bool) ->
+  {Chr{Spec.lower(U32{WCon{b0, WCon{b1, WCon{b2, WCon{b3, WCon{b4, WCon{b5, WCon{b6, WCon{b7,
+      WCon{b8, WCon{b9, WCon{b10, WCon{b11, WCon{b12, WCon{b13, WCon{b14, WCon{b15, WCon{b16,
+      WCon{b17, WCon{b18, WCon{b19, WCon{b20, WCon{b21, WCon{b22, WCon{b23, WCon{False{},
+      WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+      WCon{False{}, WNil{}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}})} == Char.to_lower(Chr{U32{WCon{b0,
+      WCon{b1, WCon{b2, WCon{b3, WCon{b4, WCon{b5, WCon{b6, WCon{b7, WCon{b8, WCon{b9, WCon{b10,
+      WCon{b11, WCon{b12, WCon{b13, WCon{b14, WCon{b15, WCon{b16, WCon{b17, WCon{b18, WCon{b19,
+      WCon{b20, WCon{b21, WCon{b22, WCon{b23, WCon{False{}, WCon{False{}, WCon{False{},
+      WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+      WNil{}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}) : Char}:
+  match b23:
+    case True{}:
+      low.hi(WCon{b0, WCon{b1, WCon{b2, WCon{b3, WCon{b4, WCon{b5, WCon{b6, WCon{b7, WCon{b8,
+          WCon{b9, WCon{b10, WCon{b11, WCon{b12, WCon{b13, WCon{b14, WCon{b15, WCon{b16, WCon{b17,
+          WCon{b18, WCon{b19, WCon{b20, WCon{b21, WCon{b22, WCon{True{}, WCon{False{},
+          WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+          WCon{False{}, WNil{}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}})
+    case False{}:
+      br.low.hi22(b22, b21, b20, b19, b18, b17, b16, b15, b14, b13, b12, b11, b10, b9, b8, b7, b6,
+          b5, b4, b3, b2, b1, b0)
+
+def br.low.hi24(b24: Bool, b23: Bool, b22: Bool, b21: Bool, b20: Bool, b19: Bool, b18: Bool,
+    b17: Bool, b16: Bool, b15: Bool, b14: Bool, b13: Bool, b12: Bool, b11: Bool, b10: Bool,
+    b9: Bool, b8: Bool, b7: Bool, b6: Bool, b5: Bool, b4: Bool, b3: Bool, b2: Bool, b1: Bool,
+    b0: Bool) ->
+  {Chr{Spec.lower(U32{WCon{b0, WCon{b1, WCon{b2, WCon{b3, WCon{b4, WCon{b5, WCon{b6, WCon{b7,
+      WCon{b8, WCon{b9, WCon{b10, WCon{b11, WCon{b12, WCon{b13, WCon{b14, WCon{b15, WCon{b16,
+      WCon{b17, WCon{b18, WCon{b19, WCon{b20, WCon{b21, WCon{b22, WCon{b23, WCon{b24, WCon{False{},
+      WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+      WNil{}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}})} == Char.to_lower(Chr{U32{WCon{b0, WCon{b1, WCon{b2,
+      WCon{b3, WCon{b4, WCon{b5, WCon{b6, WCon{b7, WCon{b8, WCon{b9, WCon{b10, WCon{b11, WCon{b12,
+      WCon{b13, WCon{b14, WCon{b15, WCon{b16, WCon{b17, WCon{b18, WCon{b19, WCon{b20, WCon{b21,
+      WCon{b22, WCon{b23, WCon{b24, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+      WCon{False{}, WCon{False{}, WCon{False{}, WNil{}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}) : Char}:
+  match b24:
+    case True{}:
+      low.hi(WCon{b0, WCon{b1, WCon{b2, WCon{b3, WCon{b4, WCon{b5, WCon{b6, WCon{b7, WCon{b8,
+          WCon{b9, WCon{b10, WCon{b11, WCon{b12, WCon{b13, WCon{b14, WCon{b15, WCon{b16, WCon{b17,
+          WCon{b18, WCon{b19, WCon{b20, WCon{b21, WCon{b22, WCon{b23, WCon{True{}, WCon{False{},
+          WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+          WNil{}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}})
+    case False{}:
+      br.low.hi23(b23, b22, b21, b20, b19, b18, b17, b16, b15, b14, b13, b12, b11, b10, b9, b8, b7,
+          b6, b5, b4, b3, b2, b1, b0)
+
+def br.low.hi25(b25: Bool, b24: Bool, b23: Bool, b22: Bool, b21: Bool, b20: Bool, b19: Bool,
+    b18: Bool, b17: Bool, b16: Bool, b15: Bool, b14: Bool, b13: Bool, b12: Bool, b11: Bool,
+    b10: Bool, b9: Bool, b8: Bool, b7: Bool, b6: Bool, b5: Bool, b4: Bool, b3: Bool, b2: Bool,
+    b1: Bool, b0: Bool) ->
+  {Chr{Spec.lower(U32{WCon{b0, WCon{b1, WCon{b2, WCon{b3, WCon{b4, WCon{b5, WCon{b6, WCon{b7,
+      WCon{b8, WCon{b9, WCon{b10, WCon{b11, WCon{b12, WCon{b13, WCon{b14, WCon{b15, WCon{b16,
+      WCon{b17, WCon{b18, WCon{b19, WCon{b20, WCon{b21, WCon{b22, WCon{b23, WCon{b24, WCon{b25,
+      WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+      WNil{}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}})} == Char.to_lower(Chr{U32{WCon{b0, WCon{b1, WCon{b2,
+      WCon{b3, WCon{b4, WCon{b5, WCon{b6, WCon{b7, WCon{b8, WCon{b9, WCon{b10, WCon{b11, WCon{b12,
+      WCon{b13, WCon{b14, WCon{b15, WCon{b16, WCon{b17, WCon{b18, WCon{b19, WCon{b20, WCon{b21,
+      WCon{b22, WCon{b23, WCon{b24, WCon{b25, WCon{False{}, WCon{False{}, WCon{False{},
+      WCon{False{}, WCon{False{}, WCon{False{}, WNil{}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}) : Char}:
+  match b25:
+    case True{}:
+      low.hi(WCon{b0, WCon{b1, WCon{b2, WCon{b3, WCon{b4, WCon{b5, WCon{b6, WCon{b7, WCon{b8,
+          WCon{b9, WCon{b10, WCon{b11, WCon{b12, WCon{b13, WCon{b14, WCon{b15, WCon{b16, WCon{b17,
+          WCon{b18, WCon{b19, WCon{b20, WCon{b21, WCon{b22, WCon{b23, WCon{b24, WCon{True{},
+          WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+          WNil{}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}})
+    case False{}:
+      br.low.hi24(b24, b23, b22, b21, b20, b19, b18, b17, b16, b15, b14, b13, b12, b11, b10, b9,
+          b8, b7, b6, b5, b4, b3, b2, b1, b0)
+
+def br.low.hi26(b26: Bool, b25: Bool, b24: Bool, b23: Bool, b22: Bool, b21: Bool, b20: Bool,
+    b19: Bool, b18: Bool, b17: Bool, b16: Bool, b15: Bool, b14: Bool, b13: Bool, b12: Bool,
+    b11: Bool, b10: Bool, b9: Bool, b8: Bool, b7: Bool, b6: Bool, b5: Bool, b4: Bool, b3: Bool,
+    b2: Bool, b1: Bool, b0: Bool) ->
+  {Chr{Spec.lower(U32{WCon{b0, WCon{b1, WCon{b2, WCon{b3, WCon{b4, WCon{b5, WCon{b6, WCon{b7,
+      WCon{b8, WCon{b9, WCon{b10, WCon{b11, WCon{b12, WCon{b13, WCon{b14, WCon{b15, WCon{b16,
+      WCon{b17, WCon{b18, WCon{b19, WCon{b20, WCon{b21, WCon{b22, WCon{b23, WCon{b24, WCon{b25,
+      WCon{b26, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+      WNil{}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}})} == Char.to_lower(Chr{U32{WCon{b0, WCon{b1, WCon{b2,
+      WCon{b3, WCon{b4, WCon{b5, WCon{b6, WCon{b7, WCon{b8, WCon{b9, WCon{b10, WCon{b11, WCon{b12,
+      WCon{b13, WCon{b14, WCon{b15, WCon{b16, WCon{b17, WCon{b18, WCon{b19, WCon{b20, WCon{b21,
+      WCon{b22, WCon{b23, WCon{b24, WCon{b25, WCon{b26, WCon{False{}, WCon{False{}, WCon{False{},
+      WCon{False{}, WCon{False{}, WNil{}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}) : Char}:
+  match b26:
+    case True{}:
+      low.hi(WCon{b0, WCon{b1, WCon{b2, WCon{b3, WCon{b4, WCon{b5, WCon{b6, WCon{b7, WCon{b8,
+          WCon{b9, WCon{b10, WCon{b11, WCon{b12, WCon{b13, WCon{b14, WCon{b15, WCon{b16, WCon{b17,
+          WCon{b18, WCon{b19, WCon{b20, WCon{b21, WCon{b22, WCon{b23, WCon{b24, WCon{b25,
+          WCon{True{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+          WNil{}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}})
+    case False{}:
+      br.low.hi25(b25, b24, b23, b22, b21, b20, b19, b18, b17, b16, b15, b14, b13, b12, b11, b10,
+          b9, b8, b7, b6, b5, b4, b3, b2, b1, b0)
+
+def br.low.hi27(b27: Bool, b26: Bool, b25: Bool, b24: Bool, b23: Bool, b22: Bool, b21: Bool,
+    b20: Bool, b19: Bool, b18: Bool, b17: Bool, b16: Bool, b15: Bool, b14: Bool, b13: Bool,
+    b12: Bool, b11: Bool, b10: Bool, b9: Bool, b8: Bool, b7: Bool, b6: Bool, b5: Bool, b4: Bool,
+    b3: Bool, b2: Bool, b1: Bool, b0: Bool) ->
+  {Chr{Spec.lower(U32{WCon{b0, WCon{b1, WCon{b2, WCon{b3, WCon{b4, WCon{b5, WCon{b6, WCon{b7,
+      WCon{b8, WCon{b9, WCon{b10, WCon{b11, WCon{b12, WCon{b13, WCon{b14, WCon{b15, WCon{b16,
+      WCon{b17, WCon{b18, WCon{b19, WCon{b20, WCon{b21, WCon{b22, WCon{b23, WCon{b24, WCon{b25,
+      WCon{b26, WCon{b27, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+      WNil{}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}})} == Char.to_lower(Chr{U32{WCon{b0, WCon{b1, WCon{b2,
+      WCon{b3, WCon{b4, WCon{b5, WCon{b6, WCon{b7, WCon{b8, WCon{b9, WCon{b10, WCon{b11, WCon{b12,
+      WCon{b13, WCon{b14, WCon{b15, WCon{b16, WCon{b17, WCon{b18, WCon{b19, WCon{b20, WCon{b21,
+      WCon{b22, WCon{b23, WCon{b24, WCon{b25, WCon{b26, WCon{b27, WCon{False{}, WCon{False{},
+      WCon{False{}, WCon{False{}, WNil{}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}) : Char}:
+  match b27:
+    case True{}:
+      low.hi(WCon{b0, WCon{b1, WCon{b2, WCon{b3, WCon{b4, WCon{b5, WCon{b6, WCon{b7, WCon{b8,
+          WCon{b9, WCon{b10, WCon{b11, WCon{b12, WCon{b13, WCon{b14, WCon{b15, WCon{b16, WCon{b17,
+          WCon{b18, WCon{b19, WCon{b20, WCon{b21, WCon{b22, WCon{b23, WCon{b24, WCon{b25, WCon{b26,
+          WCon{True{}, WCon{False{}, WCon{False{}, WCon{False{}, WCon{False{},
+          WNil{}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}})
+    case False{}:
+      br.low.hi26(b26, b25, b24, b23, b22, b21, b20, b19, b18, b17, b16, b15, b14, b13, b12, b11,
+          b10, b9, b8, b7, b6, b5, b4, b3, b2, b1, b0)
+
+def br.low.hi28(b28: Bool, b27: Bool, b26: Bool, b25: Bool, b24: Bool, b23: Bool, b22: Bool,
+    b21: Bool, b20: Bool, b19: Bool, b18: Bool, b17: Bool, b16: Bool, b15: Bool, b14: Bool,
+    b13: Bool, b12: Bool, b11: Bool, b10: Bool, b9: Bool, b8: Bool, b7: Bool, b6: Bool, b5: Bool,
+    b4: Bool, b3: Bool, b2: Bool, b1: Bool, b0: Bool) ->
+  {Chr{Spec.lower(U32{WCon{b0, WCon{b1, WCon{b2, WCon{b3, WCon{b4, WCon{b5, WCon{b6, WCon{b7,
+      WCon{b8, WCon{b9, WCon{b10, WCon{b11, WCon{b12, WCon{b13, WCon{b14, WCon{b15, WCon{b16,
+      WCon{b17, WCon{b18, WCon{b19, WCon{b20, WCon{b21, WCon{b22, WCon{b23, WCon{b24, WCon{b25,
+      WCon{b26, WCon{b27, WCon{b28, WCon{False{}, WCon{False{}, WCon{False{},
+      WNil{}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}})} == Char.to_lower(Chr{U32{WCon{b0, WCon{b1, WCon{b2,
+      WCon{b3, WCon{b4, WCon{b5, WCon{b6, WCon{b7, WCon{b8, WCon{b9, WCon{b10, WCon{b11, WCon{b12,
+      WCon{b13, WCon{b14, WCon{b15, WCon{b16, WCon{b17, WCon{b18, WCon{b19, WCon{b20, WCon{b21,
+      WCon{b22, WCon{b23, WCon{b24, WCon{b25, WCon{b26, WCon{b27, WCon{b28, WCon{False{},
+      WCon{False{}, WCon{False{}, WNil{}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}) : Char}:
+  match b28:
+    case True{}:
+      low.hi(WCon{b0, WCon{b1, WCon{b2, WCon{b3, WCon{b4, WCon{b5, WCon{b6, WCon{b7, WCon{b8,
+          WCon{b9, WCon{b10, WCon{b11, WCon{b12, WCon{b13, WCon{b14, WCon{b15, WCon{b16, WCon{b17,
+          WCon{b18, WCon{b19, WCon{b20, WCon{b21, WCon{b22, WCon{b23, WCon{b24, WCon{b25, WCon{b26,
+          WCon{b27, WCon{True{}, WCon{False{}, WCon{False{}, WCon{False{},
+          WNil{}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}})
+    case False{}:
+      br.low.hi27(b27, b26, b25, b24, b23, b22, b21, b20, b19, b18, b17, b16, b15, b14, b13, b12,
+          b11, b10, b9, b8, b7, b6, b5, b4, b3, b2, b1, b0)
+
+def br.low.hi29(b29: Bool, b28: Bool, b27: Bool, b26: Bool, b25: Bool, b24: Bool, b23: Bool,
+    b22: Bool, b21: Bool, b20: Bool, b19: Bool, b18: Bool, b17: Bool, b16: Bool, b15: Bool,
+    b14: Bool, b13: Bool, b12: Bool, b11: Bool, b10: Bool, b9: Bool, b8: Bool, b7: Bool, b6: Bool,
+    b5: Bool, b4: Bool, b3: Bool, b2: Bool, b1: Bool, b0: Bool) ->
+  {Chr{Spec.lower(U32{WCon{b0, WCon{b1, WCon{b2, WCon{b3, WCon{b4, WCon{b5, WCon{b6, WCon{b7,
+      WCon{b8, WCon{b9, WCon{b10, WCon{b11, WCon{b12, WCon{b13, WCon{b14, WCon{b15, WCon{b16,
+      WCon{b17, WCon{b18, WCon{b19, WCon{b20, WCon{b21, WCon{b22, WCon{b23, WCon{b24, WCon{b25,
+      WCon{b26, WCon{b27, WCon{b28, WCon{b29, WCon{False{}, WCon{False{},
+      WNil{}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}})} == Char.to_lower(Chr{U32{WCon{b0, WCon{b1, WCon{b2,
+      WCon{b3, WCon{b4, WCon{b5, WCon{b6, WCon{b7, WCon{b8, WCon{b9, WCon{b10, WCon{b11, WCon{b12,
+      WCon{b13, WCon{b14, WCon{b15, WCon{b16, WCon{b17, WCon{b18, WCon{b19, WCon{b20, WCon{b21,
+      WCon{b22, WCon{b23, WCon{b24, WCon{b25, WCon{b26, WCon{b27, WCon{b28, WCon{b29, WCon{False{},
+      WCon{False{}, WNil{}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}) : Char}:
+  match b29:
+    case True{}:
+      low.hi(WCon{b0, WCon{b1, WCon{b2, WCon{b3, WCon{b4, WCon{b5, WCon{b6, WCon{b7, WCon{b8,
+          WCon{b9, WCon{b10, WCon{b11, WCon{b12, WCon{b13, WCon{b14, WCon{b15, WCon{b16, WCon{b17,
+          WCon{b18, WCon{b19, WCon{b20, WCon{b21, WCon{b22, WCon{b23, WCon{b24, WCon{b25, WCon{b26,
+          WCon{b27, WCon{b28, WCon{True{}, WCon{False{}, WCon{False{},
+          WNil{}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}})
+    case False{}:
+      br.low.hi28(b28, b27, b26, b25, b24, b23, b22, b21, b20, b19, b18, b17, b16, b15, b14, b13,
+          b12, b11, b10, b9, b8, b7, b6, b5, b4, b3, b2, b1, b0)
+
+def br.low.hi30(b30: Bool, b29: Bool, b28: Bool, b27: Bool, b26: Bool, b25: Bool, b24: Bool,
+    b23: Bool, b22: Bool, b21: Bool, b20: Bool, b19: Bool, b18: Bool, b17: Bool, b16: Bool,
+    b15: Bool, b14: Bool, b13: Bool, b12: Bool, b11: Bool, b10: Bool, b9: Bool, b8: Bool, b7: Bool,
+    b6: Bool, b5: Bool, b4: Bool, b3: Bool, b2: Bool, b1: Bool, b0: Bool) ->
+  {Chr{Spec.lower(U32{WCon{b0, WCon{b1, WCon{b2, WCon{b3, WCon{b4, WCon{b5, WCon{b6, WCon{b7,
+      WCon{b8, WCon{b9, WCon{b10, WCon{b11, WCon{b12, WCon{b13, WCon{b14, WCon{b15, WCon{b16,
+      WCon{b17, WCon{b18, WCon{b19, WCon{b20, WCon{b21, WCon{b22, WCon{b23, WCon{b24, WCon{b25,
+      WCon{b26, WCon{b27, WCon{b28, WCon{b29, WCon{b30, WCon{False{},
+      WNil{}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}})} == Char.to_lower(Chr{U32{WCon{b0, WCon{b1, WCon{b2,
+      WCon{b3, WCon{b4, WCon{b5, WCon{b6, WCon{b7, WCon{b8, WCon{b9, WCon{b10, WCon{b11, WCon{b12,
+      WCon{b13, WCon{b14, WCon{b15, WCon{b16, WCon{b17, WCon{b18, WCon{b19, WCon{b20, WCon{b21,
+      WCon{b22, WCon{b23, WCon{b24, WCon{b25, WCon{b26, WCon{b27, WCon{b28, WCon{b29, WCon{b30,
+      WCon{False{}, WNil{}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}) : Char}:
+  match b30:
+    case True{}:
+      low.hi(WCon{b0, WCon{b1, WCon{b2, WCon{b3, WCon{b4, WCon{b5, WCon{b6, WCon{b7, WCon{b8,
+          WCon{b9, WCon{b10, WCon{b11, WCon{b12, WCon{b13, WCon{b14, WCon{b15, WCon{b16, WCon{b17,
+          WCon{b18, WCon{b19, WCon{b20, WCon{b21, WCon{b22, WCon{b23, WCon{b24, WCon{b25, WCon{b26,
+          WCon{b27, WCon{b28, WCon{b29, WCon{True{}, WCon{False{},
+          WNil{}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}})
+    case False{}:
+      br.low.hi29(b29, b28, b27, b26, b25, b24, b23, b22, b21, b20, b19, b18, b17, b16, b15, b14,
+          b13, b12, b11, b10, b9, b8, b7, b6, b5, b4, b3, b2, b1, b0)
+
+def br.low.hi31(b31: Bool, b30: Bool, b29: Bool, b28: Bool, b27: Bool, b26: Bool, b25: Bool,
+    b24: Bool, b23: Bool, b22: Bool, b21: Bool, b20: Bool, b19: Bool, b18: Bool, b17: Bool,
+    b16: Bool, b15: Bool, b14: Bool, b13: Bool, b12: Bool, b11: Bool, b10: Bool, b9: Bool,
+    b8: Bool, b7: Bool, b6: Bool, b5: Bool, b4: Bool, b3: Bool, b2: Bool, b1: Bool, b0: Bool) ->
+  {Chr{Spec.lower(U32{WCon{b0, WCon{b1, WCon{b2, WCon{b3, WCon{b4, WCon{b5, WCon{b6, WCon{b7,
+      WCon{b8, WCon{b9, WCon{b10, WCon{b11, WCon{b12, WCon{b13, WCon{b14, WCon{b15, WCon{b16,
+      WCon{b17, WCon{b18, WCon{b19, WCon{b20, WCon{b21, WCon{b22, WCon{b23, WCon{b24, WCon{b25,
+      WCon{b26, WCon{b27, WCon{b28, WCon{b29, WCon{b30, WCon{b31,
+      WNil{}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}})} == Char.to_lower(Chr{U32{WCon{b0, WCon{b1, WCon{b2,
+      WCon{b3, WCon{b4, WCon{b5, WCon{b6, WCon{b7, WCon{b8, WCon{b9, WCon{b10, WCon{b11, WCon{b12,
+      WCon{b13, WCon{b14, WCon{b15, WCon{b16, WCon{b17, WCon{b18, WCon{b19, WCon{b20, WCon{b21,
+      WCon{b22, WCon{b23, WCon{b24, WCon{b25, WCon{b26, WCon{b27, WCon{b28, WCon{b29, WCon{b30,
+      WCon{b31, WNil{}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}) : Char}:
+  match b31:
+    case True{}:
+      low.hi(WCon{b0, WCon{b1, WCon{b2, WCon{b3, WCon{b4, WCon{b5, WCon{b6, WCon{b7, WCon{b8,
+          WCon{b9, WCon{b10, WCon{b11, WCon{b12, WCon{b13, WCon{b14, WCon{b15, WCon{b16, WCon{b17,
+          WCon{b18, WCon{b19, WCon{b20, WCon{b21, WCon{b22, WCon{b23, WCon{b24, WCon{b25, WCon{b26,
+          WCon{b27, WCon{b28, WCon{b29, WCon{b30, WCon{True{},
+          WNil{}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}})
+    case False{}:
+      br.low.hi30(b30, b29, b28, b27, b26, b25, b24, b23, b22, b21, b20, b19, b18, b17, b16, b15,
+          b14, b13, b12, b11, b10, b9, b8, b7, b6, b5, b4, b3, b2, b1, b0)
+
+def br.low.p3(b0: Bool, b1: Bool, b2: Bool, b3: Bool, b4: Bool, b5: Bool, b6: Bool, b7: Bool,
+    b8: Bool, b9: Bool, b10: Bool, b11: Bool, b12: Bool, b13: Bool, b14: Bool, b15: Bool,
+    b16: Bool, b17: Bool, b18: Bool, b19: Bool, b20: Bool, b21: Bool, b22: Bool, b23: Bool,
+    w24: Word(8n)) ->
+  {Chr{Spec.lower(U32{WCon{b0, WCon{b1, WCon{b2, WCon{b3, WCon{b4, WCon{b5, WCon{b6, WCon{b7,
+      WCon{b8, WCon{b9, WCon{b10, WCon{b11, WCon{b12, WCon{b13, WCon{b14, WCon{b15, WCon{b16,
+      WCon{b17, WCon{b18, WCon{b19, WCon{b20, WCon{b21, WCon{b22, WCon{b23,
+      w24}}}}}}}}}}}}}}}}}}}}}}}}})} == Char.to_lower(Chr{U32{WCon{b0, WCon{b1, WCon{b2, WCon{b3,
+      WCon{b4, WCon{b5, WCon{b6, WCon{b7, WCon{b8, WCon{b9, WCon{b10, WCon{b11, WCon{b12, WCon{b13,
+      WCon{b14, WCon{b15, WCon{b16, WCon{b17, WCon{b18, WCon{b19, WCon{b20, WCon{b21, WCon{b22,
+      WCon{b23, w24}}}}}}}}}}}}}}}}}}}}}}}}}}) : Char}:
+  match w24:
+    case WCon{b24, w25}:
+      match w25:
+        case WCon{b25, w26}:
+          match w26:
+            case WCon{b26, w27}:
+              match w27:
+                case WCon{b27, w28}:
+                  match w28:
+                    case WCon{b28, w29}:
+                      match w29:
+                        case WCon{b29, w30}:
+                          match w30:
+                            case WCon{b30, w31}:
+                              match w31:
+                                case WCon{b31, w32}:
+                                  match w32:
+                                    case WNil{}:
+                                      br.low.hi31(b31, b30, b29, b28, b27, b26, b25, b24, b23, b22,
+                                          b21, b20, b19, b18, b17, b16, b15, b14, b13, b12, b11,
+                                          b10, b9, b8, b7, b6, b5, b4, b3, b2, b1, b0)
+
+def br.low.p2(b0: Bool, b1: Bool, b2: Bool, b3: Bool, b4: Bool, b5: Bool, b6: Bool, b7: Bool,
+    b8: Bool, b9: Bool, b10: Bool, b11: Bool, b12: Bool, b13: Bool, b14: Bool, b15: Bool,
+    w16: Word(16n)) ->
+  {Chr{Spec.lower(U32{WCon{b0, WCon{b1, WCon{b2, WCon{b3, WCon{b4, WCon{b5, WCon{b6, WCon{b7,
+      WCon{b8, WCon{b9, WCon{b10, WCon{b11, WCon{b12, WCon{b13, WCon{b14, WCon{b15,
+      w16}}}}}}}}}}}}}}}}})} == Char.to_lower(Chr{U32{WCon{b0, WCon{b1, WCon{b2, WCon{b3, WCon{b4,
+      WCon{b5, WCon{b6, WCon{b7, WCon{b8, WCon{b9, WCon{b10, WCon{b11, WCon{b12, WCon{b13,
+      WCon{b14, WCon{b15, w16}}}}}}}}}}}}}}}}}}) : Char}:
+  match w16:
+    case WCon{b16, w17}:
+      match w17:
+        case WCon{b17, w18}:
+          match w18:
+            case WCon{b18, w19}:
+              match w19:
+                case WCon{b19, w20}:
+                  match w20:
+                    case WCon{b20, w21}:
+                      match w21:
+                        case WCon{b21, w22}:
+                          match w22:
+                            case WCon{b22, w23}:
+                              match w23:
+                                case WCon{b23, w24}:
+                                  br.low.p3(b0, b1, b2, b3, b4, b5, b6, b7, b8, b9, b10, b11, b12,
+                                      b13, b14, b15, b16, b17, b18, b19, b20, b21, b22, b23, w24)
+
+def br.low.p1(b0: Bool, b1: Bool, b2: Bool, b3: Bool, b4: Bool, b5: Bool, b6: Bool, b7: Bool,
+    w8: Word(24n)) ->
+  {Chr{Spec.lower(U32{WCon{b0, WCon{b1, WCon{b2, WCon{b3, WCon{b4, WCon{b5, WCon{b6, WCon{b7,
+      w8}}}}}}}}})} == Char.to_lower(Chr{U32{WCon{b0, WCon{b1, WCon{b2, WCon{b3, WCon{b4, WCon{b5,
+      WCon{b6, WCon{b7, w8}}}}}}}}}}) : Char}:
+  match w8:
+    case WCon{b8, w9}:
+      match w9:
+        case WCon{b9, w10}:
+          match w10:
+            case WCon{b10, w11}:
+              match w11:
+                case WCon{b11, w12}:
+                  match w12:
+                    case WCon{b12, w13}:
+                      match w13:
+                        case WCon{b13, w14}:
+                          match w14:
+                            case WCon{b14, w15}:
+                              match w15:
+                                case WCon{b15, w16}:
+                                  br.low.p2(b0, b1, b2, b3, b4, b5, b6, b7, b8, b9, b10, b11, b12,
+                                      b13, b14, b15, w16)
+
+def br.low(c: U32) -> {Chr{Spec.lower(c)} == Char.to_lower(Chr{c}) : Char}:
+  match c:
+    case U32{w0}:
+      match w0:
+        case WCon{b0, w1}:
+          match w1:
+            case WCon{b1, w2}:
+              match w2:
+                case WCon{b2, w3}:
+                  match w3:
+                    case WCon{b3, w4}:
+                      match w4:
+                        case WCon{b4, w5}:
+                          match w5:
+                            case WCon{b5, w6}:
+                              match w6:
+                                case WCon{b6, w7}:
+                                  match w7:
+                                    case WCon{b7, w8}:
+                                      br.low.p1(b0, b1, b2, b3, b4, b5, b6, b7, w8)
+
+def br.lower(c: U32) -> {Spec.lower(c) == Eng.lower(c) : U32}:
+  Equal.cong(Char, U32, x => Char.to_u32(x), Chr{Spec.lower(c)}, Char.to_lower(Chr{c}), br.low(c))
+
+def Laws.cls_every(c):
+  Equal.sym(Eng.Cls, Spec.cls(c), Eng.cls(c), br.cls(c))
+
+def Laws.lower_every(c):
+  Equal.sym(U32, Spec.lower(c), Eng.lower(c), br.lower(c))

@@ -316,6 +316,22 @@ law refuse_after_one:
     ([Eng.Req{Eng.MGet{}, "/", "", False{}, False{}, ""}], True{}) :
     List<&2, Eng.Req> & Bool}
 
+# Framing, whole
+# ==============
+#
+# The laws above hold the reader to the RFC one rule and one vector at
+# a time. These hold it to the reference for every input at once.
+
+# LAW: the reader's classes and lowercasing are the reference's on every
+# U32, not only on the 256 bytes cls_is_spec runs.
+law cls_every:
+  for +c: U32
+  {Eng.cls(c) == Spec.cls(c) : Eng.Cls}
+
+law lower_every:
+  for +c: U32
+  {Eng.lower(c) == Spec.lower(c) : U32}
+
 # LAW: a query is no part of the path a target routes by.
 law path_query:
   {Eng.path.of("/health?x=/a?b") == "/health" : Bytes()}
