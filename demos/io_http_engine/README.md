@@ -1,12 +1,12 @@
 # io_http_engine
 
-An HTTP/1.1 engine in Bend: a streaming request parser, a router and a
-server, with the parser's laws, and the connection and accept loops'
+An HTTP/1.1 engine in Bend (HTTP/1.0 too, and chunked request bodies):
+a streaming request parser, a router and a server, with the parser's laws, and the connection and accept loops'
 laws against a model of the socket world, proved by the stock checker.
 No host language in the path — the socket is Bend's own effect.
 
     bend demos/io_http_engine/PROOF.bend        # the gate: laws hold
-    python3 demos/io_http_engine/mutants.py     # and refuse nine broken loops
+    python3 demos/io_http_engine/mutants.py     # and refuse nine broken loops, six broken framings
     bend demos/io_http_engine/main.bend -o httpd
     ./httpd --port 8080 --root www --idle-ms 10000 --max-conns 1024 --grace-ms 5000
     ./httpd --shared & ./httpd --shared &          # one port, one copy per core
@@ -78,15 +78,43 @@ comma lists of tokens, and every other value takes the scanner that
 does no work per byte.
 
 What it accepts is deliberately small, because a framing disagreement
-is how requests get smuggled: HTTP/1.1 only, exactly one Host,
-Content-Length only, that length all digits (refused at the digit that
-crosses the body cap, so it cannot wrap) and the same wherever it is
-repeated, and no Transfer-Encoding at all, refused at its colon in any
-case. A space before a colon, a folded line, a line with no colon, a
-bare LF, a control byte in a value or in the target are each a `400`.
-Empty lines before a request line are skipped (RFC 9112 2.2), and a
-query is no part of the path a request routes by. `Bad{}` is never
-left.
+is how requests get smuggled. HTTP/1.1 with exactly one Host, or
+HTTP/1.0 with at most one. A body framed one way: a Content-Length, all
+digits (refused at the digit that crosses the body cap, so it cannot
+wrap) and the same wherever it is repeated; or a Transfer-Encoding
+whose value is `chunked`, exactly (case aside), once, and nothing else
+-- `chunked `, `xchunked`, `chunked, identity`, a second
+Transfer-Encoding, one with a Content-Length in either order (CL.TE,
+TE.CL), and one in HTTP/1.0 (RFC 9112 6.1: faulty framing) are each a
+`400` that closes. Any other coding is refused the same way rather than
+with a 501: it is a framing this reader will not guess at. A space
+before a colon, a folded line, a line with no colon, a bare LF, a
+control byte in a value or in the target are each a `400`. Empty lines
+before a request line are skipped (RFC 9112 2.2), and a query is no
+part of the path a request routes by. `Bad{}` is never left.
+
+A chunked body is read by RFC 9112 7.1's grammar, a byte at a time, as
+the table of it: a size in hex (either case, leading zeros allowed),
+extensions (`;name`, `;name=token`, `;name="quoted \" string"`, with
+the BWS the grammar allows around `;` and `=`) read and dropped, CRLF
+after every line and after every chunk's data (a bare LF is refused),
+the last chunk, and a trailer whose lines are read by the head's own
+field-line grammar and dropped. It is bounded by one budget of
+`body.cap()`: every byte of a chunk line before its CR and every byte
+of data is paid from it, and a byte that would leave less than the
+chunk still needs is refused where it stands -- so a size is refused at
+the digit that takes it past what is left (and never wraps), an
+extension can never outgrow the body, and a body decodes to at most
+1 MiB. Only the decoded bytes are held; the trailer is a head's field
+lines again and runs under the head's budget (`--head-ms`, 16 KiB). A
+chunk's data is cut from a read whole, as a Content-Length body is, and
+`/echo` answers the decoded body with a Content-Length.
+
+HTTP/1.0 is answered with an HTTP/1.1 status line (RFC 9112 2.5 lets a
+server) and, unless it asked to keep alive (`Connection: keep-alive`,
+and no `close`), with `connection: close`, after which nothing more is
+read (RFC 9112 9.3). An Upgrade in an HTTP/1.0 request is not one (RFC
+9110 7.8), so `/ws` answers it with the 426.
 
 What a read's requests earn goes out in order, and a request that ends
 what the connection reads is the last one served from it: after a
@@ -244,9 +272,9 @@ ALPN advertises `http/1.1` (h2 goes in front of it when there is an h2
 to agree to). Minimum version is TLS 1.2; here it negotiates TLS 1.3.
 
 `check.c` built with `-DCHECK_TLS` swaps its own socket calls for a
-session and runs **the same thirty-nine cases over the encrypted
-wire**: one suite, two transports. All thirty-nine pass on both, the
-256-byte binary round trip included. TLS costs about a tenth at
+session and runs **the same cases over the encrypted wire** (97 with
+`--files --ws --log --root`): one suite, two transports. All pass on
+both, the 256-byte binary round trip and the chunked bodies included. TLS costs about a tenth at
 pipeline 8 (77,368 against 85,853 req/s through the same client) and
 nothing measurable at pipeline 1, where the client is the ceiling.
 
@@ -412,16 +440,30 @@ from RFC 9110's character sets and field names the obvious way.
 all 256 bytes as the reference does. `field_by_bytes` says, for every
 name, that the field the reader takes it for is the table entry spelled
 with exactly its bytes, or none. Then, for every message state:
-`te_refused` (a Transfer-Encoding dies at its colon), `name_refuses`,
+`te_chunked_only` (a Transfer-Encoding whose value is not exactly
+chunked is refused at its CR), `te_once` (so is a second one),
+`te_cl_refused` and `te_10_refused` (a head framed two ways, or a
+Transfer-Encoding in HTTP/1.0, is refused at its blank line),
+`chunk_size_capped` (a HEXDIG that takes the size past the budget is
+refused where it stands, whatever the size so far), `chunk_ext_capped`
+(so is any other byte of a chunk line the budget can no longer pay
+for), `chunk_bare_lf` (a LF anywhere in a chunked body's framing but
+right after its CR is refused), `name_refuses`,
 `line_refuses`, `clen_refuses`, `target_refuses`, `value_refuses` and
 `conn_refuses` (each part of a head refuses every byte class the grammar
 has no place for there: a space before a colon, a fold, a sign in a
 length, a control in the target), `clen_disagree` (two lengths that
-differ are refused), `host_once` and `rest_feeds` (after an upgrade
+differ are refused), `host_once` (one Host in HTTP/1.1, at most one in
+HTTP/1.0) and `rest_feeds` (after an upgrade
 nothing is read as HTTP: the rest of the read is kept whole for the
 frame reader). `lows_is_spec` says a name is lowercased at its colon
-as the reference lowercases each of its bytes. Twenty-four closed laws run the real reader
-on the smuggling inputs; `feed_split` carries each to every chunking.
+as the reference lowercases each of its bytes. Fifty-two closed laws run the real reader
+on the smuggling inputs -- CL.TE, TE.CL, TE.TE dressed four ways, a
+chunked body broken seven ways -- and on HTTP/1.0 with and without
+keep-alive and chunked bodies with extensions and trailers, one of them
+cut at every awkward place a read could end (inside the size, an
+extension, a CRLF, the trailer) and one fed a byte per read;
+`feed_split` carries each to every chunking.
 Every one of the review's mutations of the reader -- a target refused,
 a Transfer-Encoding accepted, a body one byte short, a non-digit length
 accepted, a name constant changed -- and six more of the same kind
@@ -436,12 +478,16 @@ the rules add up. `frame_sim` does, for every input at once. `spec.bend`
 has a second reference, `frame()`: a whole input read the way RFC 9112
 writes it, sharing no code with the reader. It gathers a line's bytes
 to its CR LF and reads the line whole -- a request line split at its
-spaces into a method, a target and `HTTP/1.1`, a field line split at its
-colon into a name and a value read by what the name is (a length as a
-decimal, a list at its commas and whitespace, a key or a version
-trimmed of OWS) -- judges a head at its empty line (exactly one Host,
-one length) and counts a body off by that length. A line the input
-stops inside is read as far as it goes. It says which requests the
+spaces into a method, a target and `HTTP/1.1` or `HTTP/1.0`, a field
+line split at its colon into a name and a value read by what the name
+is (a length as a decimal, a list at its commas and whitespace, a key
+or a version trimmed of OWS, a coding as it came) -- judges a head at
+its empty line (its Hosts, its one framing) and counts a body off by
+its length, or reads a chunked body by RFC 9112 7.1's grammar, which is
+regular and is written as its table: where in the grammar a byte
+arrives (`ASize`, `AName`, `AQuoted`, `ATrail`, ... one per rule) and
+where it takes the body. A line the input stops inside is read as far
+as it goes. It says which requests the
 input holds, oldest first, and how it ends: `Open` with the bytes since
 the last request, `Refused`, or `Upgraded` with what followed.
 
@@ -475,8 +521,18 @@ is the one the spec's view of that prefix names, token by token: a
 span of bytes a token may hold is one the reader stays on (`RS`), and
 the byte that stops it is stepped as the spec reads it. PV compares
 the reader's pending fields with the spec's head, forgetting only how
-the reader stores "no upgrade field seen". It is about 5,300 lines of
-PROOF.bend, 2,300 of them the generated byte bridges.
+the reader stores "no upgrade field seen"; it carries what the request
+line and the framing fields said (HTTP/1.0, keep-alive, chunked), and
+the head's end, a Transfer-Encoding's CR and an emitted request's
+`close` are each decided through it, so the two sides' decisions are
+one decision. In a chunked body `REL` holds the reader at the spec's
+place in the grammar with the same size, body so far and budget:
+`at.eng` and `go.eng` name the reader's place and move for each of the
+spec's, `tbl` says the two tables agree row by row (228 rows, each a
+computation), and `xk.is` that both sides tell the same bytes apart. The
+budget's arithmetic is the same U32 terms on both sides, so a case on
+each comparison is all it needs. It is about 6,300 lines of PROOF.bend,
+2,300 of them the generated byte bridges.
 
 It binds both sides. With every rule-by-rule framing law deleted and
 only `frame_sim` and what its proof uses kept, each of these breaks is
@@ -493,15 +549,30 @@ refused, and on the input named the reader and `frame()` disagree:
 | spec: two lengths that differ | `CR.clen.l` | `Content-Length: 3`, `: 5` | refused | 1 request |
 | spec: no Host | `HEAD.l` | `GET / HTTP/1.1`, empty line | refused | 1 request |
 
+`mutants.py` keeps six more of these standing, each run against a
+scratch copy that keeps only `frame_sim`'s family (186 laws and their
+proofs removed) and checks clean before it is broken:
+
+| broken | where the proof stops |
+|---|---|
+| TE.CL: a Transfer-Encoding with a Content-Length read as chunked | `bok` |
+| a chunk-size that wraps: no digit checked against the budget | `APPLY` |
+| a bare LF ending a chunk line | `tbl` |
+| TE.TE: anything that starts `chunked` is chunked | `te.ok.eq` |
+| HTTP/1.0 kept alive without asking | `s.req` |
+| spec: a chunk's data may end in a bare LF | `tbl` |
+
 What it does not say. The walk is over bytes; `frame_sim` says nothing
 of what the routes, the files or the frame reader then do with the
 requests, and nothing of time (`--head-ms`, `--idle-ms`) or of the
 limits the server enforces outside the reader (`--head` for a long
 head, the 414 for a long target). `frame()` is the RFC for the part of
-HTTP/1.1 this engine accepts, and where the RFC lets a server choose,
-it chose what the engine does: a bare LF or CR is refused, not read as
-a line end; a Transfer-Encoding, a Content-Length list, a length past
-1 MiB, HTTP/1.0 and a fold are refused with the same 400; and a line
+HTTP/1.1 and HTTP/1.0 this engine accepts, and where the RFC lets a
+server choose, it chose what the engine does: a bare LF or CR is
+refused, not read as a line end; a coding but chunked, whitespace
+after `chunked`, a Content-Length list, a length past 1 MiB and a fold
+are refused with the same 400; a chunked body's lines and data share
+one budget of 1 MiB; and a line
 the input stops inside is refused when a byte arrives that its token
 cannot hold (a control in a target, a letter in a length, a digit that
 takes a length past the cap), while a version, a field's name, a
@@ -638,7 +709,8 @@ cap, a reply after close, a queued reply skipped on refusal, the accept
 loop out on EMFILE, a reply before the batch it follows, a WebSocket
 that reads on after its send failed, a silent peer waited on again, an
 emptied file's head left uncapped -- and `PROOF.bend` refuses every
-one, in CI too.
+one, in CI too. It then breaks the framing six ways against `frame_sim`
+alone (above, "The reader is the framing"): fifteen of fifteen killed.
 
 Three of those nine were bugs, found by writing the proofs: `turn.ws`
 read on after a failed send, so a peer that sent pings and never read
@@ -660,15 +732,26 @@ holds it to that: the same bytes, cut at the same random points and
 sent with a pause between the cuts, go to both, and what comes back
 has to be identical, closes included -- one to four messages a round,
 valid or mutated in the ways a reader has to survive (a truncation, a
-byte flipped, a version that is not 1.1, a Transfer-Encoding, a length
-that is not all digits or is past the cap, fields in odd case, bodies
-of arbitrary bytes). Its first run found two faults, both in the C:
+byte flipped, HTTP/1.0 with and without keep-alive, a version that is
+neither, a length that is not all digits or is past the cap, fields in
+odd case, bodies of arbitrary bytes, chunked bodies -- sizes in either
+case with leading zeros, extensions with tokens, quoted strings and
+BWS, trailers -- and each of those broken, and the Transfer-Encoding
+smuggling vectors: with a length either way round, `chunked `,
+`xchunked`, `chunked, identity`, two of them). A control broken in any
+of four ways the engine is not (TE.CL accepted, HTTP/1.0 kept alive
+unasked, a chunk's data ended by a bare LF, anything starting `chunked`
+taken as chunked) shows a difference within 300 rounds. Its first run
+found two faults, both in the C:
 the control closed the moment it had parsed `Connection: close`,
 before the head had ended, and its 400 dropped its body when the
 broken message had been a HEAD. With those fixed it runs thousands of
 rounds without a difference. `check.c`
-runs its behavioural cases against either: fifteen for any server,
-the last of which reads the server's CPU when given its pid; nine more
+runs its behavioural cases against either: forty-nine for any server
+(chunked bodies decoded, cut at awkward places and with extensions and
+a trailer; HTTP/1.0 closed, and kept open when it asks; twenty-five
+framing vectors refused, TE.CL, CL.TE and TE.TE among them), the last
+of which reads the server's CPU when given its pid; nine more
 for static files when the server was started with `--root` on the
 fixture directory and the check with `--files`; eight more with
 `--root=DIR`, the server's root, where the check writes its own

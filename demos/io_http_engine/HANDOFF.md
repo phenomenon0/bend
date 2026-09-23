@@ -42,25 +42,30 @@ canon already passes.
 
 ## What works, and how it is checked
 
-`demos/io_http_engine` is an HTTP/1.1 server: keep-alive, pipelining,
-static files, SSE, WebSocket, TLS, an access log, a connection limit,
+`demos/io_http_engine` is an HTTP/1.1 server (HTTP/1.0 too, closed
+unless it asks to keep alive; chunked request bodies, decoded under the
+body cap, with every Transfer-Encoding smuggling shape refused):
+keep-alive, pipelining, static files, SSE, WebSocket, TLS, an access log, a connection limit,
 timeouts, graceful shutdown, and a shared port for running one copy per
 core. A 1.6 MB binary, linked against libc, libm, libssl and libcrypto. `demos/io_resp` is a RESP reader written to
 test whether the approach generalises (see **What is unfinished**).
 
-    bend demos/io_http_engine/PROOF.bend          # 165 laws
+    bend demos/io_http_engine/PROOF.bend          # 197 laws
     bend demos/io_http_engine/main.bend -o httpd
     ./httpd --port 8080 --root www --tls-cert cert.pem --tls-key key.pem
 
 Four gates, and it is worth knowing what each one is for, because they
 catch different things and three of them have caught real bugs:
 
-- **`PROOF.bend`** -- 165 laws, re-checked by a second, independent
+- **`PROOF.bend`** -- 197 laws, re-checked by a second, independent
   kernel (`kernel/`). The headline is `frame_sim`: for every input, cut
   into reads any way, the reader frames exactly what `Spec.frame` (RFC
   9112, written apart) frames. The laws of the world (`world.bend`)
   prove the loops' order, budgets and deadlines against a pure model of
-  the sockets. The count below is from before those two. 23 are theorems
+  the sockets. `frame_sim` covers HTTP/1.0 and chunked bodies too:
+  the spec reads RFC 9112 7.1 as the table of its grammar, and the
+  proof holds the reader to it row by row. The count below is from
+  before those. 23 are theorems
   quantified over all inputs (chunking never changes a parse; a refused message is never
   revived; a field is known by its bytes, and every framing ambiguity
   a request is smuggled with is refused in every message state; no
@@ -77,15 +82,20 @@ catch different things and three of them have caught real bugs:
   deadline, a stopped peer let go, the accept loop staying up) are
   laws in `PROOF.bend`. `conform` checks the real effects keep the
   contracts the model assumes; `mutants.py` checks the laws refuse
-  nine broken loops. README, "The world".
-- **`check.c`** -- 39 behavioural cases over a socket, plus 17 for the
-  connection limit and 17 for stopping. Built with `-DCHECK_TLS` it
-  swaps its own socket calls for a TLS session and **runs the same 39
-  cases over the encrypted wire**. All pass on both.
+  nine broken loops, and `frame_sim` alone (every rule-by-rule law
+  removed in a scratch copy) six broken framings: TE.CL, a wrapping
+  chunk-size, a bare LF in chunk framing, `chunked, identity`, HTTP/1.0
+  kept alive unasked, and a spec mutant. README, "The world".
+- **`check.c`** -- 49 behavioural cases over a socket for any server
+  (97 with files, WebSocket and the log), plus the connection limit and
+  stopping. Built with `-DCHECK_TLS` it swaps its own socket calls for
+  a TLS session and **runs the same cases over the encrypted wire**.
+  All pass on both.
 - **`fuzz.c`** -- the same random bytes, cut at the same random points,
   into the engine and into `control.c`, demanding byte-identical
-  answers including closes. Thousands of rounds clean. It found two
-  real faults on its first run, both in the C twin.
+  answers including closes, now with HTTP/1.0 and chunked streams in
+  its generator. Thousands of rounds clean. It found two real faults on
+  its first run, both in the C twin.
 - **`prof.sh`** -- gdb stack sampling under load. It is a gate in the
   sense that it settles arguments: it is the only reason the right
   thing got optimised.
