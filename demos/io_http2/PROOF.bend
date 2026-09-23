@@ -6,6 +6,8 @@ import ./hpack.bend as K
 import ./LAWS.bend as Laws
 import ./nat.bend as N
 import ./huff_proof.bend as HP
+import ./frame.bend as Fm
+import ./spec.bend as Sp
 
 # HPACK integers
 # ==============
@@ -402,4 +404,299 @@ def Laws.c5_enc():
   {==}
 
 def Laws.c6_enc():
+  {==}
+
+# Frames
+# ======
+
+# a refused reader absorbs every byte: the kit's obligation, and so the
+# kit's bad_feeds
+type Bx is Data:
+  Bx{why: Fm.Why, max: Nat, out: List<&2, Fm.Frm>}
+
+def bx(x: Bx) -> Fm.Rd:
+  match x:
+    case Bx{w, m, o}:
+      Fm.Rd{Fm.FBad{w}, m, o}
+
+def absorbs(+u: Unit, +x: Bx, +c: U32) -> {Fm.wstep(u, bx(x), c) == bx(x) : Fm.Rd}:
+  match x:
+    case Bx{w, m, o}:
+      {==}
+
+def bad_feed(+bs: List<&2, U32>, +why: Fm.Why, +max: Nat, +out: List<&2, Fm.Frm>) ->
+  {Fm.feed(bs, Fm.Rd{Fm.FBad{why}, max, out}) == Fm.Rd{Fm.FBad{why}, max, out} : Fm.Rd}:
+  Wr.bad_feeds(~Unit, ~Fm.Rd, ~Fm.wstep, ~Bx, ~bx, ~absorbs, Unit{}, bs, Bx{why, max, out})
+
+def len(xs: List<&2, U32>) -> Nat:
+  List.length(&2, U32, xs)
+
+# A payload: from a reader with m more bytes to go after the next, xs
+# either runs out first (still reading, nothing new completed) or holds
+# the payload and then r, and the frame completes where the payload ends.
+def RP(-ty: U32, -fl: U32, -sid: U32, -m: Nat, -acc: Bytes(), -max: Nat, -out: List<&2, Fm.Frm>,
+  -xs: List<&2, U32>, mt: Maybe<&2, Sp.Two>) -> Type:
+  match mt:
+    case None{}:
+      {Laws.look(Fm.feed(xs, Fm.Rd{Fm.FPay{ty, fl, sid, m, acc}, max, out})) == (out, Laws.Reading{}) :
+        List<&2, Fm.Frm> & Laws.Look}
+    case Some{tw}:
+      match tw:
+        case Sp.Two{p, r}:
+          {Fm.feed(xs, Fm.Rd{Fm.FPay{ty, fl, sid, m, acc}, max, out}) ==
+            Fm.feed(r, Laws.start(max, Con{Fm.Frm{ty, fl, sid, String.append(acc, Bytes.from_list(p))}, out})) :
+            Fm.Rd} & {Nat.is_le(len(r), len(xs)) == True{} : Bool}
+
+def pay.eq(+ty: U32, +fl: U32, +sid: U32, -m: Nat, +acc: Bytes(), +max: Nat, +out: List<&2, Fm.Frm>, +c: U32,
+  -t: List<&2, U32>, +p: List<&2, U32>, -r: List<&2, U32>,
+  e1: {Fm.feed(t, Fm.Rd{Fm.FPay{ty, fl, sid, m, Bytes.push(acc, c)}, max, out}) ==
+    Fm.feed(r, Laws.start(max, Con{Fm.Frm{ty, fl, sid, String.append(Bytes.push(acc, c), Bytes.from_list(p))}, out})) :
+    Fm.Rd}) ->
+  {Fm.feed(t, Fm.Rd{Fm.FPay{ty, fl, sid, m, Bytes.push(acc, c)}, max, out}) ==
+    Fm.feed(r, Laws.start(max, Con{Fm.Frm{ty, fl, sid, String.append(acc, Bytes.from_list(Con{c, p}))}, out})) :
+    Fm.Rd}:
+  %str_assoc(acc, SCon{Chr{c}, SNil{}}, Bytes.from_list(p)) :
+    {Fm.feed(t, Fm.Rd{Fm.FPay{ty, fl, sid, m, Bytes.push(acc, c)}, max, out}) ==
+      Fm.feed(r, Laws.start(max, Con{Fm.Frm{ty, fl, sid, _}, out})) : Fm.Rd}
+  e1
+
+def pay.step(+ty: U32, +fl: U32, +sid: U32, -m: Nat, +acc: Bytes(), +max: Nat, +out: List<&2, Fm.Frm>, +c: U32,
+  +t: List<&2, U32>, mt: Maybe<&2, Sp.Two>, ih: RP(ty, fl, sid, m, Bytes.push(acc, c), max, out, t, mt)) ->
+  RP(ty, fl, sid, 1n+m, acc, max, out, Con{c, t}, Sp.take.on(c, mt)):
+  match mt:
+    case None{}:
+      ih
+    case Some{tw}:
+      match tw:
+        case Sp.Two{p, r}:
+          match ih:
+            case (e1, e2):
+              (pay.eq(ty, fl, sid, m, acc, max, out, c, t, p, r, e1), N.le_S(len(r), len(t), e2))
+
+def pay(+ty: U32, +fl: U32, +sid: U32, +m: Nat, +acc: Bytes(), +max: Nat, +out: List<&2, Fm.Frm>,
+  xs: List<&2, U32>) -> RP(ty, fl, sid, m, acc, max, out, xs, Sp.take(1n+m, xs)):
+  match m xs:
+    case 0n Nil{}:
+      {==}
+    case 1n+k Nil{}:
+      {==}
+    case 0n Con{+c, +t}:
+      ({==}, N.le_S(len(t), len(t), N.le_refl(len(t))))
+    case 1n+k Con{+c, +t}:
+      pay.step(ty, fl, sid, k, acc, max, out, c, t, Sp.take(1n+k, t), pay(ty, fl, sid, k, Bytes.push(acc, c), max, out, t))
+
+# What comes after a header: the relation, from the reader's side,
+# between the reader after the rest of the input and what the reference
+# cut from it.
+def RC9(-max: Nat, -r0: Fm.Rd, -rest: List<&2, U32>, -out: List<&2, Fm.Frm>, c: Sp.Cut) -> Type:
+  match c:
+    case Sp.CShort{}:
+      {Laws.look(Fm.feed(rest, r0)) == (out, Laws.Reading{}) : List<&2, Fm.Frm> & Laws.Look}
+    case Sp.CBig{}:
+      {Laws.look(Fm.feed(rest, r0)) == (out, Laws.Refusing{Fm.WSize{}}) : List<&2, Fm.Frm> & Laws.Look}
+    case Sp.CFrm{fr, r}:
+      {Fm.feed(rest, r0) == Fm.feed(r, Laws.start(max, Con{fr, out})) : Fm.Rd} &
+        {Nat.is_le(len(r), len(rest)) == True{} : Bool}
+
+def pay.cut(+ty: U32, +fl: U32, +sid: U32, -m: Nat, +max: Nat, +out: List<&2, Fm.Frm>, -rest: List<&2, U32>,
+  mt: Maybe<&2, Sp.Two>, h: RP(ty, fl, sid, m, "", max, out, rest, mt)) ->
+  RC9(max, Fm.Rd{Fm.FPay{ty, fl, sid, m, ""}, max, out}, rest, out, Sp.cut.pay(ty, fl, sid, mt)):
+  match mt:
+    case None{}:
+      h
+    case Some{tw}:
+      match tw:
+        case Sp.Two{p, r}:
+          h
+
+def cut.len9(+max: Nat, big: Bool, +n: Nat, +ty: U32, +fl: U32, +sid: U32, +rest: List<&2, U32>,
+  +out: List<&2, Fm.Frm>) ->
+  RC9(max, Fm.step.len(big, n, ty, fl, sid, max, out), rest, out, Sp.cut.len(big, n, ty, fl, sid, rest)):
+  match big:
+    case True{}:
+      %Equal.sym(Fm.Rd, Fm.feed(rest, Fm.Rd{Fm.FBad{Fm.WSize{}}, max, out}), Fm.Rd{Fm.FBad{Fm.WSize{}}, max, out},
+          bad_feed(rest, Fm.WSize{}, max, out)) :
+        {Laws.look(_) == (out, Laws.Refusing{Fm.WSize{}}) : List<&2, Fm.Frm> & Laws.Look}
+      {==}
+    case False{}:
+      match n:
+        case 0n:
+          ({==}, N.le_refl(len(rest)))
+        case 1n+m:
+          pay.cut(ty, fl, sid, m, max, out, rest, Sp.take(1n+m, rest), pay(ty, fl, sid, m, "", max, out, rest))
+
+# the relation for a whole input from a frame's first byte
+def RC(-max: Nat, -bs: List<&2, U32>, -out: List<&2, Fm.Frm>, c: Sp.Cut) -> Type:
+  match c:
+    case Sp.CShort{}:
+      {Laws.look(Fm.feed(bs, Laws.start(max, out))) == (out, Laws.Reading{}) : List<&2, Fm.Frm> & Laws.Look}
+    case Sp.CBig{}:
+      {Laws.look(Fm.feed(bs, Laws.start(max, out))) == (out, Laws.Refusing{Fm.WSize{}}) :
+        List<&2, Fm.Frm> & Laws.Look}
+    case Sp.CFrm{fr, r}:
+      {Fm.feed(bs, Laws.start(max, out)) == Fm.feed(r, Laws.start(max, Con{fr, out})) : Fm.Rd} &
+        {Nat.is_le(1n+len(r), len(bs)) == True{} : Bool}
+
+def cut.nine(+max: Nat, +b0: U32, +b1: U32, +b2: U32, +b3: U32, +b4: U32, +b5: U32, +b6: U32, +b7: U32,
+  +b8: U32, +rest: List<&2, U32>, +out: List<&2, Fm.Frm>, c: Sp.Cut,
+  h: RC9(max, Fm.step.hd9([b8, b7, b6, b5, b4, b3, b2, b1, b0], max, out), rest, out, c)) ->
+  RC(max, Con{b0, Con{b1, Con{b2, Con{b3, Con{b4, Con{b5, Con{b6, Con{b7, Con{b8, rest}}}}}}}}}, out, c):
+  match c:
+    case Sp.CShort{}:
+      h
+    case Sp.CBig{}:
+      h
+    case Sp.CFrm{fr, r}:
+      match h:
+        case (e1, e2):
+          (e1, N.le_add8(len(r), len(rest), e2))
+
+def cut_ok(+max: Nat, +bs: List<&2, U32>, +out: List<&2, Fm.Frm>) -> RC(max, bs, out, Sp.cut(max, bs)):
+  match bs:
+    case Nil{}:
+      {==}
+    case [a]:
+      {==}
+    case [a, b]:
+      {==}
+    case [a, b, c]:
+      {==}
+    case [a, b, c, d]:
+      {==}
+    case [a, b, c, d, e]:
+      {==}
+    case [a, b, c, d, e, f]:
+      {==}
+    case [a, b, c, d, e, f, g]:
+      {==}
+    case [a, b, c, d, e, f, g, h]:
+      {==}
+    case Con{+b0, Con{+b1, Con{+b2, Con{+b3, Con{+b4, Con{+b5, Con{+b6, Con{+b7, Con{+b8, +rest}}}}}}}}}:
+      cut.nine(max, b0, b1, b2, b3, b4, b5, b6, b7, b8, rest, out,
+        Sp.cut.len(Nat.is_lt(max, Fm.u24(b0, b1, b2)), Fm.u24(b0, b1, b2), b3, b4, Fm.u31(b5, b6, b7, b8), rest),
+        cut.len9(max, Nat.is_lt(max, Fm.u24(b0, b1, b2)), Fm.u24(b0, b1, b2), b3, b4, Fm.u31(b5, b6, b7, b8),
+          rest, out))
+
+# frame after frame: the reader from a frame's first byte agrees with
+# the reference's walk, for every fuel the input's length is within
+def sim(+fuel: Nat, +max: Nat, +bs: List<&2, U32>, +out: List<&2, Fm.Frm>, c: Sp.Cut, h: RC(max, bs, out, c),
+  +hf: {Nat.is_le(len(bs), fuel) == True{} : Bool}) ->
+  Laws.agree(Fm.feed(bs, Laws.start(max, out)), max, Sp.go(fuel, max, bs, c, out)):
+  match fuel:
+    case 0n:
+      match bs:
+        case Nil{}:
+          ({==}, {==})
+        case Con{x, t}:
+          N.absurd(Laws.agree(Fm.feed(Con{x, t}, Laws.start(max, out)), max, Sp.go(0n, max, Con{x, t}, c, out)),
+            N.ft(hf))
+    case 1n+f:
+      match c:
+        case Sp.CShort{}:
+          (h, {==})
+        case Sp.CBig{}:
+          h
+        case Sp.CFrm{+fr, +r}:
+          match h:
+            case (e1, e2):
+              %Equal.sym(Fm.Rd, Fm.feed(bs, Laws.start(max, out)), Fm.feed(r, Laws.start(max, Con{fr, out})), e1) :
+                Laws.agree(_, max, Sp.go(f, max, r, Sp.cut(max, r), Con{fr, out}))
+              sim(f, max, r, Con{fr, out}, Sp.cut(max, r), cut_ok(max, r, Con{fr, out}),
+                N.le_trans(1n+len(r), len(bs), 1n+f, e2, hf))
+
+# The preface: the reader fed the input, beside how the reference
+# begins.
+def RPre(-max: Nat, -fed: Fm.Rd, pr: Sp.Pre) -> Type:
+  match pr:
+    case Sp.PMore{}:
+      {Laws.look(fed) == (Nil{}, Laws.Reading{}) : List<&2, Fm.Frm> & Laws.Look}
+    case Sp.PBad{}:
+      {Laws.look(fed) == (Nil{}, Laws.Refusing{Fm.WPre{}}) : List<&2, Fm.Frm> & Laws.Look}
+    case Sp.PDone{rest}:
+      {fed == Fm.feed(rest, Laws.start(max, Nil{})) : Fm.Rd}
+
+def pre.bad(+max: Nat, +u: List<&2, U32>) ->
+  {Laws.look(Fm.feed(u, Fm.Rd{Fm.FBad{Fm.WPre{}}, max, Nil{}})) == (Nil{}, Laws.Refusing{Fm.WPre{}}) :
+    List<&2, Fm.Frm> & Laws.Look}:
+  %Equal.sym(Fm.Rd, Fm.feed(u, Fm.Rd{Fm.FBad{Fm.WPre{}}, max, Nil{}}), Fm.Rd{Fm.FBad{Fm.WPre{}}, max, Nil{}},
+      bad_feed(u, Fm.WPre{}, max, Nil{})) :
+    {Laws.look(_) == (Nil{}, Laws.Refusing{Fm.WPre{}}) : List<&2, Fm.Frm> & Laws.Look}
+  {==}
+
+def pre.nil(+max: Nat, ok: Bool, +u: List<&2, U32>) ->
+  RPre(max, Fm.feed(u, Fm.step.pre.go(ok, Nil{}, max, Nil{})), Sp.pre.on(ok, Sp.PDone{u})):
+  match ok:
+    case True{}:
+      {==}
+    case False{}:
+      pre.bad(max, u)
+
+def pre.con(+max: Nat, ok: Bool, +p: U32, +t: List<&2, U32>, +u: List<&2, U32>,
+  ih: RPre(max, Fm.feed(u, Fm.Rd{Fm.FPre{Con{p, t}}, max, Nil{}}), Sp.pre(Con{p, t}, u))) ->
+  RPre(max, Fm.feed(u, Fm.step.pre.go(ok, Con{p, t}, max, Nil{})), Sp.pre.on(ok, Sp.pre(Con{p, t}, u))):
+  match ok:
+    case True{}:
+      ih
+    case False{}:
+      pre.bad(max, u)
+
+def pre_ok(bs: List<&2, U32>, +max: Nat, +p: U32, +t: List<&2, U32>) ->
+  RPre(max, Fm.feed(bs, Fm.Rd{Fm.FPre{Con{p, t}}, max, Nil{}}), Sp.pre(Con{p, t}, bs)):
+  match bs:
+    case Nil{}:
+      {==}
+    case Con{+c, +u}:
+      match t:
+        case Nil{}:
+          pre.nil(max, U32.is_eq(c, p), u)
+        case Con{+q, +w}:
+          pre.con(max, U32.is_eq(c, p), q, w, u, pre_ok(u, max, q, w))
+
+def frames.ok(+max: Nat, +bs: List<&2, U32>, pr: Sp.Pre, h: RPre(max, Fm.feed(bs, Fm.new(max)), pr)) ->
+  Laws.agree(Fm.feed(bs, Fm.new(max)), max, Sp.frames.pre(max, bs, pr)):
+  match pr:
+    case Sp.PMore{}:
+      h
+    case Sp.PBad{}:
+      h
+    case Sp.PDone{+rest}:
+      %Equal.sym(Fm.Rd, Fm.feed(bs, Fm.new(max)), Fm.feed(rest, Laws.start(max, Nil{})), h) :
+        Laws.agree(_, max, Sp.go(List.length(&2, U32, rest), max, rest, Sp.cut(max, rest), Nil{}))
+      sim(List.length(&2, U32, rest), max, rest, Nil{}, Sp.cut(max, rest), cut_ok(max, rest, Nil{}),
+        N.le_refl(len(rest)))
+
+def Laws.frame_sim(max, bs):
+  frames.ok(max, bs, Sp.pre(Sp.preface(), bs), pre_ok(bs, max, 80, Wr.bytes("RI * HTTP/2.0\r\n\r\nSM\r\n\r\n")))
+
+def feed_buf_is(+b: Bytes(), +r: Fm.Rd) -> {Fm.feed_buf(b, r) == Fm.feed(Bytes.to_list(b), r) : Fm.Rd}:
+  Wr.feed_buf_is_feed(~Unit, ~Fm.Rd, ~Fm.wstep, ~Fm.wadv, ~Wr.one.step_ok(~Unit, ~Fm.Rd, ~Fm.wstep), Unit{}, b, r)
+
+def Laws.frame_sim_buf(max, b):
+  %Equal.sym(Fm.Rd, Fm.feed_buf(b, Fm.new(max)), Fm.feed(Bytes.to_list(b), Fm.new(max)), feed_buf_is(b, Fm.new(max))) :
+    Laws.agree(_, max, Sp.frames(max, Bytes.to_list(b)))
+  Laws.frame_sim(max, Bytes.to_list(b))
+
+def Laws.frame_sim_reads(max, rs):
+  %Equal.sym(Fm.Rd, Laws.reads(rs, Fm.new(max)), Fm.feed(Bytes.to_list(Bytes.concat(rs)), Fm.new(max)),
+      Wr.reads_is(~Unit, ~Fm.Rd, ~Fm.wstep, ~Fm.wadv, ~Wr.one.step_ok(~Unit, ~Fm.Rd, ~Fm.wstep), Unit{}, rs,
+        Fm.new(max))) :
+    Laws.agree(_, max, Sp.frames(max, Bytes.to_list(Bytes.concat(rs))))
+  Laws.frame_sim(max, Bytes.to_list(Bytes.concat(rs)))
+
+def Laws.frame_split(a, b, r):
+  Wr.feed_split(~Unit, ~Fm.Rd, ~Fm.wstep, Unit{}, a, b, r)
+
+def Laws.frame_settings():
+  {==}
+
+def Laws.frame_bad_preface():
+  {==}
+
+def Laws.frame_too_big():
+  {==}
+
+def Laws.frame_cut():
+  {==}
+
+def Laws.frame_fields():
   {==}

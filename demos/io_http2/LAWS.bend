@@ -7,6 +7,8 @@ import ../../wire/reader.bend as Wr
 import ./huff.bend as H
 import ./hpack.bend as K
 import ./vectors.bend as V
+import ./frame.bend as Fm
+import ./spec.bend as Sp
 
 # HPACK: integers (RFC 7541 5.1)
 # ==============================
@@ -294,3 +296,107 @@ law c5_enc:
 law c6_enc:
   {encs([rsp1(), rsp2(), rsp3()], K.tbl.new(256n), True{}) ==
     ([V.c61(), V.c62(), V.c63()], K.Tbl{rsp.tbl(), 256n}) : List<&2, List<&2, U32>> & K.Tbl}
+
+# Frames (RFC 9113 3.4, 4.1, 4.2)
+# ===============================
+
+# The reader seen from outside: the frames it has completed, newest
+# first, and whether it is reading or has refused (and why).
+type Look is Data:
+  Reading{}
+  Refusing{why: Fm.Why}
+
+def look.at(at: Fm.Fs) -> Look:
+  match at:
+    case Fm.FBad{why}:
+      Refusing{why}
+    case _:
+      Reading{}
+
+def look(r: Fm.Rd) -> List<&2, Fm.Frm> & Look:
+  match r:
+    case Fm.Rd{at, max, out}:
+      (out, look.at(at))
+
+# a reader at a frame's first byte, with these frames behind it
+def start(+max: Nat, out: List<&2, Fm.Frm>) -> Fm.Rd:
+  Fm.Rd{Fm.hd.start(), max, out}
+
+# A reader agrees with the reference when it has completed exactly the
+# reference's frames and then: inside the preface, it is still reading;
+# where the reference is open, it is reading, and is exactly a reader
+# at a frame's first byte fed the bytes since the last whole frame;
+# where the reference refuses, it has refused, for the same reason.
+def agree.end(-r: Fm.Rd, +max: Nat, +fs: List<&2, Fm.Frm>, e: Sp.End) -> Type:
+  match e:
+    case Sp.Pre{rest}:
+      {look(r) == (fs, Reading{}) : List<&2, Fm.Frm> & Look}
+    case Sp.Open{rest}:
+      {look(r) == (fs, Reading{}) : List<&2, Fm.Frm> & Look} &
+        {r == Fm.feed(rest, start(max, fs)) : Fm.Rd}
+    case Sp.Refused{why}:
+      {look(r) == (fs, Refusing{why}) : List<&2, Fm.Frm> & Look}
+
+def agree(-r: Fm.Rd, +max: Nat, f: Sp.Frames) -> Type:
+  match f:
+    case Sp.Frames{fs, e}:
+      agree.end(r, max, fs, e)
+
+# LAW: the reader is the framing. For every maximum frame size and every
+# input, a fresh reader fed the input agrees with RFC 9113's framing of
+# it (spec.bend): the same frames at the same boundaries, the preface
+# checked byte by byte, a frame past the maximum refused at its header.
+law frame_sim:
+  for +max: Nat
+  for +bs: List<&2, U32>
+  agree(Fm.feed(bs, Fm.new(max)), max, Sp.frames(max, bs))
+
+# LAW: the same for the walk the server runs over one read ...
+law frame_sim_buf:
+  for +max: Nat
+  for +b: Bytes()
+  agree(Fm.feed_buf(b, Fm.new(max)), max, Sp.frames(max, Bytes.to_list(b)))
+
+# ... and over a connection's reads however TCP cut them
+def reads(rs: List<&2, Bytes()>, r: Fm.Rd) -> Fm.Rd:
+  Wr.reads(~Unit, ~Fm.Rd, ~Fm.wstep, ~Fm.wadv, Unit{}, rs, r)
+
+law frame_sim_reads:
+  for +max: Nat
+  for +rs: List<&2, Bytes()>
+  agree(reads(rs, Fm.new(max)), max, Sp.frames(max, Bytes.to_list(Bytes.concat(rs))))
+
+# LAW: chunking never changes a read (the kit's, at the frame reader)
+law frame_split:
+  for +a: List<&2, U32>
+  for +b: List<&2, U32>
+  for +r: Fm.Rd
+  {Fm.feed(List.append(&2, U32, a, b), r) == Fm.feed(b, Fm.feed(a, r)) : Fm.Rd}
+
+# The reference on vectors: the preface then an empty SETTINGS; a
+# preface with one byte wrong; a frame one byte past a 16-byte maximum;
+# and a PING cut after its header.
+def pfx() -> List<&2, U32>:
+  Wr.bytes("PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n")
+
+law frame_settings:
+  {Sp.frames(16384n, List.append(&2, U32, pfx(), [0, 0, 0, 4, 0, 0, 0, 0, 0])) ==
+    Sp.Frames{[Fm.Frm{4, 0, 0, ""}], Sp.Open{Nil{}}} : Sp.Frames}
+
+law frame_bad_preface:
+  {Sp.frames(16384n, Wr.bytes("PRI * HTTP/1.1\r\n\r\nSM\r\n\r\n")) ==
+    Sp.Frames{Nil{}, Sp.Refused{Fm.WPre{}}} : Sp.Frames}
+
+law frame_too_big:
+  {Sp.frames(16n, List.append(&2, U32, pfx(), [0, 0, 17, 0, 0, 0, 0, 0, 1])) ==
+    Sp.Frames{Nil{}, Sp.Refused{Fm.WSize{}}} : Sp.Frames}
+
+law frame_cut:
+  {Sp.frames(16384n, List.append(&2, U32, pfx(), [0, 0, 8, 6, 0, 0, 0, 0, 0, 1, 2])) ==
+    Sp.Frames{Nil{}, Sp.Open{[0, 0, 8, 6, 0, 0, 0, 0, 0, 1, 2]}} : Sp.Frames}
+
+# the stream identifier's reserved bit is dropped, and the length is
+# the three octets big-endian
+law frame_fields:
+  {Sp.frames(16384n, List.append(&2, U32, pfx(), [0, 0, 0, 6, 1, 128, 0, 1, 3])) ==
+    Sp.Frames{[Fm.Frm{6, 1, 259, ""}], Sp.Open{Nil{}}} : Sp.Frames}

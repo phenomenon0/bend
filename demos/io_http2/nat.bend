@@ -224,6 +224,23 @@ def lt_le(+a: Nat, +b: Nat, +c: Nat, h1: {Nat.is_lt(a, b) == True{} : Bool},
     case 1n+p 1n+q 1n+r:
       lt_le(p, q, r, h1, h2)
 
+def le_trans(+a: Nat, +b: Nat, +c: Nat, h1: {Nat.is_le(a, b) == True{} : Bool},
+  h2: {Nat.is_le(b, c) == True{} : Bool}) -> {Nat.is_le(a, c) == True{} : Bool}:
+  match a b c:
+    case 0n _ _:
+      le0(c)
+    case 1n+p 0n _:
+      absurd({Nat.is_le(1n+p, c) == True{} : Bool}, ft(h1))
+    case 1n+p 1n+q 0n:
+      absurd({Nat.is_le(1n+p, 0n) == True{} : Bool}, ft(h2))
+    case 1n+p 1n+q 1n+r:
+      le_trans(p, q, r, h1, h2)
+
+# a <= b: 1 + a <= 9 + b
+def le_add8(+a: Nat, +b: Nat, h: {Nat.is_le(a, b) == True{} : Bool}) -> {Nat.is_le(1n+a, 9n+b) == True{} : Bool}:
+  le_S(a, 7n+b, le_S(a, 6n+b, le_S(a, 5n+b, le_S(a, 4n+b, le_S(a, 3n+b, le_S(a, 2n+b, le_S(a, 1n+b,
+    le_S(a, b, h))))))))
+
 # s <= b and x <= b - s: s + x <= b
 def le_add_sub(+s: Nat, +b: Nat, -x: Nat, h1: {Nat.is_le(s, b) == True{} : Bool},
   h2: {Nat.is_le(x, Nat.sub(b, s)) == True{} : Bool}) -> {Nat.is_le(Nat.add(s, x), b) == True{} : Bool}:
