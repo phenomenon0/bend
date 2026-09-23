@@ -556,6 +556,16 @@ however TCP cut them. `cls_every` and `lower_every` say the reader and
 the reference class and lowercase every U32 alike, not only the 256
 bytes.
 
+Each request carries its head for whoever passes it on (`Eng.req.hd`,
+an `Eng.Hd{meth, v10, fields, conn}`): the method's bytes, whether it
+is HTTP/1.0, every field the reader passes on (the Host and each one it
+does not act on) as a `Wr.Field{name, value}` of `wire/reader.bend`,
+the name lowercased and the value as it came between the colon and the
+line's end, whitespace and all, in the order they came, and the members
+of every Connection, lowercased. `hd_framed` says these are `frame()`'s
+heads, read by `spec.bend`'s views of the lines. (A head still in
+progress: `Eng.p.fields(p)`, newest first.)
+
 The proof is a simulation. `REL` says where the reader is given where
 `frame()`'s walk is -- inside a line, a line-start reader fed the line
 so far; at a line's CR, the state after it with pending fields that
