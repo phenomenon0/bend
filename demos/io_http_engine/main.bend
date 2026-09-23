@@ -1616,6 +1616,34 @@ def skip(s: Bytes(), go: Bool, c: U32, pd: Pend, out: List<&2, Req>) -> P & Byte
     case SCon{Chr{+x}, t} True{}:
       skip(t, run.stay(RX{}, cls(x)), x, pd, out)
 
+# The same walk, with the visible ASCII (33 up to 127) a value is mostly
+# made of found by Bytes.span in one borrowed pass: a byte the value
+# goes on past (a space, a tab, obs-text) is stepped as skip steps it,
+# and the span goes on after it. What k bounds is only how many spans:
+# past it, skip walks the rest. PROOF.bend's lem.skip.vis: the same
+# walk as skip, and so as feed.
+def skip.jump(ok: Bool, +t: Bytes()) -> Bytes():
+  match ok:
+    case True{}:
+      String.drop(t, Bytes.span(t, 0n, 33, 127))
+    case False{}:
+      t
+
+def skip.run(k: Nat, s: Bytes(), on: Bool, c: U32, pd: Pend, out: List<&2, Req>) -> P & Bytes():
+  match k s on:
+    case 0n _ _:
+      skip(s, on, c, pd, out)
+    case 1n+j _ False{}:
+      (step(P{InLx{}, pd, out}, c), s)
+    case 1n+j SNil{} True{}:
+      (P{InLx{}, pd, out}, SNil{})
+    case 1n+j SCon{Chr{+x}, t} True{}:
+      +ok = run.stay(RX{}, cls(x))
+      skip.run(j, skip.jump(ok, t), ok, x, pd, out)
+
+def skip.vis(+s: Bytes(), pd: Pend, out: List<&2, Req>) -> P & Bytes():
+  skip.run(Bytes.len(s), skip.jump(True{}, s), True{}, 0, pd, out)
+
 # a body: all of the read when the body goes on past it, else the r + 1
 # bytes that end it, with the message emitted
 def bod.took(pd: Pend, out: List<&2, Req>, b: Bytes(), xy: Bytes() & Bytes()) -> P & Bytes():
@@ -1667,7 +1695,7 @@ def adv.at(st: St, s: Bytes(), pd: Pend, out: List<&2, Req>) -> P & Bytes():
     case InLk{k}:
       run.go(RK{}, k, s, pd, out)
     case InLx{}:
-      skip(s, True{}, 0, pd, out)
+      skip.vis(s, pd, out)
     case Bod{r, b}:
       bod.go(r, b, s, pd, out)
     case Chd{r, b, left}:

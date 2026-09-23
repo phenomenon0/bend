@@ -612,6 +612,150 @@ def lem.skip(+s: Bytes(), go: Bool, +c: U32, +pd: Eng.Pend, +out: List<&2, Eng.R
         lem.skip(t, Eng.run.stay(Eng.RX{}, Eng.cls(x)), x, pd, out),
         lem.skip.at(x, t, pd, out, Eng.run.stay(Eng.RX{}, Eng.cls(x)))({==}))
 
+# A value skipped span by span (skip.vis): every byte in [33, 127) is
+# one a skipped value goes on past, so a span of them leaves the walk
+# where it was, and between spans the walk is skip's
+def lem.rx.sym(co: Bool, cm: Bool, tk: Bool) ->
+  {Eng.run.stay(Eng.RX{}, Eng.cls.sym(co, cm, tk)) == True{} : Bool}:
+  match co cm tk:
+    case True{} True{} True{}:
+      {==}
+    case True{} True{} False{}:
+      {==}
+    case True{} False{} True{}:
+      {==}
+    case True{} False{} False{}:
+      {==}
+    case False{} True{} True{}:
+      {==}
+    case False{} True{} False{}:
+      {==}
+    case False{} False{} True{}:
+      {==}
+    case False{} False{} False{}:
+      {==}
+
+def lem.rx.vis(+c: U32, al: Bool, dg: Bool) ->
+  {Eng.run.stay(Eng.RX{}, Eng.cls.vis(c, al, dg)) == True{} : Bool}:
+  match al dg:
+    case True{} True{}:
+      {==}
+    case True{} False{}:
+      {==}
+    case False{} True{}:
+      {==}
+    case False{} False{}:
+      lem.rx.sym(U32.is_eq(c, 58), U32.is_eq(c, 44), Eng.tsym(c))
+
+def lem.rx.go(+c: U32, x: Bool, y: Bool) ->
+  {Bool.and(Bool.not(x), Bool.not(y)) == True{} : Bool} ->
+  {Eng.run.stay(Eng.RX{}, Eng.cls.go(c, x, y)) == True{} : Bool}:
+  match x y:
+    case True{} True{}:
+      e =>
+        %e : BT(_, {Eng.run.stay(Eng.RX{}, Eng.cls.go(c, True{}, True{})) == True{} : Bool})
+        Unit{}
+    case True{} False{}:
+      e =>
+        %e : BT(_, {Eng.run.stay(Eng.RX{}, Eng.cls.go(c, True{}, False{})) == True{} : Bool})
+        Unit{}
+    case False{} True{}:
+      e =>
+        %e : BT(_, {Eng.run.stay(Eng.RX{}, Eng.cls.go(c, False{}, True{})) == True{} : Bool})
+        Unit{}
+    case False{} False{}:
+      e => lem.rx.vis(c, Eng.alpha(c), Eng.digit(c))
+
+def lem.rx.in(+c: U32) ->
+  {Bytes.span.in(c, 33, 127) == True{} : Bool} ->
+  {Eng.run.stay(Eng.RX{}, Eng.cls(c)) == True{} : Bool}:
+  e => lem.rx.go(c, U32.is_lt(c, 33), U32.is_le(127, c))(e)
+
+# a byte a skipped value goes on past leaves the walk where it was
+def lem.rx.step(+c: U32, +pd: Eng.Pend, +out: List<&2, Eng.Req>) ->
+  {Eng.run.stay(Eng.RX{}, Eng.cls(c)) == True{} : Bool} ->
+  {Eng.step(Eng.P{Eng.InLx{}, pd, out}, c) == Eng.P{Eng.InLx{}, pd, out} : Eng.P}:
+  e => lem.stay(Eng.RX{}, Eng.cls(c), c, "", pd, out)(e)
+
+def lem.span.rx.at(+c: U32, +t: Bytes(), +pd: Eng.Pend, +out: List<&2, Eng.Req>, b: Bool,
+  ih: {Eng.feed_buf.slow(String.drop(t, Bytes.span.go(t, 33, 127)), Eng.P{Eng.InLx{}, pd, out}) ==
+    Eng.feed_buf.slow(t, Eng.P{Eng.InLx{}, pd, out}) : Eng.P}) ->
+  {Bytes.span.in(c, 33, 127) == b : Bool} ->
+  {Eng.feed_buf.slow(String.drop(SCon{Chr{c}, t}, Bytes.span.at(b, t, 33, 127)), Eng.P{Eng.InLx{}, pd, out}) ==
+    Eng.feed_buf.slow(SCon{Chr{c}, t}, Eng.P{Eng.InLx{}, pd, out}) : Eng.P}:
+  match b:
+    case False{}:
+      e => {==}
+    case True{}:
+      e =>
+        %Equal.sym(Eng.P, Eng.step(Eng.P{Eng.InLx{}, pd, out}, c), Eng.P{Eng.InLx{}, pd, out}, lem.rx.step(c, pd, out)(lem.rx.in(c)(e))) :
+          {Eng.feed_buf.slow(String.drop(t, Bytes.span.go(t, 33, 127)), Eng.P{Eng.InLx{}, pd, out}) ==
+            Eng.feed_buf.slow(t, _) : Eng.P}
+        ih
+
+# the span a skipped value starts with, dropped, leaves its walk as it was
+def lem.span.rx(+s: Bytes(), +pd: Eng.Pend, +out: List<&2, Eng.Req>) ->
+  {Eng.feed_buf.slow(String.drop(s, Bytes.span.go(s, 33, 127)), Eng.P{Eng.InLx{}, pd, out}) ==
+    Eng.feed_buf.slow(s, Eng.P{Eng.InLx{}, pd, out}) : Eng.P}:
+  match s:
+    case SNil{}:
+      {==}
+    case SCon{Chr{+c}, t}:
+      lem.span.rx.at(c, t, pd, out, Bytes.span.in(c, 33, 127), lem.span.rx(t, pd, out))({==})
+
+def lem.span.rx0(+s: Bytes(), +pd: Eng.Pend, +out: List<&2, Eng.Req>) ->
+  {Eng.feed_buf.slow(String.drop(s, Bytes.span(s, 0n, 33, 127)), Eng.P{Eng.InLx{}, pd, out}) ==
+    Eng.feed_buf.slow(s, Eng.P{Eng.InLx{}, pd, out}) : Eng.P}:
+  match s:
+    case SNil{}:
+      {==}
+    case SCon{h, u}:
+      lem.span.rx(SCon{h, u}, pd, out)
+
+def lem.skip.jump(+x: U32, +t: Bytes(), +pd: Eng.Pend, +out: List<&2, Eng.Req>, ok: Bool) ->
+  {Eng.run.stay(Eng.RX{}, Eng.cls(x)) == ok : Bool} ->
+  {skip.want(ok, x, Eng.skip.jump(ok, t), pd, out) ==
+    Eng.feed_buf.slow(t, Eng.step(Eng.P{Eng.InLx{}, pd, out}, x)) : Eng.P}:
+  match ok:
+    case True{}:
+      e =>
+        %Equal.sym(Eng.P, Eng.step(Eng.P{Eng.InLx{}, pd, out}, x), Eng.P{Eng.InLx{}, pd, out}, lem.rx.step(x, pd, out)(e)) :
+          {Eng.feed_buf.slow(String.drop(t, Bytes.span(t, 0n, 33, 127)), Eng.P{Eng.InLx{}, pd, out}) ==
+            Eng.feed_buf.slow(t, _) : Eng.P}
+        lem.span.rx0(t, pd, out)
+    case False{}:
+      e => {==}
+
+def lem.skip.run(k: Nat, +s: Bytes(), on: Bool, +c: U32, +pd: Eng.Pend,
+  +out: List<&2, Eng.Req>) ->
+  {Eng.feed_buf.last(Eng.skip.run(k, s, on, c, pd, out)) == skip.want(on, c, s, pd, out) : Eng.P}:
+  match k s on:
+    case 0n _ _:
+      lem.skip(s, on, c, pd, out)
+    case 1n+j SNil{} False{}:
+      {==}
+    case 1n+j SCon{Chr{x}, t} False{}:
+      {==}
+    case 1n+j SNil{} True{}:
+      {==}
+    case 1n+j SCon{Chr{+x}, t} True{}:
+      Equal.trans(Eng.P,
+        Eng.feed_buf.last(Eng.skip.run(j, Eng.skip.jump(Eng.run.stay(Eng.RX{}, Eng.cls(x)), t),
+          Eng.run.stay(Eng.RX{}, Eng.cls(x)), x, pd, out)),
+        skip.want(Eng.run.stay(Eng.RX{}, Eng.cls(x)), x,
+          Eng.skip.jump(Eng.run.stay(Eng.RX{}, Eng.cls(x)), t), pd, out),
+        Eng.feed_buf.slow(t, Eng.step(Eng.P{Eng.InLx{}, pd, out}, x)),
+        lem.skip.run(j, Eng.skip.jump(Eng.run.stay(Eng.RX{}, Eng.cls(x)), t),
+          Eng.run.stay(Eng.RX{}, Eng.cls(x)), x, pd, out),
+        lem.skip.jump(x, t, pd, out, Eng.run.stay(Eng.RX{}, Eng.cls(x)))({==}))
+
+def lem.skip.vis(+s: Bytes(), +pd: Eng.Pend, +out: List<&2, Eng.Req>) ->
+  {Eng.feed_buf.last(Eng.skip.vis(s, pd, out)) == Eng.feed_buf.slow(s, Eng.P{Eng.InLx{}, pd, out}) : Eng.P}:
+  Equal.trans(Eng.P, Eng.feed_buf.last(Eng.skip.vis(s, pd, out)),
+    Eng.feed_buf.slow(Eng.skip.jump(True{}, s), Eng.P{Eng.InLx{}, pd, out}), Eng.feed_buf.slow(s, Eng.P{Eng.InLx{}, pd, out}),
+    lem.skip.run(Bytes.len(s), Eng.skip.jump(True{}, s), True{}, 0, pd, out),
+    lem.span.rx0(s, pd, out))
+
 # A method or a name, from its first byte: the state before it steps
 # each byte the run carries as the run's empty state does
 def lem.ent.step(e: Eng.Ent, k: Eng.Cls, -c: U32, -pd: Eng.Pend, -out: List<&2, Eng.Req>) ->
@@ -896,7 +1040,7 @@ def lem.adv.at(st: Eng.St, +s: Bytes(), +pd: Eng.Pend, +out: List<&2, Eng.Req>) 
     case Eng.InLk{k}:
       lem.go.run(Eng.RK{}, k, s, pd, out)
     case Eng.InLx{}:
-      lem.skip(s, True{}, 0, pd, out)
+      lem.skip.vis(s, pd, out)
     case Eng.Bod{r, b}:
       lem.bod(s, r, b, pd, out)
     case Eng.Rest{bs}:
