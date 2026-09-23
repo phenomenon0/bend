@@ -289,17 +289,26 @@ never a hang.
 
 `bytes.bend` moved from four bytes to a Vec cell onto Base's `Bytes()`, so the
 IO effects' buffers need no conversion; the bulk operations (slice, drop, find,
-append a run) are native and copy nothing. A single byte is not: on C,
-`Bytes.get` is a reference count up and down, a `Some` node allocated and freed
-and a fresh view descriptor, about 30 ns against the Vec cell's 2; a push
-allocates the one-byte buffer it appends (85 ns); an uncons walk, which
-advances the descriptor in place, is 7 ns. On JS a positional read walks the
-string from the front. Measured on this sandbox (1T, medians of three, same
-checksums before and after): json 0.56 -> 2.97 s, bytes 0.57 -> 10.8,
-blake3 0.29 -> 3.7, cdc 0.30 -> 3.3, text 2.19 -> 4.9. The fix is two
-primitives in the compiler, not here: a borrowing `Bytes.get` answering a U32
-(no Maybe, no count; `Map.bit` already borrows this way) and a `Bytes.push`
-that writes one byte into the buffer's room.
+append a run) are native and copy nothing. A single byte was not: on C,
+`Bytes.get` was a reference count up and down, a `Some` node and a fresh view
+descriptor (30 ns against the Vec cell's 2), a push allocated the one-byte
+buffer it appended (85 ns), and on JS a positional read walked the string from
+the front. Port alone, 1T: json 0.56 -> 2.97 s, bytes 0.57 -> 10.8, blake3
+0.29 -> 3.7, cdc 0.30 -> 3.3, text 2.19 -> 4.9.
+
+Base now has the scanner's reads as natives with Bend bodies (the spec the laws
+use; `tests/base/bytes_scan.bend` holds them equal on four lanes):
+`Bytes.get`, `len`, `word_le`, `span` (bytes in [lo, hi) from i), `find_byte`
+and `find_any` (the first of one or four bytes) borrow the buffer -- the call
+site neither shares nor drops it, the read is plain loads a loop hoists -- and
+`Bytes.push` stores into an unshared buffer's room. Measured on this sandbox
+(ns per byte, 16 MiB buffer, the loop's share): get 30 -> 0.9, a get-loop run
+36 -> 2.2, span 0.9, push 80 -> 6 (the Vec cell's push was 3.9). bytes.bend's
+reads are bound before the buffer goes back in their pair, so they borrow, and
+blake3 reads its blocks where they lie. 1T medians against the pre-port pins:
+json 0.54 -> 0.58 s, grammar 1.14 -> 1.07, text 2.22 -> 2.40, cdc 0.25 ->
+0.32, blake3 0.30 -> 0.48, bytes 0.53 -> 0.81. What is left is a descriptor's
+chain of loads per read where the Vec cell had one, and the push's.
 
 ## Known hazard: a U64, I64 or F64 in an Array on the C backend
 
