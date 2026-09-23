@@ -242,13 +242,18 @@ def int.enc(p: Pfx, +flags: Nat, +v: Nat) -> List<&2, U32>:
   +max = pfx.max(p)
   int.enc.go(flags, max, v, Nat.is_lt(v, max))
 
-# the largest value past the prefix that four digits carry, plus one
-def pow128(k: Nat) -> Nat:
+# whether x has at most k digits in base 128: what the continuation
+# bytes of an integer can carry under the decoder's cap
+def int.fits(k: Nat, x: Nat) -> Bool:
   match k:
     case 0n:
-      1n
+      match x:
+        case 0n:
+          True{}
+        case 1n+y:
+          False{}
     case 1n+j:
-      Nat.mul(pow128(j), 128n)
+      int.fits(j, Nat.div(x, 128n))
 
 # Huffman strings (RFC 7541 5.2, Appendix B)
 # ==========================================
