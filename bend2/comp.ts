@@ -414,10 +414,11 @@ const OPERATIONS: Record<string, Intr> = Object.setPrototypeOf({
   // Map.bit borrows the key and returns it: the tree order and the 33-bit key
   // protocol of the reference definition, O(1) on C, an endpoint scan on JS.
   map_bit: { C: ["$0", "str_bit_peek(e, $0, $1)"], JS: "map_bit($0, $1)" },
-  // Bytes: get, span and the finds borrow the buffer (peek): the call site
+  // Bytes: len, get, span and the finds borrow the buffer (peek): the call site
   // neither shares nor drops it, so a scan loop over one buffer touches no
   // count; push appends in place into an unshared buffer's spare room.
   bytes_get: { C: "str_byte_peek(e, $0, $1)", peek: [0], JS: "bytes_get($0, $1)" },
+  bytes_len: { C: "str_len_peek(e, $0)", peek: [0], JS: "str_length($0)" },
   bytes_push: { C: "str_push_take(e, $0, $1)", JS: "bytes_push($0, $1)" },
   bytes_span: { C: "str_span_peek(e, $0, $1, $2, $3)", peek: [0],
     JS: "bytes_span($0, $1, $2, $3)" },
@@ -5345,7 +5346,7 @@ INLINE void str_uncons(Env e, Term s, THR Term* out) {
 
 // Bytes.push: one cell on the end, in place when the string is its
 // payload's one owner with room (append's doubling amortizes the rest).
-INLINE Term str_push_take(Env e, Term s, u32 c) {
+FAR Term str_push_grow(Env e, Term s, u32 c) {
   StrParts p = str_reserve(e, str_take(e, s), 1, false, str_fit(c));
   if (!err_seen(e.mem) && p.data) {
     str_put(e, p, p.len, c);
@@ -5354,18 +5355,65 @@ INLINE Term str_push_take(Env e, Term s, u32 c) {
   return str_view_owned(e, p);
 }
 
-// Bytes.get, Bytes.span and Bytes.find_byte borrow the string (the call
+INLINE Term str_push_take(Env e, Term s, u32 c) {
+  // The filling loop's case, read once: the one owner of a descriptor
+  // holding the one count of a heap payload with room and wide enough
+  // cells stores the cell and bumps the length.
+  if (!term_triv(s) && term_rfc(s)) {
+    u64 cell = rfc_view(e, term_loc(s));
+    Loc l = cell >> 24;
+    Term d = e.mem[l];
+    u64 ol = e.mem[l + 1];
+    if ((cell & RFC_CNT) == 1 && (u32)ol && term_rfc(d)) {
+      u64 dc = rfc_view(e, term_loc(d));
+      Loc dl = dc >> 24;
+      u32 nar = (u32)(term_aux(d) >> 5) & 3, at = (u32)(ol >> 32) + (u32)ol;
+      if ((dc & RFC_CNT) == 1 && dl >= HEAP_OFF && str_fit(c) >= nar
+          && at < str_cap(d)) {
+        str_cell_put(e.mem, dl, nar, at, c);
+        e.mem[l + 1] = ol + 1;
+        return s;
+      }
+    }
+  }
+  return str_push_grow(e, s, c);
+}
+
+// Bytes.len, get, span and the finds borrow the string (the call
 // site neither shares nor drops it): no view, no count, no Maybe.
+// A borrowed read holds a count on what it reads, so no location it follows
+// can move and nothing it reads was written after it got the count: its
+// loads are plain ones, which a loop over one buffer hoists.
+INLINE Loc term_peek_ro(Env e, Term t) {
+  return term_rfc(t) ? (Loc)(e.mem[term_loc(t)] >> 24) : term_loc(t);
+}
+
+INLINE StrParts str_peek_ro(Env e, Term s) {
+  StrParts p = {0, 0, 0, 0};
+  if (term_tag(s) == TAG_STR) {
+    Loc l = term_peek_ro(e, s);
+    p.data = e.mem[l];
+    p.off = (u32)(e.mem[l + 1] >> 32);
+    p.len = (u32)e.mem[l + 1];
+  }
+  return p;
+}
+
+INLINE Nat str_len_peek(Env e, Term s) {
+  return str_peek_ro(e, s).len;
+}
+
 INLINE u32 str_byte_peek(Env e, Term s, Nat i) {
-  StrParts p = str_peek(e, s);
-  return i < p.len ? str_at_peek(e, p, (u32)i) : 256;
+  StrParts p = str_peek_ro(e, s);
+  return i < p.len
+    ? str_cell(e.mem, term_peek_ro(e, p.data), str_nar(p), p.off + (u32)i) : 256;
 }
 
 // how many cells from i are in [lo, hi)
 INLINE Nat str_span_peek(Env e, Term s, Nat i, u32 lo, u32 hi) {
-  StrParts p = str_peek(e, s);
+  StrParts p = str_peek_ro(e, s);
   if (i >= p.len || hi <= lo) { return 0; }
-  Loc l = term_peek(e, p.data);
+  Loc l = term_peek_ro(e, p.data);
   u32 nar = str_nar(p), w = hi - lo, j = p.off + (u32)i, end = p.off + p.len;
   if (nar == 2) {
     DEV u8* b = (DEV u8*)(e.mem + l);
@@ -5378,9 +5426,9 @@ INLINE Nat str_span_peek(Env e, Term s, Nat i, u32 lo, u32 hi) {
 
 // i plus how many cells from i come before the first x
 INLINE Nat str_find_byte_peek(Env e, Term s, Nat i, u32 x) {
-  StrParts p = str_peek(e, s);
+  StrParts p = str_peek_ro(e, s);
   if (i >= p.len) { return i; }
-  Loc l = term_peek(e, p.data);
+  Loc l = term_peek_ro(e, p.data);
   u32 nar = str_nar(p), j = p.off + (u32)i, end = p.off + p.len;
   if (nar == 2) {
     if (x > 255) { return p.len; }
@@ -5399,9 +5447,9 @@ INLINE Nat str_find_byte_peek(Env e, Term s, Nat i, u32 x) {
 
 // i plus how many cells from i come before the first of w, x, y, z
 INLINE Nat str_find_any_peek(Env e, Term s, Nat i, u32 w, u32 x, u32 y, u32 z) {
-  StrParts p = str_peek(e, s);
+  StrParts p = str_peek_ro(e, s);
   if (i >= p.len) { return i; }
-  Loc l = term_peek(e, p.data);
+  Loc l = term_peek_ro(e, p.data);
   u32 nar = str_nar(p), j = p.off + (u32)i, end = p.off + p.len;
   if (nar == 2) {
     DEV u8* b = (DEV u8*)(e.mem + l);
