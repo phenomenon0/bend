@@ -265,18 +265,15 @@ def rd.go(fuel: Nat, s: Rd) -> Rd:
     case 1n++p:
       rd.go(p, rd.one(s))
 
-def blk.out(b: Bytes(), s: Rd) -> Bytes() & Bk:
+def blk.out(s: Rd) -> Bytes() & Bk:
   match s:
-    case Rd{o, e, m, v}:
+    case Rd{o, e, m, b}:
       (b, m)
 
-# blk: the 64-byte block at o, zero-padded past the content end e. The words
-# are read out of a 64-byte view of the block rather than the whole buffer: on
-# C the view is one descriptor, and on JS, where a positional read walks from
-# the front, it keeps each read's walk inside the block.
-def blk(+b: Bytes(), +o: U32, +e: U32) -> Bytes() & Bk:
-  blk.out(b, rd.go(16n, Rd{0, U32.sub(U32.max(e, o), o),
-    Bk{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}, Bytes.slice(b, o, 64)}))
+# blk: the 64-byte block at o, zero-padded past the content end e, its words
+# read where they lie in the buffer (a borrowed read on C, an index on JS)
+def blk(b: Bytes(), o: U32, e: U32) -> Bytes() & Bk:
+  blk.out(rd.go(16n, Rd{o, e, Bk{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}, b}))
 
 # -- one chunk ---------------------------------------------------------------
 
