@@ -626,7 +626,14 @@ loop runs, not in anything a law spoke of: an accept loop that died on
 EMFILE, a send with no deadline, buffering with no bound, SIGTERM
 unseen. They were fixed and tested. This is how they became theorems.
 
-The loops are written once. `conn`, `turn`, `send.segs` and everything
+The loops are written once, and since bend-wire (`wire/`) they are the
+library's, not the engine's: `wire/loop.bend` holds them for every
+protocol, `wire/world.bend` the model below and the laws, proven there
+once over the protocol's hooks, and `wire/effects.bend` the real
+instance. The engine hands the loop its planner and hooks (`main.bend`,
+"The hooks"), `world.bend` here is the model at those hooks, and each
+law below is wire's, stated for the engine and proven as an instance.
+`conn`, `turn`, `send.segs` and everything
 under them, and the accept loop's `accept.run`, take the monad and each
 effect as template parameters: `~M`, `~pure`, `~bind`, the socket and
 file types, `~rx` (`TCP.poll_buf`), `~tx` (`TCP.send_buf_poll`), `~clk`,
@@ -693,9 +700,9 @@ For every script and every state the loop can be in, `LAWS.bend` says:
 
 Each effect's contract is written beside it in `bend2/base.bend` and, as
 a relation on what one call answers, in `world.bend` (`rx.ok`, `tx.ok`,
-`lsn.ok`, `fopen.ok`, `fread.ok`). `conform.bend` is the bridge to C: it
+`lsn.ok`, `fopen.ok`, `fread.ok`). `wire/conform.bend` is the bridge to C: it
 drives the real effects through their contracts' cases and judges what
-they answer with those same relations, while `conform.c` plays the peer
+they answer with those same relations, while `wire/conform.c` plays the peer
 (silent, 100 ms late, ten bytes to a read of four, a FIN, a reset, a
 16 KiB window it drains every 2 ms, a reader that stops, a reset before
 a send, 80 connections at once against 48 descriptors) and checks its
@@ -704,7 +711,7 @@ own side: all 16 MiB of the crawl arrived though the send outlived its
 80 were shed while the listener went on to serve the last. 17 and 5
 cases pass, on each run in CI.
 
-`mutants.py` breaks the loop nine ways -- no head deadline, no batch
+`mutants.py` breaks the loop (now `wire/loop.bend`) nine ways -- no head deadline, no batch
 cap, a reply after close, a queued reply skipped on refusal, the accept
 loop out on EMFILE, a reply before the batch it follows, a WebSocket
 that reads on after its send failed, a silent peer waited on again, an

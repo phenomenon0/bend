@@ -133,13 +133,19 @@ the nested arrays that HTTP never needed, and CI now runs it.
 answers PING, SET and GET. The earlier "hangs the checker" was `bend
 main.bend` without `--check-only`: it checks, then runs the server.
 
-**`bend-wire` is not extracted.** The evidence for it is in: the
-chunking law is provable once, polymorphically, for every step function
-and every state type (`~A: Data, ~B: Data, ~f` erased, six lines of
-induction, verified non-vacuous by breaking it). RESP then reused the
-*idea* with no change but re-typed every byte helper and fought the
-same two hundred lines of connection-loop shape. That re-typing and
-that loop are exactly what the library should absorb.
+**`bend-wire` is extracted** (`wire/`, its README). The reader kit
+(`wire/reader.bend`) holds feed, feed_buf and their laws -- chunking,
+refusal, the block walk is the byte machine, any cut into reads --
+proven once for every step function and state type; HTTP, its
+WebSocket reader, RESP and CSV state them as one-line instances and
+prove only their obligations (a move lands where its bytes stepped one
+at a time do; a refused state is a fixed point). The connection loop,
+the writer, the budgets, the accept loop and the model of the world are
+`wire/loop.bend` and `wire/world.bend`, with the world's laws proven
+there over the protocol's hooks; this engine's world laws are those
+laws at its hooks, and `mutants.py` breaks `wire/loop.bend`. RESP's
+server went from 121 lines of loop shape to a 36-line planner and its
+hooks.
 
 **Not done at all:** HTTP/2 (needs TLS, which now exists, then HPACK
 with round-trip laws and `h2spec` as the gate); `TCP.send_vec`, which does not earn its place
@@ -165,10 +171,9 @@ reproduce and is withdrawn in `UPSTREAM.md`.
    alone -- it is a correctness bug, it is small, it has a test, and it
    unblocks every non-text protocol.
 2. **Reduce the checker hang** to a minimal file and file it.
-3. **Extract `bend-wire`** and re-derive HTTP and RESP on it. The
-   measure of success is that RESP's server takes an hour rather than
-   an afternoon, and that `foldl_split` is proposed to canon's
-   `base.bend`, where a theorem about `List.foldl` belongs.
+3. ~~Extract `bend-wire`~~ (done: `wire/`). Still open: propose
+   `foldl_split` to canon's `base.bend`, where a theorem about
+   `List.foldl` belongs.
 4. Then HTTP/2, on top of the TLS that now exists.
 
 ## Three things that are easy to get wrong here

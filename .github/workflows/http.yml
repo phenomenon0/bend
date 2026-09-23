@@ -1,14 +1,18 @@
-# The HTTP engine's gate: the laws check, the server builds, the checks
-# pass against it and against the C control, the fuzzer finds no
-# difference between the two, and the binary is kept. Runs on the
-# branch that carries the engine and only when it or the runtime moves.
+# The HTTP engine's gate, and bend-wire's (wire/) that it and RESP are
+# built on: the laws check, the server builds, the checks pass against
+# it and against the C control, the fuzzer finds no difference between
+# the two, the RESP server answers, and the binary is kept. Runs on the
+# branch that carries the engine and only when it, the library, RESP or
+# the runtime moves.
 name: http engine
 on:
   push:
     branches: [omen-http, claude/next-gen-tier-review-xss592]
-    paths: ["demos/io_http_engine/**", "bend2/**", "kernel/**", ".github/workflows/http.yml"]
+    paths: ["demos/io_http_engine/**", "demos/io_resp/**", "wire/**", "power/csv*", "bend2/**", "kernel/**",
+      ".github/workflows/http.yml"]
   pull_request:
-    paths: ["demos/io_http_engine/**", "bend2/**", "kernel/**", ".github/workflows/http.yml"]
+    paths: ["demos/io_http_engine/**", "demos/io_resp/**", "wire/**", "power/csv*", "bend2/**", "kernel/**",
+      ".github/workflows/http.yml"]
 jobs:
   engine:
     runs-on: ubuntu-24.04
@@ -27,7 +31,7 @@ jobs:
       # @unsafe or a foreign def exits 0 with "All terms check, but ..."
       - name: the laws hold
         run: |
-          for f in demos/io_http_engine/PROOF.bend demos/io_resp/PROOF.bend; do
+          for f in demos/io_http_engine/PROOF.bend demos/io_resp/PROOF.bend power/csv_proof.bend; do
             out=$(bun bend2/main.ts "$f"); echo "$out"
             [ "$out" = "All terms check." ] || { echo "$f: not a clean proof"; exit 1; }
           done
@@ -38,12 +42,13 @@ jobs:
         run: |
           cargo build --release --manifest-path kernel/Cargo.toml
           bash kernel/tests/run.sh
-          for f in demos/io_http_engine/PROOF.bend demos/io_resp/PROOF.bend; do
+          for f in demos/io_http_engine/PROOF.bend demos/io_resp/PROOF.bend power/csv_proof.bend; do
             bun bend2/main.ts "$f" --export proof.core
             kernel/target/release/bend-kernel -q proof.core || { echo "$f: the kernel refuses it"; exit 1; }
           done
-      # each mutant breaks the loop as one of the review's bugs did, and
-      # the laws of the world must refuse every one; each of the framing's
+      # each mutant breaks the loop (wire/loop.bend) as one of the
+      # review's bugs did, and the laws of the world must refuse every
+      # one; each of the framing's
       # breaks the reader or the spec, and frame_sim alone must refuse it
       - name: the laws are not vacuous
         run: python3 demos/io_http_engine/mutants.py
@@ -94,9 +99,13 @@ jobs:
       # world.bend's relations, with conform.c as its peer
       - name: the effects keep their contracts
         run: |
-          bun bend2/main.ts demos/io_http_engine/conform.bend -o conform
-          cc -std=c11 -O2 -Wall demos/io_http_engine/conform.c -o conform-peer
+          bun bend2/main.ts wire/conform.bend -o conform
+          cc -std=c11 -O2 -Wall wire/conform.c -o conform-peer
           ./conform-peer ./conform 8095 "$PWD/conform-root/root"
+      - name: the RESP server answers on bend-wire
+        run: |
+          bun bend2/main.ts demos/io_resp/main.bend -o respd
+          python3 demos/io_resp/smoke.py ./respd 6380
       - name: the engine and the control agree on 500 random streams
         run: |
           up() { for i in $(seq 1 50); do (exec 3<>/dev/tcp/127.0.0.1/$1) 2>/dev/null && return 0; sleep 0.1; done; return 1; }
