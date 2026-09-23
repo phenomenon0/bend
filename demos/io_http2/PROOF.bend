@@ -9,6 +9,9 @@ import ./huff_proof.bend as HP
 import ./frame.bend as Fm
 import ./spec.bend as Sp
 import ./conn.bend as C
+import ./main.bend as S
+import ../../wire/loop.bend as L
+import ../../wire/world.bend as WW
 
 # HPACK integers
 # ==============
@@ -1400,3 +1403,50 @@ def Laws.bud_capped(b):
       and3(Nat.is_le(C.bud.up(p), C.bud.cap()), Nat.is_le(C.bud.up(s), C.bud.cap()),
         Nat.is_le(C.bud.up(r), C.bud.cap()),
         N.min_le_r(1n+p, C.bud.cap()), N.min_le_r(1n+s, C.bud.cap()), N.min_le_r(1n+r, C.bud.cap()))
+
+# The server
+# ==========
+
+def Laws.end_is_last(srv, w, out, hw, g, v):
+  WW.end_is_last(~S.Srv, ~C.Cn, ~Unit, ~S.srv.idle, ~S.srv.head, ~S.h.plan, ~L.no.mid(~C.Cn), ~L.no.big(),
+    ~L.no.uplan(~C.Cn, ~Unit), ~L.no.gap(), ~L.no.event, ~L.no.shut, ~L.no.fhead, ~L.no.miss,
+    ~L.no.lnote, ~L.no.lsize, srv, w, out, hw, g, v)
+
+def Laws.stop_is_last(srv, w, hw, g, v):
+  WW.stop_is_last(~S.Srv, ~C.Cn, ~Unit, ~S.srv.idle, ~S.srv.head, ~S.h.plan, ~L.no.mid(~C.Cn), ~L.no.big(),
+    ~L.no.uplan(~C.Cn, ~Unit), ~L.no.gap(), ~L.no.event, ~L.no.shut, ~L.no.fhead, ~L.no.miss,
+    ~L.no.lnote, ~L.no.lsize, srv, w, hw, g, v)
+
+def Laws.go_order(srv, w, out, c, hw, g, v):
+  WW.go_order(~S.Srv, ~C.Cn, ~Unit, ~S.srv.idle, ~S.srv.head, ~S.h.plan, ~L.no.mid(~C.Cn), ~L.no.big(),
+    ~L.no.uplan(~C.Cn, ~Unit), ~L.no.gap(), ~L.no.event, ~L.no.shut, ~L.no.fhead, ~L.no.miss,
+    ~L.no.lnote, ~L.no.lsize, srv, w, out, c, hw, g, v)
+
+def Laws.fail_go(srv, g, v, m, c, hw, e):
+  WW.fail_go(~S.Srv, ~C.Cn, ~Unit, ~S.srv.idle, ~S.srv.head, ~S.h.plan, ~L.no.mid(~C.Cn), ~L.no.big(),
+    ~L.no.uplan(~C.Cn, ~Unit), ~L.no.gap(), ~L.no.event, ~L.no.shut, ~L.no.fhead, ~L.no.miss,
+    ~L.no.lnote, ~L.no.lsize, srv, g, v, m, c, hw, e)
+
+def Laws.segs_wire(xs, ms, rd, now, fs, out, e):
+  WW.segs_wire(~L.no.shut, ~L.no.fhead, ~L.no.miss, ~L.no.lnote, ~L.no.lsize, xs, ms, rd, now, fs, out, e)
+
+def Laws.stall_ends(srv, w, pl, hw, g, v):
+  WW.stall_ends(~S.Srv, ~C.Cn, ~Unit, ~S.srv.idle, ~S.srv.head, ~S.h.plan, ~L.no.mid(~C.Cn), ~L.no.big(),
+    ~L.no.uplan(~C.Cn, ~Unit), ~L.no.gap(), ~L.no.event, ~L.no.shut, ~L.no.fhead, ~L.no.miss,
+    ~L.no.lnote, ~L.no.lsize, ~WW.no.event_ok, srv, w, pl, hw, g, v)
+
+# a connection over plans its end, whatever its answers and its flush
+def ends.cw(cw: C.CW) -> {Laws.ends(S.plan.cw(cw, True{})) == True{} : Bool}:
+  match cw:
+    case C.CW{c, SNil{}}:
+      {==}
+    case C.CW{c, SCon{h, t}}:
+      {==}
+
+def ends.flush(cw: C.CW) -> {Laws.ends(S.plan.flush(cw, True{})) == True{} : Bool}:
+  match cw:
+    case C.CW{+c, w}:
+      ends.cw(C.flush(c, w))
+
+def Laws.dead_ends(srv, c, w, rq):
+  ends.flush(S.answer.all(srv, List.reverse(&2, C.Req, rq), C.CW{c, w}))

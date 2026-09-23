@@ -10,6 +10,9 @@ import ./vectors.bend as V
 import ./frame.bend as Fm
 import ./spec.bend as Sp
 import ./conn.bend as C
+import ./main.bend as S
+import ../../wire/loop.bend as L
+import ../../wire/world.bend as WW
 
 # HPACK: integers (RFC 7541 5.1)
 # ==============================
@@ -766,3 +769,112 @@ law trailers_pseudo:
 
 law trailers_plain:
   {C.trailers.ok([fd("x-sum", "1")]) == True{} : Bool}
+
+# The server (wire/loop.bend at bend-h2's hooks)
+# ==============================================
+#
+# The connection loop is bend-wire's, and its laws are proven once in
+# wire/world.bend for every protocol's hooks. Here they are at bend-h2's:
+# the loop in the model, then what it does. The budgets they carry --
+# a read of at most chunk() bytes, replies batched under send.cap(),
+# every send and every read under the idle time, a peer that stops read
+# let go -- are what bound a connection's buffers from the outside, as
+# the budgets above bound what a peer can make it do.
+def sim.conn(f: Nat, +srv: S.Srv, sph: (WW.World & S.Plan()) & L.Hw, w: Nat) -> WW.World:
+  WW.sim.conn(~S.Srv, ~C.Cn, ~Unit, ~S.srv.idle, ~S.srv.head, ~S.h.plan, ~L.no.mid(~C.Cn), ~L.no.big(),
+    ~L.no.uplan(~C.Cn, ~Unit), ~L.no.gap(), ~L.no.event, ~L.no.shut, ~L.no.fhead, ~L.no.miss,
+    ~L.no.lnote, ~L.no.lsize, f, srv, sph, w)
+
+def mute.conn(f: Nat, +srv: S.Srv, sph: (WW.World & S.Plan()) & L.Hw, w: Nat) -> WW.World:
+  WW.mute.conn(~S.Srv, ~C.Cn, ~Unit, ~S.srv.idle, ~S.srv.head, ~S.h.plan, ~L.no.mid(~C.Cn), ~L.no.big(),
+    ~L.no.uplan(~C.Cn, ~Unit), ~L.no.gap(), ~L.no.event, ~L.no.shut, ~L.no.fhead, ~L.no.miss,
+    ~L.no.lnote, ~L.no.lsize, f, srv, sph, w)
+
+def sim.segs(s: WW.World, xs: List<&2, L.Seg>, +ms: U32) -> L.Put(WW.World):
+  WW.sim.segs(~L.no.shut, ~L.no.fhead, ~L.no.miss, ~L.no.lnote, ~L.no.lsize, s, xs, ms)
+
+def sim.turn(+srv: S.Srv, m: L.Put(WW.World), c: C.Cn, hw: L.Hw) -> (WW.World & S.Plan()) & L.Hw:
+  WW.sim.turn(~S.Srv, ~C.Cn, ~Unit, ~S.srv.idle, ~S.srv.head, ~S.h.plan, ~L.no.big(), srv, m, c, hw)
+
+# LAW: a plan that ends the connection is its last act: its replies are
+# written, and nothing is read; a Stop does nothing at all
+law end_is_last:
+  for +srv: S.Srv
+  for w: WW.World
+  for out: List<&2, L.Seg>
+  for hw: L.Hw
+  for g: Nat
+  for v: Nat
+  {sim.conn(1n+g, srv, ((w, L.End{out}), hw), v) ==
+    L.put.s(WW.World, sim.segs(w, out, S.srv.idle(srv))) : WW.World}
+
+law stop_is_last:
+  for +srv: S.Srv
+  for w: WW.World
+  for hw: L.Hw
+  for g: Nat
+  for v: Nat
+  {sim.conn(1n+g, srv, ((w, L.Stop{}), hw), v) == w : WW.World}
+
+# LAW: what a read earned goes out before the next read
+law go_order:
+  for +srv: S.Srv
+  for w: WW.World
+  for out: List<&2, L.Seg>
+  for +c: C.Cn
+  for hw: L.Hw
+  for g: Nat
+  for v: Nat
+  {sim.conn(1n+g, srv, ((w, L.Go{out, c}), hw), v) ==
+    sim.conn(g, srv, sim.turn(srv, sim.segs(w, out, S.srv.idle(srv)), c,
+      L.hw.next(L.no.mid(~C.Cn, c), L.NoHead{})), L.conn.waits()) : WW.World}
+
+# LAW: nothing is done after a send fails
+law fail_go:
+  for +srv: S.Srv
+  for g: Nat
+  for v: Nat
+  for m: L.Put(WW.World)
+  for c: C.Cn
+  for hw: L.Hw
+  for e: {WW.put.done(m) == False{} : Bool}
+  {sim.conn(g, srv, sim.turn(srv, m, c, hw), v) == L.put.s(WW.World, m) : WW.World}
+
+# LAW: the frames reach a peer that reads, byte for byte, in order
+law segs_wire:
+  for +xs: List<&2, L.Seg>
+  for +ms: U32
+  for +rd: List<&2, WW.Rd>
+  for +now: Nat
+  for +fs: List<&2, WW.Fil>
+  for +out: Bytes()
+  for +e: {WW.raws(xs) == True{} : Bool}
+  {sim.segs(WW.eager(rd, now, fs, out), xs, ms) ==
+    WW.sent(rd, now, fs, Bytes.append(out, WW.wire(~L.no.shut, xs, False{}))) : L.Put(WW.World)}
+
+# LAW: a peer that stops is let go within three turns, from any state
+law stall_ends:
+  for +srv: S.Srv
+  for +w: WW.World
+  for pl: S.Plan()
+  for +hw: L.Hw
+  for +g: Nat
+  for +v: Nat
+  {mute.conn(1n+1n+1n+g, srv, ((w, pl), hw), v) == mute.conn(1n+1n+1n, srv, ((w, pl), hw), v) : WW.World}
+
+# LAW: bend-h2's own: a read whose frames end the connection (a
+# connection error's GOAWAY, a refused preface or frame) plans its end:
+# its bytes go out and nothing more is read
+def ends(p: S.Plan()) -> Bool:
+  match p:
+    case L.End{out}:
+      True{}
+    case _:
+      False{}
+
+law dead_ends:
+  for +srv: S.Srv
+  for +c: C.Cn
+  for +w: Bytes()
+  for +rq: List<&2, C.Req>
+  {ends(S.plan.out(srv, C.Out{c, w, rq, True{}})) == True{} : Bool}
