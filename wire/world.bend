@@ -659,6 +659,225 @@ def fget.ok(k: Name, +small: U32, +size: U32, r: Result<&1, &1, U32 & String, Go
     case _ Fail{e}:
       True{}
 
+# The memo
+# ========
+#
+# File.get_under answers a small file it read less than a second before
+# from memory (bend2/effs/file_open_under.c: FILE_MEMO_NS, FILE_MEMO_N).
+# As a model: what it read, newest first, each by its key (the root and
+# the path), the time it read it (ms) and what it answered; a lookup
+# takes the newest entry for its key read less than ttl before now, and
+# keeping an answer puts it first and keeps at most memo.cap() entries.
+# Its laws hold for any comparison of keys that is equality (~same,
+# ~same_ok): the C memo compares a key's bytes with memcmp.
+type Memo is Data:
+  Memo{key: Bytes(), at: Nat, got: Bytes()}
+
+def memo.cap() -> Nat:
+  256n
+
+def memo.find.at(hit: Bool, got: Bytes(), rest: Maybe<&2, Bytes()>) -> Maybe<&2, Bytes()>:
+  match hit:
+    case True{}:
+      Some{got}
+    case False{}:
+      rest
+
+def memo.find(~same: Bytes() -> Bytes() -> Bool, ms: List<&2, Memo>, +key: Bytes(), +now: Nat, +ttl: Nat) ->
+  Maybe<&2, Bytes()>:
+  match ms:
+    case Nil{}:
+      None{}
+    case Con{Memo{k, +at, got}, t}:
+      memo.find.at(same(k, key) && Nat.is_lt(now, Nat.add(at, ttl)), got, memo.find(~same, t, key, now, ttl))
+
+# the first n entries
+def memo.take(ms: List<&2, Memo>, n: Nat) -> List<&2, Memo>:
+  match ms n:
+    case Nil{} _:
+      Nil{}
+    case Con{m, t} 0n:
+      Nil{}
+    case Con{m, t} 1n+p:
+      Con{m, memo.take(t, p)}
+
+def memo.put(ms: List<&2, Memo>, key: Bytes(), now: Nat, got: Bytes()) -> List<&2, Memo>:
+  memo.take(Con{Memo{key, now, got}, ms}, memo.cap())
+
+# the effect with its memo: the memo's answer when it holds one, else
+# the file system's (fresh), which it keeps
+def memo.get.at(may: Maybe<&2, Bytes()>, ms: List<&2, Memo>, key: Bytes(), now: Nat, +fresh: Bytes()) ->
+  List<&2, Memo> & Bytes():
+  match may:
+    case Some{g}:
+      (ms, g)
+    case None{}:
+      (memo.put(ms, key, now, fresh), fresh)
+
+def memo.get(~same: Bytes() -> Bytes() -> Bool, +ms: List<&2, Memo>, +key: Bytes(), +now: Nat, +ttl: Nat,
+  fresh: Bytes()) -> List<&2, Memo> & Bytes():
+  memo.get.at(memo.find(~same, ms, key, now, ttl), ms, key, now, fresh)
+
+def memo.kept(g: List<&2, Memo> & Bytes()) -> List<&2, Memo>:
+  (ms, a) = g
+  ms
+
+def memo.ans(g: List<&2, Memo> & Bytes()) -> Bytes():
+  (ms, a) = g
+  a
+
+# at most n entries
+def memo.within(ms: List<&2, Memo>, n: Nat) -> Bool:
+  match ms n:
+    case Nil{} _:
+      True{}
+    case Con{m, t} 0n:
+      False{}
+    case Con{m, t} 1n+p:
+      memo.within(t, p)
+
+# every answer kept is what the file system (~fs) answers its key with
+def memo.AG(~fs: Bytes() -> Bytes(), ms: List<&2, Memo>) -> Type:
+  match ms:
+    case Nil{}:
+      Unit
+    case Con{Memo{k, at, g}, t}:
+      {g == fs(k) : Bytes()} & memo.AG(~fs, t)
+
+# LAW: the memo is bounded: after any lookup it holds at most memo.cap()
+# entries, as it did before.
+law memo_bounded:
+  for ~same: Bytes() -> Bytes() -> Bool
+  for +ms: List<&2, Memo>
+  for +key: Bytes()
+  for +now: Nat
+  for +ttl: Nat
+  for fresh: Bytes()
+  for e: {memo.within(ms, memo.cap()) == True{} : Bool}
+  {memo.within(memo.kept(memo.get(~same, ms, key, now, ttl, fresh)), memo.cap()) == True{} : Bool}
+
+def memo.take_within(ms: List<&2, Memo>, n: Nat) -> {memo.within(memo.take(ms, n), n) == True{} : Bool}:
+  match ms n:
+    case Nil{} 0n:
+      {==}
+    case Nil{} 1n+p:
+      {==}
+    case Con{m, t} 0n:
+      {==}
+    case Con{m, t} 1n+p:
+      memo.take_within(t, p)
+
+def memo.bound.at(may: Maybe<&2, Bytes()>, +ms: List<&2, Memo>, +key: Bytes(), +now: Nat, fresh: Bytes(),
+  e: {memo.within(ms, memo.cap()) == True{} : Bool}) ->
+  {memo.within(memo.kept(memo.get.at(may, ms, key, now, fresh)), memo.cap()) == True{} : Bool}:
+  match may:
+    case Some{g}:
+      e
+    case None{}:
+      memo.take_within(Con{Memo{key, now, fresh}, ms}, memo.cap())
+
+def memo_bounded(same, ms, key, now, ttl, fresh, e):
+  memo.bound.at(memo.find(~same, ms, key, now, ttl), ms, key, now, fresh, e)
+
+# LAW: a cached answer is what the effect answered when it read it. For
+# a file system that has not changed since the memo's answers were read
+# (memo.AG), the answer the memo gives any key is the file system's.
+law memo_answers:
+  for ~same: Bytes() -> Bytes() -> Bool
+  for ~same_ok: @a: Bytes() -> @b: Bytes() -> {same(a, b) == True{} : Bool} -> {a == b : Bytes()}
+  for ~fs: Bytes() -> Bytes()
+  for +ms: List<&2, Memo>
+  for ag: memo.AG(~fs, ms)
+  for +key: Bytes()
+  for +now: Nat
+  for +ttl: Nat
+  {memo.ans(memo.get(~same, ms, key, now, ttl, fs(key))) == fs(key) : Bytes()}
+
+def memo.FOK(~fs: Bytes() -> Bytes(), +key: Bytes(), may: Maybe<&2, Bytes()>) -> Type:
+  match may:
+    case None{}:
+      Unit
+    case Some{g}:
+      {g == fs(key) : Bytes()}
+
+def memo.hit.at(~same: Bytes() -> Bytes() -> Bool,
+  ~same_ok: @a: Bytes() -> @b: Bytes() -> {same(a, b) == True{} : Bool} -> {a == b : Bytes()},
+  ~fs: Bytes() -> Bytes(), +k: Bytes(), +key: Bytes(), +got: Bytes(), lt: Bool, b: Bool,
+  e1: {got == fs(k) : Bytes()}, rest: Maybe<&2, Bytes()>, ih: memo.FOK(~fs, key, rest)) ->
+  {Bool.and(same(k, key), lt) == b : Bool} ->
+  memo.FOK(~fs, key, memo.find.at(Bool.and(same(k, key), lt), got, rest)):
+  match b:
+    case True{}:
+      +eb =>
+        %Equal.sym(Bool, Bool.and(same(k, key), lt), True{}, eb) :
+          memo.FOK(~fs, key, memo.find.at(_, got, rest))
+        %same_ok(k, key, Bool.and_l(same(k, key), lt, eb)) : {got == fs(_) : Bytes()}
+        e1
+    case False{}:
+      +eb =>
+        %Equal.sym(Bool, Bool.and(same(k, key), lt), False{}, eb) :
+          memo.FOK(~fs, key, memo.find.at(_, got, rest))
+        ih
+
+def memo.hit(~same: Bytes() -> Bytes() -> Bool,
+  ~same_ok: @a: Bytes() -> @b: Bytes() -> {same(a, b) == True{} : Bool} -> {a == b : Bytes()},
+  ~fs: Bytes() -> Bytes(), ms: List<&2, Memo>, ag: memo.AG(~fs, ms), +key: Bytes(), +now: Nat, +ttl: Nat) ->
+  memo.FOK(~fs, key, memo.find(~same, ms, key, now, ttl)):
+  match ms:
+    case Nil{}:
+      Unit{}
+    case Con{Memo{+k, +at, +got}, +t}:
+      (e1, ag2) = ag
+      memo.hit.at(~same, ~same_ok, ~fs, k, key, got, Nat.is_lt(now, Nat.add(at, ttl)),
+        Bool.and(same(k, key), Nat.is_lt(now, Nat.add(at, ttl))), e1,
+        memo.find(~same, t, key, now, ttl), memo.hit(~same, ~same_ok, ~fs, t, ag2, key, now, ttl))({==})
+
+def memo.ans.at(~fs: Bytes() -> Bytes(), may: Maybe<&2, Bytes()>, +ms: List<&2, Memo>, +key: Bytes(), +now: Nat,
+  ok: memo.FOK(~fs, key, may)) -> {memo.ans(memo.get.at(may, ms, key, now, fs(key))) == fs(key) : Bytes()}:
+  match may:
+    case Some{g}:
+      ok
+    case None{}:
+      {==}
+
+def memo_answers(same, same_ok, fs, ms, ag, key, now, ttl):
+  memo.ans.at(~fs, memo.find(~same, ms, key, now, ttl), ms, key, now,
+    memo.hit(~same, ~same_ok, ~fs, ms, ag, key, now, ttl))
+
+# LAW: and the memo stays so: what it keeps after a lookup is what the
+# file system answers, so memo_answers holds at the next lookup too.
+law memo_keeps:
+  for ~same: Bytes() -> Bytes() -> Bool
+  for ~fs: Bytes() -> Bytes()
+  for +ms: List<&2, Memo>
+  for ag: memo.AG(~fs, ms)
+  for +key: Bytes()
+  for +now: Nat
+  for +ttl: Nat
+  memo.AG(~fs, memo.kept(memo.get(~same, ms, key, now, ttl, fs(key))))
+
+def memo.take_ag(~fs: Bytes() -> Bytes(), ms: List<&2, Memo>, n: Nat, ag: memo.AG(~fs, ms)) ->
+  memo.AG(~fs, memo.take(ms, n)):
+  match ms n:
+    case Nil{} _:
+      Unit{}
+    case Con{Memo{k, at, g}, t} 0n:
+      Unit{}
+    case Con{Memo{k, at, g}, t} 1n+p:
+      (e1, ag2) = ag
+      (e1, memo.take_ag(~fs, t, p, ag2))
+
+def memo.keep.at(~fs: Bytes() -> Bytes(), may: Maybe<&2, Bytes()>, +ms: List<&2, Memo>, +key: Bytes(),
+  +now: Nat, ag: memo.AG(~fs, ms)) -> memo.AG(~fs, memo.kept(memo.get.at(may, ms, key, now, fs(key)))):
+  match may:
+    case Some{g}:
+      ag
+    case None{}:
+      memo.take_ag(~fs, Con{Memo{key, now, fs(key)}, ms}, memo.cap(), ({==}, ag))
+
+def memo_keeps(same, fs, ms, ag, key, now, ttl):
+  memo.keep.at(~fs, memo.find(~same, ms, key, now, ttl), ms, key, now, ag)
+
 # File.read_buf(f, max) with left bytes left in the file: at most max
 # bytes and at most what is left, and none only at the end
 def fread.ok(max: U32, +left: Nat, r: Result<&1, &1, U32 & String, Bytes()>) -> Bool:
