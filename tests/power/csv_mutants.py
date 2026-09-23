@@ -62,6 +62,9 @@ MUTANTS = [
     '''    case True{} KQ{}:
       True{}
     case True{} _:''')]),
+  ('the find outside quotes runs past an LF', [(
+    'cap(left, Bytes.find_any(s, 0n, quote(d), delim(d), 13, 10))',
+    'cap(left, Bytes.find_any(s, 0n, quote(d), delim(d), 13, 13))')]),
   ('a field one byte past max_field is kept', [(
     '''    case 0n:
       P{Bad{pos, FieldTooLong{}}, fl, cur, out, w, pos}''',

@@ -276,6 +276,191 @@ def lem.run(+d: Csv.Dialect, +s: Bytes(), +q: Bool, +acc: Bytes(), +left: Nat, +
       lem.run.at(d, q, c, t, acc, l, fl, cur, out, w, pos, Csv.stay(q, Csv.cls(d, c)),
         lem.run(d, t, q, Csv.push(acc, c), l, fl, cur, out, w, 1n+pos))({==})
 
+# The finds
+# ---------
+
+# run.fast finds where a run ends with Bytes.find_byte (between quotes)
+# and Bytes.find_any (outside), each testing a byte as cls does, in its
+# order: the quote, the delimiter, CR, LF. lem.fast: it counts what
+# run.len does, so the walk is the same walk.
+
+# stay, as the tests a find is written with
+def lem.stay.q(x1: Bool, x2: Bool, x3: Bool, x4: Bool) ->
+  {Csv.stay(True{}, Csv.k.pick(x1, Csv.KQ{}, Csv.k.pick(x2, Csv.KD{}, Csv.k.pick(x3, Csv.KCR{},
+    Csv.k.pick(x4, Csv.KLF{}, Csv.KO{}))))) == Bool.not(x1) : Bool}:
+  match x1 x2 x3 x4:
+    case True{} True{} True{} True{}:
+      {==}
+    case True{} True{} True{} False{}:
+      {==}
+    case True{} True{} False{} True{}:
+      {==}
+    case True{} True{} False{} False{}:
+      {==}
+    case True{} False{} True{} True{}:
+      {==}
+    case True{} False{} True{} False{}:
+      {==}
+    case True{} False{} False{} True{}:
+      {==}
+    case True{} False{} False{} False{}:
+      {==}
+    case False{} True{} True{} True{}:
+      {==}
+    case False{} True{} True{} False{}:
+      {==}
+    case False{} True{} False{} True{}:
+      {==}
+    case False{} True{} False{} False{}:
+      {==}
+    case False{} False{} True{} True{}:
+      {==}
+    case False{} False{} True{} False{}:
+      {==}
+    case False{} False{} False{} True{}:
+      {==}
+    case False{} False{} False{} False{}:
+      {==}
+
+def lem.stay.u(x1: Bool, x2: Bool, x3: Bool, x4: Bool) ->
+  {Csv.stay(False{}, Csv.k.pick(x1, Csv.KQ{}, Csv.k.pick(x2, Csv.KD{}, Csv.k.pick(x3, Csv.KCR{},
+    Csv.k.pick(x4, Csv.KLF{}, Csv.KO{}))))) ==
+    Bool.not(Bool.or(x1, Bool.or(x2, Bool.or(x3, x4)))) : Bool}:
+  match x1 x2 x3 x4:
+    case True{} True{} True{} True{}:
+      {==}
+    case True{} True{} True{} False{}:
+      {==}
+    case True{} True{} False{} True{}:
+      {==}
+    case True{} True{} False{} False{}:
+      {==}
+    case True{} False{} True{} True{}:
+      {==}
+    case True{} False{} True{} False{}:
+      {==}
+    case True{} False{} False{} True{}:
+      {==}
+    case True{} False{} False{} False{}:
+      {==}
+    case False{} True{} True{} True{}:
+      {==}
+    case False{} True{} True{} False{}:
+      {==}
+    case False{} True{} False{} True{}:
+      {==}
+    case False{} True{} False{} False{}:
+      {==}
+    case False{} False{} True{} True{}:
+      {==}
+    case False{} False{} True{} False{}:
+      {==}
+    case False{} False{} False{} True{}:
+      {==}
+    case False{} False{} False{} False{}:
+      {==}
+
+# between quotes: the byte stays exactly when the find's test says no
+def lem.st.q(+d: Csv.Dialect, +c: U32, h: Bool) ->
+  {U32.is_eq(c, Csv.quote(d)) == h : Bool} -> {Csv.stay(True{}, Csv.cls(d, c)) == Bool.not(h) : Bool}:
+  e => Equal.trans(Bool, Csv.stay(True{}, Csv.cls(d, c)), Bool.not(U32.is_eq(c, Csv.quote(d))), Bool.not(h),
+    lem.stay.q(U32.is_eq(c, Csv.quote(d)), U32.is_eq(c, Csv.delim(d)), U32.is_eq(c, 13),
+      U32.is_eq(c, 10)),
+    Equal.cong(Bool, Bool, b => Bool.not(b), U32.is_eq(c, Csv.quote(d)), h, e))
+
+def FQ(+d: Csv.Dialect, +s: Bytes(), +left: Nat) -> Type:
+  {Csv.run.len(d, s, True{}, True{}, left, 0n) == Csv.cap(left, Bytes.find_byte.go(s, Csv.quote(d))) : Nat}
+
+def lem.fq.at(+d: Csv.Dialect, +c: U32, +t: Bytes(), +l: Nat, h: Bool, ih: FQ(d, t, l)) ->
+  {U32.is_eq(c, Csv.quote(d)) == h : Bool} ->
+  {Csv.run.len(d, SCon{Chr{c}, t}, True{}, True{}, 1n+l, 0n) ==
+    Csv.cap(1n+l, Bytes.find_byte.at(h, t, Csv.quote(d))) : Nat}:
+  match h:
+    case True{}:
+      e =>
+        %Equal.sym(Bool, Csv.stay(True{}, Csv.cls(d, c)), False{}, lem.st.q(d, c, True{})(e)) :
+          {Csv.run.len(d, t, _, True{}, l, Csv.inc(_, 0n)) == 0n : Nat}
+        lem.len0(d, t, True{}, l)
+    case False{}:
+      e =>
+        %Equal.sym(Bool, Csv.stay(True{}, Csv.cls(d, c)), True{}, lem.st.q(d, c, False{})(e)) :
+          {Csv.run.len(d, t, _, True{}, l, Csv.inc(_, 0n)) ==
+            1n+Csv.cap(l, Bytes.find_byte.go(t, Csv.quote(d))) : Nat}
+        Equal.trans(Nat, Csv.run.len(d, t, True{}, True{}, l, 1n),
+          1n+Csv.run.len(d, t, True{}, True{}, l, 0n),
+          1n+Csv.cap(l, Bytes.find_byte.go(t, Csv.quote(d))),
+          lem.shift(d, t, True{}, True{}, l, 0n),
+          Equal.cong(Nat, Nat, y => 1n+y, Csv.run.len(d, t, True{}, True{}, l, 0n),
+            Csv.cap(l, Bytes.find_byte.go(t, Csv.quote(d))), ih))
+
+def lem.fq(+d: Csv.Dialect, +s: Bytes(), +left: Nat) -> FQ(d, s, left):
+  match s left:
+    case SNil{} 0n:
+      {==}
+    case SNil{} 1n+l:
+      {==}
+    case SCon{Chr{x}, u} 0n:
+      {==}
+    case SCon{Chr{+c}, t} 1n+l:
+      lem.fq.at(d, c, t, l, U32.is_eq(c, Csv.quote(d)), lem.fq(d, t, l))({==})
+
+# outside quotes: the byte stays exactly when the find's test says no
+def lem.st.u(+d: Csv.Dialect, +c: U32, h: Bool) ->
+  {Bytes.find_any.in(c, Csv.quote(d), Csv.delim(d), 13, 10) == h : Bool} -> {Csv.stay(False{}, Csv.cls(d, c)) == Bool.not(h) : Bool}:
+  e => Equal.trans(Bool, Csv.stay(False{}, Csv.cls(d, c)), Bool.not(Bytes.find_any.in(c, Csv.quote(d), Csv.delim(d), 13, 10)), Bool.not(h),
+    lem.stay.u(U32.is_eq(c, Csv.quote(d)), U32.is_eq(c, Csv.delim(d)), U32.is_eq(c, 13),
+      U32.is_eq(c, 10)),
+    Equal.cong(Bool, Bool, b => Bool.not(b), Bytes.find_any.in(c, Csv.quote(d), Csv.delim(d), 13, 10), h, e))
+
+def FU(+d: Csv.Dialect, +s: Bytes(), +left: Nat) -> Type:
+  {Csv.run.len(d, s, True{}, False{}, left, 0n) == Csv.cap(left, Bytes.find_any.go(s, Csv.quote(d), Csv.delim(d), 13, 10)) : Nat}
+
+def lem.fu.at(+d: Csv.Dialect, +c: U32, +t: Bytes(), +l: Nat, h: Bool, ih: FU(d, t, l)) ->
+  {Bytes.find_any.in(c, Csv.quote(d), Csv.delim(d), 13, 10) == h : Bool} ->
+  {Csv.run.len(d, SCon{Chr{c}, t}, True{}, False{}, 1n+l, 0n) ==
+    Csv.cap(1n+l, Bytes.find_any.at(h, t, Csv.quote(d), Csv.delim(d), 13, 10)) : Nat}:
+  match h:
+    case True{}:
+      e =>
+        %Equal.sym(Bool, Csv.stay(False{}, Csv.cls(d, c)), False{}, lem.st.u(d, c, True{})(e)) :
+          {Csv.run.len(d, t, _, False{}, l, Csv.inc(_, 0n)) == 0n : Nat}
+        lem.len0(d, t, False{}, l)
+    case False{}:
+      e =>
+        %Equal.sym(Bool, Csv.stay(False{}, Csv.cls(d, c)), True{}, lem.st.u(d, c, False{})(e)) :
+          {Csv.run.len(d, t, _, False{}, l, Csv.inc(_, 0n)) ==
+            1n+Csv.cap(l, Bytes.find_any.go(t, Csv.quote(d), Csv.delim(d), 13, 10)) : Nat}
+        Equal.trans(Nat, Csv.run.len(d, t, True{}, False{}, l, 1n),
+          1n+Csv.run.len(d, t, True{}, False{}, l, 0n),
+          1n+Csv.cap(l, Bytes.find_any.go(t, Csv.quote(d), Csv.delim(d), 13, 10)),
+          lem.shift(d, t, True{}, False{}, l, 0n),
+          Equal.cong(Nat, Nat, y => 1n+y, Csv.run.len(d, t, True{}, False{}, l, 0n),
+            Csv.cap(l, Bytes.find_any.go(t, Csv.quote(d), Csv.delim(d), 13, 10)), ih))
+
+def lem.fu(+d: Csv.Dialect, +s: Bytes(), +left: Nat) -> FU(d, s, left):
+  match s left:
+    case SNil{} 0n:
+      {==}
+    case SNil{} 1n+l:
+      {==}
+    case SCon{Chr{x}, u} 0n:
+      {==}
+    case SCon{Chr{+c}, t} 1n+l:
+      lem.fu.at(d, c, t, l, Bytes.find_any.in(c, Csv.quote(d), Csv.delim(d), 13, 10), lem.fu(d, t, l))({==})
+
+# run.fast counts what run.len does
+def lem.fast(+d: Csv.Dialect, +s: Bytes(), q: Bool, +left: Nat) ->
+  {RL(d, s, q, left) == Csv.run.fast(d, s, q, left) : Nat}:
+  match s q:
+    case SNil{} True{}:
+      lem.fq(d, SNil{}, left)
+    case SCon{h, t} True{}:
+      lem.fq(d, SCon{h, t}, left)
+    case SNil{} False{}:
+      lem.fu(d, SNil{}, left)
+    case SCon{h, t} False{}:
+      lem.fu(d, SCon{h, t}, left)
+
 # a run cut where run.len says: the cut's two halves are what RG names
 def lem.cut.took(+d: Csv.Dialect, +q: Bool, +acc: Bytes(), +left: Nat, +s: Bytes(), +fl: Nat,
   +cur: List<&2, Bytes()>, +out: List<&2, List<&2, Bytes()>>, +w: Maybe<&2, Nat>, +pos: Nat,
@@ -327,7 +512,7 @@ def lem.go.run(+d: Csv.Dialect, +q: Bool, +acc: Bytes(), +left: Nat, +s: Bytes()
   +cur: List<&2, Bytes()>, +out: List<&2, List<&2, Bytes()>>, +w: Maybe<&2, Nat>, +pos: Nat) ->
   {Csv.feed_buf.last(d, Csv.run.go(d, q, acc, left, s, fl, cur, out, w, pos)) ==
     Csv.feed_buf.slow(d, s, Csv.P{Csv.grow(q, acc, left), fl, cur, out, w, pos}) : Csv.P}:
-  lem.cut(d, q, acc, left, s, fl, cur, out, w, pos, RL(d, s, q, left))({==})
+  lem.cut(d, q, acc, left, s, fl, cur, out, w, pos, Csv.run.fast(d, s, q, left))(lem.fast(d, s, q, left))
 
 # A field from its first byte
 # ---------------------------
@@ -439,7 +624,8 @@ def lem.ent(+d: Csv.Dialect, +isr: Bool, +s: Bytes(), +fl: Nat, +cur: List<&2, B
   +out: List<&2, List<&2, Bytes()>>, +w: Maybe<&2, Nat>, +pos: Nat) ->
   {Csv.feed_buf.last(d, Csv.ent.go(d, ent.m(isr), s, fl, cur, out, w, pos)) ==
     Csv.feed_buf.slow(d, s, Csv.P{ent.m(isr), fl, cur, out, w, pos}) : Csv.P}:
-  lem.ent.cut(d, isr, s, fl, cur, out, w, pos, RL(d, s, False{}, Csv.max_field(d)))({==})
+  lem.ent.cut(d, isr, s, fl, cur, out, w, pos, Csv.run.fast(d, s, False{}, Csv.max_field(d)))(
+    lem.fast(d, s, False{}, Csv.max_field(d)))
 
 # After a refusal
 def lem.bad(+d: Csv.Dialect, s: Bytes(), -at: Nat, -why: Csv.Why, -fl: Nat, -cur: List<&2, Bytes()>,

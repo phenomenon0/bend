@@ -453,10 +453,31 @@ def run.cut(+d: Dialect, q: Bool, acc: Bytes(), +left: Nat, s: Bytes(), fl: Nat,
     case 1n+j:
       run.took(d, q, acc, left, j, fl, cur, out, w, pos, String.cut(s, 1n+j))
 
+# the lesser of the room and a count
+def cap(left: Nat, k: Nat) -> Nat:
+  match left k:
+    case 0n _:
+      0n
+    case 1n+l 0n:
+      0n
+    case 1n+l 1n+j:
+      1n+cap(l, j)
+
+# run.len, found in one borrowed pass over the read: between quotes the
+# run ends at the quote, outside at the quote, the delimiter, CR or LF,
+# and either way within the field's room. csv_proof.bend's lem.fast: the
+# same count as run.len.
+def run.fast(+d: Dialect, +s: Bytes(), q: Bool, left: Nat) -> Nat:
+  match q:
+    case True{}:
+      cap(left, Bytes.find_byte(s, 0n, quote(d)))
+    case False{}:
+      cap(left, Bytes.find_any(s, 0n, quote(d), delim(d), 13, 10))
+
 def run.go(+d: Dialect, +q: Bool, acc: Bytes(), +left: Nat, +s: Bytes(), fl: Nat,
   cur: List<&2, Bytes()>, out: List<&2, List<&2, Bytes()>>, w: Maybe<&2, Nat>, +pos: Nat) ->
   P & Bytes():
-  run.cut(d, q, acc, left, s, fl, cur, out, w, pos, run.len(d, s, True{}, q, left, 0n))
+  run.cut(d, q, acc, left, s, fl, cur, out, w, pos, run.fast(d, s, q, left))
 
 # a field from its first byte: a byte that starts an unquoted field
 # steps exactly as the empty unquoted field does, so the whole field is
@@ -471,7 +492,7 @@ def ent.cut(+d: Dialect, m: Mode, s: Bytes(), fl: Nat, cur: List<&2, Bytes()>,
 
 def ent.go(+d: Dialect, m: Mode, +s: Bytes(), fl: Nat, cur: List<&2, Bytes()>,
   out: List<&2, List<&2, Bytes()>>, w: Maybe<&2, Nat>, +pos: Nat) -> P & Bytes():
-  ent.cut(d, m, s, fl, cur, out, w, pos, run.len(d, s, True{}, False{}, max_field(d), 0n))
+  ent.cut(d, m, s, fl, cur, out, w, pos, run.fast(d, s, False{}, max_field(d)))
 
 # one move of the walk: a run, or one byte
 def adv.at(+d: Dialect, m: Mode, +s: Bytes(), fl: Nat, cur: List<&2, Bytes()>,
