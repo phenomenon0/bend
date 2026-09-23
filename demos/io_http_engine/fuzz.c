@@ -2,12 +2,17 @@
 // the same way, go to the Bend engine and to control.c, and what comes
 // back has to be identical, byte for byte, closes included. Each round
 // draws one to four messages -- valid, or mutated in the ways a
-// protocol reader has to survive: a truncation, a byte flipped, a
-// version that is not 1.1, a Transfer-Encoding, a length that is not
-// all digits, a length past the cap, fields in odd case, bodies of
-// arbitrary bytes, and the framing ambiguities requests are smuggled
-// through (a space before a colon, a folded line, a bare LF, two
-// lengths, a length list, a missing or repeated Host) -- then cuts the stream at random points and sends
+// protocol reader has to survive: a truncation, a byte flipped, HTTP/1.0
+// with and without keep-alive, a version that is neither, a length that
+// is not all digits, a length past the cap, fields in odd case, bodies
+// of arbitrary bytes, chunked bodies (sizes in either case with leading
+// zeros, extensions with tokens, quoted strings and BWS, trailers, and
+// each of those broken: a bare LF, data a byte off its size, whitespace
+// before a CR, a size past the cap), and the framing ambiguities
+// requests are smuggled through (a space before a colon, a folded line,
+// a bare LF, two lengths, a length list, a missing or repeated Host, a
+// Transfer-Encoding with a length, TE.TE dressed up: "chunked ",
+// "xchunked", "chunked, identity", two of them) -- then cuts the stream at random points and sends
 // each cut to both servers with a pause between, so the splits are
 // real recvs on the other side. A mismatch prints the round's seed,
 // the stream, the cuts and both answers. Neither server serves
@@ -59,19 +64,52 @@ static const char* SMUGGLE[] = {
   "X-A: a\r\n b\r\n", "X-A: a\nContent-Length: 3\r\n", "content-length: +3\r\n",
   "Content-Length: 4294967299\r\n", "Content-Length: 3 \r\n", "TRANSFER-encoding: chunked\r\n",
   "X-A\r\n", "content-length:\t3\r\n", "X-\x01: y\r\n" };
-static const char* CONNS[] = { "close", "keep-alive", "keep-alive, close", "Close", "x,close ,y" };
+static const char* CONNS[] = { "close", "keep-alive", "keep-alive, close", "Close", "x,close ,y",
+  "Keep-Alive", "x, keep-alive" };
+// Transfer-Encodings: the one that is chunked, and ways to dress one up
+static const char* TES[] = { "Transfer-Encoding: chunked\r\n", "transfer-encoding: CHUNKED\r\n",
+  "Transfer-Encoding:\tchunked\r\n", "Transfer-Encoding: chunked \r\n", "Transfer-Encoding: xchunked\r\n",
+  "Transfer-Encoding: chunked, identity\r\n", "Transfer-Encoding: identity\r\n",
+  "Transfer-Encoding: chunked\r\nTransfer-Encoding: chunked\r\n", "Transfer-Encoding:\r\n",
+  "Transfer-Encoding: chunked\r\nContent-Length: 3\r\n", "Content-Length: 3\r\nTransfer-Encoding: chunked\r\n" };
+static const char* EXTS[] = { "", ";a", ";a=b", " ;x=1", "; q = \"v\\\"w\"", ";e=\"\"", ";n=\"a;b\"", ";t;u=v",
+  ";bad=\"open", "; =x", ";a=b ", ";\x01" };
+static const char* TRAILS[] = { "", "X-T: v\r\n", "A: 1\r\nB:\r\n", "X : v\r\n", "X: a\r\n b\r\n",
+  "X: a\nY: b\r\n", "X\r\n" };
+
+// A chunked body into s: one to four chunks of arbitrary bytes, the
+// last chunk and a trailer, each line with or without an extension and
+// the size in either case, with leading zeros sometimes; and now and
+// then one thing broken
+static int chunked(char* s, int cap) {
+  int n = 0, k = pick(4), brk = pick(6) == 0 ? pick(6) : -1;
+  for (int i = 0; i < k && n < cap - 512; i++) {
+    int sz = 1 + pick(40), shown = sz;
+    if (brk == 0 && i == 0) shown = sz + 1 + pick(3);                  // data short of its size
+    const char* fmt = pick(2) ? "%s%x%s%s" : "%s%X%s%s";
+    n += snprintf(s + n, (size_t)(cap - n), fmt, pick(5) ? "" : "00", shown,
+      pick(3) ? "" : EXTS[pick(12)], brk == 1 && i == 0 ? "\n" : brk == 2 && i == 0 ? " \r\n" : "\r\n");
+    for (int j = 0; j < sz && n < cap; j++) s[n++] = (char)pick(256);
+    n += snprintf(s + n, (size_t)(cap - n), "%s", brk == 3 && i == 0 ? "\n" : "\r\n");
+  }
+  if (brk == 4) n += snprintf(s + n, (size_t)(cap - n), "100001\r\n");  // past the cap
+  n += snprintf(s + n, (size_t)(cap - n), "%s%s\r\n", pick(3) ? "0" : "000", pick(4) ? "" : EXTS[pick(12)]);
+  n += snprintf(s + n, (size_t)(cap - n), "%s\r\n", brk == 5 ? TRAILS[3 + pick(4)] : TRAILS[pick(3)]);
+  return n;
+}
 
 static int message(char* s, int cap) {
   int n = 0;
   const char* meth = pick(4) ? (pick(3) ? "GET" : "HEAD") : METHS[pick(7)];
   const char* path = PATHS[pick(8)];
-  const char* ver  = pick(12) ? "HTTP/1.1" : (pick(2) ? "HTTP/1.0" : "HTTP/2.0");
+  const char* ver  = pick(6) ? "HTTP/1.1" : (pick(4) ? "HTTP/1.0" : "HTTP/2.0");
   if (pick(16) == 0) n += snprintf(s + n, (size_t)(cap - n), "\r\n");
   n += snprintf(s + n, (size_t)(cap - n), "%s %s %s\r\n", meth, path, ver);
   int hosts = pick(16) ? 1 : pick(2) * 2;               // mostly one, sometimes none or two
+  if (ver[7] == '0' && pick(3) == 0) hosts = 0;         // HTTP/1.0 needs none
   for (int i = 0; i < hosts; i++) n += snprintf(s + n, (size_t)(cap - n), "%s: x\r\n", pick(2) ? "Host" : "host");
-  int body = 0, announce = -1;
-  int kind = pick(11);
+  int body = 0, announce = -1, chunks = 0;
+  int kind = pick(14);
   if (kind < 5) {                                       // a body, announced right
     body = pick(40);
     announce = body;
@@ -87,6 +125,12 @@ static int message(char* s, int cap) {
   } else if (kind == 9) {                               // a smuggling vector
     n += snprintf(s + n, (size_t)(cap - n), "%s", SMUGGLE[pick(14)]);
     body = 3;
+  } else if (kind == 10 || kind == 11) {                // a chunked body
+    n += snprintf(s + n, (size_t)(cap - n), "%s", TES[pick(3)]);
+    chunks = 1;
+  } else if (kind == 12) {                              // a Transfer-Encoding dressed up
+    n += snprintf(s + n, (size_t)(cap - n), "%s", TES[pick(11)]);
+    chunks = 1;
   }
   if (announce >= 0) {
     static const char* NAMES[] = { "content-length", "Content-Length", "CONTENT-LENGTH", "cOnTeNt-LeNgTh" };
@@ -96,6 +140,7 @@ static int message(char* s, int cap) {
   if (pick(6) == 0) n += snprintf(s + n, (size_t)(cap - n), "X-Junk: %d\r\n", pick(100000));
   n += snprintf(s + n, (size_t)(cap - n), "\r\n");
   for (int i = 0; i < body && n < cap; i++) s[n++] = (char)pick(256);
+  if (chunks) n += chunked(s + n, cap - n);
   return n;
 }
 
