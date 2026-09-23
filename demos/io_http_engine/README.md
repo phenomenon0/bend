@@ -56,7 +56,14 @@ value it skips, a body -- the run is counted and cut from the read
 whole, so the target, the body and the key of a request that arrived in
 one read are views of it, not bytes rebuilt; every other byte is one
 step of the machine. `feed` is the same machine a byte at a time over a
-list, the reference `feed_buf` is proved equal to.
+list, the reference `feed_buf` is proved equal to. The runs are found
+by `Bytes.span` where they lie: a skipped value with its spaces is one
+span of [32, 127), a name is spans of lowercase letters with the class
+test on the byte between them, and only a name as long as one the
+engine knows is lowercased and looked up. A move goes on from where the
+one before it landed, so one move takes a field line whole. Each of
+these is proven to land where stepping its bytes does (`lem.rx.in`,
+`lem.nm`, `lem.adv`, `fld_name`), on base's U32 order lemmas.
 
 That shape is not a workaround. Bend's loops cannot exit early — a
 recursive call has to shrink a matched argument — so a machine that
