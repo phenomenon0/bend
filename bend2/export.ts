@@ -81,8 +81,13 @@ function term(tm: Bend.HTerm, d: number): string {
       return "(adt " + name(t.k) + " (" + t.r.map(name).join(" ") + ")" + xs + ")";
     }
     case "Ctr": return "(ctr " + name(t.k) + t.x.map((x) => " " + term(x, d)).join("") + ")";
-    // a string or nat literal leaves as the constructor chain it stands for
-    case "Lit": return term(Bend.term_higher(Bend.lit_full(t)), d);
+    // a string or nat literal leaves as the constructor chain it stands for;
+    // a nat past NAT_LITERAL_MAX as U32.to_nat of its word, as the compiler
+    // reads it, so no chain outgrows the stack
+    case "Lit": return term(Bend.term_higher(typeof t.v === "number"
+      && t.v > Bend.NAT_LITERAL_MAX
+      ? Bend.App(Bend.Ref("U32.to_nat"), Bend.u32_to_term(t.v))
+      : Bend.lit_full(t)), d);
     case "Mat": return "(mat " + name(t.k) + " " + term(t.h, d) + " " + term(t.m, d) + ")";
     case "Efq": return "efq";
     case "Eql": return "(eql " + term(t.a, d) + " " + term(t.b, d) + " " + term(t.T, d) + ")";
