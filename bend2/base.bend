@@ -565,6 +565,20 @@ def File.read_buf(file: File, max: U32) ->
   import "./effs/file_read_buf.c"
   import "./effs/file_read_buf.js"
 
+# The file's bytes from off, len of them, onto the socket, with
+# TCP.send_buf_poll's deadline: the kernel's sendfile on a plain socket,
+# a block at a time through the session under TLS. The file's position
+# does not move.
+# Contract (wire/world.bend, fsend.ok): to a peer that reads, Done once
+# the len bytes of the file from off are out, exactly those; when the
+# file has fewer, the peer has what it had and the send fails with
+# ENODATA; to one that stops reading, Fail with ETIMEDOUT after at least
+# ms; to one that resets, Fail.
+def File.sendfile(sock: Socket, file: File, off: U32, len: U32, ms: U32) ->
+  IO(Socket & File & Result<&1, &1, U32 & String, Unit>):
+  import "./effs/file_sendfile.c"
+  import "./effs/file_sendfile.js"
+
 # TCP.recv through a Utf8.Dec, as File.read_text: a scalar cut by the end
 # of a recv is carried; need answers 4 when the peer has closed.
 def TCP.recv_text.go(sock: Socket, pend: U32, need: U32, max: U32) ->

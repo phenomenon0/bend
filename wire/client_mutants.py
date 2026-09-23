@@ -1,10 +1,13 @@
 #!/usr/bin/env python3
-# The client's and the pool's laws are not vacuous. Each mutant breaks
-# wire/client.bend or wire/pool.bend the way a bug would -- a connection
-# reused after a close or with bytes unread, a read past the deadline, no
-# head cap, a pooled connection handed out though bytes wait on it or
-# stale, a pool kept past its cap -- and the file's own laws must refuse
-# it. (A connection handed out and kept in the pool too is not a mutant
+# The client's, the pool's and the body stream's laws are not vacuous.
+# Each mutant breaks wire/client.bend, wire/pool.bend or wire/stream.bend
+# the way a bug would -- a connection reused after a close or with bytes
+# unread, a read past the deadline, no head cap, a pooled connection
+# handed out though bytes wait on it or stale, a pool kept past its cap;
+# a stream that reads with its window full, waits on a stalled consumer,
+# reorders, drops or trusts too much of a body, or tells its end early,
+# twice, or goes on after it -- and the laws must refuse it: the file's
+# own, and the stream's in wire/world.bend. (A connection handed out and kept in the pool too is not a mutant
 # that can be written: a connection is affine, and the checker refuses
 # the second use.) Each runs in a scratch copy of wire/, checked clean
 # first.
@@ -23,8 +26,10 @@ MUTANTS = [
     '''  Done{Got{i, r, rest, Bool.not(resp.close(r)) && String.is_empty(rest)}}''',
     '''  Done{Got{i, r, rest, Bool.not(resp.close(r))}}'''),
   ('client.bend', 'a body that ran to the close taken as reusable',
-    '''          Done{Got{i, r, "", False{}}}''',
-    '''          Done{Got{i, r, "", True{}}}'''),
+    '''        case R.Closing{r}:
+          Done{Got{i, r, "", False{}}}''',
+    '''        case R.Closing{r}:
+          Done{Got{i, r, "", True{}}}'''),
   ('client.bend', 'a turn past the deadline reads anyway',
     '''  rd.time(~M, ~pure, ~bind, ~S, ~rx, e, b, Nat.is_lt(now, until), Nat.sub(until, now), p, hd, s,''',
     '''  rd.time(~M, ~pure, ~bind, ~S, ~rx, e, b, True{}, Nat.sub(until, now), p, hd, s,'''),
@@ -51,6 +56,47 @@ def take.at('''),
     '''      give.keep(~M, ~pure, ~bind, ~a, ~C, ~close, 1n+k, age, idle, s, split(a, C, 1n+k, xs))'''),
 ]
 
+# the body stream's mutants: (file, what, before, after); its laws are
+# world.bend's, over every framer
+STREAM = [
+  ('stream.bend', 'a stream reads with its window full',
+    '''    case Going{} False{}:
+      pull.room(~M, ~pure, ~bind, ~S, ~rx, ~E, ~R, ~feed, ~take, ~K, e, ms, s, r, k, held,
+        False{}, Nat.is_lt(Bytes.len(held), win))''',
+    '''    case Going{} False{}:
+      pull.room(~M, ~pure, ~bind, ~S, ~rx, ~E, ~R, ~feed, ~take, ~K, e, ms, s, r, k, held,
+        False{}, True{})'''),
+  ('stream.bend', 'a consumer that takes nothing of a full window is waited on',
+    '''    Nat.is_eq(n, 0n) && (Nat.is_le(win, Bytes.len(held)) || Bool.not(more(look(r), eof))))''',
+    '''    Nat.is_eq(n, 0n) && Bool.not(more(look(r), eof)))'''),
+  ('stream.bend', 'a pass drops what the consumer did not take',
+    '''  pass.stall(S, R, K, s, r, k, String.drop(held, n), eof,''',
+    '''  pass.stall(S, R, K, s, r, k, "", eof,'''),
+  ('stream.bend', "a read's body goes in front of what was held",
+    '''      (Bq{s, r, k, Bytes.append(held, x), eof}, None{})''',
+    '''      (Bq{s, r, k, Bytes.append(x, held), eof}, None{})'''),
+  ('stream.bend', "a read's body past its bytes is trusted",
+    '''  pull.fits(S, R, K, s, r, k, held, x, eof, Nat.is_le(Bytes.len(x), n))''',
+    '''  pull.fits(S, R, K, s, r, k, held, x, eof, True{})'''),
+  ('stream.bend', 'the end told with bytes still held',
+    '''    case Ended{} _:
+      pull.end(~M, ~pure, ~bind, ~S, ~R, ~K, ~fin, s, r, k, held, eof, String.is_empty(held))''',
+    '''    case Ended{} _:
+      pull.end(~M, ~pure, ~bind, ~S, ~R, ~K, ~fin, s, r, k, held, eof, True{})'''),
+  ('stream.bend', 'the end told twice',
+    '''      bind(K, Turn(S, R, K), fin(k), k2 => pure(Turn(S, R, K), (Bq{s, r, k2, held, eof},''',
+    '''      bind(K, Turn(S, R, K), bind(K, K, fin(k), fin), k2 => pure(Turn(S, R, K), (Bq{s, r, k2, held, eof},'''),
+  ('stream.bend', 'the stream goes on after its end',
+    '''    case Some{why}:
+      pure(Bq<S, R, K> & Why, (bq, why))
+    case None{}:
+      again(bq)''',
+    '''    case Some{why}:
+      again(bq)
+    case None{}:
+      again(bq)'''),
+]
+
 def check(path):
   r = subprocess.run(['bun', os.path.join(ROOT, 'bend2', 'main.ts'), path],
     capture_output=True, text=True, cwd=ROOT)
@@ -66,18 +112,18 @@ def main():
   d = os.path.join(top, 'wire')
   try:
     shutil.copytree(HERE, d)
-    for f in ('client.bend', 'pool.bend'):
+    for f in ('client.bend', 'pool.bend', 'world.bend'):
       out = check(os.path.join(d, f))
       if out != 'All terms check.':
         print('the copy of %s does not check clean: %s' % (f, out))
         sys.exit(1)
-    for f, name, a, b in MUTANTS:
+    for f, name, a, b, laws in [m + (m[0],) for m in MUTANTS] + [m + ('world.bend',) for m in STREAM]:
       path = os.path.join(d, f)
       src = open(path).read()
       if src.count(a) != 1:
         print('MISSING  %s' % name); bad += 1; continue
       open(path, 'w').write(src.replace(a, b))
-      out = check(path)
+      out = check(os.path.join(d, laws))
       open(path, 'w').write(src)
       if out == 'All terms check.':
         print('SURVIVED %s' % name); bad += 1
@@ -85,7 +131,8 @@ def main():
         print('KILLED   %s -- %s' % (name, where(out)))
   finally:
     shutil.rmtree(top, ignore_errors=True)
-  print('mutants: %d / %d killed' % (len(MUTANTS) - bad, len(MUTANTS)))
+  total = len(MUTANTS) + len(STREAM)
+  print('mutants: %d / %d killed' % (total - bad, total))
   sys.exit(1 if bad else 0)
 
 main()

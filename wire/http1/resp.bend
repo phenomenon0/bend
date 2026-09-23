@@ -732,6 +732,20 @@ def head.end(+e: Ask, +h: Head, out: List<&2, U32>) -> P:
 # Bodies
 # ------
 
+# A request's body, framed by what its head said, for a server that
+# streams it (wire/stream.bend): the reader entered at the body, n bytes
+# to count off, or chunked under the cap -- the same states, and so the
+# same grammar and budget, a response's body is read by. What follows the
+# body (a pipelined request) is the final state's rest.
+def body.head() -> Head:
+  Head{False{}, 200, None{}, False{}, False{}, False{}}
+
+def body.len(+n: U32) -> P:
+  P{head.len(U32.is_zero(n), body.head(), n), Nil{}}
+
+def body.chunked(+cap: U32) -> P:
+  P{Chk{body.head(), ASize0{}, 0, "", cap}, Nil{}}
+
 def body.byte(more: Nat, c: U32, h: Head, got: Bytes()) -> St:
   match more:
     case 0n:
@@ -1046,6 +1060,182 @@ def feed_buf(+e: Ask, +s: Bytes(), p: P) -> P:
 
 def reads(+e: Ask, rs: List<&2, Bytes()>, p: P) -> P:
   Wr.reads(~Ask, ~P, ~wstep, ~wadv, e, rs, p)
+
+# Taking the body as it comes
+# ===========================
+#
+# A client that streams a body (wire/stream.bend) takes what the reader
+# has gathered of it after each read, and the reader goes on holding
+# none: take answers the body bytes the state holds -- a body's, a
+# chunk's data's or a close-delimited body's so far, or a final
+# response's -- and the state without them; give puts bytes back in
+# front. A state is open once the head is behind it (a body, the final
+# response, or a refusal): only an open state holds body bytes, and one
+# never steps back out. PROOF.bend proves the kit's obligations of the
+# three, and gets drain_reads: the chunks taken after each read, joined,
+# then what the reader still holds, are the body the reader frames for
+# the stream whole, however it was cut.
+def st.open(st: St) -> Bool:
+  match st:
+    case SVer{a, b}:
+      False{}
+    case SCode{v10, n, k}:
+      False{}
+    case SWhy{v10, code}:
+      False{}
+    case Eol{h}:
+      False{}
+    case Lin{h}:
+      False{}
+    case Nam{h, cl, te, co}:
+      False{}
+    case Oth{h}:
+      False{}
+    case Len0{h}:
+      False{}
+    case Len{h, n}:
+      False{}
+    case LenW{h, n}:
+      False{}
+    case Te0{h}:
+      False{}
+    case Te{h, m}:
+      False{}
+    case Conn{h, cl, ka, mc, mk}:
+      False{}
+    case Eoh{h}:
+      False{}
+    case Bod{h, more, got}:
+      True{}
+    case Chk{h, at, n, got, left}:
+      True{}
+    case Dat{h, more, got, left}:
+      True{}
+    case Clo{h, got, left}:
+      True{}
+    case Fin{r, rest}:
+      True{}
+    case Bad{}:
+      True{}
+
+def open(p: P) -> Bool:
+  match p:
+    case P{st, out}:
+      st.open(st)
+
+def resp.give(+g: Bytes(), r: Resp) -> Resp:
+  match r:
+    case Resp{code, v10, close, body}:
+      Resp{code, v10, close, Bytes.append(g, body)}
+
+def st.give(+g: Bytes(), st: St) -> St:
+  match st:
+    case SVer{a, b}:
+      SVer{a, b}
+    case SCode{v10, n, k}:
+      SCode{v10, n, k}
+    case SWhy{v10, code}:
+      SWhy{v10, code}
+    case Eol{h}:
+      Eol{h}
+    case Lin{h}:
+      Lin{h}
+    case Nam{h, cl, te, co}:
+      Nam{h, cl, te, co}
+    case Oth{h}:
+      Oth{h}
+    case Len0{h}:
+      Len0{h}
+    case Len{h, n}:
+      Len{h, n}
+    case LenW{h, n}:
+      LenW{h, n}
+    case Te0{h}:
+      Te0{h}
+    case Te{h, m}:
+      Te{h, m}
+    case Conn{h, cl, ka, mc, mk}:
+      Conn{h, cl, ka, mc, mk}
+    case Eoh{h}:
+      Eoh{h}
+    case Bod{h, more, got}:
+      Bod{h, more, Bytes.append(g, got)}
+    case Chk{h, at, n, got, left}:
+      Chk{h, at, n, Bytes.append(g, got), left}
+    case Dat{h, more, got, left}:
+      Dat{h, more, Bytes.append(g, got), left}
+    case Clo{h, got, left}:
+      Clo{h, Bytes.append(g, got), left}
+    case Fin{r, rest}:
+      Fin{resp.give(g, r), rest}
+    case Bad{}:
+      Bad{}
+
+def give(+g: Bytes(), p: P) -> P:
+  match p:
+    case P{st, out}:
+      P{st.give(g, st), out}
+
+# give with the kit's shape
+def wgive(g: Bytes(), p: P) -> P:
+  give(g, p)
+
+def resp.take(r: Resp, rest: Bytes()) -> St & Bytes():
+  match r:
+    case Resp{code, v10, close, body}:
+      (Fin{Resp{code, v10, close, ""}, rest}, body)
+
+def st.take(st: St) -> St & Bytes():
+  match st:
+    case SVer{a, b}:
+      (SVer{a, b}, "")
+    case SCode{v10, n, k}:
+      (SCode{v10, n, k}, "")
+    case SWhy{v10, code}:
+      (SWhy{v10, code}, "")
+    case Eol{h}:
+      (Eol{h}, "")
+    case Lin{h}:
+      (Lin{h}, "")
+    case Nam{h, cl, te, co}:
+      (Nam{h, cl, te, co}, "")
+    case Oth{h}:
+      (Oth{h}, "")
+    case Len0{h}:
+      (Len0{h}, "")
+    case Len{h, n}:
+      (Len{h, n}, "")
+    case LenW{h, n}:
+      (LenW{h, n}, "")
+    case Te0{h}:
+      (Te0{h}, "")
+    case Te{h, m}:
+      (Te{h, m}, "")
+    case Conn{h, cl, ka, mc, mk}:
+      (Conn{h, cl, ka, mc, mk}, "")
+    case Eoh{h}:
+      (Eoh{h}, "")
+    case Bod{h, more, got}:
+      (Bod{h, more, ""}, got)
+    case Chk{h, at, n, got, left}:
+      (Chk{h, at, n, "", left}, got)
+    case Dat{h, more, got, left}:
+      (Dat{h, more, "", left}, got)
+    case Clo{h, got, left}:
+      (Clo{h, "", left}, got)
+    case Fin{r, rest}:
+      resp.take(r, rest)
+    case Bad{}:
+      (Bad{}, "")
+
+def take.at(q: St & Bytes(), out: List<&2, U32>) -> P & Bytes():
+  (st, x) = q
+  (P{st, out}, x)
+
+def take(p: P) -> P & Bytes():
+  match p:
+    case P{st, out}:
+      take.at(st.take(st), out)
 
 # whether a head is in progress: the reader is in a status line or a
 # field line, or between two lines of a head (a client caps the bytes

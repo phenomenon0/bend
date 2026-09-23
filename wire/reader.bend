@@ -426,3 +426,311 @@ def reads_split(E, S, step, adv, adv_ok, e, rs, p):
     Equal.sym(S, feed_buf(~E, ~S, ~step, ~adv, e, Bytes.concat(rs), p),
       feed(~E, ~S, ~step, e, Bytes.to_list(Bytes.concat(rs)), p),
       feed_buf_is_feed(~E, ~S, ~step, ~adv, ~adv_ok, e, Bytes.concat(rs), p)))
+
+# Taking a body as it comes
+# =========================
+#
+# A reader that frames a body gathers it in its state. A consumer that
+# streams the body takes what the reader holds after each read, and the
+# reader goes on holding none: ~take answers the bytes and the state
+# without them, and ~give puts bytes back in front of what a state
+# holds. drain is a stream read that way -- each read fed, then taken --
+# with its takes joined in order.
+#
+# What the protocol proves of its take and give, as template arguments:
+# a state is open (~open) once it is in a body, and from then on stays
+# open (step_open) and steps the same with bytes put back in front as
+# without, the bytes staying in front (step_give); a state not open
+# holds none (shut_take); and take and give are inverse (give_take),
+# with give of nothing nothing (give_nil) and of two joined, the two in
+# turn (give_app). take_open: taking leaves a state as open as it was.
+#
+# What it gets: drain_reads, the takes of a stream, joined, put back in
+# front of the reader that took them, are the reader fed the stream
+# whole: the concatenation of the chunks a consumer was handed, then
+# what the reader still holds, is the body exactly, whatever the cuts.
+
+def drain.s(-S: Type, q: S & Bytes()) -> S:
+  (p, x) = q
+  p
+
+def drain.b(-S: Type, q: S & Bytes()) -> Bytes():
+  (p, x) = q
+  x
+
+def drain.on(
+  -S: Type, q: S & Bytes(), +acc: Bytes(), again: S -> Bytes() -> S & Bytes()
+) -> S & Bytes():
+  (p, x) = q
+  again(p, Bytes.append(acc, x))
+
+def drain(
+  ~E: Data, ~S: Data, ~step: E -> S -> U32 -> S, ~adv: E -> Bytes() -> S -> S & Bytes(),
+  ~take: S -> S & Bytes(), +e: E, rs: List<&2, Bytes()>, p: S, +acc: Bytes()
+) -> S & Bytes():
+  match rs:
+    case Nil{}:
+      (p, acc)
+    case Con{r, t}:
+      drain.on(S, take(feed_buf(~E, ~S, ~step, ~adv, e, r, p)), acc,
+        q => a => drain(~E, ~S, ~step, ~adv, ~take, e, t, q, a))
+
+# a byte list fed to an open state with bytes put back in front lands
+# where it lands without them, the bytes still in front
+law feed_give:
+  for ~E: Data
+  for ~S: Data
+  for ~step: E -> S -> U32 -> S
+  for ~give: Bytes() -> S -> S
+  for ~open: S -> Bool
+  for ~step_open: @+e: E -> @+p: S -> @+c: U32 -> @o: {open(p) == True{} : Bool} ->
+    {open(step(e, p, c)) == True{} : Bool}
+  for ~step_give: @+e: E -> @+x: Bytes() -> @+p: S -> @+c: U32 ->
+    @o: {open(p) == True{} : Bool} -> {step(e, give(x, p), c) == give(x, step(e, p, c)) : S}
+  for +e: E
+  for +bs: List<&2, U32>
+  for +x: Bytes()
+  for +p: S
+  for +o: {open(p) == True{} : Bool}
+  {feed(~E, ~S, ~step, e, bs, give(x, p)) == give(x, feed(~E, ~S, ~step, e, bs, p)) : S}
+
+def feed_give(E, S, step, give, open, step_open, step_give, e, bs, x, p, o):
+  match bs:
+    case Nil{}:
+      {==}
+    case Con{+c, +t}:
+      %Equal.sym(S, step(e, give(x, p), c), give(x, step(e, p, c)), step_give(e, x, p, c, o)) :
+        {feed(~E, ~S, ~step, e, t, _) ==
+          give(x, feed(~E, ~S, ~step, e, t, step(e, p, c))) : S}
+      feed_give(~E, ~S, ~step, ~give, ~open, ~step_open, ~step_give, e, t, x, step(e, p, c),
+        step_open(e, p, c, o))
+
+# ... and so does a stream of reads
+law reads_give:
+  for ~E: Data
+  for ~S: Data
+  for ~step: E -> S -> U32 -> S
+  for ~adv: E -> Bytes() -> S -> S & Bytes()
+  for ~adv_ok: @+e: E -> @+s: Bytes() -> @p: S ->
+    {feed_buf.last(~E, ~S, ~step, e, adv(e, s, p)) == feed_buf.slow(~E, ~S, ~step, e, s, p) : S}
+  for ~give: Bytes() -> S -> S
+  for ~open: S -> Bool
+  for ~step_open: @+e: E -> @+p: S -> @+c: U32 -> @o: {open(p) == True{} : Bool} ->
+    {open(step(e, p, c)) == True{} : Bool}
+  for ~step_give: @+e: E -> @+x: Bytes() -> @+p: S -> @+c: U32 ->
+    @o: {open(p) == True{} : Bool} -> {step(e, give(x, p), c) == give(x, step(e, p, c)) : S}
+  for +e: E
+  for +rs: List<&2, Bytes()>
+  for +x: Bytes()
+  for +p: S
+  for +o: {open(p) == True{} : Bool}
+  {reads(~E, ~S, ~step, ~adv, e, rs, give(x, p)) == give(x, reads(~E, ~S, ~step, ~adv, e, rs, p)) :
+    S}
+
+def reads_give(E, S, step, adv, adv_ok, give, open, step_open, step_give, e, rs, x, p, o):
+  %Equal.sym(S, reads(~E, ~S, ~step, ~adv, e, rs, give(x, p)),
+    feed(~E, ~S, ~step, e, Bytes.to_list(Bytes.concat(rs)), give(x, p)),
+    reads_is(~E, ~S, ~step, ~adv, ~adv_ok, e, rs, give(x, p))) :
+    {_ == give(x, reads(~E, ~S, ~step, ~adv, e, rs, p)) : S}
+  %Equal.sym(S, reads(~E, ~S, ~step, ~adv, e, rs, p),
+    feed(~E, ~S, ~step, e, Bytes.to_list(Bytes.concat(rs)), p),
+    reads_is(~E, ~S, ~step, ~adv, ~adv_ok, e, rs, p)) :
+    {feed(~E, ~S, ~step, e, Bytes.to_list(Bytes.concat(rs)), give(x, p)) == give(x, _) : S}
+  feed_give(~E, ~S, ~step, ~give, ~open, ~step_open, ~step_give, e,
+    Bytes.to_list(Bytes.concat(rs)), x, p, o)
+
+# the bytes a take took, put back in front of the rest of the stream
+# read from the state it left, are the stream read from the state it
+# took them from: open, by reads_give; not open, it took none
+law take_back.at:
+  for ~E: Data
+  for ~S: Data
+  for ~step: E -> S -> U32 -> S
+  for ~adv: E -> Bytes() -> S -> S & Bytes()
+  for ~adv_ok: @+e: E -> @+s: Bytes() -> @p: S ->
+    {feed_buf.last(~E, ~S, ~step, e, adv(e, s, p)) == feed_buf.slow(~E, ~S, ~step, e, s, p) : S}
+  for ~take: S -> S & Bytes()
+  for ~give: Bytes() -> S -> S
+  for ~open: S -> Bool
+  for ~step_open: @+e: E -> @+p: S -> @+c: U32 -> @o: {open(p) == True{} : Bool} ->
+    {open(step(e, p, c)) == True{} : Bool}
+  for ~step_give: @+e: E -> @+x: Bytes() -> @+p: S -> @+c: U32 ->
+    @o: {open(p) == True{} : Bool} -> {step(e, give(x, p), c) == give(x, step(e, p, c)) : S}
+  for ~take_open: @+p: S -> {open(drain.s(S, take(p))) == open(p) : Bool}
+  for ~shut_take: @+p: S -> @o: {open(p) == False{} : Bool} -> {drain.b(S, take(p)) == "" : Bytes()}
+  for ~give_take: @+p: S -> {give(drain.b(S, take(p)), drain.s(S, take(p))) == p : S}
+  for ~give_nil: @+p: S -> {give("", p) == p : S}
+  for +e: E
+  for +t: List<&2, Bytes()>
+  for +f: S
+  for b: Bool
+  for +eb: {open(drain.s(S, take(f))) == b : Bool}
+  {give(drain.b(S, take(f)), reads(~E, ~S, ~step, ~adv, e, t, drain.s(S, take(f)))) ==
+    reads(~E, ~S, ~step, ~adv, e, t, f) : S}
+
+def take_back.at(E, S, step, adv, adv_ok, take, give, open, step_open, step_give, take_open,
+  shut_take, give_take, give_nil, e, t, f, b, eb):
+  match b:
+    case True{}:
+      %give_take(f) :
+        {give(drain.b(S, take(f)), reads(~E, ~S, ~step, ~adv, e, t, drain.s(S, take(f)))) ==
+          reads(~E, ~S, ~step, ~adv, e, t, _) : S}
+      Equal.sym(S, reads(~E, ~S, ~step, ~adv, e, t,
+          give(drain.b(S, take(f)), drain.s(S, take(f)))),
+        give(drain.b(S, take(f)), reads(~E, ~S, ~step, ~adv, e, t, drain.s(S, take(f)))),
+        reads_give(~E, ~S, ~step, ~adv, ~adv_ok, ~give, ~open, ~step_open, ~step_give, e, t,
+          drain.b(S, take(f)), drain.s(S, take(f)), eb))
+    case False{}:
+      %give_take(f) :
+        {give(drain.b(S, take(f)), reads(~E, ~S, ~step, ~adv, e, t, drain.s(S, take(f)))) ==
+          reads(~E, ~S, ~step, ~adv, e, t, _) : S}
+      %Equal.sym(Bytes(), drain.b(S, take(f)), "",
+        shut_take(f, Equal.trans(Bool, open(f), open(drain.s(S, take(f))), False{},
+          Equal.sym(Bool, open(drain.s(S, take(f))), open(f), take_open(f)), eb))) :
+        {give(_, reads(~E, ~S, ~step, ~adv, e, t, drain.s(S, take(f)))) ==
+          reads(~E, ~S, ~step, ~adv, e, t, give(drain.b(S, take(f)), drain.s(S, take(f)))) : S}
+      %Equal.sym(Bytes(), drain.b(S, take(f)), "",
+        shut_take(f, Equal.trans(Bool, open(f), open(drain.s(S, take(f))), False{},
+          Equal.sym(Bool, open(drain.s(S, take(f))), open(f), take_open(f)), eb))) :
+        {give("", reads(~E, ~S, ~step, ~adv, e, t, drain.s(S, take(f)))) ==
+          reads(~E, ~S, ~step, ~adv, e, t, give(_, drain.s(S, take(f)))) : S}
+      %Equal.sym(S, give("", reads(~E, ~S, ~step, ~adv, e, t, drain.s(S, take(f)))),
+        reads(~E, ~S, ~step, ~adv, e, t, drain.s(S, take(f))),
+        give_nil(reads(~E, ~S, ~step, ~adv, e, t, drain.s(S, take(f))))) :
+        {_ == reads(~E, ~S, ~step, ~adv, e, t, give("", drain.s(S, take(f)))) : S}
+      %Equal.sym(S, give("", drain.s(S, take(f))), drain.s(S, take(f)),
+        give_nil(drain.s(S, take(f)))) :
+        {reads(~E, ~S, ~step, ~adv, e, t, drain.s(S, take(f))) ==
+          reads(~E, ~S, ~step, ~adv, e, t, _) : S}
+      {==}
+
+# one read of drain: what it took joins what came before, and the rest
+# of the stream is drained from the state it left
+law drain_on:
+  for ~E: Data
+  for ~S: Data
+  for ~step: E -> S -> U32 -> S
+  for ~adv: E -> Bytes() -> S -> S & Bytes()
+  for ~take: S -> S & Bytes()
+  for ~give: Bytes() -> S -> S
+  for ~give_app: @+a: Bytes() -> @+b: Bytes() -> @+p: S ->
+    {give(Bytes.append(a, b), p) == give(a, give(b, p)) : S}
+  for +e: E
+  for +t: List<&2, Bytes()>
+  for q: S & Bytes()
+  for +acc: Bytes()
+  for ih: @+p: S -> @+a: Bytes() ->
+    {give(drain.b(S, drain(~E, ~S, ~step, ~adv, ~take, e, t, p, a)),
+      drain.s(S, drain(~E, ~S, ~step, ~adv, ~take, e, t, p, a))) ==
+      give(a, reads(~E, ~S, ~step, ~adv, e, t, p)) : S}
+  {give(drain.b(S, drain.on(S, q, acc, p => a => drain(~E, ~S, ~step, ~adv, ~take, e, t, p, a))),
+    drain.s(S, drain.on(S, q, acc, p => a => drain(~E, ~S, ~step, ~adv, ~take, e, t, p, a)))) ==
+    give(acc, give(drain.b(S, q), reads(~E, ~S, ~step, ~adv, e, t, drain.s(S, q)))) : S}
+
+def drain_on(E, S, step, adv, take, give, give_app, e, t, q, acc, ih):
+  (+p, +x) = q
+  Equal.trans(S,
+    give(drain.b(S, drain(~E, ~S, ~step, ~adv, ~take, e, t, p, Bytes.append(acc, x))),
+      drain.s(S, drain(~E, ~S, ~step, ~adv, ~take, e, t, p, Bytes.append(acc, x)))),
+    give(Bytes.append(acc, x), reads(~E, ~S, ~step, ~adv, e, t, p)),
+    give(acc, give(x, reads(~E, ~S, ~step, ~adv, e, t, p))),
+    ih(p, Bytes.append(acc, x)),
+    give_app(acc, x, reads(~E, ~S, ~step, ~adv, e, t, p)))
+
+law drain_give:
+  for ~E: Data
+  for ~S: Data
+  for ~step: E -> S -> U32 -> S
+  for ~adv: E -> Bytes() -> S -> S & Bytes()
+  for ~adv_ok: @+e: E -> @+s: Bytes() -> @p: S ->
+    {feed_buf.last(~E, ~S, ~step, e, adv(e, s, p)) == feed_buf.slow(~E, ~S, ~step, e, s, p) : S}
+  for ~take: S -> S & Bytes()
+  for ~give: Bytes() -> S -> S
+  for ~open: S -> Bool
+  for ~step_open: @+e: E -> @+p: S -> @+c: U32 -> @o: {open(p) == True{} : Bool} ->
+    {open(step(e, p, c)) == True{} : Bool}
+  for ~step_give: @+e: E -> @+x: Bytes() -> @+p: S -> @+c: U32 ->
+    @o: {open(p) == True{} : Bool} -> {step(e, give(x, p), c) == give(x, step(e, p, c)) : S}
+  for ~take_open: @+p: S -> {open(drain.s(S, take(p))) == open(p) : Bool}
+  for ~shut_take: @+p: S -> @o: {open(p) == False{} : Bool} -> {drain.b(S, take(p)) == "" : Bytes()}
+  for ~give_take: @+p: S -> {give(drain.b(S, take(p)), drain.s(S, take(p))) == p : S}
+  for ~give_nil: @+p: S -> {give("", p) == p : S}
+  for ~give_app: @+a: Bytes() -> @+b: Bytes() -> @+p: S ->
+    {give(Bytes.append(a, b), p) == give(a, give(b, p)) : S}
+  for +e: E
+  for +rs: List<&2, Bytes()>
+  for +p: S
+  for +acc: Bytes()
+  {give(drain.b(S, drain(~E, ~S, ~step, ~adv, ~take, e, rs, p, acc)),
+    drain.s(S, drain(~E, ~S, ~step, ~adv, ~take, e, rs, p, acc))) ==
+    give(acc, reads(~E, ~S, ~step, ~adv, e, rs, p)) : S}
+
+def drain_give(E, S, step, adv, adv_ok, take, give, open, step_open, step_give, take_open, shut_take,
+  give_take, give_nil, give_app, e, rs, p, acc):
+  match rs:
+    case Nil{}:
+      {==}
+    case Con{+r, +t}:
+      Equal.trans(S,
+        give(drain.b(S, drain.on(S, take(feed_buf(~E, ~S, ~step, ~adv, e, r, p)), acc,
+            q => a => drain(~E, ~S, ~step, ~adv, ~take, e, t, q, a))),
+          drain.s(S, drain.on(S, take(feed_buf(~E, ~S, ~step, ~adv, e, r, p)), acc,
+            q => a => drain(~E, ~S, ~step, ~adv, ~take, e, t, q, a)))),
+        give(acc, give(drain.b(S, take(feed_buf(~E, ~S, ~step, ~adv, e, r, p))),
+          reads(~E, ~S, ~step, ~adv, e, t, drain.s(S, take(feed_buf(~E, ~S, ~step, ~adv, e, r, p)))))),
+        give(acc, reads(~E, ~S, ~step, ~adv, e, t, feed_buf(~E, ~S, ~step, ~adv, e, r, p))),
+        drain_on(~E, ~S, ~step, ~adv, ~take, ~give, ~give_app, e, t,
+          take(feed_buf(~E, ~S, ~step, ~adv, e, r, p)), acc,
+          q => a => drain_give(~E, ~S, ~step, ~adv, ~adv_ok, ~take, ~give, ~open, ~step_open,
+            ~step_give, ~take_open, ~shut_take, ~give_take, ~give_nil, ~give_app, e, t, q, a)),
+        Equal.cong(S, S, y => give(acc, y),
+          give(drain.b(S, take(feed_buf(~E, ~S, ~step, ~adv, e, r, p))),
+            reads(~E, ~S, ~step, ~adv, e, t, drain.s(S, take(feed_buf(~E, ~S, ~step, ~adv, e, r, p))))),
+          reads(~E, ~S, ~step, ~adv, e, t, feed_buf(~E, ~S, ~step, ~adv, e, r, p)),
+          take_back.at(~E, ~S, ~step, ~adv, ~adv_ok, ~take, ~give, ~open, ~step_open, ~step_give,
+            ~take_open, ~shut_take, ~give_take, ~give_nil, e, t,
+            feed_buf(~E, ~S, ~step, ~adv, e, r, p),
+            open(drain.s(S, take(feed_buf(~E, ~S, ~step, ~adv, e, r, p)))), {==})))
+
+# LAW: a body taken as it comes is the body. However a stream is cut
+# into reads, the bytes taken after each read, joined in order, put back
+# in front of what the reader still holds, are the reader fed the
+# stream: no byte a consumer was handed is out of order, doubled, or
+# missing, and none it was not handed is lost.
+law drain_reads:
+  for ~E: Data
+  for ~S: Data
+  for ~step: E -> S -> U32 -> S
+  for ~adv: E -> Bytes() -> S -> S & Bytes()
+  for ~adv_ok: @+e: E -> @+s: Bytes() -> @p: S ->
+    {feed_buf.last(~E, ~S, ~step, e, adv(e, s, p)) == feed_buf.slow(~E, ~S, ~step, e, s, p) : S}
+  for ~take: S -> S & Bytes()
+  for ~give: Bytes() -> S -> S
+  for ~open: S -> Bool
+  for ~step_open: @+e: E -> @+p: S -> @+c: U32 -> @o: {open(p) == True{} : Bool} ->
+    {open(step(e, p, c)) == True{} : Bool}
+  for ~step_give: @+e: E -> @+x: Bytes() -> @+p: S -> @+c: U32 ->
+    @o: {open(p) == True{} : Bool} -> {step(e, give(x, p), c) == give(x, step(e, p, c)) : S}
+  for ~take_open: @+p: S -> {open(drain.s(S, take(p))) == open(p) : Bool}
+  for ~shut_take: @+p: S -> @o: {open(p) == False{} : Bool} -> {drain.b(S, take(p)) == "" : Bytes()}
+  for ~give_take: @+p: S -> {give(drain.b(S, take(p)), drain.s(S, take(p))) == p : S}
+  for ~give_nil: @+p: S -> {give("", p) == p : S}
+  for ~give_app: @+a: Bytes() -> @+b: Bytes() -> @+p: S ->
+    {give(Bytes.append(a, b), p) == give(a, give(b, p)) : S}
+  for +e: E
+  for +rs: List<&2, Bytes()>
+  for +p: S
+  {give(drain.b(S, drain(~E, ~S, ~step, ~adv, ~take, e, rs, p, "")),
+    drain.s(S, drain(~E, ~S, ~step, ~adv, ~take, e, rs, p, ""))) ==
+    reads(~E, ~S, ~step, ~adv, e, rs, p) : S}
+
+def drain_reads(E, S, step, adv, adv_ok, take, give, open, step_open, step_give, take_open,
+  shut_take, give_take, give_nil, give_app, e, rs, p):
+  Equal.trans(S,
+    give(drain.b(S, drain(~E, ~S, ~step, ~adv, ~take, e, rs, p, "")),
+      drain.s(S, drain(~E, ~S, ~step, ~adv, ~take, e, rs, p, ""))),
+    give("", reads(~E, ~S, ~step, ~adv, e, rs, p)),
+    reads(~E, ~S, ~step, ~adv, e, rs, p),
+    drain_give(~E, ~S, ~step, ~adv, ~adv_ok, ~take, ~give, ~open, ~step_open, ~step_give,
+      ~take_open, ~shut_take, ~give_take, ~give_nil, ~give_app, e, rs, p, ""),
+    give_nil(reads(~E, ~S, ~step, ~adv, e, rs, p)))

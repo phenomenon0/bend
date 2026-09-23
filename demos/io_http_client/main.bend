@@ -18,8 +18,12 @@
 # another request. --twice gives the connection back to a pool
 # (wire/pool.bend) and sends a second request on what the pool hands
 # out: the same connection when it was fit to keep and nothing waits
-# unread on it, a new one otherwise. It exits 1 when there is no
-# response, with why.
+# unread on it, a new one otherwise. --stream hands the body to its
+# consumer as it arrives (wire/stream.bend), under a 256 KiB window,
+# rather than gathering it: the line then says how many bytes were
+# streamed, --body writes them as they come, and a body of any size (up
+# to 256 MiB, the reader's cap) costs the window and one read. It exits
+# 1 when there is no response, with why.
 import Base
 import ../../wire/client.bend as C
 import ../../wire/http1/resp.bend as R
@@ -87,23 +91,24 @@ def url.parse(+s: String) -> Maybe<&2, Url>:
 # the URL; --head: HEAD rather than GET; --body: print the body;
 # --twice: a second request on the connection, when it may carry one;
 # --ca FILE: trust only the certificates in FILE (ca says the next
-# argument is that file)
+# argument is that file); --stream: stream the body
 type Opt is Data:
-  Opt{url: String, head: Bool, body: Bool, twice: Bool, ca: String, next: Bool}
+  Opt{url: String, head: Bool, body: Bool, twice: Bool, ca: String, next: Bool, stream: Bool}
 
 def opt.take(+x: String, o: Opt) -> Opt:
   match o:
-    case Opt{url, head, body, twice, ca, next}:
+    case Opt{url, head, body, twice, ca, next, stream}:
       match next:
         case True{}:
-          Opt{url, head, body, twice, x, False{}}
+          Opt{url, head, body, twice, x, False{}, stream}
         case False{}:
           Opt{Bool.pick(String, String.starts_with(x, "--"), url, x), head || String.eq(x, "--head"),
-            body || String.eq(x, "--body"), twice || String.eq(x, "--twice"), ca, String.eq(x, "--ca")}
+            body || String.eq(x, "--body"), twice || String.eq(x, "--twice"), ca, String.eq(x, "--ca"),
+            stream || String.eq(x, "--stream")}
 
 def opt.url(o: Opt) -> String:
   match o:
-    case Opt{url, head, body, twice, ca, next}:
+    case Opt{url, head, body, twice, ca, next, stream}:
       url
 
 def opts(xs: List<String>, o: Opt) -> Opt:
@@ -123,6 +128,13 @@ def ask.of(head: Bool) -> R.Ask:
 
 def budget() -> C.Budget:
   C.Budget{65536, 30000, 10000}
+
+# a streamed body: the reader's largest cap, and a window of 256 KiB
+def ask.stream(head: Bool) -> R.Ask:
+  R.ask.new(head, 268435455)
+
+def window() -> Nat:
+  U32.to_nat(262144)
 
 def host.of(u: Url) -> String:
   match u:
@@ -188,6 +200,48 @@ def answered(+show: Bool, m: C.Out(Socket)) -> IO(Socket & Bool):
         said(show, g)
         return (s, got.reuse(g))
 
+# the consumers of a streamed body: one that counts what it takes, and
+# one that writes it out as well; each takes all it is offered
+def sink.count.go(k: Nat, +bs: Bytes()) -> IO(Nat & Nat):
+  IO.pure(Nat & Nat, (Nat.add(k, Bytes.len(bs)), Bytes.len(bs)))
+
+def sink.count(k: Nat, bs: Bytes()) -> IO(Nat & Nat):
+  sink.count.go(k, bs)
+
+def sink.write.go(k: Nat, +bs: Bytes()) -> IO(Nat & Nat):
+  +n = Bytes.len(bs)
+  do IO<Nat & Nat>:
+    IO.write(bs)
+    return (Nat.add(k, n), n)
+
+def sink.write(k: Nat, bs: Bytes()) -> IO(Nat & Nat):
+  sink.write.go(k, bs)
+
+def sink.fin(k: Nat) -> IO(Nat):
+  IO.pure(Nat, k)
+
+def streamed.line(+n: Nat, g: C.Got) -> String:
+  match g:
+    case C.Got{i, r, extra, reuse}:
+      match r:
+        case R.Resp{code, v10, close, body}:
+          "status " ++ U32.show(code) ++ ", streamed " ++ Nat.show(n) ++ " bytes, interim ["
+            ++ interim.show(i) ++ " ], " ++ Bool.pick(String, reuse, "reusable", "not reusable")
+
+def streamed(m: Socket & Nat & Result<&2, &2, C.Why, C.Got>) -> IO(Socket & Bool):
+  (s, nr) = m
+  (+n, r) = nr
+  match r:
+    case Fail{w}:
+      do IO<Socket & Bool>:
+        Socket.close(s)
+        IO.die(Socket & Bool, 1, "no response: " ++ C.why.show(w) ++ " (" ++ Nat.show(n)
+          ++ " bytes streamed)")
+    case Done{+g}:
+      do IO<Socket & Bool>:
+        IO.print_err(streamed.line(n, g))
+        return (s, got.reuse(g))
+
 # The connection
 # ==============
 
@@ -205,7 +259,7 @@ def secure(r: Result<&1, &1, U32 & String, Socket & String>) -> IO(Socket):
 
 def dial(+o: Opt, +u: Url, addr: String) -> IO(Socket):
   match o u:
-    case Opt{url, head, body, twice, ca, next} Url{tls, host, +port, path}:
+    case Opt{url, head, body, twice, ca, next, stream} Url{tls, host, +port, path}:
       match tls:
         case True{}:
           IO.bind(Result<&1, &1, U32 & String, Socket & String>, Socket,
@@ -213,11 +267,27 @@ def dial(+o: Opt, +u: Url, addr: String) -> IO(Socket):
         case False{}:
           IO.bind(Result<&1, &1, U32 & String, Socket>, Socket, TCP.connect_poll(addr, port, 10000), plain)
 
-# one exchange on a socket
+# one exchange on a socket, the body gathered or streamed
+def exchange.stream(+head: Bool, +body: Bool, +u: Url, s: Socket) -> IO(Socket & Bool):
+  match body:
+    case True{}:
+      IO.bind(Socket & Nat & Result<&2, &2, C.Why, C.Got>, Socket & Bool,
+        C.fetch.stream(~Nat, ~sink.write, ~sink.fin, ask.stream(head), budget(), window(),
+          req.of(head, u), s, 0n), streamed)
+    case False{}:
+      IO.bind(Socket & Nat & Result<&2, &2, C.Why, C.Got>, Socket & Bool,
+        C.fetch.stream(~Nat, ~sink.count, ~sink.fin, ask.stream(head), budget(), window(),
+          req.of(head, u), s, 0n), streamed)
+
 def exchange(+o: Opt, +u: Url, s: Socket) -> IO(Socket & Bool):
   match o:
-    case Opt{url, +head, +body, twice, ca, next}:
-      IO.bind(C.Out(Socket), Socket & Bool, C.fetch(ask.of(head), budget(), req.of(head, u), s), m => answered(body, m))
+    case Opt{url, +head, +body, twice, ca, next, stream}:
+      match stream:
+        case True{}:
+          exchange.stream(head, body, u, s)
+        case False{}:
+          IO.bind(C.Out(Socket), Socket & Bool, C.fetch(ask.of(head), budget(), req.of(head, u), s),
+            m => answered(body, m))
 
 # The pool
 # ========
@@ -254,7 +324,7 @@ def second(+o: Opt, +u: Url, +addr: String, pm: P.Pool<&1, Socket> & Maybe<&1, P
 
 def done(+o: Opt, +u: Url, +addr: String, pool: P.Pool<&1, Socket>) -> IO(Unit):
   match o:
-    case Opt{url, head, body, twice, ca, next}:
+    case Opt{url, head, body, twice, ca, next, stream}:
       match twice:
         case False{}:
           P.close.all(~(A => IO(A)), ~IO.pure, ~IO.bind, ~&1, ~Socket, ~Socket.close, P.pool.xs(&1, Socket, pool))
@@ -279,12 +349,13 @@ def run(+o: Opt, +u: Url) -> IO(Unit):
 def start(+o: Opt, may: Maybe<&2, Url>) -> IO(Unit):
   match may:
     case None{}:
-      IO.die(Unit, 2, "usage: hc http[s]://host[:port][/path] [--head] [--body] [--twice] [--ca FILE]")
+      IO.die(Unit, 2,
+        "usage: hc http[s]://host[:port][/path] [--head] [--body] [--twice] [--stream] [--ca FILE]")
     case Some{+u}:
       run(o, u)
 
 def main() -> IO(Unit):
   do IO<Unit>:
     xs : List<String> <- IO.args()
-    +o : Opt = opts(xs, Opt{"", False{}, False{}, False{}, "", False{}})
+    +o : Opt = opts(xs, Opt{"", False{}, False{}, False{}, "", False{}, False{}})
     start(o, url.parse(opt.url(o)))

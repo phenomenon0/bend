@@ -1446,11 +1446,11 @@ law refuse_conn:
     WW.World}
 
 # LAW: bounded buffering, the replies. Whatever a reply is -- a fixed
-# one, a missing file, a file of any size, streamed in blocks -- and
+# one, a missing file, a file of any size, sent by the kernel -- and
 # whatever the peer does, a writer that may still take replies leaves
 # it holding a batch below send.cap(): so the most ever held unsent is
-# the cap, plus the one reply (or a file's head and one page.chunk()
-# block) that crossed it.
+# the cap, plus the one reply (or a file's head) that crossed it; a
+# file's body is never held at all.
 law hold_fine:
   for +ms: U32
   for s: WW.World
@@ -1474,6 +1474,45 @@ law page_fine:
   for sh: Bool
   for st: L.Em<WW.World>
   {WW.em.fine(W.sim.page(ms, root, path, ct, head, may, sh, st)) == True{} : Bool}
+
+# LAW: a file's bytes. At a peer that takes what it is sent, a GET of a
+# file the root has (under 4 GiB) puts on the wire what waited in front
+# of it, the file's head, and then the file's own bytes, every one and
+# nothing else, by sendfile; and a sendfile or a head that did not go
+# out ends the connection with nothing after it.
+law page_wire:
+  for +ms: U32
+  for root: List<&2, U32>
+  for path: List<&2, U32>
+  for +ct: List<&2, U32>
+  for may: Maybe<&2, Bytes()>
+  for +sh: Bool
+  for +rd: List<&2, WW.Rd>
+  for +now: Nat
+  for +fs: List<&2, WW.Fil>
+  for +out: Bytes()
+  for +acc: Bytes()
+  for +body: Bytes()
+  for ef: {WW.w.find(fs, L.text(path)) == Done{body} : Result<&1, &1, U32 & String, Bytes()>}
+  for en: {U32.to_nat(U32.from_nat(Bytes.len(body))) == Bytes.len(body) : Nat}
+  {W.sim.page(ms, root, path, ct, False{}, may, sh, L.Em{WW.eager(rd, now, fs, out), acc, True{}}) ==
+    L.Em{WW.eager(rd, now, fs, Bytes.append(Bytes.append(out,
+      Bytes.append(acc, Eng.h.shut(sh, Eng.h.fhead(ct, U32.from_nat(Bytes.len(body)))))), body)),
+      "", True{}} : L.Em<WW.World>}
+
+law page_fail:
+  for s: WW.World
+  for f: Bytes()
+  for e: U32 & String
+  {WW.sim.fsent((s, (f, Fail{e}))) == L.Em{s, "", False{}} : L.Em<WW.World>}
+
+law page_head_fail:
+  for +ms: U32
+  for f: Bytes()
+  for n: U32
+  for s: WW.World
+  for e: U32 & String
+  {WW.sim.headed(ms, f, n, (s, Fail{e})) == L.Em{s, "", False{}} : L.Em<WW.World>}
 
 # LAW: bounded buffering, the head. A read that leaves a head in
 # progress leaves it with at most head.cap() bytes since the read it
@@ -1585,3 +1624,32 @@ law fread_model:
   for +f: Bytes()
   for +n: Nat
   {Nat.is_le(Bytes.len(String.take(f, n)), n) == True{} : Bool}
+
+law fsend_model:
+  for +rd: List<&2, WW.Rd>
+  for +now: Nat
+  for +fs: List<&2, WW.Fil>
+  for +out: Bytes()
+  for +f: Bytes()
+  for +off: U32
+  for +len: U32
+  for +ms: U32
+  {WW.fsend.ok(ms, WW.Reads{}, 0n, Bytes.len(String.drop(f, U32.to_nat(off))), U32.to_nat(len),
+    WW.fsend.res(WW.w.fsend(WW.eager(rd, now, fs, out), f, off, len, ms))) == True{} : Bool}
+
+law fsend_stalled:
+  for +rd: List<&2, WW.Rd>
+  for +now: Nat
+  for +fs: List<&2, WW.Fil>
+  for +out: Bytes()
+  for +f: Bytes()
+  for +off: U32
+  for +len: U32
+  for +ms: U32
+  for +h: Char
+  for +t: Bytes()
+  for e: {WW.w.fbytes(f, off, len) == SCon{h, t} : Bytes()}
+  {WW.fsend.ok(ms, WW.Stops{}, Nat.sub(Nat.add(now, U32.to_nat(ms)), now),
+    Bytes.len(String.drop(f, U32.to_nat(off))), U32.to_nat(len),
+    WW.fsend.res(WW.w.fsend(WW.World{rd, Nil{}, False{}, now, fs, out}, f, off, len, ms))) ==
+    True{} : Bool}

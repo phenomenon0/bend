@@ -3,15 +3,18 @@
 # world.bend states, as relations, what the model of the socket world
 # assumes of each effect the loops use (rx.ok for TCP.poll_buf, tx.ok
 # for TCP.send_buf_poll, lsn.ok for TCP.accept_poll, fopen.ok for
-# File.open_under, fread.ok for File.read_buf), and proves the model
-# keeps them (rx_model, tx_stalled, tx_served, fread_model). This program drives each real effect through its
-# contract's cases -- a read that waits out its time, one that parks
-# and wakes, one asked for fewer bytes than came, a FIN, a reset; a
-# send that crawls through a small window, one to a peer that stopped
-# reading, one to a peer that reset; accepts with no descriptor left; a
-# plain file, a missing one, a link, a directory, a climb; a file read
-# in short blocks to its end -- and judges what it observes with those
-# same defs. conform.c is the peer: it starts this program under a low
+# File.open_under, fread.ok for File.read_buf, fsend.ok for
+# File.sendfile), and proves the model keeps them (rx_model,
+# tx_stalled, tx_served, fread_model, fsend_model, fsend_stalled). This
+# program drives each real effect through its contract's cases -- a
+# read that waits out its time, one that parks and wakes, one asked for
+# fewer bytes than came, a FIN, a reset; a send that crawls through a
+# small window, one to a peer that stopped reading, one to a peer that
+# reset; a sendfile of 16 MiB through the same crawl, one of a part of
+# a file, one past a file's end, one to a peer that stopped reading;
+# accepts with no descriptor left; a plain file, a missing one, a link,
+# a directory, a climb; a file read in short blocks to its end -- and
+# judges what it observes with those same defs. conform.c is the peer: it starts this program under a low
 # descriptor limit, plays each case's peer in the same order, and checks
 # what it sees from its side.
 #
@@ -277,6 +280,85 @@ def tx.case(
   do IO<Listener & U32>:
     ls : Listener & Socket <- take(40n, l)
     lx : Listener & U32 <- tx.case.at(name, k, ms, pause, peer, slow, ls)
+    return verdict.add(lx, f)
+
+# Sendfile
+# ========
+#
+# A file of the root's to the case's connection, from off, len bytes;
+# left is what the file has from off. The peer checks that the bytes it
+# got are the file's.
+
+def fs.judge(
+  name: String, +ms: U32, peer: W.Peer, +slow: Bool, +left: Nat, +len: Nat, +took: Nat, +code: U32
+) -> IO(U32):
+  verdict(name, W.fsend.ok(ms, peer, took, left, len, tx.back(U32.is_zero(code), code))
+    && (Bool.not(slow) || Nat.is_lt(U32.to_nat(ms), took)),
+    tx.show(tx.back(U32.is_zero(code), code)) ++ " after " ++ ms.note(took))
+
+def fs.sent(
+  name: String, +ms: U32, peer: W.Peer, +slow: Bool, +left: Nat, +len: Nat, +took: Nat,
+  m: Socket & File & Result<&1, &1, U32 & String, Unit>
+) -> IO(U32):
+  (s, fr) = m
+  (f, r) = fr
+  +code = tx.code.of(r)
+  do IO<U32>:
+    Socket.close(s)
+    File.close(f)
+    fs.judge(name, ms, peer, slow, left, len, took, code)
+
+def fs.go(
+  name: String, +off: U32, +len: U32, +ms: U32, peer: W.Peer, +slow: Bool, s: Socket,
+  sz: File & Result<&1, &1, U32 & String, U32>
+) -> IO(U32):
+  (f, r) = sz
+  match r:
+    case Fail{e}:
+      do IO<U32>:
+        Socket.close(s)
+        File.close(f)
+        verdict(name, False{}, "the file did not size")
+    case Done{+n}:
+      do IO<U32>:
+        t0 : Nat <- IO.now()
+        m  : Socket & File & Result<&1, &1, U32 & String, Unit> <- File.sendfile(s, f, off, len, ms)
+        t1 : Nat <- IO.now()
+        fs.sent(name, ms, peer, slow, Nat.sub(U32.to_nat(n), U32.to_nat(off)), U32.to_nat(len),
+          Nat.sub(t1, t0), m)
+
+def fs.opened(
+  name: String, +off: U32, +len: U32, +ms: U32, peer: W.Peer, +slow: Bool, s: Socket,
+  r: Result<&1, &1, U32 & String, File>
+) -> IO(U32):
+  match r:
+    case Fail{e}:
+      do IO<U32>:
+        Socket.close(s)
+        verdict(name, False{}, "the file did not open")
+    case Done{f}:
+      do IO<U32>:
+        sz : File & Result<&1, &1, U32 & String, U32> <- File.size(f)
+        fs.go(name, off, len, ms, peer, slow, s, sz)
+
+def fs.case.at(
+  name: String, +root: String, path: String, +off: U32, +len: U32, +ms: U32, peer: W.Peer,
+  +slow: Bool, ls: Listener & Socket
+) -> IO(Listener & U32):
+  (l, s) = ls
+  do IO<Listener & U32>:
+    r : Result<&1, &1, U32 & String, File> <- File.open_under(root, path)
+    x : U32 <- fs.opened(name, off, len, ms, peer, slow, s, r)
+    return (l, x)
+
+def fs.case(
+  name: String, +root: String, path: String, +off: U32, +len: U32, +ms: U32, peer: W.Peer,
+  +slow: Bool, lf: Listener & U32
+) -> IO(Listener & U32):
+  (l, f) = lf
+  do IO<Listener & U32>:
+    ls : Listener & Socket <- take(40n, l)
+    lx : Listener & U32 <- fs.case.at(name, root, path, off, len, ms, peer, slow, ls)
     return verdict.add(lx, f)
 
 # Accepts with no descriptor left
@@ -650,7 +732,7 @@ def finish(+port: U32, root: String, ca: String, lf: Listener & U32) -> IO(Unit)
     h : U32 <- connects(port, ca, g)
     finish.say(h)
 
-def run(+port: U32, root: String, ca: String, l: Listener) -> IO(Unit):
+def run(+port: U32, +root: String, ca: String, l: Listener) -> IO(Unit):
   do IO<Unit>:
     IO.print("ready")
     a : Listener & U32 <- rx.case("rx.silent", 100, 300, WNone{}, (l, 0))
@@ -661,7 +743,14 @@ def run(+port: U32, root: String, ca: String, l: Listener) -> IO(Unit):
     g : Listener & U32 <- tx.case("tx.crawl", 18n, 300, 0, W.Reads{}, True{}, e)
     h : Listener & U32 <- tx.case("tx.stall", 18n, 300, 0, W.Stops{}, False{}, g)
     i : Listener & U32 <- tx.case("tx.reset", 14n, 1000, 200, W.Resets{}, False{}, h)
-    j : Listener & U32 <- shed(i)
+    i1 : Listener & U32 <- fs.case("fsend.crawl", root, "big.bin", 0, 16777216, 300, W.Reads{},
+      True{}, i)
+    i2 : Listener & U32 <- fs.case("fsend.part", root, "a.txt", 1, 3, 1000, W.Reads{}, False{}, i1)
+    i3 : Listener & U32 <- fs.case("fsend.short", root, "a.txt", 3, 100, 1000, W.Reads{}, False{},
+      i2)
+    i4 : Listener & U32 <- fs.case("fsend.stall", root, "big.bin", 0, 16777216, 300, W.Stops{},
+      False{}, i3)
+    j : Listener & U32 <- shed(i4)
     finish(port, root, ca, j)
 
 def conform.at(root: String, ca: String, may: Maybe<&2, U32>) -> IO(Unit):

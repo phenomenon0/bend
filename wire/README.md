@@ -24,6 +24,9 @@ one-line instance.
                         in, under budgets, and whether to reuse; its laws
     wire/pool.bend      idle connections to an upstream, bounded, probed
                         as they are taken; its laws
+    wire/stream.bend    a body as a stream: chunks handed to a consumer
+                        as they arrive, under a window; its laws are in
+                        world.bend
 
 Its users: `demos/io_http_engine` (HTTP/1.1, WebSocket, SSE, files),
 `demos/io_resp` (RESP, below) and `power/csv.bend` (the reader kit only).
@@ -60,6 +63,18 @@ is the byte machine), `feed_buf_split`, `slow_split` (chunking, on
 blocks), `reads_is` and `reads_split` (any list of reads reads as their
 concatenation).
 
+**Taking a body as it comes.** A reader that frames a body can hand it
+on as it arrives: `~take` answers the body bytes the state holds and
+the state without them, `~give` puts bytes back in front, `~open` says
+the head is behind. `Wr.drain` is a stream read that way, each read
+fed and then taken. For seven obligations (an open state stays open
+and steps the same with bytes put back in front, a state not open
+holds none, take and give are inverse, give of nothing is nothing and
+of two joined the two in turn) the kit proves `drain_reads`: the
+chunks taken, joined in order, put back in front of what the reader
+still holds, are the reader fed the stream whole, however it was cut.
+`wire/http1/resp.bend` proves them (`R.take`, `R.give`, `R.open`).
+
 ## The loop
 
 A server hands `wire/loop.bend` its hooks (the names are the loop's
@@ -84,7 +99,7 @@ upgrade, no stream, no files, no log. A `Plan` is `Go{out, p2}` (write,
 read again), `Wait{p2}` (read again), `End{out}` (write, close),
 `Feed{out, n}` (write, stream n events), `Sock{out, u}`/`Hold{u}`
 (upgrade), or `Stop{}`. The replies are `Seg`s: `Raw{bytes}`, `Page{...}`
-(a file, streamed), `Note{...}` (a log line), `Shut{}`.
+(a file, by sendfile), `Note{...}` (a log line), `Shut{}`.
 
 The budgets are the loop's: a read takes at most `chunk()` bytes; a head
 in progress at most `head.cap()` bytes past the read it began in, and
@@ -106,9 +121,65 @@ byte, in order), `hold_fine`, `raw_fine`, `page_fine`, `batch_under`
 `hw_rest`, `hw_keeps` (the head's budget and deadline), `stall_ends` (a
 stopped peer is let go within three turns, from any state),
 `accept_calm` and `accept_ends` (the accept loop stays up, and ends
-only as it may); and of the model against the effects' contracts,
-`rx_model`, `tx_stalled`, `tx_served`, `fread_model`. `conform.bend`
-checks the real effects keep the same contracts.
+only as it may), `page_wire` (a file's reply puts on the wire what
+waited, its head, and then the file's own bytes, every one and nothing
+else, by sendfile or, for a small file, by one read), `page_fail`,
+`page_head_fail` and `page_read_short` (a sendfile, a head or a small
+file's read that did not all go out ends the writer); and of the model
+against the effects' contracts, `rx_model`, `tx_stalled`, `tx_served`, `fread_model`,
+`fsend_model` (a sendfile to a reading peer puts the file's bytes from
+its offset on the wire and is Done only when the file had them all),
+`fsend_stalled`. `conform.bend` checks the real effects keep the same
+contracts.
+
+**Files.** A `Page`'s body goes out by `File.sendfile(sock, file, off,
+len, ms)`: on a plain socket the kernel copies it from the page cache
+to the socket (Linux and macOS sendfile), under TLS the effect writes it
+through the session a 64 KiB block at a time; either way the
+connection holds none of the file itself. A file under `page.small()`
+(16 KiB) is read whole instead and goes out with its head in one send,
+which costs a small file less than a second send would. A body that
+comes up short (the file shrank) fails, ending the connection
+(`page_fail`, `page_read_short`). One core, `wrk -t2 -c32`, against
+nginx with one worker and sendfile on: 4 KiB about 20k req/s to
+nginx's 37k (as before), 1 MiB 1.9-2.6k req/s to nginx's 1.7k (1.4-1.6k
+before).
+
+## Bodies as streams
+
+`wire/stream.bend` delivers a body a read at a time to a consumer that
+may be slower than the peer -- an upstream socket, a file, a planner --
+with backpressure. It is written over its effects and its framer like
+the loop: `~rx` the timed read; `~feed`, `~take`, `~look` the framer (a
+reader on the kit with the kit's take, and its word on the body: more to
+come, whole, running to the close, refused); `~give` and `~fin` the
+consumer (offered every byte held, it answers how many it took from the
+front; told once that the body is over). A turn is a pass (offer what is
+held) and a pull (read, feed, take, hold): the socket is read only while
+fewer than `win` bytes are held.
+
+**Laws** (`wire/world.bend`, for every framer, with a scripted peer and
+a scripted consumer): `stream_pass` (a pass only moves bytes: what the
+consumer took followed by what is held is what it was, the socket
+untouched, no end told), `stream_stall` (a consumer that takes none of
+a full window ends the stream with no read), `stream_full` (a full
+window is never read into), `stream_pull` (a read's body joins the end
+of what is held, exactly the bytes the framer took), `stream_over` (a
+read that would bring more body than bytes ends the stream instead),
+`stream_window` (so what is held stays under the window plus one read),
+`stream_fin_held` and `stream_fin_last` (the end is told only with
+nothing held and the body over, once, and the stream ends with it).
+With the kit's `drain_reads` they say the chunks a consumer is handed,
+in order, are the body the reader frames, whatever the cuts.
+`client_mutants.py` breaks the stream eight ways, each refused.
+
+The client streams a response with `fetch.stream` (the head capped as
+`fetch` caps it, the body to the consumer); `demos/io_http_client
+--stream` fetches a 100 MB file from nginx in 10 MB of RSS, where
+gathering a 15 MB one takes 35 MB. For a request body, a server hands
+the stream a reader entered at the body (`R.body.len`, `R.body.chunked`):
+`demos/io_sink` takes 100 MB uploads, by length or chunked, at the
+speed nginx discards them, its peak RSS 3 MB after 200 MB.
 
 ## A protocol on the kit: RESP
 

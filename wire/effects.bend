@@ -9,9 +9,9 @@
 #
 # What the model in wire/world.bend assumes of each effect is its
 # contract, stated there as a relation (rx.ok, tx.ok, lsn.ok, fopen.ok,
-# fread.ok) and beside each effect in bend2/base.bend; wire/conform.bend
-# drives the effects below through the contracts' cases and judges them
-# by those very relations.
+# fread.ok, fsend.ok) and beside each effect in bend2/base.bend;
+# wire/conform.bend drives the effects below through the contracts'
+# cases and judges them by those very relations.
 import Base
 import ./loop.bend as L
 
@@ -49,8 +49,8 @@ def serve(
 ) -> IO(Socket):
   L.conn.start(~(A => IO(A)), ~IO.pure, ~IO.bind, ~Socket, ~File, ~TCP.poll_buf,
     ~TCP.send_buf_poll, ~net.now, ~net.nap, ~IO.print_err, ~net.open, ~File.size, ~File.read_buf,
-    ~File.close, ~E, ~P, ~U, ~idle, ~hdms, ~plan, ~mid, ~big, ~uplan, ~gap, ~event, ~shut, ~fhead,
-    ~miss, ~lnote, ~lsize, srv, p0, s)
+    ~File.sendfile, ~File.close, ~E, ~P, ~U, ~idle, ~hdms, ~plan, ~mid, ~big, ~uplan, ~gap, ~event,
+    ~shut, ~fhead, ~miss, ~lnote, ~lsize, srv, p0, s)
 
 # The accept loop
 # ===============

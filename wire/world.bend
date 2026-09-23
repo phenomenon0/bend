@@ -24,15 +24,17 @@
 #
 # The model is only as good as the contracts: what it assumes of each
 # effect is written below as a relation on what the effect answers
-# (rx.ok, tx.ok, lsn.ok, fopen.ok, fread.ok; cx.ok and tls.ok for the
-# client's connects, idle.ok for its pool's probe), the model is proved to
-# keep them (rx_model, tx_stalled, tx_served, fread_model), and
+# (rx.ok, tx.ok, lsn.ok, fopen.ok, fread.ok, fsend.ok; cx.ok and tls.ok
+# for the client's connects, idle.ok for its pool's probe), the model is
+# proved to keep them (rx_model, tx_stalled, tx_served, fread_model,
+# fsend_model, fsend_stalled), and
 # wire/conform.bend drives each real effect through the same cases and
 # checks the same relations against what it observes. That is the
 # bridge; what is left trusted is that the effects keep their contract
 # in the cases conform.bend does not try.
 import Base
 import ./loop.bend as L
+import ./stream.bend as Bs
 
 # The identity monad
 # ==================
@@ -218,6 +220,42 @@ def w.fread(f: Bytes(), max: U32) -> Bytes() & Result<&1, &1, U32 & String, Byte
 def w.fclose(f: Bytes()) -> Unit:
   Unit{}
 
+# File.sendfile: the len bytes of the file from off, put to the peer as
+# a send of them would be; a file with fewer fails with ENODATA once
+# what it had is out. The file is its bytes, and a sendfile leaves it as
+# it was (its position does not move).
+def w.fsend.cut(whole: Bool, r: Result<&1, &1, U32 & String, Unit>) ->
+  Result<&1, &1, U32 & String, Unit>:
+  match whole r:
+    case True{} Done{u}:
+      Done{u}
+    case True{} Fail{e}:
+      Fail{e}
+    case False{} Done{u}:
+      Fail{(61, "the file ended first")}
+    case False{} Fail{e}:
+      Fail{e}
+
+def w.fsend.at(m: L.Put(World), f: Bytes(), whole: Bool) ->
+  World & Bytes() & Result<&1, &1, U32 & String, Unit>:
+  (s, r) = m
+  (s, (f, w.fsend.cut(whole, r)))
+
+def w.fbytes(+f: Bytes(), +off: U32, +len: U32) -> Bytes():
+  String.take(String.drop(f, U32.to_nat(off)), U32.to_nat(len))
+
+def w.fsend.bs(s: World, f: Bytes(), +bs: Bytes(), +len: Nat, +ms: U32) ->
+  World & Bytes() & Result<&1, &1, U32 & String, Unit>:
+  w.fsend.at(w.tx(s, bs, ms), f, Nat.is_eq(Bytes.len(bs), len))
+
+def w.fsend.go(s: World, +f: Bytes(), +off: U32, +len: U32, +ms: U32) ->
+  World & Bytes() & Result<&1, &1, U32 & String, Unit>:
+  w.fsend.bs(s, f, w.fbytes(f, off, len), U32.to_nat(len), ms)
+
+def w.fsend(s: World, f: Bytes(), off: U32, len: U32, ms: U32) ->
+  World & Bytes() & Result<&1, &1, U32 & String, Unit>:
+  w.fsend.go(s, f, off, len, ms)
+
 # The loop in the model
 # =====================
 #
@@ -245,7 +283,7 @@ def sim.page(
   may: Maybe<&2, Bytes()>, sh: Bool, st: L.Em<World>
 ) -> L.Em<World>:
   L.send.page(~Id, ~Id.pure, ~Id.bind, ~World, ~Bytes(), ~w.tx, ~w.say, ~w.fopen, ~w.fsize,
-    ~w.fread, ~w.fclose, ~shut, ~fhead, ~miss, ~lnote, ~lsize, ms, root, path, ct, head, may, sh, st)
+    ~w.fread, ~w.fsend, ~w.fclose, ~shut, ~fhead, ~miss, ~lnote, ~lsize, ms, root, path, ct, head, may, sh, st)
 
 def sim.go(
   ~shut: Bool -> Bytes() -> Bytes(), ~fhead: List<&2, U32> -> U32 -> Bytes(),
@@ -253,13 +291,13 @@ def sim.go(
   ~lsize: Bytes() -> Bytes() -> U32 -> String, xs: List<&2, L.Seg>, +ms: U32, may: Maybe<&2, Bytes()>, sh: Bool, st: L.Em<World>
 ) -> L.Put(World):
   L.send.go(~Id, ~Id.pure, ~Id.bind, ~World, ~Bytes(), ~w.tx, ~w.say, ~w.fopen, ~w.fsize,
-    ~w.fread, ~w.fclose, ~shut, ~fhead, ~miss, ~lnote, ~lsize, xs, ms, may, sh, st)
+    ~w.fread, ~w.fsend, ~w.fclose, ~shut, ~fhead, ~miss, ~lnote, ~lsize, xs, ms, may, sh, st)
 
 def sim.segs(~shut: Bool -> Bytes() -> Bytes(), ~fhead: List<&2, U32> -> U32 -> Bytes(),
   ~miss: Bool -> Bytes(), ~lnote: Bytes() -> Bytes() -> String,
   ~lsize: Bytes() -> Bytes() -> U32 -> String, s: World, xs: List<&2, L.Seg>, +ms: U32) -> L.Put(World):
   L.send.segs(~Id, ~Id.pure, ~Id.bind, ~World, ~Bytes(), ~w.tx, ~w.say, ~w.fopen, ~w.fsize,
-    ~w.fread, ~w.fclose, ~shut, ~fhead, ~miss, ~lnote, ~lsize, s, xs, ms)
+    ~w.fread, ~w.fsend, ~w.fclose, ~shut, ~fhead, ~miss, ~lnote, ~lsize, s, xs, ms)
 
 def sim.turn.h(~E: Data, ~P: Data, ~U: Data, ~idle: E -> U32, ~hdms: E -> U32,
   ~plan: E -> Bytes() -> P -> L.Plan<P, U>, ~big: Bytes(), +srv: E, s: World, p: P, hw: L.Hw) -> (World & L.Plan<P, U>) & L.Hw:
@@ -277,29 +315,6 @@ def sim.held(+ms: U32, s: World, acc: Bytes(), c: Cmp) -> L.Em<World>:
 def sim.flushed(m: L.Put(World)) -> L.Em<World>:
   L.send.flushed(~Id, ~Id.pure, ~Id.bind, ~World, m)
 
-def sim.pleft(+ms: U32, f: Bytes(), left: U32, s: World, pre: Bytes(), done: Bool) ->
-  L.Pump<World, Bytes()>:
-  L.pump.left(~Id, ~Id.pure, ~Id.bind, ~World, ~Bytes(), ~w.tx, ~w.fclose, ms, f, left, s, pre,
-    done)
-
-def sim.psent(+ms: U32, m: L.Put(World), f: Bytes(), +left: U32) -> L.Pump<World, Bytes()>:
-  L.pump.sent(~Id, ~Id.pure, ~Id.bind, ~World, ~Bytes(), ~w.tx, ~w.fclose, ms, m, f, left)
-
-def sim.pblock(
-  +ms: U32, f: Bytes(), +left: U32, s: World, pre: Bytes(), bs: Bytes(), +n: U32, empty: Bool
-) -> L.Pump<World, Bytes()>:
-  L.pump.block(~Id, ~Id.pure, ~Id.bind, ~World, ~Bytes(), ~w.tx, ~w.fclose, ms, f, left, s,
-    pre, bs, n, empty)
-
-def sim.pgot(
-  +ms: U32, got: Bytes() & Result<&1, &1, U32 & String, Bytes()>, left: U32, s: World,
-  pre: Bytes()
-) -> L.Pump<World, Bytes()>:
-  L.pump.got(~Id, ~Id.pure, ~Id.bind, ~World, ~Bytes(), ~w.tx, ~w.fclose, ms, got, left, s, pre)
-
-def sim.pump(k: Nat, +ms: U32, p: L.Pump<World, Bytes()>) -> L.Em<World>:
-  L.pump(~Id, ~Id.pure, ~Id.bind, ~World, ~Bytes(), ~w.tx, ~w.fread, ~w.fclose, k, ms, p)
-
 def sim.miss(
   ~shut: Bool -> Bytes() -> Bytes(), ~miss: Bool -> Bytes(), ~lnote: Bytes() -> Bytes() -> String,
   +ms: U32, head: Bool, may: Maybe<&2, Bytes()>, sh: Bool, s: World, acc: Bytes()
@@ -307,11 +322,25 @@ def sim.miss(
   L.page.miss(~Id, ~Id.pure, ~Id.bind, ~World, ~w.tx, ~w.say, ~shut, ~miss, ~lnote, ms, head, may,
     sh, s, acc)
 
+def sim.fsent(g: World & Bytes() & Result<&1, &1, U32 & String, Unit>) -> L.Em<World>:
+  L.page.fsent(~Id, ~Id.pure, ~Id.bind, ~World, ~Bytes(), ~w.fclose, g)
+
+def sim.headed(+ms: U32, f: Bytes(), n: U32, m: L.Put(World)) -> L.Em<World>:
+  L.page.headed(~Id, ~Id.pure, ~Id.bind, ~World, ~Bytes(), ~w.fsend, ~w.fclose, ms, f, n, m)
+
+def sim.read(+ms: U32, got: Bytes() & Result<&1, &1, U32 & String, Bytes()>, +n: U32, s: World,
+  pre: Bytes()) -> L.Em<World>:
+  L.page.read(~Id, ~Id.pure, ~Id.bind, ~World, ~Bytes(), ~w.tx, ~w.fclose, ms, got, n, s, pre)
+
+def sim.body(+ms: U32, f: Bytes(), +n: U32, s: World, pre: Bytes(), small: Bool) -> L.Em<World>:
+  L.page.body(~Id, ~Id.pure, ~Id.bind, ~World, ~Bytes(), ~w.tx, ~w.fread, ~w.fsend, ~w.fclose, ms,
+    f, n, s, pre, small)
+
 def sim.pstart(
   ~lsize: Bytes() -> Bytes() -> U32 -> String, +ms: U32, f: Bytes(), +n: U32, +hd: Bytes(),
   head: Bool, may: Maybe<&2, Bytes()>, s: World, acc: Bytes()
 ) -> L.Em<World>:
-  L.page.start(~Id, ~Id.pure, ~Id.bind, ~World, ~Bytes(), ~w.tx, ~w.say, ~w.fread, ~w.fclose,
+  L.page.start(~Id, ~Id.pure, ~Id.bind, ~World, ~Bytes(), ~w.tx, ~w.say, ~w.fread, ~w.fsend, ~w.fclose,
     ~lsize, ms, f, n, hd, head, may, s, acc)
 
 def sim.psized(
@@ -320,7 +349,7 @@ def sim.psized(
   ~lsize: Bytes() -> Bytes() -> U32 -> String, +ms: U32, got: Bytes() & Result<&1, &1, U32 & String, U32>, ct: List<&2, U32>,
   head: Bool, may: Maybe<&2, Bytes()>, sh: Bool, s: World, acc: Bytes()
 ) -> L.Em<World>:
-  L.page.sized(~Id, ~Id.pure, ~Id.bind, ~World, ~Bytes(), ~w.tx, ~w.say, ~w.fread, ~w.fclose,
+  L.page.sized(~Id, ~Id.pure, ~Id.bind, ~World, ~Bytes(), ~w.tx, ~w.say, ~w.fread, ~w.fsend, ~w.fclose,
     ~shut, ~fhead, ~miss, ~lnote, ~lsize, ms, got, ct, head, may, sh, s, acc)
 
 def sim.opened(
@@ -329,7 +358,7 @@ def sim.opened(
   ~lsize: Bytes() -> Bytes() -> U32 -> String, +ms: U32, m: World & Result<&1, &1, U32 & String, Bytes()>, ct: List<&2, U32>,
   head: Bool, may: Maybe<&2, Bytes()>, sh: Bool, acc: Bytes()
 ) -> L.Em<World>:
-  L.page.opened(~Id, ~Id.pure, ~Id.bind, ~World, ~Bytes(), ~w.tx, ~w.say, ~w.fsize, ~w.fread,
+  L.page.opened(~Id, ~Id.pure, ~Id.bind, ~World, ~Bytes(), ~w.tx, ~w.say, ~w.fsize, ~w.fread, ~w.fsend,
     ~w.fclose, ~shut, ~fhead, ~miss, ~lnote, ~lsize, ms, m, ct, head, may, sh, acc)
 
 def sim.turn(~E: Data, ~P: Data, ~U: Data, ~idle: E -> U32, ~hdms: E -> U32,
@@ -350,7 +379,7 @@ def sim.conn(~E: Data, ~P: Data, ~U: Data, ~idle: E -> U32, ~hdms: E -> U32,
   ~miss: Bool -> Bytes(), ~lnote: Bytes() -> Bytes() -> String,
   ~lsize: Bytes() -> Bytes() -> U32 -> String, f: Nat, +srv: E, sph: (World & L.Plan<P, U>) & L.Hw, w: Nat) -> World:
   L.conn(~Id, ~Id.pure, ~Id.bind, ~World, ~Bytes(), ~w.rx, ~w.tx, ~w.clk, ~w.nap, ~w.say,
-    ~w.fopen, ~w.fsize, ~w.fread, ~w.fclose, ~E, ~P, ~U, ~idle, ~hdms, ~plan, ~mid, ~big, ~uplan, ~gap, ~event, ~shut, ~fhead, ~miss, ~lnote, ~lsize, f, srv, sph, w)
+    ~w.fopen, ~w.fsize, ~w.fread, ~w.fsend, ~w.fclose, ~E, ~P, ~U, ~idle, ~hdms, ~plan, ~mid, ~big, ~uplan, ~gap, ~event, ~shut, ~fhead, ~miss, ~lnote, ~lsize, f, srv, sph, w)
 
 def sim.start(~E: Data, ~P: Data, ~U: Data, ~idle: E -> U32, ~hdms: E -> U32,
   ~plan: E -> Bytes() -> P -> L.Plan<P, U>, ~mid: P -> Bool, ~big: Bytes(),
@@ -359,7 +388,7 @@ def sim.start(~E: Data, ~P: Data, ~U: Data, ~idle: E -> U32, ~hdms: E -> U32,
   ~miss: Bool -> Bytes(), ~lnote: Bytes() -> Bytes() -> String,
   ~lsize: Bytes() -> Bytes() -> U32 -> String, +srv: E, p0: P, s: World) -> World:
   L.conn.start(~Id, ~Id.pure, ~Id.bind, ~World, ~Bytes(), ~w.rx, ~w.tx, ~w.clk, ~w.nap,
-    ~w.say, ~w.fopen, ~w.fsize, ~w.fread, ~w.fclose, ~E, ~P, ~U, ~idle, ~hdms, ~plan, ~mid, ~big, ~uplan, ~gap, ~event, ~shut, ~fhead, ~miss, ~lnote, ~lsize, srv, p0, s)
+    ~w.say, ~w.fopen, ~w.fsize, ~w.fread, ~w.fsend, ~w.fclose, ~E, ~P, ~U, ~idle, ~hdms, ~plan, ~mid, ~big, ~uplan, ~gap, ~event, ~shut, ~fhead, ~miss, ~lnote, ~lsize, srv, p0, s)
 
 # The mute peer
 # =============
@@ -384,6 +413,18 @@ def m.tx(s: World, bs: Bytes(), ms: U32) -> L.Put(World):
 def m.nap(s: World, ms: U32) -> World:
   s
 
+def m.fsend.bs(s: World, f: Bytes(), +bs: Bytes(), +len: Nat, +ms: U32) ->
+  World & Bytes() & Result<&1, &1, U32 & String, Unit>:
+  w.fsend.at(m.tx(s, bs, ms), f, Nat.is_eq(Bytes.len(bs), len))
+
+def m.fsend.go(s: World, +f: Bytes(), +off: U32, +len: U32, +ms: U32) ->
+  World & Bytes() & Result<&1, &1, U32 & String, Unit>:
+  m.fsend.bs(s, f, w.fbytes(f, off, len), U32.to_nat(len), ms)
+
+def m.fsend(s: World, f: Bytes(), off: U32, len: U32, ms: U32) ->
+  World & Bytes() & Result<&1, &1, U32 & String, Unit>:
+  m.fsend.go(s, f, off, len, ms)
+
 def mute.conn(~E: Data, ~P: Data, ~U: Data, ~idle: E -> U32, ~hdms: E -> U32,
   ~plan: E -> Bytes() -> P -> L.Plan<P, U>, ~mid: P -> Bool, ~big: Bytes(),
   ~uplan: U -> Bytes() -> L.Plan<P, U>, ~gap: U32, ~event: U32 -> Bytes(),
@@ -391,7 +432,7 @@ def mute.conn(~E: Data, ~P: Data, ~U: Data, ~idle: E -> U32, ~hdms: E -> U32,
   ~miss: Bool -> Bytes(), ~lnote: Bytes() -> Bytes() -> String,
   ~lsize: Bytes() -> Bytes() -> U32 -> String, f: Nat, +srv: E, sph: (World & L.Plan<P, U>) & L.Hw, w: Nat) -> World:
   L.conn(~Id, ~Id.pure, ~Id.bind, ~World, ~Bytes(), ~m.rx, ~m.tx, ~w.clk, ~m.nap, ~w.say,
-    ~w.fopen, ~w.fsize, ~w.fread, ~w.fclose, ~E, ~P, ~U, ~idle, ~hdms, ~plan, ~mid, ~big, ~uplan, ~gap, ~event, ~shut, ~fhead, ~miss, ~lnote, ~lsize, f, srv, sph, w)
+    ~w.fopen, ~w.fsize, ~w.fread, ~m.fsend, ~w.fclose, ~E, ~P, ~U, ~idle, ~hdms, ~plan, ~mid, ~big, ~uplan, ~gap, ~event, ~shut, ~fhead, ~miss, ~lnote, ~lsize, f, srv, sph, w)
 
 def mute.turn(~E: Data, ~P: Data, ~U: Data, ~idle: E -> U32, ~hdms: E -> U32,
   ~plan: E -> Bytes() -> P -> L.Plan<P, U>, ~big: Bytes(), +srv: E, m: L.Put(World), p: P, hw: L.Hw) ->
@@ -402,7 +443,7 @@ def mute.segs(~shut: Bool -> Bytes() -> Bytes(), ~fhead: List<&2, U32> -> U32 ->
   ~miss: Bool -> Bytes(), ~lnote: Bytes() -> Bytes() -> String,
   ~lsize: Bytes() -> Bytes() -> U32 -> String, s: World, xs: List<&2, L.Seg>, +ms: U32) -> L.Put(World):
   L.send.segs(~Id, ~Id.pure, ~Id.bind, ~World, ~Bytes(), ~m.tx, ~w.say, ~w.fopen, ~w.fsize,
-    ~w.fread, ~w.fclose, ~shut, ~fhead, ~miss, ~lnote, ~lsize, s, xs, ms)
+    ~w.fread, ~m.fsend, ~w.fclose, ~shut, ~fhead, ~miss, ~lnote, ~lsize, s, xs, ms)
 
 def mute.turn.h(~E: Data, ~P: Data, ~U: Data, ~idle: E -> U32, ~hdms: E -> U32,
   ~plan: E -> Bytes() -> P -> L.Plan<P, U>, ~big: Bytes(), +srv: E, s: World, p: P, hw: L.Hw) -> (World & L.Plan<P, U>) & L.Hw:
@@ -429,7 +470,7 @@ def mute.go(
   ~lsize: Bytes() -> Bytes() -> U32 -> String, xs: List<&2, L.Seg>, +ms: U32, may: Maybe<&2, Bytes()>, sh: Bool, st: L.Em<World>
 ) -> L.Put(World):
   L.send.go(~Id, ~Id.pure, ~Id.bind, ~World, ~Bytes(), ~m.tx, ~w.say, ~w.fopen, ~w.fsize,
-    ~w.fread, ~w.fclose, ~shut, ~fhead, ~miss, ~lnote, ~lsize, xs, ms, may, sh, st)
+    ~w.fread, ~m.fsend, ~w.fclose, ~shut, ~fhead, ~miss, ~lnote, ~lsize, xs, ms, may, sh, st)
 
 def empty(bs: Bytes()) -> Bool:
   match bs:
@@ -595,6 +636,46 @@ def fread.ok(max: U32, +left: Nat, r: Result<&1, &1, U32 & String, Bytes()>) -> 
       U32.is_le(U32.from_nat(Bytes.len(bs)), max) && Nat.is_le(Bytes.len(bs), left)
         && Bool.not(Nat.is_eq(Bytes.len(bs), 0n) && Bool.not(Nat.is_eq(left, 0n)))
 
+# File.sendfile(s, f, off, len, ms), with left bytes in the file from off,
+# to a peer that reads, stops reading, or resets: the first is Done when
+# the file has the len bytes, and fails with ENODATA (61 on Linux, 96 on
+# macOS) when it has fewer; the second fails with ETIMEDOUT after at
+# least ms; the third fails. What reaches a reading peer is the file's
+# bytes from off, len of them or as many as it had (fsend_served, and
+# the peer's own check in conform.c).
+def enodata.is(+code: U32) -> Bool:
+  U32.is_eq(code, 61) || U32.is_eq(code, 96)
+
+def enodata(e: U32 & String) -> Bool:
+  (code, msg) = e
+  enodata.is(code)
+
+def fsend.read(whole: Bool, r: Result<&1, &1, U32 & String, Unit>) -> Bool:
+  match whole r:
+    case True{} Done{u}:
+      True{}
+    case True{} Fail{e}:
+      False{}
+    case False{} Done{u}:
+      False{}
+    case False{} Fail{e}:
+      enodata(e)
+
+def fsend.ok(
+  +ms: U32, peer: Peer, +took: Nat, +left: Nat, +len: Nat, r: Result<&1, &1, U32 & String, Unit>
+) -> Bool:
+  match peer:
+    case Reads{}:
+      fsend.read(Nat.is_le(len, left), r)
+    case Stops{}:
+      match r:
+        case Done{u}:
+          False{}
+        case Fail{e}:
+          tx.timed(e, took, ms)
+    case Resets{}:
+      Result.is_fail(&1, &1, U32 & String, Unit, r)
+
 # TCP.connect_poll(host, port, ms), answering after took ms, to a peer
 # that accepts, to a port nothing listens on, or to one that never
 # answers (its SYNs dropped): the first is Done; the second fails with
@@ -698,13 +779,6 @@ def em.fine(em: L.Em<World>) -> Bool:
           U32.is_lt(U32.from_nat(Bytes.len(acc)), L.send.cap())
         case False{}:
           True{}
-
-def pump.fine(p: L.Pump<World, Bytes()>) -> Bool:
-  match p:
-    case L.Going{f, left, s, pre}:
-      True{}
-    case L.Over{em}:
-      em.fine(em)
 
 # a head in progress has had at most head.cap() bytes since the read it
 # began in
@@ -832,7 +906,7 @@ def tx.seen(+ms: U32, peer: Peer, +t0: Nat, m: L.Put(World)) -> Bool:
 # with the equation that says what it was. end_is_last, stop_is_last
 # and go_order compute; fail_* take the send's answer apart; the
 # buffering laws walk the writer (send.hold, send.raw, and a file
-# through fopen, fsize, page.start and the pump) with the comparison
+# through fopen, fsize, page.start and the sendfile) with the comparison
 # with the cap generalised; segs_wire walks send.go with the held batch,
 # and the peer's appends reassociated; stall_ends shows that a turn at
 # the mute peer always plans Stop (or, for a stream, plans one event
@@ -1165,11 +1239,11 @@ def head_capped(E, P, U, plan, big, srv, w, may, p, t0, n):
         U32.is_lt(L.head.cap(), (n + U32.from_nat(Bytes.len(buf)) : U32)), {==})
 
 # LAW: bounded buffering, the replies. Whatever a reply is -- a fixed
-# one, a missing file, a file of any size, streamed in blocks -- and
+# one, a missing file, a file of any size, sent by the kernel -- and
 # whatever the peer does, a writer that may still take replies leaves
 # it holding a batch below send.cap(): so the most ever held unsent is
-# the cap, plus the one reply (or a file's head and one page.chunk()
-# block) that crossed it.
+# the cap, plus the one reply (or a file's head) that crossed it; a
+# file's body is never held at all.
 law wl.flushed_fine:
   for m: L.Put(World)
   {em.fine(sim.flushed(m)) == True{} : Bool}
@@ -1226,94 +1300,82 @@ def raw_fine(lnote, ms, may, bs, st):
         case True{}:
           hold_fine(ms, s, Bytes.append(acc, sim.note(~lnote, may, bs)))
 
-law wl.pleft_fine:
-  for +ms: U32
-  for f: Bytes()
-  for left: U32
-  for s: World
-  for pre: Bytes()
-  for done: Bool
-  {pump.fine(sim.pleft(ms, f, left, s, pre, done)) == True{} : Bool}
+law wl.fsent_fine:
+  for g: World & Bytes() & Result<&1, &1, U32 & String, Unit>
+  {em.fine(sim.fsent(g)) == True{} : Bool}
 
-def wl.pleft_fine(ms, f, left, s, pre, done):
-  match done:
-    case True{}:
-      hold_fine(ms, s, pre)
-    case False{}:
+def wl.fsent_fine(g):
+  (s, fr) = g
+  (f, r) = fr
+  match r:
+    case Done{u}:
+      {==}
+    case Fail{e}:
       {==}
 
-law wl.psent_fine:
+law wl.headed_fine:
   for +ms: U32
-  for m: L.Put(World)
   for f: Bytes()
-  for +left: U32
-  {pump.fine(sim.psent(ms, m, f, left)) == True{} : Bool}
+  for n: U32
+  for m: L.Put(World)
+  {em.fine(sim.headed(ms, f, n, m)) == True{} : Bool}
 
-def wl.psent_fine(ms, m, f, left):
+def wl.headed_fine(ms, f, n, m):
   (s, r) = m
   match r:
     case Fail{e}:
       {==}
     case Done{u}:
-      wl.pleft_fine(ms, f, left, s, "", U32.is_zero(left))
+      wl.fsent_fine(w.fsend(s, f, 0, n, ms))
 
-law wl.pblock_fine:
-  for +ms: U32
-  for f: Bytes()
-  for +left: U32
-  for s: World
-  for pre: Bytes()
-  for bs: Bytes()
-  for +n: U32
-  for empty: Bool
-  {pump.fine(sim.pblock(ms, f, left, s, pre, bs, n, empty)) == True{} : Bool}
+law wl.blk_fine:
+  for m: L.Put(World)
+  for whole: Bool
+  {em.fine(L.page.blk(World, m, whole)) == True{} : Bool}
 
-def wl.pblock_fine(ms, f, left, s, pre, bs, n, empty):
-  match empty:
-    case True{}:
+def wl.blk_fine(m, whole):
+  (s, r) = m
+  match r:
+    case Done{u}:
+      match whole:
+        case True{}:
+          {==}
+        case False{}:
+          {==}
+    case Fail{e}:
       {==}
-    case False{}:
-      wl.psent_fine(ms, w.tx(s, Bytes.append(pre, bs), ms), f, (left - n : U32))
 
-law wl.pgot_fine:
+law wl.read_fine:
   for +ms: U32
   for got: Bytes() & Result<&1, &1, U32 & String, Bytes()>
-  for left: U32
+  for +n: U32
   for s: World
   for pre: Bytes()
-  {pump.fine(sim.pgot(ms, got, left, s, pre)) == True{} : Bool}
+  {em.fine(sim.read(ms, got, n, s, pre)) == True{} : Bool}
 
-def wl.pgot_fine(ms, got, left, s, pre):
+def wl.read_fine(ms, got, n, s, pre):
   (f, r) = got
   match r:
     case Fail{e}:
       {==}
     case Done{+bs}:
-      wl.pblock_fine(ms, f, left, s, pre, bs, U32.from_nat(Bytes.len(bs)),
-        U32.is_zero(U32.from_nat(Bytes.len(bs))))
+      wl.blk_fine(w.tx(s, Bytes.append(pre, bs), ms), Nat.is_eq(Bytes.len(bs), U32.to_nat(n)))
 
-law wl.pump_fine:
-  for k: Nat
+law wl.body_fine:
   for +ms: U32
-  for p: L.Pump<World, Bytes()>
-  for e: {pump.fine(p) == True{} : Bool}
-  {em.fine(sim.pump(k, ms, p)) == True{} : Bool}
+  for +f: Bytes()
+  for +n: U32
+  for +s: World
+  for +pre: Bytes()
+  for small: Bool
+  {em.fine(sim.body(ms, f, n, s, pre, small)) == True{} : Bool}
 
-def wl.pump_fine(k, ms, p, e):
-  match k:
-    case 0n:
-      match p:
-        case L.Going{f, left, s, pre}:
-          {==}
-        case L.Over{em}:
-          e
-    case 1n+j:
-      match p:
-        case L.Over{em}:
-          e
-        case L.Going{+f, +left, +s, +pre}:
-          wl.pump_fine(j, ms, sim.pgot(ms, w.fread(f, U32.min(L.page.chunk(), left)), left, s, pre),
-            wl.pgot_fine(ms, w.fread(f, U32.min(L.page.chunk(), left)), left, s, pre))
+def wl.body_fine(ms, f, n, s, pre, small):
+  match small:
+    case True{}:
+      wl.read_fine(ms, w.fread(f, n), n, s, pre)
+    case False{}:
+      wl.headed_fine(ms, f, n, w.tx(s, pre, ms))
 
 law wl.miss_fine:
   for ~shut: Bool -> Bytes() -> Bytes()
@@ -1347,9 +1409,7 @@ def wl.pstart_fine(lsize, ms, f, n, hd, head, may, s, acc):
     case True{}:
       hold_fine(ms, s, Bytes.append(acc, hd))
     case False{}:
-      wl.pump_fine(U32.to_nat((n / L.page.chunk() + 64 : U32)), ms,
-        sim.pleft(ms, f, n, s, Bytes.append(acc, hd), U32.is_zero(n)),
-        wl.pleft_fine(ms, f, n, s, Bytes.append(acc, hd), U32.is_zero(n)))
+      wl.body_fine(ms, f, n, s, Bytes.append(acc, hd), U32.is_lt(n, L.page.small()))
 
 law wl.psized_fine:
   for ~shut: Bool -> Bytes() -> Bytes()
@@ -2349,6 +2409,482 @@ def tx_served(rd, now, fs, out, a, ms):
     {tx.seen(ms, Reads{}, now, _) == True{} : Bool}
   {==}
 
+# a sendfile to a peer that takes everything puts the file's bytes from
+# off on the wire, len of them or as many as the file had, and is Done
+# only when it had them all
+def wl.eq_le(+s: Bytes(), +n: Nat) ->
+  {Nat.is_eq(Bytes.len(String.take(s, n)), n) == Nat.is_le(n, Bytes.len(s)) : Bool}:
+  match s n:
+    case SNil{} 0n:
+      {==}
+    case SNil{} 1n+q:
+      {==}
+    case SCon{+h, +t} 0n:
+      %Equal.sym(Nat, String.length.go(t, 1n), 1n+String.length.go(t, 0n),
+        Bytes.len.shift(t, 0n)) :
+        {True{} == Nat.is_le(0n, _) : Bool}
+      {==}
+    case SCon{+h, +t} 1n+p:
+      %Equal.sym(Nat, String.length.go(String.take(t, p), 1n),
+        1n+String.length.go(String.take(t, p), 0n), Bytes.len.shift(String.take(t, p), 0n)) :
+        {Nat.is_eq(_, 1n+p) == Nat.is_le(1n+p, Bytes.len(SCon{h, t})) : Bool}
+      %Equal.sym(Nat, String.length.go(t, 1n), 1n+String.length.go(t, 0n),
+        Bytes.len.shift(t, 0n)) :
+        {Nat.is_eq(Bytes.len(String.take(t, p)), p) == Nat.is_le(1n+p, _) : Bool}
+      wl.eq_le(t, p)
+
+law fsend_served:
+  for +rd: List<&2, Rd>
+  for +now: Nat
+  for +fs: List<&2, Fil>
+  for +out: Bytes()
+  for +f: Bytes()
+  for +off: U32
+  for +len: U32
+  for +ms: U32
+  {w.fsend(eager(rd, now, fs, out), f, off, len, ms) ==
+    (eager(rd, now, fs, Bytes.append(out, w.fbytes(f, off, len))),
+      (f, w.fsend.cut(Nat.is_le(U32.to_nat(len), Bytes.len(String.drop(f, U32.to_nat(off)))),
+        Done{Unit{}}))) : World & Bytes() & Result<&1, &1, U32 & String, Unit>}
+
+def fsend_served(rd, now, fs, out, f, off, len, ms):
+  %Equal.sym(L.Put(World), w.tx(eager(rd, now, fs, out), w.fbytes(f, off, len), ms),
+    sent(rd, now, fs, Bytes.append(out, w.fbytes(f, off, len))),
+    wl.tx_eager(rd, now, fs, out, w.fbytes(f, off, len), ms)) :
+    {w.fsend.at(_, f, Nat.is_eq(Bytes.len(w.fbytes(f, off, len)), U32.to_nat(len))) ==
+      (eager(rd, now, fs, Bytes.append(out, w.fbytes(f, off, len))),
+        (f, w.fsend.cut(Nat.is_le(U32.to_nat(len), Bytes.len(String.drop(f, U32.to_nat(off)))),
+          Done{Unit{}}))) : World & Bytes() & Result<&1, &1, U32 & String, Unit>}
+  %Equal.sym(Bool, Nat.is_eq(Bytes.len(w.fbytes(f, off, len)), U32.to_nat(len)),
+    Nat.is_le(U32.to_nat(len), Bytes.len(String.drop(f, U32.to_nat(off)))),
+    wl.eq_le(String.drop(f, U32.to_nat(off)), U32.to_nat(len))) :
+    {w.fsend.at(sent(rd, now, fs, Bytes.append(out, w.fbytes(f, off, len))), f, _) ==
+      (eager(rd, now, fs, Bytes.append(out, w.fbytes(f, off, len))),
+        (f, w.fsend.cut(Nat.is_le(U32.to_nat(len), Bytes.len(String.drop(f, U32.to_nat(off)))),
+          Done{Unit{}}))) : World & Bytes() & Result<&1, &1, U32 & String, Unit>}
+  {==}
+
+def fsend.res(g: World & Bytes() & Result<&1, &1, U32 & String, Unit>) ->
+  Result<&1, &1, U32 & String, Unit>:
+  (s, fr) = g
+  (f, r) = fr
+  r
+
+def wl.read_cut(whole: Bool) ->
+  {fsend.read(whole, w.fsend.cut(whole, Done{Unit{}})) == True{} : Bool}:
+  match whole:
+    case True{}:
+      {==}
+    case False{}:
+      {==}
+
+law fsend_model:
+  for +rd: List<&2, Rd>
+  for +now: Nat
+  for +fs: List<&2, Fil>
+  for +out: Bytes()
+  for +f: Bytes()
+  for +off: U32
+  for +len: U32
+  for +ms: U32
+  {fsend.ok(ms, Reads{}, 0n, Bytes.len(String.drop(f, U32.to_nat(off))), U32.to_nat(len),
+    fsend.res(w.fsend(eager(rd, now, fs, out), f, off, len, ms))) == True{} : Bool}
+
+def fsend_model(rd, now, fs, out, f, off, len, ms):
+  %Equal.sym(World & Bytes() & Result<&1, &1, U32 & String, Unit>,
+    w.fsend(eager(rd, now, fs, out), f, off, len, ms),
+    (eager(rd, now, fs, Bytes.append(out, w.fbytes(f, off, len))),
+      (f, w.fsend.cut(Nat.is_le(U32.to_nat(len), Bytes.len(String.drop(f, U32.to_nat(off)))),
+        Done{Unit{}}))),
+    fsend_served(rd, now, fs, out, f, off, len, ms)) :
+    {fsend.ok(ms, Reads{}, 0n, Bytes.len(String.drop(f, U32.to_nat(off))), U32.to_nat(len),
+      fsend.res(_)) == True{} : Bool}
+  wl.read_cut(Nat.is_le(U32.to_nat(len), Bytes.len(String.drop(f, U32.to_nat(off)))))
+
+# a sendfile with bytes to move, to a peer that has stopped reading,
+# fails with ETIMEDOUT after its time
+def wl.cut_fail(whole: Bool, -e: U32 & String) ->
+  {w.fsend.cut(whole, Fail{e}) == Fail{e} : Result<&1, &1, U32 & String, Unit>}:
+  match whole:
+    case True{}:
+      {==}
+    case False{}:
+      {==}
+
+law fsend_stalled:
+  for +rd: List<&2, Rd>
+  for +now: Nat
+  for +fs: List<&2, Fil>
+  for +out: Bytes()
+  for +f: Bytes()
+  for +off: U32
+  for +len: U32
+  for +ms: U32
+  for +h: Char
+  for +t: Bytes()
+  for e: {w.fbytes(f, off, len) == SCon{h, t} : Bytes()}
+  {fsend.ok(ms, Stops{}, Nat.sub(Nat.add(now, U32.to_nat(ms)), now),
+    Bytes.len(String.drop(f, U32.to_nat(off))), U32.to_nat(len),
+    fsend.res(w.fsend(World{rd, Nil{}, False{}, now, fs, out}, f, off, len, ms))) == True{} : Bool}
+
+def fsend_stalled(rd, now, fs, out, f, off, len, ms, h, t, e):
+  %Equal.sym(Bytes(), w.fbytes(f, off, len), SCon{h, t}, e) :
+    {fsend.ok(ms, Stops{}, Nat.sub(Nat.add(now, U32.to_nat(ms)), now),
+      Bytes.len(String.drop(f, U32.to_nat(off))), U32.to_nat(len),
+      fsend.res(w.fsend.bs(World{rd, Nil{}, False{}, now, fs, out}, f, _, U32.to_nat(len), ms))) ==
+      True{} : Bool}
+  %Equal.sym(Result<&1, &1, U32 & String, Unit>,
+    w.fsend.cut(Nat.is_eq(Bytes.len(SCon{h, t}), U32.to_nat(len)), Fail{(110, "timed out")}),
+    Fail{(110, "timed out")},
+    wl.cut_fail(Nat.is_eq(Bytes.len(SCon{h, t}), U32.to_nat(len)), (110, "timed out"))) :
+    {fsend.ok(ms, Stops{}, Nat.sub(Nat.add(now, U32.to_nat(ms)), now),
+      Bytes.len(String.drop(f, U32.to_nat(off))), U32.to_nat(len), _) == True{} : Bool}
+  wl.waited(now, ms)
+
+# LAW: a file's bytes. At a peer that takes what it is sent, a Page of a
+# file the root has (of fewer than 2^32 bytes, as File.size answers for
+# any it sizes) puts on the wire what waited in front of it, the head
+# its size framed, and then the file's own bytes, every one and nothing
+# else, and leaves the writer empty and able to go on.
+def wl.drop_0(+f: Bytes()) -> {String.drop(f, 0n) == f : Bytes()}:
+  match f:
+    case SNil{}:
+      {==}
+    case SCon{h, t}:
+      {==}
+
+def wl.take_all(+f: Bytes()) -> {String.take(f, Bytes.len(f)) == f : Bytes()}:
+  match f:
+    case SNil{}:
+      {==}
+    case SCon{+h, +t}:
+      %Equal.sym(Nat, String.length.go(t, 1n), 1n+String.length.go(t, 0n),
+        Bytes.len.shift(t, 0n)) :
+        {String.take(SCon{h, t}, _) == SCon{h, t} : Bytes()}
+      Equal.cong(Bytes(), Bytes(), x => SCon{h, x}, String.take(t, Bytes.len(t)), t,
+        wl.take_all(t))
+
+law wl.fbytes_all:
+  for +f: Bytes()
+  for en: {U32.to_nat(U32.from_nat(Bytes.len(f))) == Bytes.len(f) : Nat}
+  {w.fbytes(f, 0, U32.from_nat(Bytes.len(f))) == f : Bytes()}
+
+def wl.fbytes_all(f, en):
+  %Equal.sym(Nat, U32.to_nat(U32.from_nat(Bytes.len(f))), Bytes.len(f), en) :
+    {String.take(String.drop(f, 0n), _) == f : Bytes()}
+  %Equal.sym(Bytes(), String.drop(f, 0n), f, wl.drop_0(f)) :
+    {String.take(_, Bytes.len(f)) == f : Bytes()}
+  wl.take_all(f)
+
+law wl.fall_le:
+  for +f: Bytes()
+  for en: {U32.to_nat(U32.from_nat(Bytes.len(f))) == Bytes.len(f) : Nat}
+  {Nat.is_le(U32.to_nat(U32.from_nat(Bytes.len(f))), Bytes.len(String.drop(f, 0n))) ==
+    True{} : Bool}
+
+def wl.fall_le(f, en):
+  %Equal.sym(Nat, U32.to_nat(U32.from_nat(Bytes.len(f))), Bytes.len(f), en) :
+    {Nat.is_le(_, Bytes.len(String.drop(f, 0n))) == True{} : Bool}
+  %Equal.sym(Bytes(), String.drop(f, 0n), f, wl.drop_0(f)) :
+    {Nat.is_le(Bytes.len(f), Bytes.len(_)) == True{} : Bool}
+  wl.le_refl(Bytes.len(f))
+
+law wl.fsend_whole.at:
+  for +rd: List<&2, Rd>
+  for +now: Nat
+  for +fs: List<&2, Fil>
+  for +o: Bytes()
+  for +f: Bytes()
+  for +en: {U32.to_nat(U32.from_nat(Bytes.len(f))) == Bytes.len(f) : Nat}
+  {(eager(rd, now, fs, Bytes.append(o, w.fbytes(f, 0, U32.from_nat(Bytes.len(f))))),
+      (f, w.fsend.cut(Nat.is_le(U32.to_nat(U32.from_nat(Bytes.len(f))),
+        Bytes.len(String.drop(f, 0n))), Done{Unit{}}))) ==
+    (eager(rd, now, fs, Bytes.append(o, f)), (f, Done{Unit{}})) :
+    World & Bytes() & Result<&1, &1, U32 & String, Unit>}
+
+def wl.fsend_whole.at(rd, now, fs, o, f, en):
+  %Equal.sym(Bytes(), w.fbytes(f, 0, U32.from_nat(Bytes.len(f))), f, wl.fbytes_all(f, en)) :
+    {(eager(rd, now, fs, Bytes.append(o, _)),
+      (f, w.fsend.cut(Nat.is_le(U32.to_nat(U32.from_nat(Bytes.len(f))),
+        Bytes.len(String.drop(f, 0n))), Done{Unit{}}))) ==
+      (eager(rd, now, fs, Bytes.append(o, f)), (f, Done{Unit{}})) :
+      World & Bytes() & Result<&1, &1, U32 & String, Unit>}
+  %Equal.sym(Bool, Nat.is_le(U32.to_nat(U32.from_nat(Bytes.len(f))),
+      Bytes.len(String.drop(f, 0n))), True{}, wl.fall_le(f, en)) :
+    {(eager(rd, now, fs, Bytes.append(o, f)), (f, w.fsend.cut(_, Done{Unit{}}))) ==
+      (eager(rd, now, fs, Bytes.append(o, f)), (f, Done{Unit{}})) :
+      World & Bytes() & Result<&1, &1, U32 & String, Unit>}
+  {==}
+
+# a sendfile of a whole file to a peer that takes everything puts the
+# file on the wire after what was there, and succeeds
+law wl.fsend_whole:
+  for +rd: List<&2, Rd>
+  for +now: Nat
+  for +fs: List<&2, Fil>
+  for +o: Bytes()
+  for +f: Bytes()
+  for +ms: U32
+  for en: {U32.to_nat(U32.from_nat(Bytes.len(f))) == Bytes.len(f) : Nat}
+  {w.fsend(eager(rd, now, fs, o), f, 0, U32.from_nat(Bytes.len(f)), ms) ==
+    (eager(rd, now, fs, Bytes.append(o, f)), (f, Done{Unit{}})) :
+    World & Bytes() & Result<&1, &1, U32 & String, Unit>}
+
+def wl.fsend_whole(rd, now, fs, o, f, ms, en):
+  Equal.trans(World & Bytes() & Result<&1, &1, U32 & String, Unit>,
+    w.fsend(eager(rd, now, fs, o), f, 0, U32.from_nat(Bytes.len(f)), ms),
+    (eager(rd, now, fs, Bytes.append(o, w.fbytes(f, 0, U32.from_nat(Bytes.len(f))))),
+      (f, w.fsend.cut(Nat.is_le(U32.to_nat(U32.from_nat(Bytes.len(f))),
+        Bytes.len(String.drop(f, 0n))), Done{Unit{}}))),
+    (eager(rd, now, fs, Bytes.append(o, f)), (f, Done{Unit{}})),
+    fsend_served(rd, now, fs, o, f, 0, U32.from_nat(Bytes.len(f)), ms),
+    wl.fsend_whole.at(rd, now, fs, o, f, en))
+
+law wl.headed_wire:
+  for +ms: U32
+  for +f: Bytes()
+  for +rd: List<&2, Rd>
+  for +now: Nat
+  for +fs: List<&2, Fil>
+  for +o: Bytes()
+  for en: {U32.to_nat(U32.from_nat(Bytes.len(f))) == Bytes.len(f) : Nat}
+  {sim.headed(ms, f, U32.from_nat(Bytes.len(f)), sent(rd, now, fs, o)) ==
+    L.Em{eager(rd, now, fs, Bytes.append(o, f)), "", True{}} : L.Em<World>}
+
+def wl.headed_wire(ms, f, rd, now, fs, o, en):
+  %Equal.sym(World & Bytes() & Result<&1, &1, U32 & String, Unit>,
+    w.fsend(eager(rd, now, fs, o), f, 0, U32.from_nat(Bytes.len(f)), ms),
+    (eager(rd, now, fs, Bytes.append(o, f)), (f, Done{Unit{}})),
+    wl.fsend_whole(rd, now, fs, o, f, ms, en)) :
+    {sim.fsent(_) == L.Em{eager(rd, now, fs, Bytes.append(o, f)), "", True{}} : L.Em<World>}
+  {==}
+
+def wl.eq_refl(+n: Nat) -> {Nat.is_eq(n, n) == True{} : Bool}:
+  match n:
+    case 0n:
+      {==}
+    case 1n+p:
+      wl.eq_refl(p)
+
+law wl.blk_eager:
+  for +rd: List<&2, Rd>
+  for +now: Nat
+  for +fs: List<&2, Fil>
+  for +out: Bytes()
+  for +x: Bytes()
+  for +whole: Bool
+  for +ms: U32
+  {L.page.blk(World, w.tx(eager(rd, now, fs, out), x, ms), whole) ==
+    L.Em{eager(rd, now, fs, Bytes.append(out, x)), "", whole} : L.Em<World>}
+
+def wl.blk_eager(rd, now, fs, out, x, whole, ms):
+  %Equal.sym(L.Put(World), w.tx(eager(rd, now, fs, out), x, ms),
+    sent(rd, now, fs, Bytes.append(out, x)), wl.tx_eager(rd, now, fs, out, x, ms)) :
+    {L.page.blk(World, _, whole) == L.Em{eager(rd, now, fs, Bytes.append(out, x)), "", whole} :
+      L.Em<World>}
+  {==}
+
+law wl.take_n:
+  for +f: Bytes()
+  for en: {U32.to_nat(U32.from_nat(Bytes.len(f))) == Bytes.len(f) : Nat}
+  {String.take(f, U32.to_nat(U32.from_nat(Bytes.len(f)))) == f : Bytes()}
+
+def wl.take_n(f, en):
+  %Equal.sym(Nat, U32.to_nat(U32.from_nat(Bytes.len(f))), Bytes.len(f), en) :
+    {String.take(f, _) == f : Bytes()}
+  wl.take_all(f)
+
+law wl.whole_n:
+  for +f: Bytes()
+  for +en: {U32.to_nat(U32.from_nat(Bytes.len(f))) == Bytes.len(f) : Nat}
+  {Nat.is_eq(Bytes.len(String.take(f, U32.to_nat(U32.from_nat(Bytes.len(f))))),
+    U32.to_nat(U32.from_nat(Bytes.len(f)))) == True{} : Bool}
+
+def wl.whole_n(f, en):
+  %Equal.sym(Bytes(), String.take(f, U32.to_nat(U32.from_nat(Bytes.len(f)))), f, wl.take_n(f, en)) :
+    {Nat.is_eq(Bytes.len(_), U32.to_nat(U32.from_nat(Bytes.len(f)))) == True{} : Bool}
+  %Equal.sym(Nat, U32.to_nat(U32.from_nat(Bytes.len(f))), Bytes.len(f), en) :
+    {Nat.is_eq(Bytes.len(f), _) == True{} : Bool}
+  wl.eq_refl(Bytes.len(f))
+
+law wl.read_wire.at:
+  for +f: Bytes()
+  for +rd: List<&2, Rd>
+  for +now: Nat
+  for +fs: List<&2, Fil>
+  for +out: Bytes()
+  for +pre: Bytes()
+  for +en: {U32.to_nat(U32.from_nat(Bytes.len(f))) == Bytes.len(f) : Nat}
+  {L.Em{eager(rd, now, fs, Bytes.append(out,
+      Bytes.append(pre, String.take(f, U32.to_nat(U32.from_nat(Bytes.len(f))))))), "",
+      Nat.is_eq(Bytes.len(String.take(f, U32.to_nat(U32.from_nat(Bytes.len(f))))),
+        U32.to_nat(U32.from_nat(Bytes.len(f))))} ==
+    L.Em{eager(rd, now, fs, Bytes.append(Bytes.append(out, pre), f)), "", True{}} : L.Em<World>}
+
+def wl.read_wire.at(f, rd, now, fs, out, pre, en):
+  %Equal.sym(Bool, Nat.is_eq(Bytes.len(String.take(f, U32.to_nat(U32.from_nat(Bytes.len(f))))),
+      U32.to_nat(U32.from_nat(Bytes.len(f)))), True{}, wl.whole_n(f, en)) :
+    {L.Em{eager(rd, now, fs, Bytes.append(out,
+      Bytes.append(pre, String.take(f, U32.to_nat(U32.from_nat(Bytes.len(f))))))), "", _} ==
+      L.Em{eager(rd, now, fs, Bytes.append(Bytes.append(out, pre), f)), "", True{}} : L.Em<World>}
+  %Equal.sym(Bytes(), String.take(f, U32.to_nat(U32.from_nat(Bytes.len(f)))), f, wl.take_n(f, en)) :
+    {L.Em{eager(rd, now, fs, Bytes.append(out, Bytes.append(pre, _))), "", True{}} ==
+      L.Em{eager(rd, now, fs, Bytes.append(Bytes.append(out, pre), f)), "", True{}} : L.Em<World>}
+  Equal.cong(Bytes(), L.Em<World>, y => L.Em{eager(rd, now, fs, y), "", True{}},
+    Bytes.append(out, Bytes.append(pre, f)), Bytes.append(Bytes.append(out, pre), f),
+    Equal.sym(Bytes(), Bytes.append(Bytes.append(out, pre), f), Bytes.append(out, Bytes.append(pre, f)),
+      wl.app_assoc(out, pre, f)))
+
+# a small file: read whole, and on the wire with its head in one send
+law wl.read_wire:
+  for +ms: U32
+  for +f: Bytes()
+  for +rd: List<&2, Rd>
+  for +now: Nat
+  for +fs: List<&2, Fil>
+  for +out: Bytes()
+  for +pre: Bytes()
+  for +en: {U32.to_nat(U32.from_nat(Bytes.len(f))) == Bytes.len(f) : Nat}
+  {sim.read(ms, w.fread(f, U32.from_nat(Bytes.len(f))), U32.from_nat(Bytes.len(f)),
+      eager(rd, now, fs, out), pre) ==
+    L.Em{eager(rd, now, fs, Bytes.append(Bytes.append(out, pre), f)), "", True{}} : L.Em<World>}
+
+def wl.read_wire(ms, f, rd, now, fs, out, pre, en):
+  Equal.trans(L.Em<World>,
+    L.page.blk(World, w.tx(eager(rd, now, fs, out),
+        Bytes.append(pre, String.take(f, U32.to_nat(U32.from_nat(Bytes.len(f))))), ms),
+      Nat.is_eq(Bytes.len(String.take(f, U32.to_nat(U32.from_nat(Bytes.len(f))))),
+        U32.to_nat(U32.from_nat(Bytes.len(f))))),
+    L.Em{eager(rd, now, fs, Bytes.append(out,
+        Bytes.append(pre, String.take(f, U32.to_nat(U32.from_nat(Bytes.len(f))))))), "",
+      Nat.is_eq(Bytes.len(String.take(f, U32.to_nat(U32.from_nat(Bytes.len(f))))),
+        U32.to_nat(U32.from_nat(Bytes.len(f))))},
+    L.Em{eager(rd, now, fs, Bytes.append(Bytes.append(out, pre), f)), "", True{}},
+    wl.blk_eager(rd, now, fs, out,
+      Bytes.append(pre, String.take(f, U32.to_nat(U32.from_nat(Bytes.len(f))))),
+      Nat.is_eq(Bytes.len(String.take(f, U32.to_nat(U32.from_nat(Bytes.len(f))))),
+        U32.to_nat(U32.from_nat(Bytes.len(f)))), ms),
+    wl.read_wire.at(f, rd, now, fs, out, pre, en))
+
+law wl.body_wire:
+  for +ms: U32
+  for +f: Bytes()
+  for +rd: List<&2, Rd>
+  for +now: Nat
+  for +fs: List<&2, Fil>
+  for +out: Bytes()
+  for +pre: Bytes()
+  for small: Bool
+  for +en: {U32.to_nat(U32.from_nat(Bytes.len(f))) == Bytes.len(f) : Nat}
+  {sim.body(ms, f, U32.from_nat(Bytes.len(f)), eager(rd, now, fs, out), pre, small) ==
+    L.Em{eager(rd, now, fs, Bytes.append(Bytes.append(out, pre), f)), "", True{}} : L.Em<World>}
+
+def wl.body_wire(ms, f, rd, now, fs, out, pre, small, en):
+  match small:
+    case True{}:
+      wl.read_wire(ms, f, rd, now, fs, out, pre, en)
+    case False{}:
+      %Equal.sym(L.Put(World), w.tx(eager(rd, now, fs, out), pre, ms),
+        sent(rd, now, fs, Bytes.append(out, pre)), wl.tx_eager(rd, now, fs, out, pre, ms)) :
+        {sim.headed(ms, f, U32.from_nat(Bytes.len(f)), _) ==
+          L.Em{eager(rd, now, fs, Bytes.append(Bytes.append(out, pre), f)), "", True{}} :
+          L.Em<World>}
+      wl.headed_wire(ms, f, rd, now, fs, Bytes.append(out, pre), en)
+
+law page_wire:
+  for ~shut: Bool -> Bytes() -> Bytes()
+  for ~fhead: List<&2, U32> -> U32 -> Bytes()
+  for ~miss: Bool -> Bytes()
+  for ~lnote: Bytes() -> Bytes() -> String
+  for ~lsize: Bytes() -> Bytes() -> U32 -> String
+  for +ms: U32
+  for root: List<&2, U32>
+  for path: List<&2, U32>
+  for +ct: List<&2, U32>
+  for may: Maybe<&2, Bytes()>
+  for +sh: Bool
+  for +rd: List<&2, Rd>
+  for +now: Nat
+  for +fs: List<&2, Fil>
+  for +out: Bytes()
+  for +acc: Bytes()
+  for +body: Bytes()
+  for ef: {w.find(fs, L.text(path)) == Done{body} : Result<&1, &1, U32 & String, Bytes()>}
+  for +en: {U32.to_nat(U32.from_nat(Bytes.len(body))) == Bytes.len(body) : Nat}
+  {sim.page(~shut, ~fhead, ~miss, ~lnote, ~lsize, ms, root, path, ct, False{}, may, sh,
+      L.Em{eager(rd, now, fs, out), acc, True{}}) ==
+    L.Em{eager(rd, now, fs, Bytes.append(Bytes.append(out,
+      Bytes.append(acc, shut(sh, fhead(ct, U32.from_nat(Bytes.len(body)))))), body)), "",
+      True{}} : L.Em<World>}
+
+def page_wire(shut, fhead, miss, lnote, lsize, ms, root, path, ct, may, sh, rd, now, fs, out, acc,
+  body, ef, en):
+  %Equal.sym(Result<&1, &1, U32 & String, Bytes()>, w.find(fs, L.text(path)), Done{body}, ef) :
+    {sim.opened(~shut, ~fhead, ~miss, ~lnote, ~lsize, ms, (eager(rd, now, fs, out), _), ct,
+        False{}, may, sh, acc) ==
+      L.Em{eager(rd, now, fs, Bytes.append(Bytes.append(out,
+        Bytes.append(acc, shut(sh, fhead(ct, U32.from_nat(Bytes.len(body)))))), body)), "",
+        True{}} : L.Em<World>}
+  wl.body_wire(ms, body, rd, now, fs, out,
+    Bytes.append(acc, shut(sh, fhead(ct, U32.from_nat(Bytes.len(body))))),
+    U32.is_lt(U32.from_nat(Bytes.len(body)), L.page.small()), en)
+
+# LAW: nothing after a failed sendfile. A file's body that did not all
+# go out -- the send failed or stalled, or the file came up short --
+# leaves the writer unable to take more, so the connection ends with
+# nothing after it; and a head that did not go out is not followed by
+# its body.
+law page_fail:
+  for s: World
+  for f: Bytes()
+  for e: U32 & String
+  {sim.fsent((s, (f, Fail{e}))) == L.Em{s, "", False{}} : L.Em<World>}
+
+def page_fail(s, f, e):
+  {==}
+
+law page_head_fail:
+  for +ms: U32
+  for f: Bytes()
+  for n: U32
+  for s: World
+  for e: U32 & String
+  {sim.headed(ms, f, n, (s, Fail{e})) == L.Em{s, "", False{}} : L.Em<World>}
+
+def page_head_fail(ms, f, n, s, e):
+  {==}
+
+# ... and a small file's read that came back short ends it too, after
+# what the read had: a head's length is never followed by fewer bytes
+# and then more
+def em.ok(em: L.Em<World>) -> Bool:
+  match em:
+    case L.Em{s, acc, ok}:
+      ok
+
+def wl.blk_short(m: L.Put(World)) -> {em.ok(L.page.blk(World, m, False{})) == False{} : Bool}:
+  (s, r) = m
+  match r:
+    case Done{u}:
+      {==}
+    case Fail{e}:
+      {==}
+
+law page_read_short:
+  for +ms: U32
+  for f: Bytes()
+  for +bs: Bytes()
+  for +n: U32
+  for +s: World
+  for +pre: Bytes()
+  for e: {Nat.is_eq(Bytes.len(bs), U32.to_nat(n)) == False{} : Bool}
+  {em.ok(sim.read(ms, (f, Done{bs}), n, s, pre)) == False{} : Bool}
+
+def page_read_short(ms, f, bs, n, s, pre, e):
+  %Equal.sym(Bool, Nat.is_eq(Bytes.len(bs), U32.to_nat(n)), False{}, e) :
+    {em.ok(L.page.blk(World, w.tx(s, Bytes.append(pre, bs), ms), _)) == False{} : Bool}
+  wl.blk_short(w.tx(s, Bytes.append(pre, bs), ms))
+
 law fread_model:
   for +f: Bytes()
   for +n: Nat
@@ -2367,3 +2903,689 @@ def fread_model(f, n):
         1n+String.length.go(String.take(t, p), 0n), Bytes.len.shift(String.take(t, p), 0n)) :
         {Nat.is_le(_, 1n+p) == True{} : Bool}
       fread_model(t, p)
+
+# The body stream in the model
+# ============================
+#
+# wire/stream.bend's pass, pull and turn with the identity monad, the
+# scripted peer, and a scripted consumer: what it takes of each offer,
+# in order (past its script, all of it), what it has taken so far, and
+# how many ends it has been told. The framer is any: its state, feed,
+# take and look are the laws' template parameters, so the laws hold for
+# every body a reader frames.
+type Snk is Data:
+  Snk{takes: List<&2, Nat>, got: Bytes(), fins: Nat}
+
+def k.give.at(takes: List<&2, Nat>, +got: Bytes(), fins: Nat, +bs: Bytes()) -> Snk & Nat:
+  match takes:
+    case Nil{}:
+      (Snk{Nil{}, Bytes.append(got, String.take(bs, Bytes.len(bs))), fins}, Bytes.len(bs))
+    case Con{+n, t}:
+      (Snk{t, Bytes.append(got, String.take(bs, n)), fins}, n)
+
+def k.give.go(k: Snk, +bs: Bytes()) -> Snk & Nat:
+  match k:
+    case Snk{takes, +got, fins}:
+      k.give.at(takes, got, fins, bs)
+
+def k.give(k: Snk, bs: Bytes()) -> Snk & Nat:
+  k.give.go(k, bs)
+
+def k.fin(k: Snk) -> Snk:
+  match k:
+    case Snk{takes, got, fins}:
+      Snk{takes, got, 1n+fins}
+
+def sb.pass(~R: Data, ~look: R -> Bs.Stage, +win: Nat, bq: Bs.Bq<World, R, Snk>) ->
+  Bs.Turn(World, R, Snk):
+  Bs.pass(~Id, ~Id.pure, ~Id.bind, ~World, ~R, ~look, ~Snk, ~k.give, win, bq)
+
+def sb.pull(
+  ~E: Data, ~R: Data, ~feed: E -> Bytes() -> R -> R, ~take: R -> R & Bytes(),
+  ~look: R -> Bs.Stage, +e: E, +win: Nat, +ms: U32, bq: Bs.Bq<World, R, Snk>
+) -> Bs.Turn(World, R, Snk):
+  Bs.pull(~Id, ~Id.pure, ~Id.bind, ~World, ~w.rx, ~E, ~R, ~feed, ~take, ~look, ~Snk, ~k.fin, e,
+    win, ms, bq)
+
+def sb.turn(
+  ~E: Data, ~R: Data, ~feed: E -> Bytes() -> R -> R, ~take: R -> R & Bytes(),
+  ~look: R -> Bs.Stage, +e: E, +win: Nat, +ms: U32, bq: Bs.Bq<World, R, Snk>
+) -> Bs.Turn(World, R, Snk):
+  Bs.turn(~Id, ~Id.pure, ~Id.bind, ~World, ~w.rx, ~E, ~R, ~feed, ~take, ~look, ~Snk, ~k.give,
+    ~k.fin, e, win, ms, bq)
+
+# what a turn leaves: the socket, what the consumer has taken followed by
+# what the stream still holds, and the ends told
+def sb.moved(-R: Data, t: Bs.Turn(World, R, Snk)) -> World & Bytes() & Nat:
+  (bq, w) = t
+  match bq:
+    case Bs.Bq{s, r, k, held, eof}:
+      match k:
+        case Snk{takes, got, fins}:
+          (s, (Bytes.append(got, held), fins))
+
+def sb.fins(-R: Data, t: Bs.Turn(World, R, Snk)) -> Nat:
+  (bq, w) = t
+  match bq:
+    case Bs.Bq{s, r, k, held, eof}:
+      match k:
+        case Snk{takes, got, fins}:
+          fins
+
+def sb.qs(-R: Data, q: R & Bytes()) -> R:
+  (r, x) = q
+  r
+
+def sb.qb(-R: Data, q: R & Bytes()) -> Bytes():
+  (r, x) = q
+  x
+
+# LAW: a pass moves bytes, and only moves them. Whatever the consumer
+# takes, what it has taken followed by what the stream still holds is
+# what it had taken followed by what the stream held: in order, none
+# lost, none doubled; the socket is not touched and no end is told.
+def wl.take_drop(+b: Bytes(), +n: Nat) ->
+  {Bytes.append(String.take(b, n), String.drop(b, n)) == b : Bytes()}:
+  match b n:
+    case SNil{} 0n:
+      {==}
+    case SNil{} 1n+p:
+      {==}
+    case SCon{h, t} 0n:
+      {==}
+    case SCon{+h, +t} 1n+p:
+      Equal.cong(Bytes(), Bytes(), x => SCon{h, x}, Bytes.append(String.take(t, p), String.drop(t, p)),
+        t, wl.take_drop(t, p))
+
+law wl.stall_moved:
+  for -R: Data
+  for s: World
+  for r: R
+  for takes: List<&2, Nat>
+  for +got: Bytes()
+  for fins: Nat
+  for +held: Bytes()
+  for eof: Bool
+  for stalled: Bool
+  {sb.moved(R, Bs.pass.stall(World, R, Snk, s, r, Snk{takes, got, fins}, held, eof, stalled)) ==
+    (s, (Bytes.append(got, held), fins)) : World & Bytes() & Nat}
+
+def wl.stall_moved(R, s, r, takes, got, fins, held, eof, stalled):
+  match stalled:
+    case True{}:
+      {==}
+    case False{}:
+      {==}
+
+# a consumer that took n of what was held: taken, then held, is as before
+law wl.took_moved:
+  for -R: Data
+  for s: World
+  for r: R
+  for takes: List<&2, Nat>
+  for +got: Bytes()
+  for fins: Nat
+  for +held: Bytes()
+  for +n: Nat
+  for eof: Bool
+  for stalled: Bool
+  {sb.moved(R, Bs.pass.stall(World, R, Snk, s, r, Snk{takes, Bytes.append(got,
+    String.take(held, n)), fins}, String.drop(held, n), eof, stalled)) ==
+    (s, (Bytes.append(got, held), fins)) : World & Bytes() & Nat}
+
+def wl.took_moved(R, s, r, takes, got, fins, held, n, eof, stalled):
+  Equal.trans(World & Bytes() & Nat,
+    sb.moved(R, Bs.pass.stall(World, R, Snk, s, r, Snk{takes, Bytes.append(got,
+      String.take(held, n)), fins}, String.drop(held, n), eof, stalled)),
+    (s, (Bytes.append(Bytes.append(got, String.take(held, n)), String.drop(held, n)), fins)),
+    (s, (Bytes.append(got, held), fins)),
+    wl.stall_moved(R, s, r, takes, Bytes.append(got, String.take(held, n)), fins,
+      String.drop(held, n), eof, stalled),
+    Equal.cong(Bytes(), World & Bytes() & Nat, y => (s, (y, fins)),
+      Bytes.append(Bytes.append(got, String.take(held, n)), String.drop(held, n)),
+      Bytes.append(got, held),
+      Equal.trans(Bytes(),
+        Bytes.append(Bytes.append(got, String.take(held, n)), String.drop(held, n)),
+        Bytes.append(got, Bytes.append(String.take(held, n), String.drop(held, n))),
+        Bytes.append(got, held),
+        wl.app_assoc(got, String.take(held, n), String.drop(held, n)),
+        Equal.cong(Bytes(), Bytes(), y => Bytes.append(got, y),
+          Bytes.append(String.take(held, n), String.drop(held, n)), held, wl.take_drop(held, n)))))
+
+law stream_pass:
+  for ~R: Data
+  for ~look: R -> Bs.Stage
+  for +win: Nat
+  for s: World
+  for +r: R
+  for takes: List<&2, Nat>
+  for +got: Bytes()
+  for fins: Nat
+  for +held: Bytes()
+  for +eof: Bool
+  {sb.moved(R, sb.pass(~R, ~look, win, Bs.Bq{s, r, Snk{takes, got, fins}, held, eof})) ==
+    (s, (Bytes.append(got, held), fins)) : World & Bytes() & Nat}
+
+def stream_pass(R, look, win, s, r, takes, got, fins, held, eof):
+  match takes held:
+    case Nil{} SNil{}:
+      {==}
+    case Con{n, t} SNil{}:
+      {==}
+    case Nil{} SCon{+h, +t}:
+      wl.took_moved(R, s, r, Nil{}, got, fins, SCon{h, t}, Bytes.len(SCon{h, t}), eof,
+        Nat.is_eq(Bytes.len(SCon{h, t}), 0n) && (Nat.is_le(win, Bytes.len(SCon{h, t}))
+          || Bool.not(Bs.more(look(r), eof))))
+    case Con{+n, tk} SCon{+h, +t}:
+      wl.took_moved(R, s, r, tk, got, fins, SCon{h, t}, n, eof,
+        Nat.is_eq(n, 0n) && (Nat.is_le(win, Bytes.len(SCon{h, t}))
+          || Bool.not(Bs.more(look(r), eof))))
+
+# LAW: a stalled consumer stops reads. With a window's worth held or
+# more, a consumer that takes none of it ends the stream: the turn's
+# pull never runs, the socket is not read, and nothing more is held.
+law stream_stall:
+  for ~E: Data
+  for ~R: Data
+  for ~feed: E -> Bytes() -> R -> R
+  for ~take: R -> R & Bytes()
+  for ~look: R -> Bs.Stage
+  for +e: E
+  for +win: Nat
+  for +ms: U32
+  for s: World
+  for +r: R
+  for rest: List<&2, Nat>
+  for +got: Bytes()
+  for fins: Nat
+  for +h: Char
+  for +t: Bytes()
+  for +eof: Bool
+  for full: {Nat.is_le(win, Bytes.len(SCon{h, t})) == True{} : Bool}
+  {sb.turn(~E, ~R, ~feed, ~take, ~look, e, win, ms,
+      Bs.Bq{s, r, Snk{Con{0n, rest}, got, fins}, SCon{h, t}, eof}) ==
+    (Bs.Bq{s, r, Snk{rest, Bytes.append(got, ""), fins}, SCon{h, t}, eof}, Some{Bs.BStall{}}) :
+    Bs.Turn(World, R, Snk)}
+
+def stream_stall(E, R, feed, take, look, e, win, ms, s, r, rest, got, fins, h, t, eof, full):
+  %Equal.sym(Bool, Nat.is_le(win, Bytes.len(SCon{h, t})), True{}, full) :
+    {Bs.turn.then(~Id, ~Id.pure, ~Id.bind, ~World, ~w.rx, ~E, ~R, ~feed, ~take, ~look, ~Snk,
+      ~k.fin, e, win, ms, Bs.pass.stall(World, R, Snk, s, r, Snk{rest, Bytes.append(got, ""), fins},
+        SCon{h, t}, eof, _ || Bool.not(Bs.more(look(r), eof)))) ==
+      (Bs.Bq{s, r, Snk{rest, Bytes.append(got, ""), fins}, SCon{h, t}, eof}, Some{Bs.BStall{}}) :
+      Bs.Turn(World, R, Snk)}
+  {==}
+
+# LAW: a full window stops reads. With win bytes or more held and the
+# body still coming, a pull reads nothing and holds what it held.
+law stream_full:
+  for ~E: Data
+  for ~R: Data
+  for ~feed: E -> Bytes() -> R -> R
+  for ~take: R -> R & Bytes()
+  for ~look: R -> Bs.Stage
+  for +e: E
+  for +win: Nat
+  for +ms: U32
+  for s: World
+  for +r: R
+  for k: Snk
+  for +held: Bytes()
+  for st: Bs.Stage
+  for es: {look(r) == st : Bs.Stage}
+  for em: {Bs.more(st, False{}) == True{} : Bool}
+  for full: {Nat.is_lt(Bytes.len(held), win) == False{} : Bool}
+  {sb.pull(~E, ~R, ~feed, ~take, ~look, e, win, ms, Bs.Bq{s, r, k, held, False{}}) ==
+    (Bs.Bq{s, r, k, held, False{}}, None{}) : Bs.Turn(World, R, Snk)}
+
+def stream_full(E, R, feed, take, look, e, win, ms, s, r, k, held, st, es, em, full):
+  match st:
+    case Bs.Going{}:
+      %Equal.sym(Bs.Stage, look(r), Bs.Going{}, es) :
+        {Bs.pull.go(~Id, ~Id.pure, ~Id.bind, ~World, ~w.rx, ~E, ~R, ~feed, ~take, ~Snk, ~k.fin,
+          e, win, ms, _, False{}, s, r, k, held) == (Bs.Bq{s, r, k, held, False{}}, None{}) :
+          Bs.Turn(World, R, Snk)}
+      %Equal.sym(Bool, Nat.is_lt(Bytes.len(held), win), False{}, full) :
+        {Bs.pull.room(~Id, ~Id.pure, ~Id.bind, ~World, ~w.rx, ~E, ~R, ~feed, ~take, ~Snk, e, ms,
+          s, r, k, held, False{}, _) == (Bs.Bq{s, r, k, held, False{}}, None{}) :
+          Bs.Turn(World, R, Snk)}
+      {==}
+    case Bs.Closing{}:
+      %Equal.sym(Bs.Stage, look(r), Bs.Closing{}, es) :
+        {Bs.pull.go(~Id, ~Id.pure, ~Id.bind, ~World, ~w.rx, ~E, ~R, ~feed, ~take, ~Snk, ~k.fin,
+          e, win, ms, _, False{}, s, r, k, held) == (Bs.Bq{s, r, k, held, False{}}, None{}) :
+          Bs.Turn(World, R, Snk)}
+      %Equal.sym(Bool, Nat.is_lt(Bytes.len(held), win), False{}, full) :
+        {Bs.pull.room(~Id, ~Id.pure, ~Id.bind, ~World, ~w.rx, ~E, ~R, ~feed, ~take, ~Snk, e, ms,
+          s, r, k, held, False{}, _) == (Bs.Bq{s, r, k, held, False{}}, None{}) :
+          Bs.Turn(World, R, Snk)}
+      {==}
+    case Bs.Ended{}:
+      no({sb.pull(~E, ~R, ~feed, ~take, ~look, e, win, ms, Bs.Bq{s, r, k, held, False{}}) ==
+        (Bs.Bq{s, r, k, held, False{}}, None{}) : Bs.Turn(World, R, Snk)}, em)
+    case Bs.Refused{}:
+      no({sb.pull(~E, ~R, ~feed, ~take, ~look, e, win, ms, Bs.Bq{s, r, k, held, False{}}) ==
+        (Bs.Bq{s, r, k, held, False{}}, None{}) : Bs.Turn(World, R, Snk)}, em)
+
+# LAW: a read joins the body at the end of what is held, exactly. With
+# room in the window and the body still coming, a pull reads the
+# peer's next bytes, feeds them to the framer, and holds what the
+# framer then holds of the body after what it held before -- the bytes
+# drain_reads says are the body's, in their order -- and the framer
+# goes on holding none.
+law wl.fed_ok:
+  for -R: Data
+  for s: World
+  for q: R & Bytes()
+  for k: Snk
+  for +held: Bytes()
+  for +n: Nat
+  for ok: {Nat.is_le(Bytes.len(sb.qb(R, q)), n) == True{} : Bool}
+  {Bs.pull.fed(World, R, Snk, s, q, k, held, False{}, n) ==
+    (Bs.Bq{s, sb.qs(R, q), k, Bytes.append(held, sb.qb(R, q)), False{}}, None{}) :
+    Bs.Turn(World, R, Snk)}
+
+def wl.fed_ok(R, s, q, k, held, n, ok):
+  (r, +x) = q
+  %Equal.sym(Bool, Nat.is_le(Bytes.len(x), n), True{}, ok) :
+    {Bs.pull.fits(World, R, Snk, s, r, k, held, x, False{}, _) ==
+      (Bs.Bq{s, r, k, Bytes.append(held, x), False{}}, None{}) : Bs.Turn(World, R, Snk)}
+  {==}
+
+law wl.room_read:
+  for ~E: Data
+  for ~R: Data
+  for ~feed: E -> Bytes() -> R -> R
+  for ~take: R -> R & Bytes()
+  for +e: E
+  for +ms: U32
+  for +r: R
+  for k: Snk
+  for +held: Bytes()
+  for +wait: Nat
+  for +h: Char
+  for +t: Bytes()
+  for rd: List<&2, Rd>
+  for wr: List<&2, Wr>
+  for eager: Bool
+  for +now: Nat
+  for fs: List<&2, Fil>
+  for out: Bytes()
+  for ew: {Nat.is_lt(wait, U32.to_nat(ms)) == True{} : Bool}
+  for q: R & Bytes()
+  for eq: {take(feed(e, SCon{h, t}, r)) == q : R & Bytes()}
+  for ok: {Nat.is_le(Bytes.len(sb.qb(R, q)), Bytes.len(SCon{h, t})) == True{} : Bool}
+  {Bs.pull.room(~Id, ~Id.pure, ~Id.bind, ~World, ~w.rx, ~E, ~R, ~feed, ~take, ~Snk, e, ms,
+      World{Con{Give{wait, SCon{h, t}}, rd}, wr, eager, now, fs, out}, r, k, held, False{}, True{}) ==
+    (Bs.Bq{World{rd, wr, eager, Nat.add(now, wait), fs, out}, sb.qs(R, q), k,
+      Bytes.append(held, sb.qb(R, q)), False{}}, None{}) : Bs.Turn(World, R, Snk)}
+
+def wl.room_read(E, R, feed, take, e, ms, r, k, held, wait, h, t, rd, wr, eager, now, fs, out, ew, q,
+  eq, ok):
+  %Equal.sym(Bool, Nat.is_lt(wait, U32.to_nat(ms)), True{}, ew) :
+    {Bs.pull.got(~E, ~R, ~feed, ~take, World, Snk, e,
+      w.rx.give(rd, wait, SCon{h, t}, ms, wr, eager, now, fs, out, _), r, k, held, False{}) ==
+      (Bs.Bq{World{rd, wr, eager, Nat.add(now, wait), fs, out}, sb.qs(R, q), k,
+        Bytes.append(held, sb.qb(R, q)), False{}}, None{}) : Bs.Turn(World, R, Snk)}
+  %Equal.sym(R & Bytes(), take(feed(e, SCon{h, t}, r)), q, eq) :
+    {Bs.pull.fed(World, R, Snk, World{rd, wr, eager, Nat.add(now, wait), fs, out}, _, k, held,
+      False{}, Bytes.len(SCon{h, t})) ==
+      (Bs.Bq{World{rd, wr, eager, Nat.add(now, wait), fs, out}, sb.qs(R, q), k,
+        Bytes.append(held, sb.qb(R, q)), False{}}, None{}) : Bs.Turn(World, R, Snk)}
+  wl.fed_ok(R, World{rd, wr, eager, Nat.add(now, wait), fs, out}, q, k, held,
+    Bytes.len(SCon{h, t}), ok)
+
+law stream_pull:
+  for ~E: Data
+  for ~R: Data
+  for ~feed: E -> Bytes() -> R -> R
+  for ~take: R -> R & Bytes()
+  for ~look: R -> Bs.Stage
+  for +e: E
+  for +win: Nat
+  for +ms: U32
+  for +r: R
+  for k: Snk
+  for +held: Bytes()
+  for st: Bs.Stage
+  for es: {look(r) == st : Bs.Stage}
+  for em: {Bs.more(st, False{}) == True{} : Bool}
+  for room: {Nat.is_lt(Bytes.len(held), win) == True{} : Bool}
+  for +wait: Nat
+  for +h: Char
+  for +t: Bytes()
+  for rd: List<&2, Rd>
+  for wr: List<&2, Wr>
+  for eager: Bool
+  for +now: Nat
+  for fs: List<&2, Fil>
+  for out: Bytes()
+  for ew: {Nat.is_lt(wait, U32.to_nat(ms)) == True{} : Bool}
+  for q: R & Bytes()
+  for eq: {take(feed(e, SCon{h, t}, r)) == q : R & Bytes()}
+  for ok: {Nat.is_le(Bytes.len(sb.qb(R, q)), Bytes.len(SCon{h, t})) == True{} : Bool}
+  {sb.pull(~E, ~R, ~feed, ~take, ~look, e, win, ms,
+      Bs.Bq{World{Con{Give{wait, SCon{h, t}}, rd}, wr, eager, now, fs, out}, r, k, held, False{}}) ==
+    (Bs.Bq{World{rd, wr, eager, Nat.add(now, wait), fs, out}, sb.qs(R, q), k,
+      Bytes.append(held, sb.qb(R, q)), False{}}, None{}) : Bs.Turn(World, R, Snk)}
+
+def stream_pull(E, R, feed, take, look, e, win, ms, r, k, held, st, es, em, room, wait, h, t, rd, wr,
+  eager, now, fs, out, ew, q, eq, ok):
+  match st:
+    case Bs.Going{}:
+      %Equal.sym(Bs.Stage, look(r), Bs.Going{}, es) :
+        {Bs.pull.go(~Id, ~Id.pure, ~Id.bind, ~World, ~w.rx, ~E, ~R, ~feed, ~take, ~Snk, ~k.fin,
+          e, win, ms, _, False{}, World{Con{Give{wait, SCon{h, t}}, rd}, wr, eager, now, fs, out}, r,
+          k, held) ==
+          (Bs.Bq{World{rd, wr, eager, Nat.add(now, wait), fs, out}, sb.qs(R, q), k,
+            Bytes.append(held, sb.qb(R, q)), False{}}, None{}) : Bs.Turn(World, R, Snk)}
+      %Equal.sym(Bool, Nat.is_lt(Bytes.len(held), win), True{}, room) :
+        {Bs.pull.room(~Id, ~Id.pure, ~Id.bind, ~World, ~w.rx, ~E, ~R, ~feed, ~take, ~Snk, e, ms,
+          World{Con{Give{wait, SCon{h, t}}, rd}, wr, eager, now, fs, out}, r, k, held, False{}, _) ==
+          (Bs.Bq{World{rd, wr, eager, Nat.add(now, wait), fs, out}, sb.qs(R, q), k,
+            Bytes.append(held, sb.qb(R, q)), False{}}, None{}) : Bs.Turn(World, R, Snk)}
+      wl.room_read(~E, ~R, ~feed, ~take, e, ms, r, k, held, wait, h, t, rd, wr, eager, now, fs, out,
+        ew, q, eq, ok)
+    case Bs.Closing{}:
+      %Equal.sym(Bs.Stage, look(r), Bs.Closing{}, es) :
+        {Bs.pull.go(~Id, ~Id.pure, ~Id.bind, ~World, ~w.rx, ~E, ~R, ~feed, ~take, ~Snk, ~k.fin,
+          e, win, ms, _, False{}, World{Con{Give{wait, SCon{h, t}}, rd}, wr, eager, now, fs, out}, r,
+          k, held) ==
+          (Bs.Bq{World{rd, wr, eager, Nat.add(now, wait), fs, out}, sb.qs(R, q), k,
+            Bytes.append(held, sb.qb(R, q)), False{}}, None{}) : Bs.Turn(World, R, Snk)}
+      %Equal.sym(Bool, Nat.is_lt(Bytes.len(held), win), True{}, room) :
+        {Bs.pull.room(~Id, ~Id.pure, ~Id.bind, ~World, ~w.rx, ~E, ~R, ~feed, ~take, ~Snk, e, ms,
+          World{Con{Give{wait, SCon{h, t}}, rd}, wr, eager, now, fs, out}, r, k, held, False{}, _) ==
+          (Bs.Bq{World{rd, wr, eager, Nat.add(now, wait), fs, out}, sb.qs(R, q), k,
+            Bytes.append(held, sb.qb(R, q)), False{}}, None{}) : Bs.Turn(World, R, Snk)}
+      wl.room_read(~E, ~R, ~feed, ~take, e, ms, r, k, held, wait, h, t, rd, wr, eager, now, fs, out,
+        ew, q, eq, ok)
+    case Bs.Ended{}:
+      no({sb.pull(~E, ~R, ~feed, ~take, ~look, e, win, ms,
+          Bs.Bq{World{Con{Give{wait, SCon{h, t}}, rd}, wr, eager, now, fs, out}, r, k, held, False{}}) ==
+        (Bs.Bq{World{rd, wr, eager, Nat.add(now, wait), fs, out}, sb.qs(R, q), k,
+          Bytes.append(held, sb.qb(R, q)), False{}}, None{}) : Bs.Turn(World, R, Snk)}, em)
+    case Bs.Refused{}:
+      no({sb.pull(~E, ~R, ~feed, ~take, ~look, e, win, ms,
+          Bs.Bq{World{Con{Give{wait, SCon{h, t}}, rd}, wr, eager, now, fs, out}, r, k, held, False{}}) ==
+        (Bs.Bq{World{rd, wr, eager, Nat.add(now, wait), fs, out}, sb.qs(R, q), k,
+          Bytes.append(held, sb.qb(R, q)), False{}}, None{}) : Bs.Turn(World, R, Snk)}, em)
+
+# LAW: the window. A read is taken only with fewer than win bytes held
+# (stream_full), and adds no more body than it brought bytes (the
+# pull's own check), so what a stream holds after it is under the
+# window plus that read: with reads at most Bs.chunk() bytes, a stream
+# never holds more than win + chunk() of a body, however large the
+# body and however slow its consumer.
+def wl.lt_succ(+x: Nat, +m: Nat, e: {Nat.is_le(x, m) == True{} : Bool}) ->
+  {Nat.is_lt(x, 1n+m) == True{} : Bool}:
+  match x m:
+    case 0n 0n:
+      {==}
+    case 0n 1n+q:
+      {==}
+    case 1n+p 0n:
+      no({Nat.is_lt(1n+p, 1n) == True{} : Bool}, e)
+    case 1n+p 1n+q:
+      wl.lt_succ(p, q, e)
+
+def wl.le_up(+x: Nat, +m: Nat, e: {Nat.is_le(x, m) == True{} : Bool}) ->
+  {Nat.is_le(x, 1n+m) == True{} : Bool}:
+  wl.lt_le(x, 1n+m, wl.lt_succ(x, m, e))
+
+def wl.le_addl(+w: Nat, +x: Nat, +n: Nat, e: {Nat.is_le(x, n) == True{} : Bool}) ->
+  {Nat.is_le(x, Nat.add(w, n)) == True{} : Bool}:
+  match w:
+    case 0n:
+      e
+    case 1n+p:
+      wl.le_up(x, Nat.add(p, n), wl.le_addl(p, x, n, e))
+
+def wl.lt_add(+a: Nat, +w: Nat, +x: Nat, +n: Nat, e1: {Nat.is_lt(a, w) == True{} : Bool},
+  e2: {Nat.is_le(x, n) == True{} : Bool}) -> {Nat.is_lt(Nat.add(a, x), Nat.add(w, n)) == True{} : Bool}:
+  match a w:
+    case 0n 0n:
+      no({Nat.is_lt(x, n) == True{} : Bool}, e1)
+    case 0n 1n+q:
+      wl.lt_succ(x, Nat.add(q, n), wl.le_addl(q, x, n, e2))
+    case 1n+p 0n:
+      no({Nat.is_lt(1n+Nat.add(p, x), n) == True{} : Bool}, e1)
+    case 1n+p 1n+q:
+      wl.lt_add(p, q, x, n, e1, e2)
+
+law stream_window:
+  for +held: Bytes()
+  for +x: Bytes()
+  for +win: Nat
+  for +n: Nat
+  for room: {Nat.is_lt(Bytes.len(held), win) == True{} : Bool}
+  for ok: {Nat.is_le(Bytes.len(x), n) == True{} : Bool}
+  {Nat.is_lt(Bytes.len(Bytes.append(held, x)), Nat.add(win, n)) == True{} : Bool}
+
+def stream_window(held, x, win, n, room, ok):
+  %Equal.sym(Nat, Bytes.len(Bytes.append(held, x)), Nat.add(Bytes.len(held), Bytes.len(x)),
+    Bytes.len_append(held, x)) :
+    {Nat.is_lt(_, Nat.add(win, n)) == True{} : Bool}
+  wl.lt_add(Bytes.len(held), win, Bytes.len(x), n, room, ok)
+
+# LAW: the end is told once, after the last byte. A pull tells the
+# consumer the body is over only when the framer says so and nothing
+# is held (so after every byte was taken), and the stream ends with it;
+# while bytes are held, no pull tells it, and no pass ever does
+# (stream_pass).
+def sb.run(
+  ~E: Data, ~R: Data, ~feed: E -> Bytes() -> R -> R, ~take: R -> R & Bytes(),
+  ~look: R -> Bs.Stage, +e: E, +win: Nat, +ms: U32, n: Nat, bq: Bs.Bq<World, R, Snk>
+) -> Bs.Bq<World, R, Snk> & Bs.Why:
+  Bs.run(~Id, ~Id.pure, ~Id.bind, ~World, ~w.rx, ~E, ~R, ~feed, ~take, ~look, ~Snk, ~k.give,
+    ~k.fin, e, win, ms, n, bq)
+
+law stream_fin_last:
+  for ~E: Data
+  for ~R: Data
+  for ~feed: E -> Bytes() -> R -> R
+  for ~take: R -> R & Bytes()
+  for ~look: R -> Bs.Stage
+  for +e: E
+  for +win: Nat
+  for +ms: U32
+  for n: Nat
+  for s: World
+  for +r: R
+  for takes: List<&2, Nat>
+  for got: Bytes()
+  for fins: Nat
+  for +eof: Bool
+  for es: {look(r) == Bs.Ended{} : Bs.Stage}
+  {sb.run(~E, ~R, ~feed, ~take, ~look, e, win, ms, 1n+n, Bs.Bq{s, r, Snk{takes, got, fins}, "", eof}) ==
+    (Bs.Bq{s, r, Snk{takes, got, 1n+fins}, "", eof}, Bs.BDone{}) :
+    Bs.Bq<World, R, Snk> & Bs.Why}
+
+def stream_fin_last(E, R, feed, take, look, e, win, ms, n, s, r, takes, got, fins, eof, es):
+  %Equal.sym(Bs.Stage, look(r), Bs.Ended{}, es) :
+    {Bs.run.next(~Id, ~Id.pure, World, R, Snk,
+      Bs.pull.go(~Id, ~Id.pure, ~Id.bind, ~World, ~w.rx, ~E, ~R, ~feed, ~take, ~Snk, ~k.fin, e,
+        win, ms, _, eof, s, r, Snk{takes, got, fins}, ""),
+      b => Bs.run(~Id, ~Id.pure, ~Id.bind, ~World, ~w.rx, ~E, ~R, ~feed, ~take, ~look, ~Snk,
+        ~k.give, ~k.fin, e, win, ms, n, b)) ==
+      (Bs.Bq{s, r, Snk{takes, got, 1n+fins}, "", eof}, Bs.BDone{}) :
+      Bs.Bq<World, R, Snk> & Bs.Why}
+  {==}
+
+def wl.fits_fins(-R: Data, s: World, r: R, takes: List<&2, Nat>, got: Bytes(), fins: Nat,
+  +held: Bytes(), +x: Bytes(), eof: Bool, ok: Bool) ->
+  {sb.fins(R, Bs.pull.fits(World, R, Snk, s, r, Snk{takes, got, fins}, held, x, eof, ok)) ==
+    fins : Nat}:
+  match ok:
+    case True{}:
+      {==}
+    case False{}:
+      {==}
+
+def wl.fed_fins(-R: Data, s: World, q: R & Bytes(), takes: List<&2, Nat>, got: Bytes(),
+  fins: Nat, +held: Bytes(), eof: Bool, +n: Nat) ->
+  {sb.fins(R, Bs.pull.fed(World, R, Snk, s, q, Snk{takes, got, fins}, held, eof, n)) ==
+    fins : Nat}:
+  (r, +x) = q
+  wl.fits_fins(R, s, r, takes, got, fins, held, x, eof, Nat.is_le(Bytes.len(x), n))
+
+def wl.bytes_fins(~E: Data, ~R: Data, ~feed: E -> Bytes() -> R -> R, ~take: R -> R & Bytes(),
+  +e: E, s: World, r: R, takes: List<&2, Nat>, got: Bytes(), fins: Nat, +held: Bytes(),
+  eof: Bool, empty: Bool, +bs: Bytes()) ->
+  {sb.fins(R, Bs.pull.bytes(~E, ~R, ~feed, ~take, World, Snk, e, s, r, Snk{takes, got, fins},
+    held, eof, empty, bs)) == fins : Nat}:
+  match empty:
+    case True{}:
+      {==}
+    case False{}:
+      wl.fed_fins(R, s, take(feed(e, bs, r)), takes, got, fins, held, eof, Bytes.len(bs))
+
+def wl.cut_fins(-R: Data, s: World, r: R, takes: List<&2, Nat>, got: Bytes(), fins: Nat,
+  held: Bytes(), eof: Bool, er: U32 & String) ->
+  {sb.fins(R, Bs.pull.cut(World, R, Snk, s, r, Snk{takes, got, fins}, held, eof, er)) ==
+    fins : Nat}:
+  (code, msg) = er
+  {==}
+
+def wl.got_fins(~E: Data, ~R: Data, ~feed: E -> Bytes() -> R -> R, ~take: R -> R & Bytes(),
+  +e: E, g: L.Got(World), r: R, takes: List<&2, Nat>, got: Bytes(), fins: Nat, +held: Bytes(),
+  eof: Bool) ->
+  {sb.fins(R, Bs.pull.got(~E, ~R, ~feed, ~take, World, Snk, e, g, r, Snk{takes, got, fins},
+    held, eof)) == fins : Nat}:
+  (s, res) = g
+  match res:
+    case Fail{er}:
+      wl.cut_fins(R, s, r, takes, got, fins, held, eof, er)
+    case Done{may}:
+      match may:
+        case None{}:
+          {==}
+        case Some{+bs}:
+          wl.bytes_fins(~E, ~R, ~feed, ~take, e, s, r, takes, got, fins, held, eof,
+            String.is_empty(bs), bs)
+
+def wl.room_fins(~E: Data, ~R: Data, ~feed: E -> Bytes() -> R -> R, ~take: R -> R & Bytes(),
+  +e: E, +ms: U32, s: World, r: R, takes: List<&2, Nat>, got: Bytes(), fins: Nat,
+  +held: Bytes(), room: Bool) ->
+  {sb.fins(R, Bs.pull.room(~Id, ~Id.pure, ~Id.bind, ~World, ~w.rx, ~E, ~R, ~feed, ~take, ~Snk,
+    e, ms, s, r, Snk{takes, got, fins}, held, False{}, room)) == fins : Nat}:
+  match room:
+    case False{}:
+      {==}
+    case True{}:
+      wl.got_fins(~E, ~R, ~feed, ~take, e, w.rx(s, Bs.chunk(), ms), r, takes, got, fins, held,
+        False{})
+
+def wl.go_fins(~E: Data, ~R: Data, ~feed: E -> Bytes() -> R -> R, ~take: R -> R & Bytes(),
+  +e: E, +win: Nat, +ms: U32, st: Bs.Stage, eof: Bool, s: World, r: R, takes: List<&2, Nat>,
+  got: Bytes(), fins: Nat, +h: Char, +t: Bytes()) ->
+  {sb.fins(R, Bs.pull.go(~Id, ~Id.pure, ~Id.bind, ~World, ~w.rx, ~E, ~R, ~feed, ~take, ~Snk,
+    ~k.fin, e, win, ms, st, eof, s, r, Snk{takes, got, fins}, SCon{h, t})) == fins : Nat}:
+  match st eof:
+    case Bs.Refused{} _:
+      {==}
+    case Bs.Ended{} _:
+      {==}
+    case Bs.Closing{} True{}:
+      {==}
+    case Bs.Going{} True{}:
+      {==}
+    case Bs.Closing{} False{}:
+      wl.room_fins(~E, ~R, ~feed, ~take, e, ms, s, r, takes, got, fins, SCon{h, t},
+        Nat.is_lt(Bytes.len(SCon{h, t}), win))
+    case Bs.Going{} False{}:
+      wl.room_fins(~E, ~R, ~feed, ~take, e, ms, s, r, takes, got, fins, SCon{h, t},
+        Nat.is_lt(Bytes.len(SCon{h, t}), win))
+
+law stream_fin_held:
+  for ~E: Data
+  for ~R: Data
+  for ~feed: E -> Bytes() -> R -> R
+  for ~take: R -> R & Bytes()
+  for ~look: R -> Bs.Stage
+  for +e: E
+  for +win: Nat
+  for +ms: U32
+  for s: World
+  for +r: R
+  for takes: List<&2, Nat>
+  for got: Bytes()
+  for fins: Nat
+  for +h: Char
+  for +t: Bytes()
+  for st: Bs.Stage
+  for eof: Bool
+  for es: {look(r) == st : Bs.Stage}
+  {sb.fins(R, sb.pull(~E, ~R, ~feed, ~take, ~look, e, win, ms,
+    Bs.Bq{s, r, Snk{takes, got, fins}, SCon{h, t}, eof})) == fins : Nat}
+
+def stream_fin_held(E, R, feed, take, look, e, win, ms, s, r, takes, got, fins, h, t, st, eof, es):
+  %Equal.sym(Bs.Stage, look(r), st, es) :
+    {sb.fins(R, Bs.pull.go(~Id, ~Id.pure, ~Id.bind, ~World, ~w.rx, ~E, ~R, ~feed, ~take, ~Snk,
+      ~k.fin, e, win, ms, _, eof, s, r, Snk{takes, got, fins}, SCon{h, t})) == fins : Nat}
+  wl.go_fins(~E, ~R, ~feed, ~take, e, win, ms, st, eof, s, r, takes, got, fins, h, t)
+
+# LAW: a read never brings more body than it brought bytes. When the
+# framer holds more body after a read than the read had bytes (no
+# framer on the kit does; a faulty one might), the stream ends there,
+# holding what it held, rather than grow past its window.
+law wl.fed_over:
+  for -R: Data
+  for s: World
+  for q: R & Bytes()
+  for k: Snk
+  for +held: Bytes()
+  for +n: Nat
+  for over: {Nat.is_le(Bytes.len(sb.qb(R, q)), n) == False{} : Bool}
+  {Bs.pull.fed(World, R, Snk, s, q, k, held, False{}, n) ==
+    (Bs.Bq{s, sb.qs(R, q), k, held, False{}}, Some{Bs.BOver{}}) : Bs.Turn(World, R, Snk)}
+
+def wl.fed_over(R, s, q, k, held, n, over):
+  (r, +x) = q
+  %Equal.sym(Bool, Nat.is_le(Bytes.len(x), n), False{}, over) :
+    {Bs.pull.fits(World, R, Snk, s, r, k, held, x, False{}, _) ==
+      (Bs.Bq{s, r, k, held, False{}}, Some{Bs.BOver{}}) : Bs.Turn(World, R, Snk)}
+  {==}
+
+law stream_over:
+  for ~E: Data
+  for ~R: Data
+  for ~feed: E -> Bytes() -> R -> R
+  for ~take: R -> R & Bytes()
+  for +e: E
+  for +ms: U32
+  for +r: R
+  for k: Snk
+  for +held: Bytes()
+  for +wait: Nat
+  for +h: Char
+  for +t: Bytes()
+  for rd: List<&2, Rd>
+  for wr: List<&2, Wr>
+  for eager: Bool
+  for +now: Nat
+  for fs: List<&2, Fil>
+  for out: Bytes()
+  for ew: {Nat.is_lt(wait, U32.to_nat(ms)) == True{} : Bool}
+  for q: R & Bytes()
+  for eq: {take(feed(e, SCon{h, t}, r)) == q : R & Bytes()}
+  for over: {Nat.is_le(Bytes.len(sb.qb(R, q)), Bytes.len(SCon{h, t})) == False{} : Bool}
+  {Bs.pull.room(~Id, ~Id.pure, ~Id.bind, ~World, ~w.rx, ~E, ~R, ~feed, ~take, ~Snk, e, ms,
+      World{Con{Give{wait, SCon{h, t}}, rd}, wr, eager, now, fs, out}, r, k, held, False{}, True{}) ==
+    (Bs.Bq{World{rd, wr, eager, Nat.add(now, wait), fs, out}, sb.qs(R, q), k, held, False{}},
+      Some{Bs.BOver{}}) : Bs.Turn(World, R, Snk)}
+
+def stream_over(E, R, feed, take, e, ms, r, k, held, wait, h, t, rd, wr, eager, now, fs, out, ew, q,
+  eq, over):
+  %Equal.sym(Bool, Nat.is_lt(wait, U32.to_nat(ms)), True{}, ew) :
+    {Bs.pull.got(~E, ~R, ~feed, ~take, World, Snk, e,
+      w.rx.give(rd, wait, SCon{h, t}, ms, wr, eager, now, fs, out, _), r, k, held, False{}) ==
+      (Bs.Bq{World{rd, wr, eager, Nat.add(now, wait), fs, out}, sb.qs(R, q), k, held, False{}},
+        Some{Bs.BOver{}}) : Bs.Turn(World, R, Snk)}
+  %Equal.sym(R & Bytes(), take(feed(e, SCon{h, t}, r)), q, eq) :
+    {Bs.pull.fed(World, R, Snk, World{rd, wr, eager, Nat.add(now, wait), fs, out}, _, k, held,
+      False{}, Bytes.len(SCon{h, t})) ==
+      (Bs.Bq{World{rd, wr, eager, Nat.add(now, wait), fs, out}, sb.qs(R, q), k, held, False{}},
+        Some{Bs.BOver{}}) : Bs.Turn(World, R, Snk)}
+  wl.fed_over(R, World{rd, wr, eager, Nat.add(now, wait), fs, out}, q, k, held,
+    Bytes.len(SCon{h, t}), over)

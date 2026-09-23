@@ -9,9 +9,9 @@
 // behaves as the case says -- silent, late, too much, a FIN, a reset, a
 // reader through a 16 KiB window, a reader that stops, a flood of
 // connections. It checks what it sees from its side too (the bytes a
-// crawling send delivered, that the flood was shed rather than
-// refused), echoes conform's verdicts, and exits 0 only when both
-// sides passed.
+// crawling send delivered, the very bytes of the file each sendfile
+// put on the wire, that the flood was shed rather than refused),
+// echoes conform's verdicts, and exits 0 only when both sides passed.
 //
 //   bend wire/conform.bend -o conform
 //   cc -std=c11 -O2 -Wall wire/conform.c -o conform-peer -lssl -lcrypto
@@ -111,6 +111,27 @@ static long drain(int fd, int ms) {
   return got;
 }
 
+// read until conform closes the connection, keeping up to cap bytes
+static long slurp(int fd, char* b, long cap, int ms) {
+  long got = 0;
+  for (;;) {
+    ssize_t n = read_for(fd, b + got, cap - got > 65536 ? 65536 : cap - got, ms);
+    if (n <= 0) break;
+    got += n;
+    if (got == cap) break;
+  }
+  close(fd);
+  return got;
+}
+
+// big.bin's byte at i: no two blocks of it alike, so a block sent from
+// the wrong offset shows
+static unsigned char big_at(long i) {
+  return (unsigned char)(i * 7 + (i >> 16));
+}
+
+#define BIG (16L << 20)
+
 static void reset(int fd) {
   struct linger l = { 1, 0 };
   setsockopt(fd, SOL_SOCKET, SO_LINGER, &l, sizeof(l));
@@ -133,6 +154,10 @@ static void files(const char* root) {
   mkdir(p, 0755);
   snprintf(q, sizeof(q), "%s/../conform-outside.txt", root);
   f = fopen(q, "w"); fputs("out\n", f); fclose(f);
+  snprintf(p, sizeof(p), "%s/big.bin", root);
+  f = fopen(p, "w");
+  for (long i = 0; i < BIG; i++) fputc(big_at(i), f);
+  fclose(f);
 }
 
 static int alpn_h11(SSL* ssl, const unsigned char** out, unsigned char* outn,
@@ -321,6 +346,61 @@ int main(int argc, char** argv) {
   // tx.reset: reset before conform sends
   fd = take(0);
   if (fd >= 0) reset(fd);
+
+  // fsend.crawl: big.bin by sendfile through a 16 KiB window read every
+  // 2 ms, far longer than the send's 300 ms deadline; every byte must
+  // arrive, and be the file's
+  fd = take(16384);
+  if (fd >= 0) {
+    char* b = malloc(BIG + 1);
+    long got = 0;
+    for (;;) {
+      ssize_t n = read_for(fd, b + got, BIG + 1 - got > 65536 ? 65536 : BIG + 1 - got, 5000);
+      if (n <= 0) break;
+      got += n;
+      nap(2);
+    }
+    close(fd);
+    long bad = got == BIG ? 0 : 1;
+    for (long i = 0; i < got && i < BIG && bad == 0; i++) bad = (unsigned char)b[i] != big_at(i);
+    free(b);
+    char what[128];
+    snprintf(what, sizeof(what), "fsend.crawl delivered %ld of %ld bytes, %s", got, BIG,
+      bad ? "not the file's" : "the file's");
+    ok(bad == 0, what);
+  }
+
+  // fsend.part: a.txt from 1, 3 bytes: "lph", and nothing else
+  fd = take(0);
+  if (fd >= 0) {
+    char b[64];
+    long got = slurp(fd, b, sizeof(b), 5000);
+    ok(got == 3 && memcmp(b, "lph", 3) == 0, "fsend.part delivered the file's bytes 1 to 3");
+  }
+
+  // fsend.short: a.txt from 3, 100 bytes asked: the 3 it has, "ha\n"
+  fd = take(0);
+  if (fd >= 0) {
+    char b[256];
+    long got = slurp(fd, b, sizeof(b), 5000);
+    ok(got == 3 && memcmp(b, "ha\n", 3) == 0, "fsend.short delivered what the file had");
+  }
+
+  // fsend.stall: read nothing; conform's sendfile must give up after
+  // 300 ms, and what did arrive is the file's head
+  fd = take(4096);
+  if (fd >= 0) {
+    nap(1500);
+    char* b = malloc(BIG);
+    long got = slurp(fd, b, BIG, 5000);
+    long bad = 0;
+    for (long i = 0; i < got && bad == 0; i++) bad = (unsigned char)b[i] != big_at(i);
+    free(b);
+    char what[128];
+    snprintf(what, sizeof(what), "fsend.stall delivered %ld of %ld bytes before it gave up", got,
+      BIG);
+    ok(got < BIG && bad == 0, what);
+  }
 
   // lsn.emfile: 80 connections at once against 48 descriptors. Those it
   // cannot hold are shed (closed at once), not left to wake it forever;
