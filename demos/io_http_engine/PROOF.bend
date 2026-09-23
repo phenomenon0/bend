@@ -1,13 +1,16 @@
 # The proofs of the HTTP engine laws.
 #
-# feed_split and bad_feeds are inductions on the chunk: feed walks the
-# string structurally and ++ builds it the same way, so in the cons
-# case both sides step the reader once and the induction hypothesis is
-# already the goal. bad_absorbs and the five reply laws compute: the
+# feed_split and bad_feeds, and the block walk's laws, are the reader
+# kit's (wire/reader.bend), proven once there for every reader and
+# instantiated here at Eng.step; the engine proves the kit's two
+# obligations, that a refused reader is a fixed point of the step
+# (bad_absorbs) and that every move of its block walk lands where
+# stepping its bytes does (lem.adv). bad_absorbs and the five reply laws compute: the
 # machine's last row sends Bad{} to Bad{} whatever the byte class is,
 # and each written-out reply normalises to the same string the builder
 # does.
 import Base
+import ../../wire/reader.bend as Wr
 import ./main.bend as Eng
 import ./sha1.bend as Sha1
 import ./b64.bend as B64
@@ -17,21 +20,27 @@ import ./world.bend as W
 import ./LAWS.bend as Laws
 
 def Laws.feed_split(a, b, p):
-  match a:
-    case Nil{}:
-      {==}
-    case Con{c, t}:
-      Laws.feed_split(t, b, Eng.step(p, c))
+  Wr.feed_split(~Unit, ~Eng.P, ~Eng.wstep, Unit{}, a, b, p)
 
 def Laws.bad_absorbs(c, pd, out):
   {==}
 
+# a refused reader, as the kit's absorbing states, and the obligation
+type BadAt is Data:
+  BadAt{pd: Eng.Pend, out: List<&2, Eng.Req>}
+
+def bad(x: BadAt) -> Eng.P:
+  match x:
+    case BadAt{pd, out}:
+      Eng.P{Eng.Bad{}, pd, out}
+
+def absorbs(+u: Unit, +x: BadAt, +c: U32) -> {Eng.wstep(u, bad(x), c) == bad(x) : Eng.P}:
+  match x:
+    case BadAt{pd, out}:
+      Laws.bad_absorbs(c, pd, out)
+
 def Laws.bad_feeds(s, pd, out):
-  match s:
-    case Nil{}:
-      {==}
-    case Con{c, t}:
-      Laws.bad_feeds(t, pd, out)
+  Wr.bad_feeds(~Unit, ~Eng.P, ~Eng.wstep, ~BadAt, ~bad, ~absorbs, Unit{}, s, BadAt{pd, out})
 
 # Framing
 # =======
@@ -206,11 +215,7 @@ def lem.stay(sel: Eng.Run, k: Eng.Cls, -c: U32, -acc: Bytes(), -pd: Eng.Pend,
 
 def slow_is_feed(s: Bytes(), p: Eng.P) ->
   {Eng.feed_buf.slow(s, p) == Eng.feed(Bytes.to_list(s), p) : Eng.P}:
-  match s:
-    case SNil{}:
-      {==}
-    case SCon{Chr{c}, t}:
-      slow_is_feed(t, Eng.step(p, c))
+  Wr.slow_is_feed(~Unit, ~Eng.P, ~Eng.wstep, Unit{}, s, p)
 
 # Bytes joined
 def app_nil(a: Bytes()) -> {Bytes.append(a, "") == a : Bytes()}:
@@ -772,47 +777,28 @@ def lem.adv(+s: Bytes(), p: Eng.P) ->
     case Eng.P{st, pd, out}:
       lem.adv.at(st, s, pd, out)
 
-# the fuel never matters
+# the kit's obligation: every move lands where stepping its bytes does
+def adv_ok(+u: Unit, +s: Bytes(), p: Eng.P) ->
+  {Wr.feed_buf.last(~Unit, ~Eng.P, ~Eng.wstep, u, Eng.wadv(u, s, p)) ==
+    Wr.feed_buf.slow(~Unit, ~Eng.P, ~Eng.wstep, u, s, p) : Eng.P}:
+  match u:
+    case Unit{}:
+      lem.adv(s, p)
+
+# the fuel never matters (the kit's go_is_slow)
 def lem.go(n: Nat, q: Eng.P & Bytes()) ->
-  {Eng.feed_buf.go(n, q) == Eng.feed_buf.last(q) : Eng.P}:
-  match n:
-    case 0n:
-      {==}
-    case 1n+m:
-      match q:
-        case (p, SNil{}):
-          {==}
-        case (+p, SCon{+h, +t}):
-          Equal.trans(Eng.P, Eng.feed_buf.go(m, Eng.adv(SCon{h, t}, p)),
-            Eng.feed_buf.last(Eng.adv(SCon{h, t}, p)), Eng.feed_buf.slow(SCon{h, t}, p),
-            lem.go(m, Eng.adv(SCon{h, t}, p)), lem.adv(SCon{h, t}, p))
+  {Wr.feed_buf.go(~Unit, ~Eng.P, ~Eng.wstep, ~Eng.wadv, Unit{}, n, q) == Eng.feed_buf.last(q) : Eng.P}:
+  Wr.go_is_slow(~Unit, ~Eng.P, ~Eng.wstep, ~Eng.wadv, ~adv_ok, Unit{}, n, q)
 
 def Laws.feed_buf_is_feed(b, p):
-  Equal.trans(Eng.P, Eng.feed_buf(b, p), Eng.feed_buf.slow(b, p), Eng.feed(Bytes.to_list(b), p),
-    lem.go(Bytes.len(b), (p, b)), slow_is_feed(b, p))
+  Wr.feed_buf_is_feed(~Unit, ~Eng.P, ~Eng.wstep, ~Eng.wadv, ~adv_ok, Unit{}, b, p)
 
 def Laws.feed_buf_split(a, b, p):
-  %Equal.sym(Eng.P, Eng.feed_buf(Bytes.append(a, b), p),
-    Eng.feed(Bytes.to_list(Bytes.append(a, b)), p), Laws.feed_buf_is_feed(Bytes.append(a, b), p)) :
-    {_ == Eng.feed_buf(b, Eng.feed_buf(a, p)) : Eng.P}
-  %Equal.sym(List<&2, U32>, Bytes.to_list(Bytes.append(a, b)),
-    List.append(&2, U32, Bytes.to_list(a), Bytes.to_list(b)), Bytes.to_list_append(a, b)) :
-    {Eng.feed(_, p) == Eng.feed_buf(b, Eng.feed_buf(a, p)) : Eng.P}
-  %Equal.sym(Eng.P, Eng.feed(List.append(&2, U32, Bytes.to_list(a), Bytes.to_list(b)), p),
-    Eng.feed(Bytes.to_list(b), Eng.feed(Bytes.to_list(a), p)),
-    Laws.feed_split(Bytes.to_list(a), Bytes.to_list(b), p)) :
-    {_ == Eng.feed_buf(b, Eng.feed_buf(a, p)) : Eng.P}
-  %Laws.feed_buf_is_feed(a, p) :
-    {Eng.feed(Bytes.to_list(b), _) == Eng.feed_buf(b, Eng.feed_buf(a, p)) : Eng.P}
-  Equal.sym(Eng.P, Eng.feed_buf(b, Eng.feed_buf(a, p)),
-    Eng.feed(Bytes.to_list(b), Eng.feed_buf(a, p)), Laws.feed_buf_is_feed(b, Eng.feed_buf(a, p)))
+  Wr.feed_buf_split(~Unit, ~Eng.P, ~Eng.wstep, ~Eng.wadv, ~adv_ok, Unit{}, a, b, p)
 
 def Laws.bad_feeds_buf(s, pd, out):
-  %Equal.sym(Eng.P, Eng.feed_buf(s, Eng.P{Eng.Bad{}, pd, out}),
-    Eng.feed(Bytes.to_list(s), Eng.P{Eng.Bad{}, pd, out}),
-    Laws.feed_buf_is_feed(s, Eng.P{Eng.Bad{}, pd, out})) :
-    {_ == Eng.P{Eng.Bad{}, pd, out} : Eng.P}
-  Laws.bad_feeds(Bytes.to_list(s), pd, out)
+  Wr.bad_feeds_buf(~Unit, ~Eng.P, ~Eng.wstep, ~Eng.wadv, ~adv_ok, ~BadAt, ~bad, ~absorbs, Unit{}, s,
+    BadAt{pd, out})
 
 # the runtime compares two blocks by their order; at the first pair of
 # bytes it says LT or GT and stops, or EQ and goes on, which is the
@@ -1557,69 +1543,33 @@ def Laws.ws_accept():
   {==}
 
 def Laws.ws_feed_split(a, b, w):
-  match a:
-    case Nil{}:
-      {==}
-    case Con{c, t}:
-      Laws.ws_feed_split(t, b, Ws.step(w, c))
+  Wr.feed_split(~Unit, ~Ws.W, ~Ws.wstep, Unit{}, a, b, w)
 
 def Laws.ws_bad_absorbs(c, out):
   {==}
 
+# a refused frame reader, as the kit's absorbing states
+def ws.bad(out: List<&2, Ws.Frm>) -> Ws.W:
+  Ws.W{Ws.Bad{}, out}
+
+def ws.absorbs(+u: Unit, +out: List<&2, Ws.Frm>, +c: U32) ->
+  {Ws.wstep(u, ws.bad(out), c) == ws.bad(out) : Ws.W}:
+  Laws.ws_bad_absorbs(c, out)
+
 def Laws.ws_bad_feeds(s, out):
-  match s:
-    case Nil{}:
-      {==}
-    case Con{c, t}:
-      Laws.ws_bad_feeds(t, out)
+  Wr.bad_feeds(~Unit, ~Ws.W, ~Ws.wstep, ~List<&2, Ws.Frm>, ~ws.bad, ~ws.absorbs, Unit{}, s, out)
 
-# ws_feed_buf: the two walks step the same machine on the same byte, so
-# the cons case is the hypothesis on the stepped state.
+# the frame reader walks a read a byte at a time, so its block laws are
+# the kit's for the slow walk, with no obligation
 def Laws.ws_feed_buf(b, w):
-  match b:
-    case SNil{}:
-      {==}
-    case SCon{Chr{c}, t}:
-      Laws.ws_feed_buf(t, Ws.step(w, c))
+  Wr.slow_is_feed(~Unit, ~Ws.W, ~Ws.wstep, Unit{}, b, w)
 
-# ws_feed_buf_split: through the lists. Each buffer walk is the list
-# walk of its bytes, the bytes of a join are the join of the bytes, and
-# the list reader splits.
 def Laws.ws_feed_buf_split(a, b, w):
-  Equal.trans(Ws.W, Ws.feed_buf(Bytes.append(a, b), w),
-    Ws.feed(Bytes.to_list(Bytes.append(a, b)), w),
-    Ws.feed_buf(b, Ws.feed_buf(a, w)),
-    Laws.ws_feed_buf(Bytes.append(a, b), w),
-    Equal.trans(Ws.W, Ws.feed(Bytes.to_list(Bytes.append(a, b)), w),
-      Ws.feed(List.append(&2, U32, Bytes.to_list(a), Bytes.to_list(b)), w),
-      Ws.feed_buf(b, Ws.feed_buf(a, w)),
-      Equal.cong(List<&2, U32>, Ws.W, xs => Ws.feed(xs, w),
-        Bytes.to_list(Bytes.append(a, b)),
-        List.append(&2, U32, Bytes.to_list(a), Bytes.to_list(b)),
-        Bytes.to_list_append(a, b)),
-      Equal.trans(Ws.W,
-        Ws.feed(List.append(&2, U32, Bytes.to_list(a), Bytes.to_list(b)), w),
-        Ws.feed(Bytes.to_list(b), Ws.feed(Bytes.to_list(a), w)),
-        Ws.feed_buf(b, Ws.feed_buf(a, w)),
-        Laws.ws_feed_split(Bytes.to_list(a), Bytes.to_list(b), w),
-        Equal.trans(Ws.W,
-          Ws.feed(Bytes.to_list(b), Ws.feed(Bytes.to_list(a), w)),
-          Ws.feed(Bytes.to_list(b), Ws.feed_buf(a, w)),
-          Ws.feed_buf(b, Ws.feed_buf(a, w)),
-          Equal.cong(Ws.W, Ws.W, v => Ws.feed(Bytes.to_list(b), v),
-            Ws.feed(Bytes.to_list(a), w), Ws.feed_buf(a, w),
-            Equal.sym(Ws.W, Ws.feed_buf(a, w), Ws.feed(Bytes.to_list(a), w),
-              Laws.ws_feed_buf(a, w))),
-          Equal.sym(Ws.W, Ws.feed_buf(b, Ws.feed_buf(a, w)),
-            Ws.feed(Bytes.to_list(b), Ws.feed_buf(a, w)),
-            Laws.ws_feed_buf(b, Ws.feed_buf(a, w)))))))
+  Wr.slow_split(~Unit, ~Ws.W, ~Ws.wstep, Unit{}, a, b, w)
 
 def Laws.ws_bad_feeds_buf(s, out):
-  match s:
-    case SNil{}:
-      {==}
-    case SCon{Chr{c}, t}:
-      Laws.ws_bad_feeds_buf(t, out)
+  Wr.bad_feeds_slow(~Unit, ~Ws.W, ~Ws.wstep, ~List<&2, Ws.Frm>, ~ws.bad, ~ws.absorbs, Unit{}, s,
+    out)
 
 def Laws.ws_read_text():
   {==}
@@ -9217,34 +9167,11 @@ def Laws.frame_sim_buf(b):
     Laws.feed_buf_is_feed(b, Eng.p.new())) : Laws.agree(_, Spec.frame(Bytes.to_list(b)))
   frame.sim(Bytes.to_list(b))
 
-# reads fed one after another are their bytes fed at once
+# reads fed one after another are their bytes fed at once (the kit's
+# reads_is)
 def reads.is(rs: List<&2, Bytes()>, +p: Eng.P) ->
   {Laws.reads(rs, p) == Eng.feed(Bytes.to_list(Bytes.concat(rs)), p) : Eng.P}:
-  match rs:
-    case Nil{}:
-      {==}
-    case Con{+r, +t}:
-      Equal.trans(Eng.P, Laws.reads(t, Eng.feed_buf(r, p)),
-        Eng.feed(Bytes.to_list(Bytes.concat(t)), Eng.feed_buf(r, p)),
-        Eng.feed(Bytes.to_list(Bytes.append(r, Bytes.concat(t))), p),
-        reads.is(t, Eng.feed_buf(r, p)),
-        Equal.trans(Eng.P, Eng.feed(Bytes.to_list(Bytes.concat(t)), Eng.feed_buf(r, p)),
-          Eng.feed(Bytes.to_list(Bytes.concat(t)), Eng.feed(Bytes.to_list(r), p)),
-          Eng.feed(Bytes.to_list(Bytes.append(r, Bytes.concat(t))), p),
-          Equal.cong(Eng.P, Eng.P, x => Eng.feed(Bytes.to_list(Bytes.concat(t)), x), Eng.feed_buf(r, p),
-            Eng.feed(Bytes.to_list(r), p), Laws.feed_buf_is_feed(r, p)),
-          Equal.trans(Eng.P, Eng.feed(Bytes.to_list(Bytes.concat(t)), Eng.feed(Bytes.to_list(r), p)),
-            Eng.feed(List.append(&2, U32, Bytes.to_list(r), Bytes.to_list(Bytes.concat(t))), p),
-            Eng.feed(Bytes.to_list(Bytes.append(r, Bytes.concat(t))), p),
-            Equal.sym(Eng.P, Eng.feed(List.append(&2, U32, Bytes.to_list(r), Bytes.to_list(Bytes.concat(t))), p),
-              Eng.feed(Bytes.to_list(Bytes.concat(t)), Eng.feed(Bytes.to_list(r), p)),
-              Laws.feed_split(Bytes.to_list(r), Bytes.to_list(Bytes.concat(t)), p)),
-            Equal.cong(List<&2, U32>, Eng.P, x => Eng.feed(x, p),
-              List.append(&2, U32, Bytes.to_list(r), Bytes.to_list(Bytes.concat(t))),
-              Bytes.to_list(Bytes.append(r, Bytes.concat(t))),
-              Equal.sym(List<&2, U32>, Bytes.to_list(Bytes.append(r, Bytes.concat(t))),
-                List.append(&2, U32, Bytes.to_list(r), Bytes.to_list(Bytes.concat(t))),
-                Bytes.to_list_append(r, Bytes.concat(t)))))))
+  Wr.reads_is(~Unit, ~Eng.P, ~Eng.wstep, ~Eng.wadv, ~adv_ok, Unit{}, rs, p)
 
 def Laws.frame_sim_reads(rs):
   %Equal.sym(Eng.P, Laws.reads(rs, Eng.p.new()), Eng.feed(Bytes.to_list(Bytes.concat(rs)), Eng.p.new()),

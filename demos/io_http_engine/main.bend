@@ -38,6 +38,7 @@
 #   bend demos/io_http_engine/main.bend -o httpd && ./httpd
 #   curl -i http://127.0.0.1:8080/health
 import Base
+import ../../wire/reader.bend as Wr
 import ./ws.bend as Ws
 
 # Bytes
@@ -1401,25 +1402,22 @@ def step(p: P, +c: U32) -> P:
     case P{st, pd, out}:
       step.at(st, cls(c), c, pd, out)
 
+# The walk is the reader kit's (wire/reader.bend): the step as the kit
+# takes it (Unit beside the state: the head grammar has no dialect).
+def wstep(u: Unit, p: P, c: U32) -> P:
+  step(p, c)
+
 # feed: the machine over a byte list, one byte at a time. The reader
 # state that comes out is the reader state to feed the next chunk, so a
 # message split anywhere parses exactly like a message that arrived
 # whole. It is the reference the engine's own walk, feed_buf, is proved
 # equal to.
 def feed(s: List<&2, U32>, p: P) -> P:
-  match s:
-    case Nil{}:
-      p
-    case Con{c, t}:
-      feed(t, step(p, c))
+  Wr.feed(~Unit, ~P, ~wstep, Unit{}, s, p)
 
 # The same walk over Bytes, a byte at a time.
 def feed_buf.slow(s: Bytes(), p: P) -> P:
-  match s:
-    case SNil{}:
-      p
-    case SCon{Chr{c}, t}:
-      feed_buf.slow(t, step(p, c))
+  Wr.feed_buf.slow(~Unit, ~P, ~wstep, Unit{}, s, p)
 
 # The walk the engine runs. Where a state reads a run of bytes without
 # a transition -- a method, a target, a version, a name, a key, a value
@@ -1690,25 +1688,17 @@ def adv(s: Bytes(), p: P) -> P & Bytes():
 
 # the rest of a walk the fuel ran out on, a byte at a time
 def feed_buf.last(q: P & Bytes()) -> P:
-  (p, s) = q
-  feed_buf.slow(s, p)
+  Wr.feed_buf.last(~Unit, ~P, ~wstep, Unit{}, q)
 
-# n bounds the moves; every move takes at least one byte, so a walk
-# over n bytes never runs out
-def feed_buf.go(n: Nat, q: P & Bytes()) -> P:
-  match n:
-    case 0n:
-      feed_buf.last(q)
-    case 1n+m:
-      (p, s) = q
-      match s:
-        case SNil{}:
-          p
-        case SCon{h, t}:
-          feed_buf.go(m, adv(SCon{h, t}, p))
+# The block walk is the kit's, moving by adv: the kit bounds the moves
+# by the read's length (every move takes at least one byte) and proves
+# the walk is feed given that adv lands where stepping its bytes does
+# (PROOF.bend's lem.adv).
+def wadv(u: Unit, s: Bytes(), p: P) -> P & Bytes():
+  adv(s, p)
 
 def feed_buf(+s: Bytes(), p: P) -> P:
-  feed_buf.go(Bytes.len(s), (p, s))
+  Wr.feed_buf(~Unit, ~P, ~wstep, ~wadv, Unit{}, s, p)
 
 # the finished messages, oldest first, and the reader with them cleared
 def p.take(p: P) -> P & List<&2, Req>:

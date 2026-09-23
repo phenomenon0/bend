@@ -26,8 +26,8 @@
 #            step(e, bad(x), c) == bad(x)
 #
 # and what it gets for them is below: chunking never changes a read
-# (feed_split, feed_buf_split, reads_split), a refusal is never left
-# (bad_feeds, bad_feeds_buf), the block walk is the byte machine
+# (feed_split, feed_buf_split, slow_split, reads_split), a refusal is never left
+# (bad_feeds, bad_feeds_buf, bad_feeds_slow), the block walk is the byte machine
 # (feed_buf_is_feed), and however a stream is cut into reads the reader
 # reads it as the stream whole (reads_is).
 import Base
@@ -199,6 +199,47 @@ def slow_is_feed(E, S, step, e, s, p):
       {==}
     case SCon{Chr{c}, t}:
       slow_is_feed(~E, ~S, ~step, e, t, step(e, p, c))
+
+# LAW: a protocol that walks a read a byte at a time (feed_buf.slow, no
+# moves to prove) has the block laws with no obligation at all.
+law slow_split:
+  for ~E: Data
+  for ~S: Data
+  for ~step: E -> S -> U32 -> S
+  for +e: E
+  for +a: Bytes()
+  for +b: Bytes()
+  for +p: S
+  {feed_buf.slow(~E, ~S, ~step, e, Bytes.append(a, b), p) ==
+    feed_buf.slow(~E, ~S, ~step, e, b, feed_buf.slow(~E, ~S, ~step, e, a, p)) : S}
+
+def slow_split(E, S, step, e, a, b, p):
+  match a:
+    case SNil{}:
+      {==}
+    case SCon{Chr{c}, t}:
+      slow_split(~E, ~S, ~step, e, t, b, step(e, p, c))
+
+law bad_feeds_slow:
+  for ~E: Data
+  for ~S: Data
+  for ~step: E -> S -> U32 -> S
+  for ~X: Data
+  for ~bad: X -> S
+  for ~absorbs: @+e: E -> @+x: X -> @+c: U32 -> {step(e, bad(x), c) == bad(x) : S}
+  for +e: E
+  for +s: Bytes()
+  for +x: X
+  {feed_buf.slow(~E, ~S, ~step, e, s, bad(x)) == bad(x) : S}
+
+def bad_feeds_slow(E, S, step, X, bad, absorbs, e, s, x):
+  match s:
+    case SNil{}:
+      {==}
+    case SCon{Chr{c}, t}:
+      %Equal.sym(S, step(e, bad(x), c), bad(x), absorbs(e, x, c)) :
+        {feed_buf.slow(~E, ~S, ~step, e, t, _) == bad(x) : S}
+      bad_feeds_slow(~E, ~S, ~step, ~X, ~bad, ~absorbs, e, t, x)
 
 # the one-byte move keeps the obligation: a protocol with no runs hands
 # in one.step and one.step_ok

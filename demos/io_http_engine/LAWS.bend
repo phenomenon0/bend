@@ -3,6 +3,7 @@
 # reader has to get right, and the one optimisation that would
 # otherwise be a comment nobody checks.
 import Base
+import ../../wire/reader.bend as Wr
 import ./main.bend as Eng
 import ./sha1.bend as Sha1
 import ./b64.bend as B64
@@ -616,12 +617,9 @@ law frame_sim_buf:
 
 # ... and over a connection's reads however TCP cut them: the reader
 # fed each read in turn agrees with frame() of them all, joined.
+# (the reader kit's walk over a list of reads, wire/reader.bend)
 def reads(rs: List<&2, Bytes()>, p: Eng.P) -> Eng.P:
-  match rs:
-    case Nil{}:
-      p
-    case Con{r, t}:
-      reads(t, Eng.feed_buf(r, p))
+  Wr.reads(~Unit, ~Eng.P, ~Eng.wstep, ~Eng.wadv, Unit{}, rs, p)
 
 law frame_sim_reads:
   for +rs: List<&2, Bytes()>

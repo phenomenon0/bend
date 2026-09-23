@@ -12,7 +12,8 @@
 #   keeps only frame_sim, frame_sim_buf, frame_sim_reads and the laws
 #   their proofs stand on -- every rule-by-rule law and every vector is
 #   removed, with its proof, and so are the world's -- so a kill there
-#   is frame_sim's and no other law's. The copy is checked clean first.
+#   is frame_sim's and no other law's. The copy (beside a copy of wire/,
+#   which it imports) is checked clean first.
 #
 #   python3 demos/io_http_engine/mutants.py        (from the repo root)
 import os, re, shutil, subprocess, sys, tempfile
@@ -174,8 +175,11 @@ def main():
         print('KILLED   %s -- %s' % (name, where(out)))
   finally:
     open(MAIN, 'w').write(orig)
-  d = tempfile.mkdtemp(prefix='frame_sim_')
+  top = tempfile.mkdtemp(prefix='frame_sim_')
+  d = os.path.join(top, 'demos', 'io_http_engine')
   try:
+    os.makedirs(d)
+    shutil.copytree(os.path.join(ROOT, 'wire'), os.path.join(top, 'wire'))
     for f in os.listdir(HERE):
       if f.endswith('.bend'):
         shutil.copy(os.path.join(HERE, f), d)
@@ -198,7 +202,7 @@ def main():
       else:
         print('KILLED   %s -- %s' % (name, where(out)))
   finally:
-    shutil.rmtree(d, ignore_errors=True)
+    shutil.rmtree(top, ignore_errors=True)
   print('mutants: %d / %d killed' % (total - bad, total))
   sys.exit(1 if bad else 0)
 
