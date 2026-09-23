@@ -48,7 +48,7 @@ timeouts, graceful shutdown, and a shared port for running one copy per
 core. A 1.6 MB binary, linked against libc, libm, libssl and libcrypto. `demos/io_resp` is a RESP reader written to
 test whether the approach generalises (see **What is unfinished**).
 
-    bend demos/io_http_engine/PROOF.bend          # 95 laws
+    bend demos/io_http_engine/PROOF.bend          # 165 laws
     bend demos/io_http_engine/main.bend -o httpd
     ./httpd --port 8080 --root www --tls-cert cert.pem --tls-key key.pem
 
