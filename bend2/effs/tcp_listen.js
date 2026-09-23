@@ -15,7 +15,8 @@ function tcp_listen(port) {
     sys.close(fd);
     return io_fail(22);
   }
-  if (sys.bind(fd, sys.ptr(at), 16) < 0 || sys.listen(fd, 16) < 0
+  // the backlog is clamped to the kernel's limit (somaxconn)
+  if (sys.bind(fd, sys.ptr(at), 16) < 0 || sys.listen(fd, 4096) < 0
     || sys.fcntl(fd, 4, sys.fcntl(fd, 3, 0) | (sys.mac ? 4 : 0x800)) < 0) {
     const code = sys.errno();
     sys.close(fd);
