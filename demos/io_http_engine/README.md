@@ -1,10 +1,12 @@
 # io_http_engine
 
 An HTTP/1.1 engine in Bend: a streaming request parser, a router and a
-server, with the parser's laws proved by the stock checker. No host
-language in the path — the socket is Bend's own effect.
+server, with the parser's laws, and the connection and accept loops'
+laws against a model of the socket world, proved by the stock checker.
+No host language in the path — the socket is Bend's own effect.
 
     bend demos/io_http_engine/PROOF.bend        # the gate: laws hold
+    python3 demos/io_http_engine/mutants.py     # and refuse nine broken loops
     bend demos/io_http_engine/main.bend -o httpd
     ./httpd --port 8080 --root www --idle-ms 10000 --max-conns 1024 --grace-ms 5000
     ./httpd --shared & ./httpd --shared &          # one port, one copy per core
@@ -460,6 +462,109 @@ served, DEL forgotten as a control byte, a one-digit content-length, a
 linefeed that escapes `Bad{}`, a `feed` that drops state at a chunk
 boundary, a head one byte long, a climb claimed to resolve, and a
 duplicate route are all rejected, with the two terms printed.
+
+## The world
+
+Every critical bug the review found was in the effects the connection
+loop runs, not in anything a law spoke of: an accept loop that died on
+EMFILE, a send with no deadline, buffering with no bound, SIGTERM
+unseen. They were fixed and tested. This is how they became theorems.
+
+The loops are written once. `conn`, `turn`, `send.segs` and everything
+under them, and the accept loop's `accept.run`, take the monad and each
+effect as template parameters: `~M`, `~pure`, `~bind`, the socket and
+file types, `~rx` (`TCP.poll_buf`), `~tx` (`TCP.send_buf_poll`), `~clk`,
+`~nap`, `~say`, `~fopen`, `~fsize`, `~fread`, `~fclose`; for the accept
+loop `~lsn` (`TCP.accept_poll`), `~sig` and `~hand`. `start` and
+`accept` instantiate them with `IO` and the effects themselves. A
+template is substituted at compile time, so the server runs what it ran
+before: callgrind counts 46,672 instructions per request at pipeline 8
+against 46,711 before, and 54,058 against 54,093 at pipeline 1. The loop
+answers the socket instead of closing it, so the caller closes it and
+gives the slot back; `send.segs` takes no read effect, so it cannot
+read; the `@unsafe` accept only starts `accept.run` again when its 2^20
+turns are spent.
+
+`world.bend` instantiates the same defs with the identity monad and a
+pure world. The socket is the world: every effect already hands its
+handle back, so the handle can carry a scripted peer -- reads that
+arrive after a wait, stay silent or fail; sends it takes a piece at a
+time, stalls on or resets; whether it takes everything once its script
+is spent -- with a clock, the files under the root and every byte the
+peer has taken. A mute peer (it has stopped: every read waits out its
+time, every send with bytes to move fails) and a scripted listener
+(arrivals, quiet ticks, failures with any code, a SIGTERM) complete it.
+
+For every script and every state the loop can be in, `LAWS.bend` says:
+
+- `end_is_last`, `stop_is_last`: a plan that ends the connection is its
+  last act. After `End` the loop writes the segments and answers the
+  socket, with nothing read and nothing more written; after `Stop`,
+  nothing at all.
+- `go_order`, `segs_wire`: a plan that reads on writes all its replies
+  first, and at a peer that takes them they go out byte for byte, in
+  the order of their segments, after whatever it already had.
+- `fail_go`, `fail_ws`, `fail_feed`: a send that failed or stalled is
+  the connection's last act on its socket, whether it carried a read's
+  replies, a WebSocket's frames or a stream's event.
+- `refuse_plan`, `refuse_conn`: when the requests a read completed all
+  keep the connection and the grammar then broke, the connection writes
+  every reply they are owed, in order, then the `400`, and ends; it
+  reads nothing more, so no request after the refusal is consumed.
+- `hold_fine`, `raw_fine`, `page_fine`: a writer that may still take
+  replies holds a batch below `send.cap()` after any reply -- fixed, a
+  missing file, a file of any size streamed in blocks -- whatever the
+  peer does. So what is held unsent is at most the cap and one reply,
+  or a file's head and one `page.chunk()` block.
+- `head_capped`: a read that leaves a head in progress leaves it at
+  most `head.cap()` bytes past the read it began in; past that it is a
+  `431` and the end. With reads of at most `chunk()` bytes, a head held
+  is at most `chunk()` + `head.cap()`, and a body at most `body.cap()`
+  (the reader's cap). Held in all: 16 + 16 KiB of head, 1 MiB of body, 1
+  MiB of batch, one reply.
+- `head_expires`: a head whose `--head-ms` has run out is not read
+  again; the turn ends the connection whatever the peer would send.
+- `stall_ends`: at the mute peer the connection ends within three turns
+  from any state: fuel past three changes nothing. Each of those turns
+  lasts at most its deadline, by the contracts below.
+- `accept_calm`, `accept_ends`: with no stop request and every accept
+  failure one of the passing set (EMFILE, ECONNABORTED, ...), the accept
+  loop runs every turn it is given; it ends only for a stop request or
+  a code outside that set. The model lets accept fail with any code at
+  any time, so this assumes nothing of `accept_poll`'s own sorting.
+- `rx_model`, `tx_stalled`, `tx_served`, `fread_model`: the model keeps
+  the contracts it assumes.
+
+Each effect's contract is written beside it in `bend2/base.bend` and, as
+a relation on what one call answers, in `world.bend` (`rx.ok`, `tx.ok`,
+`lsn.ok`, `fopen.ok`, `fread.ok`). `conform.bend` is the bridge to C: it
+drives the real effects through their contracts' cases and judges what
+they answer with those same relations, while `conform.c` plays the peer
+(silent, 100 ms late, ten bytes to a read of four, a FIN, a reset, a
+16 KiB window it drains every 2 ms, a reader that stops, a reset before
+a send, 80 connections at once against 48 descriptors) and checks its
+own side: all 16 MiB of the crawl arrived though the send outlived its
+300 ms deadline six times over, the stall gave up short, and 40 of the
+80 were shed while the listener went on to serve the last. 17 and 5
+cases pass, on each run in CI.
+
+`mutants.py` breaks the loop nine ways -- no head deadline, no batch
+cap, a reply after close, a queued reply skipped on refusal, the accept
+loop out on EMFILE, a reply before the batch it follows, a WebSocket
+that reads on after its send failed, a silent peer waited on again, an
+emptied file's head left uncapped -- and `PROOF.bend` refuses every
+one, in CI too.
+
+Three of those nine were bugs, found by writing the proofs: `turn.ws`
+read on after a failed send, so a peer that sent pings and never read
+held its connection for the whole fuel; `pump.left` left an emptied
+file's head in the batch without the cap's test, so a pipelined read of
+empty files grew it by a head each; and the accept loop ended on any
+accept failure, trusting `accept_poll` to have absorbed the passing
+ones. What stays trusted: the effects themselves, in the cases
+`conform` does not try; the parser's own bound on a body; `IO.bind`,
+`IO.pure` and the event loop that runs them; and that the template
+substitution the compiler does is the one the checker saw.
 
 ## The control and the checks
 

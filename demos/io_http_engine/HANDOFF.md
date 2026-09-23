@@ -61,6 +61,14 @@ catch different things and three of them have caught real bugs:
   the reader, route tables,
   specific paths, literals proved equal to their builder -- which are
   test vectors the compiler recomputes and so cannot rot.
+- **`world.bend`, `conform.bend`, `mutants.py`** -- the connection
+  and accept loops are written over an effect interface and run, in
+  `world.bend`, against a scripted peer; their safety properties (the
+  last act, reply order, refusal, the buffers' bounds, the head's
+  deadline, a stopped peer let go, the accept loop staying up) are
+  laws in `PROOF.bend`. `conform` checks the real effects keep the
+  contracts the model assumes; `mutants.py` checks the laws refuse
+  nine broken loops. README, "The world".
 - **`check.c`** -- 39 behavioural cases over a socket, plus 17 for the
   connection limit and 17 for stopping. Built with `-DCHECK_TLS` it
   swaps its own socket calls for a TLS session and **runs the same 39
