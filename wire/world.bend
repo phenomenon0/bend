@@ -24,7 +24,8 @@
 #
 # The model is only as good as the contracts: what it assumes of each
 # effect is written below as a relation on what the effect answers
-# (rx.ok, tx.ok, lsn.ok, fopen.ok, fread.ok), the model is proved to
+# (rx.ok, tx.ok, lsn.ok, fopen.ok, fread.ok; cx.ok and tls.ok for the
+# client's connects, idle.ok for its pool's probe), the model is proved to
 # keep them (rx_model, tx_stalled, tx_served, fread_model), and
 # wire/conform.bend drives each real effect through the same cases and
 # checks the same relations against what it observes. That is the
@@ -593,6 +594,95 @@ def fread.ok(max: U32, +left: Nat, r: Result<&1, &1, U32 & String, Bytes()>) -> 
     case Done{+bs}:
       U32.is_le(U32.from_nat(Bytes.len(bs)), max) && Nat.is_le(Bytes.len(bs), left)
         && Bool.not(Nat.is_eq(Bytes.len(bs), 0n) && Bool.not(Nat.is_eq(left, 0n)))
+
+# TCP.connect_poll(host, port, ms), answering after took ms, to a peer
+# that accepts, to a port nothing listens on, or to one that never
+# answers (its SYNs dropped): the first is Done; the second fails with
+# ECONNREFUSED (111 on Linux, 61 on macOS); the third fails with
+# ETIMEDOUT after at least ms.
+type Dial is Data:
+  Accepts{}
+  Closed{}
+  Silent{}
+
+def econnrefused(+code: U32) -> Bool:
+  U32.is_eq(code, 111) || U32.is_eq(code, 61)
+
+def cx.refused(e: U32 & String) -> Bool:
+  (code, msg) = e
+  econnrefused(code)
+
+def cx.ok(+ms: U32, d: Dial, +took: Nat, r: Result<&1, &1, U32 & String, Unit>) -> Bool:
+  match d:
+    case Accepts{}:
+      Result.is_done(&1, &1, U32 & String, Unit, r)
+    case Closed{}:
+      match r:
+        case Done{u}:
+          False{}
+        case Fail{e}:
+          cx.refused(e)
+    case Silent{}:
+      match r:
+        case Done{u}:
+          False{}
+        case Fail{e}:
+          tx.timed(e, took, ms)
+
+# TLS.connect(addr, port, name, alpn, ca, ms) to a server whose
+# certificate chains to the store and names name, to one whose
+# certificate does not chain to it, to one whose certificate names
+# another host, and to one that does not speak TLS: only the first is
+# Done; the certificate refusals are EACCES (13); the last fails with
+# anything else.
+type Cert is Data:
+  Trusted{}
+  Untrusted{}
+  Misnamed{}
+  NotTls{}
+
+def eacces(e: U32 & String) -> Bool:
+  (code, msg) = e
+  U32.is_eq(code, 13)
+
+def tls.ok(c: Cert, r: Result<&1, &1, U32 & String, Unit>) -> Bool:
+  match c:
+    case Trusted{}:
+      Result.is_done(&1, &1, U32 & String, Unit, r)
+    case Untrusted{}:
+      match r:
+        case Done{u}:
+          False{}
+        case Fail{e}:
+          eacces(e)
+    case Misnamed{}:
+      match r:
+        case Done{u}:
+          False{}
+        case Fail{e}:
+          eacces(e)
+    case NotTls{}:
+      match r:
+        case Done{u}:
+          False{}
+        case Fail{e}:
+          Bool.not(eacces(e))
+
+# TCP.idle(s), on a connection where nothing waits, where a byte has
+# arrived unread, or whose peer has closed: True only for the first.
+type Pend is Data:
+  PQuiet{}
+  PByte{}
+  PFin{}
+
+def idle.ok(k: Pend, ok: Bool) -> Bool:
+  match k:
+    case PQuiet{}:
+      ok
+    case PByte{}:
+      Bool.not(ok)
+    case PFin{}:
+      Bool.not(ok)
 
 # What the laws speak of
 # ======================
