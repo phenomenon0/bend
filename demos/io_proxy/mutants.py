@@ -7,8 +7,12 @@
 # unchecked, with a body its framing says it has not, with a length or
 # a field the check should have stopped, a 101 taken as final, a close
 # the client is not told of, a 502 with a body to HEAD -- and PROOF.bend
-# must refuse it. Each runs in a scratch copy of the tree the proof imports (the
-# proxy, the engine, wire/), checked clean first.
+# must refuse it. Each runs in a scratch copy of the tree the proof
+# imports (the proxy, the engine, wire/), where the engine's own proof, which the proxy's
+# uses (frame_sim, bad_feeds, cls_every, ...), is replaced by its statements
+# left open: the copy then checks to exactly its count of open holes, and a
+# mutant that the proxy's proof refuses shows an error instead. (The laws
+# hold step checks PROOF.bend whole, the engine's proof included.)
 #
 #   python3 demos/io_proxy/mutants.py        (from the repo root)
 import os, re, shutil, subprocess, sys, tempfile
@@ -81,6 +85,34 @@ def where(out):
   m = re.search(r'Location: ([\w.]+)', out)
   return m.group(1) if m else out.splitlines()[0] if out else '?'
 
+# the engine's laws the proxy's proof uses, stated and left open
+OPEN = '''import Base
+import ../io_http_engine/LAWS.bend as EL
+import ../io_http_engine/main.bend as Eng
+import ../io_http_engine/spec.bend as Spec
+
+def EL.frame_sim(bs):
+  ?TODO
+
+def EL.feed_split(a, b, p):
+  ?TODO
+
+def EL.cls_every(c):
+  ?TODO
+
+def EL.lower_every(c):
+  ?TODO
+
+def EL.field_by_bytes(k):
+  ?TODO
+
+def EL.bad_feeds(s, pd, out):
+  ?TODO
+
+def br.lows(s: Bytes()) -> {Spec.lows(s) == Eng.lows(s) : Bytes()}:
+  ?TODO
+'''
+
 def main():
   bad = 0
   top = tempfile.mkdtemp(prefix='proxy_laws_')
@@ -89,9 +121,15 @@ def main():
       shutil.copytree(os.path.join(ROOT, d), os.path.join(top, d))
     proof = os.path.join(top, 'demos/io_proxy/PROOF.bend')
     core = os.path.join(top, 'demos/io_proxy/core.bend')
-    out = check(proof)
-    if out != 'All terms check.':
-      print('the copy of PROOF.bend does not check clean: %s' % out)
+    open(os.path.join(top, 'demos/io_proxy/open.bend'), 'w').write(OPEN)
+    src = open(proof).read()
+    imp = 'import ../io_http_engine/PROOF.bend as EP\n'
+    if src.count(imp) != 1:
+      print('PROOF.bend does not import the engine proof as EP'); sys.exit(1)
+    open(proof, 'w').write(src.replace(imp, 'import ./open.bend as EP\n'))
+    base = check(proof)
+    if not re.fullmatch(r'Error: \d+ TODOs found\.\nThe code is incomplete, and not a valid proof yet\.', base):
+      print('the copy of PROOF.bend does not check clean: %s' % base)
       sys.exit(1)
     for name, a, b in MUTANTS:
       src = open(core).read()
@@ -100,10 +138,10 @@ def main():
       open(core, 'w').write(src.replace(a, b))
       out = check(proof)
       open(core, 'w').write(src)
-      if out == 'All terms check.':
+      if out == base:
         print('SURVIVED %s' % name); bad += 1
       else:
-        print('KILLED   %s -- %s' % (name, where(out)))
+        print('KILLED   %s -- %s' % (name, where(out)), flush=True)
   finally:
     shutil.rmtree(top, ignore_errors=True)
   print('mutants: %d / %d killed' % (len(MUTANTS) - bad, len(MUTANTS)))
