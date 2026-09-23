@@ -26,8 +26,10 @@ MUTANTS = [
     '''  Done{Got{i, r, rest, Bool.not(resp.close(r)) && String.is_empty(rest)}}''',
     '''  Done{Got{i, r, rest, Bool.not(resp.close(r))}}'''),
   ('client.bend', 'a body that ran to the close taken as reusable',
-    '''          Done{Got{i, r, "", False{}}}''',
-    '''          Done{Got{i, r, "", True{}}}'''),
+    '''        case R.Closing{r}:
+          Done{Got{i, r, "", False{}}}''',
+    '''        case R.Closing{r}:
+          Done{Got{i, r, "", True{}}}'''),
   ('client.bend', 'a turn past the deadline reads anyway',
     '''  rd.time(~M, ~pure, ~bind, ~S, ~rx, e, b, Nat.is_lt(now, until), Nat.sub(until, now), p, hd, s,''',
     '''  rd.time(~M, ~pure, ~bind, ~S, ~rx, e, b, True{}, Nat.sub(until, now), p, hd, s,'''),
