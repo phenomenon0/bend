@@ -96,3 +96,17 @@ law crc32_ref:
   for +x: Bytes()
   for +prev: U32
   {D.crc32(x, prev) == U32.not(crc_ref(x, U32.not(prev))) : U32}
+
+# Round trips
+# ===========
+
+# LAW: stored blocks read back. Any bytes (each below 256, as Bytes()
+# promises), stored at level 0 as blocks of 65535 and the rest, inflate
+# to themselves under any cap they fit: every header, LEN, NLEN, byte
+# and block boundary as the writer put it, to the bit.
+law stored_round_trip:
+  for +x: Bytes()
+  for +cap: Nat
+  for +vx: {D.valid(x) == True{} : Bool}
+  for fits: {Nat.is_le(Bytes.len(x), cap) == True{} : Bool}
+  {D.inflate(cap, D.deflate(x, 0n)) == Done{x} : Result<&2, &2, D.Why, Bytes()>}

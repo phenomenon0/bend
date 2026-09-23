@@ -50,10 +50,10 @@ import ../wire/reader.bend as Wr
 # ================
 
 def K32() -> Nat:
-  U32.to_nat(32768)
+  32768n
 
 def K64() -> Nat:
-  U32.to_nat(65535)
+  65535n
 
 def pick(b: Bool, x: Nat, y: Nat) -> Nat:
   match b:
@@ -596,7 +596,7 @@ type Dyn is Data:
 type K is Data:
   KHead{}
   KLen{last: Bool}
-  KNLen{last: Bool, len: Nat}
+  KNLen{last: Bool, len: List<&2, Bool>}
   KByte{last: Bool, left: Nat}
   KLenX{blk: Blk, base: Nat}
   KDistX{blk: Blk, len: Nat, base: Nat}
@@ -878,15 +878,37 @@ def cl_got(last: Bool, nlit: Nat, ndist: Nat, left: Nat, got: List<&2, Nat>, o: 
     case 1n+p:
       St{Get{2n, Nil{}, KCl{last, nlit, ndist, p, got}}, o, bp}
 
+# NLEN's bit against LEN's: its complement
+def compl.at(x: Bool, y: Bool, r: Bool) -> Bool:
+  match x y:
+    case True{} False{}:
+      r
+    case False{} True{}:
+      r
+    case True{} True{}:
+      False{}
+    case False{} False{}:
+      False{}
+
+# NLEN is LEN's ones' complement: the two, bit for bit, newest first
+def compl(a: List<&2, Bool>, b: List<&2, Bool>) -> Bool:
+  match a b:
+    case Nil{} Nil{}:
+      True{}
+    case Con{x, s} Con{y, t}:
+      compl.at(x, y, compl(s, t))
+    case _ _:
+      False{}
+
 # a run of bits is read, acc (newest first): what it was for
 def fire(k: K, acc: List<&2, Bool>, o: O, +bp: Nat) -> St:
   match k:
     case KHead{}:
       head(acc, o, bp)
     case KLen{last}:
-      St{Get{15n, Nil{}, KNLen{last, hval(acc, 0n)}}, o, bp}
+      St{Get{15n, Nil{}, KNLen{last, acc}}, o, bp}
     case KNLen{last, +len}:
-      stored_nlen(Nat.is_eq(Nat.add(len, hval(acc, 0n)), K64()), last, len, o, bp)
+      stored_nlen(compl(len, acc), last, hval(len, 0n), o, bp)
     case KByte{last, left}:
       stored_byte(last, left, U32.from_nat(hval(acc, 0n)), o, bp)
     case KLenX{blk, base}:
@@ -1627,28 +1649,85 @@ def put_dyn_head(w: W, last: Bool, p: Dp) -> W:
 # Blocks
 # ------
 
-# one stored block of the k bytes of x from at
-def stored_one(w: W, cur: Bytes(), +k: Nat, last: Bool) -> W:
-  put_raw(putx(16n, putx(16n, align(put(put(put(w, last), False{}), False{})), k),
-    Nat.sub(K64(), k)), cur)
+# the first n bits of bs (False past its end), each put in turn
+def hd(bs: List<&2, Bool>) -> Bool:
+  match bs:
+    case Nil{}:
+      False{}
+    case Con{b, t}:
+      b
 
-# stored blocks as they fill: the bytes of the block so far, how many,
+def tl(bs: List<&2, Bool>) -> List<&2, Bool>:
+  match bs:
+    case Nil{}:
+      Nil{}
+    case Con{b, t}:
+      t
+
+def putn(n: Nat, +bs: List<&2, Bool>, w: W) -> W:
+  match n:
+    case 0n:
+      w
+    case 1n+p:
+      putn(p, tl(bs), put(w, hd(bs)))
+
+def nots(bs: List<&2, Bool>) -> List<&2, Bool>:
+  match bs:
+    case Nil{}:
+      Nil{}
+    case Con{b, t}:
+      Con{Bool.not(b), nots(t)}
+
+# A stored block's length is counted in its own 16 bits, low first, the
+# bits LEN is written in: one more, and whether all are set (65535)
+def inc(bs: List<&2, Bool>) -> List<&2, Bool>:
+  match bs:
+    case Nil{}:
+      Nil{}
+    case Con{b, t}:
+      match b:
+        case True{}:
+          Con{False{}, inc(t)}
+        case False{}:
+          Con{True{}, t}
+
+def all1(bs: List<&2, Bool>) -> Bool:
+  match bs:
+    case Nil{}:
+      True{}
+    case Con{b, t}:
+      b && all1(t)
+
+def z16() -> List<&2, Bool>:
+  [False{}, False{}, False{}, False{}, False{}, False{}, False{}, False{}, False{}, False{}, False{},
+    False{}, False{}, False{}, False{}, False{}]
+
+def one16() -> List<&2, Bool>:
+  [True{}, False{}, False{}, False{}, False{}, False{}, False{}, False{}, False{}, False{}, False{},
+    False{}, False{}, False{}, False{}, False{}]
+
+# one stored block of the bytes cur, cnt its length's bits
+def stored_one(w: W, cur: Bytes(), +cnt: List<&2, Bool>, last: Bool) -> W:
+  put_raw(putn(16n, nots(cnt), putn(16n, cnt, align(put(put(put(w, last), False{}), False{})))),
+    cur)
+
+# stored blocks as they fill: the bytes of the block so far, their count,
 # the writer
 type SS is Data:
-  SS{cur: Bytes(), k: Nat, w: W}
+  SS{cur: Bytes(), cnt: List<&2, Bool>, w: W}
 
-def stored.add.at(full: Bool, cur: Bytes(), +k: Nat, w: W, c: U32) -> SS:
+def stored.add.at(full: Bool, cur: Bytes(), +cnt: List<&2, Bool>, w: W, c: U32) -> SS:
   match full:
     case True{}:
-      SS{Bytes.push("", c), 1n, stored_one(w, cur, k, False{})}
+      SS{Bytes.push("", c), one16(), stored_one(w, cur, cnt, False{})}
     case False{}:
-      SS{Bytes.push(cur, c), 1n+k, w}
+      SS{Bytes.push(cur, c), inc(cnt), w}
 
 # a byte: into the block, or a full block out and the byte into a new one
 def stored.add(s: SS, c: U32) -> SS:
   match s:
-    case SS{cur, +k, w}:
-      stored.add.at(Nat.is_eq(k, K64()), cur, k, w, c)
+    case SS{cur, +cnt, w}:
+      stored.add.at(all1(cnt), cur, cnt, w, c)
 
 # the bytes of x as stored blocks of 65535 bytes and one of the rest,
 # that one the last if last
@@ -1656,13 +1735,13 @@ def stored.go(x: Bytes(), last: Bool, s: SS) -> W:
   match x:
     case SNil{}:
       match s:
-        case SS{cur, k, w}:
-          stored_one(w, cur, k, last)
+        case SS{cur, cnt, w}:
+          stored_one(w, cur, cnt, last)
     case SCon{Chr{c}, t}:
       stored.go(t, last, stored.add(s, c))
 
 def stored_all(+x: Bytes(), +at: Nat, +len: Nat, last: Bool, w: W) -> W:
-  stored.go(Bytes.slice(x, at, len), last, SS{"", 0n, w})
+  stored.go(Bytes.slice(x, at, len), last, SS{"", z16(), w})
 
 def ec_with(ll: Hc, d: Hc, t: EC) -> EC:
   match t:
@@ -2053,7 +2132,7 @@ def lz_end(z: Z) -> W:
 def deflate.at(lz_level: Bool, +x: Bytes(), +lvl: Nat, fx: Bool) -> Bytes():
   match lz_level:
     case False{}:
-      w_out(stored.go(x, True{}, SS{"", 0n, w_new()}))
+      w_out(stored.go(x, True{}, SS{"", z16(), w_new()}))
     case True{}:
       +n = Bytes.len(x)
       w_out(lz_end(lz(1n+n, Z{x, n, level(lvl), ec_fixed(fx), 0n, h_new(), Nil{}, 0n, 0n, 0n,
