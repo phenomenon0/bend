@@ -112,4 +112,53 @@ def tree() -> Ht:
     out.append('      [' + ', '.join(tf(b) for b in bits(code, n)) + ']')
   open(os.path.join(HERE, 'huff.bend'), 'w').write('\n'.join(out) + '\n')
 
+def tfs(n):
+  return [tf((n >> (7 - i)) & 1) for i in range(8)]
+
+# The proof pieces that are a computation per byte: a packed byte walks
+# its eight bits (hf_byte), and each byte's code walks the tree to its
+# leaf (hf_sym). Each is 256 cases, every one {==}.
+def proofs():
+  out = []
+  out.append('''# The Huffman proofs' two lemmas that hold byte by byte, one case per
+# byte, each by computation; written by gen.py. PROOF.bend uses them.
+import Base
+import ./huff.bend as H
+import ./hpack.bend as K
+import ./LAWS.bend as Laws
+
+# the decoder walked over bits, one at a time
+def walk(+root: H.Ht, bs: List<&2, Bool>, h: K.Hf) -> K.Hf:
+  match bs:
+    case Nil{}:
+      h
+    case Con{b, t}:
+      walk(root, t, K.hf.bit(root, h, b))
+
+# a byte packed from eight bits is walked as those bits, most
+# significant first
+def hf_byte(+root: H.Ht, h: K.Hf, b7: Bool, b6: Bool, b5: Bool, b4: Bool, b3: Bool, b2: Bool,
+  b1: Bool, b0: Bool) ->
+  {K.hf.byte(root, h, K.pack8(b7, b6, b5, b4, b3, b2, b1, b0)) ==
+    walk(root, [b7, b6, b5, b4, b3, b2, b1, b0], h) : K.Hf}:
+  match b7 b6 b5 b4 b3 b2 b1 b0:''')
+  for n in range(256):
+    out.append('    case ' + ' '.join(tfs(n)) + ':')
+    out.append('      {==}')
+  out.append('''
+# every byte's code walks the tree from the root to that byte's leaf
+def hf_sym(+acc: Bytes(), w: Word(8n)) ->
+  {walk(H.tree(), K.code(Laws.byte(w)), K.HfAt{H.tree(), acc}) ==
+    K.HfAt{H.tree(), Bytes.push(acc, Laws.byte(w))} : K.Hf}:
+  match w:''')
+  for n in range(256):
+    lsb = [tf((n >> i) & 1) for i in range(8)]
+    pat = 'WNil{}'
+    for b in reversed(lsb):
+      pat = 'WCon{%s, %s}' % (b, pat)
+    out.append('    case ' + pat + ':')
+    out.append('      {==}')
+  open(os.path.join(HERE, 'huff_proof.bend'), 'w').write('\n'.join(out) + '\n')
+
 main()
+proofs()

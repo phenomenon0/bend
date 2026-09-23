@@ -5,6 +5,7 @@ import ./huff.bend as H
 import ./hpack.bend as K
 import ./LAWS.bend as Laws
 import ./nat.bend as N
+import ./huff_proof.bend as HP
 
 # HPACK integers
 # ==============
@@ -151,8 +152,149 @@ def Laws.int_c1_3():
 def Laws.int_over():
   {==}
 
+# HPACK Huffman strings
+# =====================
+
+# the ones that pad bs to a whole byte, as chunk8 adds them
+def padbits(bs: List<&2, Bool>) -> List<&2, Bool>:
+  match bs:
+    case Nil{}:
+      Nil{}
+    case Con{a, Nil{}}:
+      [True{}, True{}, True{}, True{}, True{}, True{}, True{}]
+    case Con{a, Con{b, Nil{}}}:
+      [True{}, True{}, True{}, True{}, True{}, True{}]
+    case Con{a, Con{b, Con{c, Nil{}}}}:
+      [True{}, True{}, True{}, True{}, True{}]
+    case Con{a, Con{b, Con{c, Con{d, Nil{}}}}}:
+      [True{}, True{}, True{}, True{}]
+    case Con{a, Con{b, Con{c, Con{d, Con{e, Nil{}}}}}}:
+      [True{}, True{}, True{}]
+    case Con{a, Con{b, Con{c, Con{d, Con{e, Con{f, Nil{}}}}}}}:
+      [True{}, True{}]
+    case Con{a, Con{b, Con{c, Con{d, Con{e, Con{f, Con{g, Nil{}}}}}}}}:
+      [True{}]
+    case Con{a, Con{b, Con{c, Con{d, Con{e, Con{f, Con{g, Con{h, t}}}}}}}}:
+      padbits(t)
+
+# the walk over a join is the walk over its parts
+def walk_cat(+root: H.Ht, xs: List<&2, Bool>, -ys: List<&2, Bool>, h: K.Hf) ->
+  {HP.walk(root, List.append(&2, Bool, xs, ys), h) == HP.walk(root, ys, HP.walk(root, xs, h)) : K.Hf}:
+  match xs:
+    case Nil{}:
+      {==}
+    case Con{x, t}:
+      walk_cat(root, t, ys, K.hf.bit(root, h, x))
+
+# the packed bytes decode as the bits they pack, padding included
+def feed_chunk(+root: H.Ht, bs: List<&2, Bool>, +h: K.Hf) ->
+  {K.hf.feed(root, K.chunk8(bs), h) == HP.walk(root, List.append(&2, Bool, bs, padbits(bs)), h) : K.Hf}:
+  match bs:
+    case Nil{}:
+      {==}
+    case Con{a, Nil{}}:
+      HP.hf_byte(root, h, a, True{}, True{}, True{}, True{}, True{}, True{}, True{})
+    case Con{a, Con{b, Nil{}}}:
+      HP.hf_byte(root, h, a, b, True{}, True{}, True{}, True{}, True{}, True{})
+    case Con{a, Con{b, Con{c, Nil{}}}}:
+      HP.hf_byte(root, h, a, b, c, True{}, True{}, True{}, True{}, True{})
+    case Con{a, Con{b, Con{c, Con{d, Nil{}}}}}:
+      HP.hf_byte(root, h, a, b, c, d, True{}, True{}, True{}, True{})
+    case Con{a, Con{b, Con{c, Con{d, Con{e, Nil{}}}}}}:
+      HP.hf_byte(root, h, a, b, c, d, e, True{}, True{}, True{})
+    case Con{a, Con{b, Con{c, Con{d, Con{e, Con{f, Nil{}}}}}}}:
+      HP.hf_byte(root, h, a, b, c, d, e, f, True{}, True{})
+    case Con{a, Con{b, Con{c, Con{d, Con{e, Con{f, Con{g, Nil{}}}}}}}}:
+      HP.hf_byte(root, h, a, b, c, d, e, f, g, True{})
+    case Con{+a, Con{+b, Con{+c, Con{+d, Con{+e, Con{+f, Con{+g, Con{+i, t}}}}}}}}:
+      %Equal.sym(K.Hf, K.hf.byte(root, h, K.pack8(a, b, c, d, e, f, g, i)),
+          HP.walk(root, [a, b, c, d, e, f, g, i], h), HP.hf_byte(root, h, a, b, c, d, e, f, g, i)) :
+        {K.hf.feed(root, K.chunk8(t), _) ==
+          HP.walk(root, List.append(&2, Bool, Con{a, Con{b, Con{c, Con{d, Con{e, Con{f, Con{g, Con{i, t}}}}}}}},
+            padbits(t)), h) : K.Hf}
+      feed_chunk(root, t, HP.walk(root, [a, b, c, d, e, f, g, i], h))
+
+def str_nil(s: Bytes()) -> {String.append(s, SNil{}) == s : Bytes()}:
+  match s:
+    case SNil{}:
+      {==}
+    case SCon{c, t}:
+      %str_nil(t) : {SCon{c, String.append(t, SNil{})} == SCon{c, _} : Bytes()}
+      {==}
+
+def str_assoc(a: Bytes(), -b: Bytes(), -c: Bytes()) ->
+  {String.append(String.append(a, b), c) == String.append(a, String.append(b, c)) : Bytes()}:
+  match a:
+    case SNil{}:
+      {==}
+    case SCon{x, t}:
+      %str_assoc(t, b, c) : {SCon{x, String.append(String.append(t, b), c)} == SCon{x, _} : Bytes()}
+      {==}
+
+# every code in turn walks to its byte: the string's bits walk to the
+# string
+def walk_str(ws: List<&2, Word(8n)>, +acc: Bytes()) ->
+  {HP.walk(H.tree(), K.huff.bits(Laws.bytes(ws)), K.HfAt{H.tree(), acc}) ==
+    K.HfAt{H.tree(), String.append(acc, Laws.bytes(ws))} : K.Hf}:
+  match ws:
+    case Nil{}:
+      %Equal.sym(Bytes(), String.append(acc, SNil{}), acc, str_nil(acc)) : {K.HfAt{H.tree(), acc} == K.HfAt{H.tree(), _} : K.Hf}
+      {==}
+    case Con{+w, t}:
+      %Equal.sym(K.Hf, HP.walk(H.tree(), List.append(&2, Bool, K.code(Laws.byte(w)), K.huff.bits(Laws.bytes(t))),
+          K.HfAt{H.tree(), acc}),
+          HP.walk(H.tree(), K.huff.bits(Laws.bytes(t)), HP.walk(H.tree(), K.code(Laws.byte(w)), K.HfAt{H.tree(), acc})),
+          walk_cat(H.tree(), K.code(Laws.byte(w)), K.huff.bits(Laws.bytes(t)), K.HfAt{H.tree(), acc})) :
+        {_ == K.HfAt{H.tree(), String.append(acc, SCon{Chr{Laws.byte(w)}, Laws.bytes(t)})} : K.Hf}
+      %Equal.sym(K.Hf, HP.walk(H.tree(), K.code(Laws.byte(w)), K.HfAt{H.tree(), acc}),
+          K.HfAt{H.tree(), Bytes.push(acc, Laws.byte(w))}, HP.hf_sym(acc, w)) :
+        {HP.walk(H.tree(), K.huff.bits(Laws.bytes(t)), _) ==
+          K.HfAt{H.tree(), String.append(acc, SCon{Chr{Laws.byte(w)}, Laws.bytes(t)})} : K.Hf}
+      %str_assoc(acc, SCon{Chr{Laws.byte(w)}, SNil{}}, Laws.bytes(t)) :
+        {HP.walk(H.tree(), K.huff.bits(Laws.bytes(t)), K.HfAt{H.tree(), Bytes.push(acc, Laws.byte(w))}) ==
+          K.HfAt{H.tree(), _} : K.Hf}
+      walk_str(t, Bytes.push(acc, Laws.byte(w)))
+
+# the padding ends where a string may: at most seven ones from the root
+def pad_end(bs: List<&2, Bool>, +out: Bytes()) ->
+  {K.hf.end(HP.walk(H.tree(), padbits(bs), K.HfAt{H.tree(), out})) == Some{out} : Maybe<&2, Bytes()>}:
+  match bs:
+    case Nil{}:
+      {==}
+    case Con{a, Nil{}}:
+      {==}
+    case Con{a, Con{b, Nil{}}}:
+      {==}
+    case Con{a, Con{b, Con{c, Nil{}}}}:
+      {==}
+    case Con{a, Con{b, Con{c, Con{d, Nil{}}}}}:
+      {==}
+    case Con{a, Con{b, Con{c, Con{d, Con{e, Nil{}}}}}}:
+      {==}
+    case Con{a, Con{b, Con{c, Con{d, Con{e, Con{f, Nil{}}}}}}}:
+      {==}
+    case Con{a, Con{b, Con{c, Con{d, Con{e, Con{f, Con{g, Nil{}}}}}}}}:
+      {==}
+    case Con{a, Con{b, Con{c, Con{d, Con{e, Con{f, Con{g, Con{h, t}}}}}}}}:
+      pad_end(t, out)
+
 def Laws.huff_rt(ws):
-  ?TODO
+  %Equal.sym(K.Hf, K.hf.feed(H.tree(), K.chunk8(K.huff.bits(Laws.bytes(ws))), K.HfAt{H.tree(), ""}),
+      HP.walk(H.tree(), List.append(&2, Bool, K.huff.bits(Laws.bytes(ws)), padbits(K.huff.bits(Laws.bytes(ws)))),
+        K.HfAt{H.tree(), ""}),
+      feed_chunk(H.tree(), K.huff.bits(Laws.bytes(ws)), K.HfAt{H.tree(), ""})) :
+    {K.hf.end(_) == Some{Laws.bytes(ws)} : Maybe<&2, Bytes()>}
+  %Equal.sym(K.Hf,
+      HP.walk(H.tree(), List.append(&2, Bool, K.huff.bits(Laws.bytes(ws)), padbits(K.huff.bits(Laws.bytes(ws)))),
+        K.HfAt{H.tree(), ""}),
+      HP.walk(H.tree(), padbits(K.huff.bits(Laws.bytes(ws))),
+        HP.walk(H.tree(), K.huff.bits(Laws.bytes(ws)), K.HfAt{H.tree(), ""})),
+      walk_cat(H.tree(), K.huff.bits(Laws.bytes(ws)), padbits(K.huff.bits(Laws.bytes(ws))), K.HfAt{H.tree(), ""})) :
+    {K.hf.end(_) == Some{Laws.bytes(ws)} : Maybe<&2, Bytes()>}
+  %Equal.sym(K.Hf, HP.walk(H.tree(), K.huff.bits(Laws.bytes(ws)), K.HfAt{H.tree(), ""}),
+      K.HfAt{H.tree(), Laws.bytes(ws)}, walk_str(ws, "")) :
+    {K.hf.end(HP.walk(H.tree(), padbits(K.huff.bits(Laws.bytes(ws))), _)) == Some{Laws.bytes(ws)} : Maybe<&2, Bytes()>}
+  pad_end(K.huff.bits(Laws.bytes(ws)), Laws.bytes(ws))
 
 def Laws.huff_eos():
   {==}

@@ -57,7 +57,7 @@ def bytes(ws: List<&2, Word(8n)>) -> Bytes():
 # RFC 7541's (the tree and the codes are one table, gen.py's), the last
 # byte's padding is EOS's high bits, and the decoder accepts it.
 law huff_rt:
-  for ws: List<&2, Word(8n)>
+  for +ws: List<&2, Word(8n)>
   {K.huff.dec(H.tree(), K.huff.enc(bytes(ws))) == Some{bytes(ws)} : Maybe<&2, Bytes()>}
 
 # LAW: EOS in a string is refused, and so is padding that is longer
