@@ -1718,6 +1718,439 @@ def U32.from_nat(n: Nat) -> U32:
     case 1n+p:
       U32.inc(U32.from_nat(p))
 
+# U32 and Nat order
+# ------------------
+#
+# U32's order is its value's: Word.cmp decides by the highest bit that
+# differs, which is Nat.cmp of the two values (U32.cmp_nat). Nat's order
+# is proven here once, and a U32 comparison is read as a Nat one: flipped
+# (a < b is not b <= a), chained, and stepped by one (a < b + 1 is a <= b).
+
+def Bool.if(b: Bool, t: Type, f: Type) -> Type:
+  match b:
+    case True{}:
+      t
+    case False{}:
+      f
+
+# anything, from False == True
+def Bool.no(-g: Type, e: {False{} == True{} : Bool}) -> g:
+  %e : Bool.if(_, g, Unit)
+  Unit{}
+
+# a conjunction that holds, taken apart
+law Bool.and_l:
+  for a: Bool
+  for -b: Bool
+  for e: {Bool.and(a, b) == True{} : Bool}
+  {a == True{} : Bool}
+
+def Bool.and_l(a, b, e):
+  match a:
+    case True{}:
+      {==}
+    case False{}:
+      Bool.no({False{} == True{} : Bool}, e)
+
+law Bool.and_r:
+  for a: Bool
+  for b: Bool
+  for e: {Bool.and(a, b) == True{} : Bool}
+  {b == True{} : Bool}
+
+def Bool.and_r(a, b, e):
+  match a:
+    case True{}:
+      e
+    case False{}:
+      Bool.no({b == True{} : Bool}, e)
+
+# a number's bit below the rest: 2x, or 2x + 1
+def Nat.bit(b: Bool, x: Nat) -> Nat:
+  match b:
+    case False{}:
+      Nat.double(x)
+    case True{}:
+      1n+Nat.double(x)
+
+law Nat.cmp_bit:
+  for +ab: Bool
+  for +bb: Bool
+  for +x: Nat
+  for +y: Nat
+  {Nat.cmp(Nat.bit(ab, x), Nat.bit(bb, y)) == Word.cmp.fin(ab, bb, Nat.cmp(x, y)) : Cmp}
+
+def Nat.cmp_bit(ba, bc, x, y):
+  match ba bc x y:
+    case False{} False{} 0n 0n:
+      {==}
+    case False{} True{} 0n 0n:
+      {==}
+    case True{} False{} 0n 0n:
+      {==}
+    case True{} True{} 0n 0n:
+      {==}
+    case False{} False{} 0n 1n+q:
+      {==}
+    case False{} True{} 0n 1n+q:
+      {==}
+    case True{} False{} 0n 1n+q:
+      {==}
+    case True{} True{} 0n 1n+q:
+      {==}
+    case False{} False{} 1n+p 0n:
+      {==}
+    case False{} True{} 1n+p 0n:
+      {==}
+    case True{} False{} 1n+p 0n:
+      {==}
+    case True{} True{} 1n+p 0n:
+      {==}
+    case False{} False{} 1n+p 1n+q:
+      Nat.cmp_bit(False{}, False{}, p, q)
+    case False{} True{} 1n+p 1n+q:
+      Nat.cmp_bit(False{}, True{}, p, q)
+    case True{} False{} 1n+p 1n+q:
+      Nat.cmp_bit(True{}, False{}, p, q)
+    case True{} True{} 1n+p 1n+q:
+      Nat.cmp_bit(True{}, True{}, p, q)
+
+law Word.to_nat_bit:
+  for -p: Nat
+  for b: Bool
+  for -t: Word(p)
+  {Word.to_nat(1n+p, WCon{b, t}) == Nat.bit(b, Word.to_nat(p, t)) : Nat}
+
+def Word.to_nat_bit(p, b, t):
+  match b:
+    case False{}:
+      {==}
+    case True{}:
+      {==}
+
+def Word.cmp_nat.go(+p: Nat, +ab: Bool, +at: Word(p), +bb: Bool, +bt: Word(p)) ->
+  {Word.cmp.fin(ab, bb, Nat.cmp(Word.to_nat(p, at), Word.to_nat(p, bt))) ==
+    Nat.cmp(Word.to_nat(1n+p, WCon{ab, at}), Word.to_nat(1n+p, WCon{bb, bt})) : Cmp}:
+  %Equal.sym(Nat, Word.to_nat(1n+p, WCon{ab, at}), Nat.bit(ab, Word.to_nat(p, at)),
+    Word.to_nat_bit(p, ab, at)) :
+    {Word.cmp.fin(ab, bb, Nat.cmp(Word.to_nat(p, at), Word.to_nat(p, bt))) ==
+      Nat.cmp(_, Word.to_nat(1n+p, WCon{bb, bt})) : Cmp}
+  %Equal.sym(Nat, Word.to_nat(1n+p, WCon{bb, bt}), Nat.bit(bb, Word.to_nat(p, bt)),
+    Word.to_nat_bit(p, bb, bt)) :
+    {Word.cmp.fin(ab, bb, Nat.cmp(Word.to_nat(p, at), Word.to_nat(p, bt))) ==
+      Nat.cmp(Nat.bit(ab, Word.to_nat(p, at)), _) : Cmp}
+  Equal.sym(Cmp, Nat.cmp(Nat.bit(ab, Word.to_nat(p, at)), Nat.bit(bb, Word.to_nat(p, bt))),
+    Word.cmp.fin(ab, bb, Nat.cmp(Word.to_nat(p, at), Word.to_nat(p, bt))),
+    Nat.cmp_bit(ab, bb, Word.to_nat(p, at), Word.to_nat(p, bt)))
+
+law Word.cmp_nat:
+  for +n: Nat
+  for +a: Word(n)
+  for +b: Word(n)
+  {Word.cmp(n, a, b) == Nat.cmp(Word.to_nat(n, a), Word.to_nat(n, b)) : Cmp}
+
+def Word.cmp_nat(n, a, b):
+  match n:
+    case 0n:
+      {==}
+    case 1n+p:
+      match a b:
+        case WCon{ab, at} WCon{bb, bt}:
+          Equal.trans(Cmp, Word.cmp.fin(ab, bb, Word.cmp(p, at, bt)),
+            Word.cmp.fin(ab, bb, Nat.cmp(Word.to_nat(p, at), Word.to_nat(p, bt))),
+            Nat.cmp(Word.to_nat(1n+p, WCon{ab, at}), Word.to_nat(1n+p, WCon{bb, bt})),
+            Equal.cong(Cmp, Cmp, x => Word.cmp.fin(ab, bb, x), Word.cmp(p, at, bt),
+              Nat.cmp(Word.to_nat(p, at), Word.to_nat(p, bt)), Word.cmp_nat(p, at, bt)),
+            Word.cmp_nat.go(p, ab, at, bb, bt))
+
+# U32's order is its value's
+law U32.cmp_nat:
+  for a: U32
+  for b: U32
+  {U32.cmp(a, b) == Nat.cmp(U32.to_nat(a), U32.to_nat(b)) : Cmp}
+
+def U32.cmp_nat(a, b):
+  match a b:
+    case U32{x} U32{y}:
+      Word.cmp_nat(32n, x, y)
+
+law U32.lt_nat:
+  for a: U32
+  for b: U32
+  {U32.is_lt(a, b) == Nat.is_lt(U32.to_nat(a), U32.to_nat(b)) : Bool}
+
+def U32.lt_nat(a, b):
+  Equal.cong(Cmp, Bool, Cmp.is_lt, U32.cmp(a, b), Nat.cmp(U32.to_nat(a), U32.to_nat(b)),
+    U32.cmp_nat(a, b))
+
+law U32.le_nat:
+  for a: U32
+  for b: U32
+  {U32.is_le(a, b) == Nat.is_le(U32.to_nat(a), U32.to_nat(b)) : Bool}
+
+def U32.le_nat(a, b):
+  Equal.cong(Cmp, Bool, Cmp.is_le, U32.cmp(a, b), Nat.cmp(U32.to_nat(a), U32.to_nat(b)),
+    U32.cmp_nat(a, b))
+
+law U32.eq_nat:
+  for a: U32
+  for b: U32
+  {U32.is_eq(a, b) == Nat.is_eq(U32.to_nat(a), U32.to_nat(b)) : Bool}
+
+def U32.eq_nat(a, b):
+  Equal.cong(Cmp, Bool, Cmp.is_eq, U32.cmp(a, b), Nat.cmp(U32.to_nat(a), U32.to_nat(b)),
+    U32.cmp_nat(a, b))
+
+# Nat's order: a < b is not b <= a
+law Nat.lt_flip:
+  for a: Nat
+  for b: Nat
+  {Bool.not(Nat.is_lt(a, b)) == Nat.is_le(b, a) : Bool}
+
+def Nat.lt_flip(a, b):
+  match a b:
+    case 0n 0n:
+      {==}
+    case 0n 1n+q:
+      {==}
+    case 1n+p 0n:
+      {==}
+    case 1n+p 1n+q:
+      Nat.lt_flip(p, q)
+
+law Nat.le_flip:
+  for a: Nat
+  for b: Nat
+  {Bool.not(Nat.is_le(a, b)) == Nat.is_lt(b, a) : Bool}
+
+def Nat.le_flip(a, b):
+  match a b:
+    case 0n 0n:
+      {==}
+    case 0n 1n+q:
+      {==}
+    case 1n+p 0n:
+      {==}
+    case 1n+p 1n+q:
+      Nat.le_flip(p, q)
+
+def Nat.lt_succ.z(p: Nat) -> {Nat.is_lt(1n+p, 1n) == Nat.is_le(1n+p, 0n) : Bool}:
+  match p:
+    case 0n:
+      {==}
+    case 1n+r:
+      {==}
+
+# a < b + 1 is a <= b
+law Nat.lt_succ:
+  for a: Nat
+  for b: Nat
+  {Nat.is_lt(a, 1n+b) == Nat.is_le(a, b) : Bool}
+
+def Nat.lt_succ(a, b):
+  match a b:
+    case 0n 0n:
+      {==}
+    case 0n 1n+q:
+      {==}
+    case 1n+p 0n:
+      Nat.lt_succ.z(p)
+    case 1n+p 1n+q:
+      Nat.lt_succ(p, q)
+
+law Nat.is_le_trans:
+  for a: Nat
+  for b: Nat
+  for c: Nat
+  for ab: {Nat.is_le(a, b) == True{} : Bool}
+  for bc: {Nat.is_le(b, c) == True{} : Bool}
+  {Nat.is_le(a, c) == True{} : Bool}
+
+def Nat.is_le_trans(a, b, c, ab, bc):
+  match a b c:
+    case 0n _ 0n:
+      {==}
+    case 0n _ 1n+r:
+      {==}
+    case 1n+p 0n _:
+      Bool.no({Nat.is_le(1n+p, c) == True{} : Bool}, ab)
+    case 1n+p 1n+q 0n:
+      Bool.no({Nat.is_le(1n+p, 0n) == True{} : Bool}, bc)
+    case 1n+p 1n+q 1n+r:
+      Nat.is_le_trans(p, q, r, ab, bc)
+
+law Nat.is_lt_le_trans:
+  for a: Nat
+  for b: Nat
+  for c: Nat
+  for ab: {Nat.is_lt(a, b) == True{} : Bool}
+  for bc: {Nat.is_le(b, c) == True{} : Bool}
+  {Nat.is_lt(a, c) == True{} : Bool}
+
+def Nat.is_lt_le_trans(a, b, c, ab, bc):
+  match a b c:
+    case 0n 0n _:
+      Bool.no({Nat.is_lt(0n, c) == True{} : Bool}, ab)
+    case 1n+p 0n _:
+      Bool.no({Nat.is_lt(1n+p, c) == True{} : Bool}, ab)
+    case 0n 1n+q 0n:
+      Bool.no({Nat.is_lt(0n, 0n) == True{} : Bool}, bc)
+    case 0n 1n+q 1n+r:
+      {==}
+    case 1n+p 1n+q 0n:
+      Bool.no({Nat.is_lt(1n+p, 0n) == True{} : Bool}, bc)
+    case 1n+p 1n+q 1n+r:
+      Nat.is_lt_le_trans(p, q, r, ab, bc)
+
+# a <= b and not a < b: a is b
+law Nat.is_le_eq:
+  for a: Nat
+  for b: Nat
+  for le: {Nat.is_le(a, b) == True{} : Bool}
+  for nlt: {Nat.is_lt(a, b) == False{} : Bool}
+  {Nat.is_eq(a, b) == True{} : Bool}
+
+def Nat.is_le_eq(a, b, le, nlt):
+  match a b:
+    case 0n 0n:
+      {==}
+    case 0n 1n+q:
+      Bool.no({Nat.is_eq(0n, 1n+q) == True{} : Bool}, Equal.sym(Bool, True{}, False{}, nlt))
+    case 1n+p 0n:
+      Bool.no({Nat.is_eq(1n+p, 0n) == True{} : Bool}, le)
+    case 1n+p 1n+q:
+      Nat.is_le_eq(p, q, le, nlt)
+
+# a Bool that is not True is False; a disjunction with a True in it holds
+law Bool.not_true:
+  for a: Bool
+  for e: {Bool.not(a) == True{} : Bool}
+  {a == False{} : Bool}
+
+def Bool.not_true(a, e):
+  match a:
+    case False{}:
+      {==}
+    case True{}:
+      Bool.no({True{} == False{} : Bool}, e)
+
+law Bool.or_true:
+  for a: Bool
+  {Bool.or(a, True{}) == True{} : Bool}
+
+def Bool.or_true(a):
+  match a:
+    case False{}:
+      {==}
+    case True{}:
+      {==}
+
+# U32's order, read as Nat's
+law U32.lt_flip:
+  for +a: U32
+  for +b: U32
+  {Bool.not(U32.is_lt(a, b)) == U32.is_le(b, a) : Bool}
+
+def U32.lt_flip(a, b):
+  %Equal.sym(Bool, U32.is_lt(a, b), Nat.is_lt(U32.to_nat(a), U32.to_nat(b)), U32.lt_nat(a, b)) :
+    {Bool.not(_) == U32.is_le(b, a) : Bool}
+  %Equal.sym(Bool, U32.is_le(b, a), Nat.is_le(U32.to_nat(b), U32.to_nat(a)), U32.le_nat(b, a)) :
+    {Bool.not(Nat.is_lt(U32.to_nat(a), U32.to_nat(b))) == _ : Bool}
+  Nat.lt_flip(U32.to_nat(a), U32.to_nat(b))
+
+law U32.le_flip:
+  for +a: U32
+  for +b: U32
+  {Bool.not(U32.is_le(a, b)) == U32.is_lt(b, a) : Bool}
+
+def U32.le_flip(a, b):
+  %Equal.sym(Bool, U32.is_le(a, b), Nat.is_le(U32.to_nat(a), U32.to_nat(b)), U32.le_nat(a, b)) :
+    {Bool.not(_) == U32.is_lt(b, a) : Bool}
+  %Equal.sym(Bool, U32.is_lt(b, a), Nat.is_lt(U32.to_nat(b), U32.to_nat(a)), U32.lt_nat(b, a)) :
+    {Bool.not(Nat.is_le(U32.to_nat(a), U32.to_nat(b))) == _ : Bool}
+  Nat.le_flip(U32.to_nat(a), U32.to_nat(b))
+
+# c < b is c <= a, when b is a + 1
+law U32.lt_succ:
+  for +c: U32
+  for +a: U32
+  for +b: U32
+  for e: {U32.to_nat(b) == 1n+U32.to_nat(a) : Nat}
+  {U32.is_lt(c, b) == U32.is_le(c, a) : Bool}
+
+def U32.lt_succ(c, a, b, e):
+  %Equal.sym(Bool, U32.is_lt(c, b), Nat.is_lt(U32.to_nat(c), U32.to_nat(b)), U32.lt_nat(c, b)) :
+    {_ == U32.is_le(c, a) : Bool}
+  %Equal.sym(Bool, U32.is_le(c, a), Nat.is_le(U32.to_nat(c), U32.to_nat(a)), U32.le_nat(c, a)) :
+    {Nat.is_lt(U32.to_nat(c), U32.to_nat(b)) == _ : Bool}
+  %Equal.sym(Nat, U32.to_nat(b), 1n+U32.to_nat(a), e) :
+    {Nat.is_lt(U32.to_nat(c), _) == Nat.is_le(U32.to_nat(c), U32.to_nat(a)) : Bool}
+  Nat.lt_succ(U32.to_nat(c), U32.to_nat(a))
+
+law U32.le_trans:
+  for +a: U32
+  for +b: U32
+  for +c: U32
+  for ab: {U32.is_le(a, b) == True{} : Bool}
+  for bc: {U32.is_le(b, c) == True{} : Bool}
+  {U32.is_le(a, c) == True{} : Bool}
+
+def U32.le_trans(a, b, c, ab, bc):
+  %Equal.sym(Bool, U32.is_le(a, c), Nat.is_le(U32.to_nat(a), U32.to_nat(c)), U32.le_nat(a, c)) :
+    {_ == True{} : Bool}
+  Nat.is_le_trans(U32.to_nat(a), U32.to_nat(b), U32.to_nat(c),
+    Equal.trans(Bool, Nat.is_le(U32.to_nat(a), U32.to_nat(b)), U32.is_le(a, b), True{},
+      Equal.sym(Bool, U32.is_le(a, b), Nat.is_le(U32.to_nat(a), U32.to_nat(b)), U32.le_nat(a, b)), ab),
+    Equal.trans(Bool, Nat.is_le(U32.to_nat(b), U32.to_nat(c)), U32.is_le(b, c), True{},
+      Equal.sym(Bool, U32.is_le(b, c), Nat.is_le(U32.to_nat(b), U32.to_nat(c)), U32.le_nat(b, c)), bc))
+
+law U32.lt_le_trans:
+  for +a: U32
+  for +b: U32
+  for +c: U32
+  for ab: {U32.is_lt(a, b) == True{} : Bool}
+  for bc: {U32.is_le(b, c) == True{} : Bool}
+  {U32.is_lt(a, c) == True{} : Bool}
+
+def U32.lt_le_trans(a, b, c, ab, bc):
+  %Equal.sym(Bool, U32.is_lt(a, c), Nat.is_lt(U32.to_nat(a), U32.to_nat(c)), U32.lt_nat(a, c)) :
+    {_ == True{} : Bool}
+  Nat.is_lt_le_trans(U32.to_nat(a), U32.to_nat(b), U32.to_nat(c),
+    Equal.trans(Bool, Nat.is_lt(U32.to_nat(a), U32.to_nat(b)), U32.is_lt(a, b), True{},
+      Equal.sym(Bool, U32.is_lt(a, b), Nat.is_lt(U32.to_nat(a), U32.to_nat(b)), U32.lt_nat(a, b)), ab),
+    Equal.trans(Bool, Nat.is_le(U32.to_nat(b), U32.to_nat(c)), U32.is_le(b, c), True{},
+      Equal.sym(Bool, U32.is_le(b, c), Nat.is_le(U32.to_nat(b), U32.to_nat(c)), U32.le_nat(b, c)), bc))
+
+# lo <= c < lo + 1: c is lo
+law U32.eq_of_lt_succ:
+  for +c: U32
+  for +lo: U32
+  for +hi: U32
+  for ge: {Bool.not(U32.is_lt(c, lo)) == True{} : Bool}
+  for lt: {U32.is_lt(c, hi) == True{} : Bool}
+  for e: {U32.to_nat(hi) == 1n+U32.to_nat(lo) : Nat}
+  {U32.is_eq(c, lo) == True{} : Bool}
+
+def U32.eq_of_lt_succ(c, lo, hi, ge, lt, e):
+  %Equal.sym(Bool, U32.is_eq(c, lo), Nat.is_eq(U32.to_nat(c), U32.to_nat(lo)), U32.eq_nat(c, lo)) :
+    {_ == True{} : Bool}
+  Nat.is_le_eq(U32.to_nat(c), U32.to_nat(lo),
+    Equal.trans(Bool, Nat.is_le(U32.to_nat(c), U32.to_nat(lo)), U32.is_le(c, lo), True{},
+      Equal.sym(Bool, U32.is_le(c, lo), Nat.is_le(U32.to_nat(c), U32.to_nat(lo)), U32.le_nat(c, lo)),
+      Equal.trans(Bool, U32.is_le(c, lo), U32.is_lt(c, hi), True{},
+        Equal.sym(Bool, U32.is_lt(c, hi), U32.is_le(c, lo), U32.lt_succ(c, lo, hi, e)), lt)),
+    Equal.trans(Bool, Nat.is_lt(U32.to_nat(c), U32.to_nat(lo)), U32.is_lt(c, lo), False{},
+      Equal.sym(Bool, U32.is_lt(c, lo), Nat.is_lt(U32.to_nat(c), U32.to_nat(lo)), U32.lt_nat(c, lo)),
+      Bool.not_true(U32.is_lt(c, lo), ge)))
+
+# nothing is below zero
+def Nat.lt_zero(-g: Type, k: Nat, e: {Nat.is_lt(k, 0n) == True{} : Bool}) -> g:
+  match k:
+    case 0n:
+      Bool.no(g, e)
+    case 1n+j:
+      Bool.no(g, e)
+
 def U32.log2.go(+k: Nat, +n: U32, +d: Nat) -> Nat:
   match k:
     case 0n:
@@ -3585,6 +4018,108 @@ law Bytes.span_le:
 
 def Bytes.span_le(b, i, lo, hi):
   Bytes.span.go_le(String.drop(b, i), lo, hi)
+
+# A byte in a span's range: lo <= c and c < hi; in a range, in any range
+# around it
+law Bytes.span.in_lo:
+  for +c: U32
+  for +lo: U32
+  for +hi: U32
+  for +e: {Bytes.span.in(c, lo, hi) == True{} : Bool}
+  {U32.is_le(lo, c) == True{} : Bool}
+
+def Bytes.span.in_lo(c, lo, hi, e):
+  %U32.lt_flip(c, lo) : {_ == True{} : Bool}
+  Bool.and_l(Bool.not(U32.is_lt(c, lo)), Bool.not(U32.is_le(hi, c)), e)
+
+law Bytes.span.in_hi:
+  for +c: U32
+  for +lo: U32
+  for +hi: U32
+  for +e: {Bytes.span.in(c, lo, hi) == True{} : Bool}
+  {U32.is_lt(c, hi) == True{} : Bool}
+
+def Bytes.span.in_hi(c, lo, hi, e):
+  %U32.le_flip(hi, c) : {_ == True{} : Bool}
+  Bool.and_r(Bool.not(U32.is_lt(c, lo)), Bool.not(U32.is_le(hi, c)), e)
+
+law Bytes.span.in_of:
+  for +c: U32
+  for +lo: U32
+  for +hi: U32
+  for l: {U32.is_le(lo, c) == True{} : Bool}
+  for h: {U32.is_lt(c, hi) == True{} : Bool}
+  {Bytes.span.in(c, lo, hi) == True{} : Bool}
+
+def Bytes.span.in_of(c, lo, hi, l, h):
+  %Equal.sym(Bool, Bool.not(U32.is_lt(c, lo)), U32.is_le(lo, c), U32.lt_flip(c, lo)) :
+    {Bool.and(_, Bool.not(U32.is_le(hi, c))) == True{} : Bool}
+  %Equal.sym(Bool, Bool.not(U32.is_le(hi, c)), U32.is_lt(c, hi), U32.le_flip(hi, c)) :
+    {Bool.and(U32.is_le(lo, c), _) == True{} : Bool}
+  %Equal.sym(Bool, U32.is_le(lo, c), True{}, l) : {Bool.and(_, U32.is_lt(c, hi)) == True{} : Bool}
+  h
+
+law Bytes.span.in_widen:
+  for +c: U32
+  for +lo: U32
+  for +hi: U32
+  for +lo2: U32
+  for +hi2: U32
+  for +e: {Bytes.span.in(c, lo, hi) == True{} : Bool}
+  for l: {U32.is_le(lo2, lo) == True{} : Bool}
+  for h: {U32.is_le(hi, hi2) == True{} : Bool}
+  {Bytes.span.in(c, lo2, hi2) == True{} : Bool}
+
+def Bytes.span.in_widen(c, lo, hi, lo2, hi2, e, l, h):
+  Bytes.span.in_of(c, lo2, hi2, U32.le_trans(lo2, lo, c, l, Bytes.span.in_lo(c, lo, hi, e)),
+    U32.lt_le_trans(c, hi, hi2, Bytes.span.in_hi(c, lo, hi, e), h))
+
+# every byte a span counts is in its range
+def Bytes.span.go_get.at(+c: U32, +t: String, +lo: U32, +hi: U32, +k: Nat, ok: Bool,
+  ih: @+j: Nat -> {Nat.is_lt(j, Bytes.span.go(t, lo, hi)) == True{} : Bool} ->
+    {Bytes.span.in(Bytes.get(t, j), lo, hi) == True{} : Bool}) ->
+  {Bytes.span.in(c, lo, hi) == ok : Bool} ->
+  {Nat.is_lt(k, Bytes.span.at(ok, t, lo, hi)) == True{} : Bool} ->
+  {Bytes.span.in(Bytes.get(SCon{Chr{c}, t}, k), lo, hi) == True{} : Bool}:
+  match k ok:
+    case _ False{}:
+      e => lt => Nat.lt_zero({Bytes.span.in(Bytes.get(SCon{Chr{c}, t}, k), lo, hi) == True{} : Bool}, k, lt)
+    case 0n True{}:
+      e => lt => e
+    case 1n+j True{}:
+      e => lt => ih(j, lt)
+
+law Bytes.span.go_get:
+  for +s: String
+  for +lo: U32
+  for +hi: U32
+  for +k: Nat
+  for lt: {Nat.is_lt(k, Bytes.span.go(s, lo, hi)) == True{} : Bool}
+  {Bytes.span.in(Bytes.get(s, k), lo, hi) == True{} : Bool}
+
+def Bytes.span.go_get(s, lo, hi, k, lt):
+  match s:
+    case SNil{}:
+      Nat.lt_zero({Bytes.span.in(Bytes.get(SNil{}, k), lo, hi) == True{} : Bool}, k, lt)
+    case SCon{Chr{+c}, t}:
+      Bytes.span.go_get.at(c, t, lo, hi, k, Bytes.span.in(c, lo, hi),
+        j => l => Bytes.span.go_get(t, lo, hi, j, l))({==}, lt)
+
+# the bytes from i that Bytes.span counts are each in [lo, hi)
+law Bytes.span_get:
+  for +b: Bytes()
+  for +i: Nat
+  for +lo: U32
+  for +hi: U32
+  for +k: Nat
+  for lt: {Nat.is_lt(k, Bytes.span(b, i, lo, hi)) == True{} : Bool}
+  {Bytes.span.in(Bytes.get(b, Nat.add(i, k)), lo, hi) == True{} : Bool}
+
+def Bytes.span_get(b, i, lo, hi, k, lt):
+  %Equal.cong(Maybe<&2, Char>, U32, Bytes.byte, String.get(String.drop(b, i), k),
+    String.get(b, Nat.add(i, k)), Bytes.get.drop(b, i, k)) :
+    {Bytes.span.in(_, lo, hi) == True{} : Bool}
+  Bytes.span.go_get(String.drop(b, i), lo, hi, k, lt)
 
 law Bytes.find_byte.go:
   for s: String

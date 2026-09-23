@@ -276,6 +276,35 @@ def fld.scan(tbl: List<&2, Known>, ka: Bytes() & Maybe<&2, Fld>) -> Fld:
 def fld.of(k: Bytes()) -> Fld:
   fld.scan(fld.table(), (k, None{}))
 
+# A name is looked up only when it is as long as a name in the table:
+# any other is no field of this engine, and is neither lowercased nor
+# compared (a browser's user-agent, accept, cookie). PROOF.bend's
+# lem.fld.name: the same field as fld.of(lows(n)).
+# whether some name in the table is n bytes long, as fld.len.ok says it
+# for the table as it is, in its order
+def fld.len.any(+n: Nat, tbl: List<&2, Known>) -> Bool:
+  match tbl:
+    case Nil{}:
+      False{}
+    case Con{h, t}:
+      match h:
+        case Known{k, f}:
+          Nat.is_eq(n, Bytes.len(k)) || fld.len.any(n, t)
+
+def fld.len.ok(+n: Nat) -> Bool:
+  Nat.is_eq(n, 17n) || (Nat.is_eq(n, 14n) || (Nat.is_eq(n, 10n) || (Nat.is_eq(n, 7n)
+    || (Nat.is_eq(n, 17n) || (Nat.is_eq(n, 4n) || (Nat.is_eq(n, 21n) || False{}))))))
+
+def fld.gate(ok: Bool, n: Bytes()) -> Fld:
+  match ok:
+    case True{}:
+      fld.of(lows(n))
+    case False{}:
+      FOther{}
+
+def fld.name(+n: Bytes()) -> Fld:
+  fld.gate(fld.len.ok(Bytes.len(n)), n)
+
 # the method, by its bytes: GET and HEAD are served, and anything else
 # is a method this engine does not implement
 type Meth is Data:
@@ -1267,7 +1296,7 @@ def step.at(st: St, k: Cls, +c: U32, pd: Pend, out: List<&2, Req>) -> P:
     case Lin{} _:
       P{Bad{}, pd, out}
     case InN{n} KCo{}:
-      step.name(fld.of(lows(n)), pd, out)
+      step.name(fld.name(n), pd, out)
     case InN{n} KTk{}:
       P{InN{push(n, c)}, pd, out}
     case InN{n} KDg{}:
@@ -1601,8 +1630,43 @@ def ent.cut(+e: Ent, s: Bytes(), pd: Pend, out: List<&2, Req>, k: Nat) -> P & By
     case 1n+j:
       run.took(ent.sel(e), "", pd, out, String.cut(s, 1n+j))
 
+# A name is mostly lowercase letters (97 up to 123), found by Bytes.span
+# where they lie in the read: a token byte between them (a capital, a
+# digit, a '-') is taken by the class test on Bytes.get, and the span
+# goes on after it. Nothing is cut or copied until the name's end is
+# known. What k bounds is only how many spans: past it, run.len counts
+# the rest. PROOF.bend's lem.nm: the same count as run.len.
+def nm.ok(+s: Bytes(), +i: Nat) -> Bool:
+  run.stay(RN{}, cls(Bytes.get(s, i)))
+
+# how many bytes of the name are at i and after, ok saying whether the
+# byte at i is one
+def nm.go(k: Nat, +s: Bytes(), +i: Nat, ok: Bool) -> Nat:
+  match k ok:
+    case 0n False{}:
+      0n
+    case 0n True{}:
+      run.len(String.drop(s, i), True{}, RN{}, 0n)
+    case 1n+j False{}:
+      0n
+    case 1n+j True{}:
+      +n = Bytes.span(s, 1n+i, 97, 123)
+      +i2 = Nat.add(1n+i, n)
+      1n+Nat.add(n, nm.go(j, s, i2, nm.ok(s, i2)))
+
+def run.nm(+s: Bytes()) -> Nat:
+  +n = Bytes.span(s, 0n, 97, 123)
+  Nat.add(n, nm.go(Bytes.len(s), s, n, nm.ok(s, n)))
+
+def ent.len(+e: Ent, +s: Bytes()) -> Nat:
+  match e:
+    case EMeth{}:
+      run.len(s, True{}, RM{}, 0n)
+    case EName{}:
+      run.nm(s)
+
 def ent.go(+e: Ent, +s: Bytes(), pd: Pend, out: List<&2, Req>) -> P & Bytes():
-  ent.cut(e, s, pd, out, run.len(s, True{}, ent.sel(e), 0n))
+  ent.cut(e, s, pd, out, ent.len(e, s))
 
 # a value skipped: walked where it lies and nothing kept, and the byte
 # that ends it stepped at once. go says whether c, the byte before s,
@@ -1616,16 +1680,16 @@ def skip(s: Bytes(), go: Bool, c: U32, pd: Pend, out: List<&2, Req>) -> P & Byte
     case SCon{Chr{+x}, t} True{}:
       skip(t, run.stay(RX{}, cls(x)), x, pd, out)
 
-# The same walk, with the visible ASCII (33 up to 127) a value is mostly
-# made of found by Bytes.span in one borrowed pass: a byte the value
-# goes on past (a space, a tab, obs-text) is stepped as skip steps it,
-# and the span goes on after it. What k bounds is only how many spans:
-# past it, skip walks the rest. PROOF.bend's lem.skip.vis: the same
-# walk as skip, and so as feed.
+# The same walk, with the space and the visible ASCII (32 up to 127) a
+# value is mostly made of found by Bytes.span in one borrowed pass: a
+# byte the value goes on past (a tab, obs-text) is stepped as skip steps
+# it, and the span goes on after it. What k bounds is only how many
+# spans: past it, skip walks the rest. PROOF.bend's lem.skip.vis: the
+# same walk as skip, and so as feed.
 def skip.jump(ok: Bool, +t: Bytes()) -> Bytes():
   match ok:
     case True{}:
-      String.drop(t, Bytes.span(t, 0n, 33, 127))
+      String.drop(t, Bytes.span(t, 0n, 32, 127))
     case False{}:
       t
 
@@ -1735,10 +1799,20 @@ def adv.at(st: St, s: Bytes(), pd: Pend, out: List<&2, Req>) -> P & Bytes():
     case Bad{}:
       (P{Bad{}, pd, out}, "")
 
-def adv(s: Bytes(), p: P) -> P & Bytes():
+def adv.one(s: Bytes(), p: P) -> P & Bytes():
   match p:
     case P{st, pd, out}:
       adv.at(st, s, pd, out)
+
+# a move goes on from where the one before it landed, so one move of the
+# walk takes a field line whole: the LF before it, its name, its colon,
+# its value and the CR after it
+def adv.then(q: P & Bytes()) -> P & Bytes():
+  (p, s) = q
+  adv.one(s, p)
+
+def adv(s: Bytes(), p: P) -> P & Bytes():
+  adv.then(adv.then(adv.then(adv.one(s, p))))
 
 # the rest of a walk the fuel ran out on, a byte at a time
 def feed_buf.last(q: P & Bytes()) -> P:
