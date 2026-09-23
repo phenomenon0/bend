@@ -2434,6 +2434,56 @@ def lem.clo(+e: R.Ask, +s: Bytes(), +h: R.Head, +b: Bytes(), +left: Nat, +out: L
         lem.clo.at(e, q, h, b, c, t, out, Nat.is_le(String.length.go(t, 0n), q)),
         lem.clo(e, t, h, Bytes.push(b, c), q, out))
 
+# the byte-at-a-time states, stepped on in one move
+def lem.many(n: Nat, +e: R.Ask, s: Bytes(), p: R.P) -> {last(e, R.many(n, e, s, p)) == slow(e, s, p) : R.P}:
+  match n s p:
+    case 0n SNil{} R.P{st, out}:
+      {==}
+    case 0n SCon{Chr{c}, t} R.P{st, out}:
+      {==}
+    case 1n+j SNil{} R.P{st, out}:
+      {==}
+    case 1n+j SCon{Chr{+c}, t} R.P{R.Bod{h, r, b}, +out}:
+      {==}
+    case 1n+j SCon{Chr{+c}, t} R.P{R.Dat{h, r, b, left}, +out}:
+      {==}
+    case 1n+j SCon{Chr{+c}, t} R.P{R.Clo{h, b, left}, +out}:
+      {==}
+    case 1n+j SCon{Chr{+c}, t} R.P{R.Fin{r, rest}, +out}:
+      {==}
+    case 1n+j SCon{Chr{+c}, t} R.P{R.Bad{}, +out}:
+      {==}
+    case 1n+j SCon{Chr{+c}, t} R.P{R.SVer{a, b}, +out}:
+      lem.many(j, e, t, R.step(e, R.P{R.SVer{a, b}, out}, c))
+    case 1n+j SCon{Chr{+c}, t} R.P{R.SCode{v10, n0, k}, +out}:
+      lem.many(j, e, t, R.step(e, R.P{R.SCode{v10, n0, k}, out}, c))
+    case 1n+j SCon{Chr{+c}, t} R.P{R.SWhy{v10, code}, +out}:
+      lem.many(j, e, t, R.step(e, R.P{R.SWhy{v10, code}, out}, c))
+    case 1n+j SCon{Chr{+c}, t} R.P{R.Eol{h}, +out}:
+      lem.many(j, e, t, R.step(e, R.P{R.Eol{h}, out}, c))
+    case 1n+j SCon{Chr{+c}, t} R.P{R.Lin{h}, +out}:
+      lem.many(j, e, t, R.step(e, R.P{R.Lin{h}, out}, c))
+    case 1n+j SCon{Chr{+c}, t} R.P{R.Nam{h, a, b, d}, +out}:
+      lem.many(j, e, t, R.step(e, R.P{R.Nam{h, a, b, d}, out}, c))
+    case 1n+j SCon{Chr{+c}, t} R.P{R.Oth{h}, +out}:
+      lem.many(j, e, t, R.step(e, R.P{R.Oth{h}, out}, c))
+    case 1n+j SCon{Chr{+c}, t} R.P{R.Len0{h}, +out}:
+      lem.many(j, e, t, R.step(e, R.P{R.Len0{h}, out}, c))
+    case 1n+j SCon{Chr{+c}, t} R.P{R.Len{h, n0}, +out}:
+      lem.many(j, e, t, R.step(e, R.P{R.Len{h, n0}, out}, c))
+    case 1n+j SCon{Chr{+c}, t} R.P{R.LenW{h, n0}, +out}:
+      lem.many(j, e, t, R.step(e, R.P{R.LenW{h, n0}, out}, c))
+    case 1n+j SCon{Chr{+c}, t} R.P{R.Te0{h}, +out}:
+      lem.many(j, e, t, R.step(e, R.P{R.Te0{h}, out}, c))
+    case 1n+j SCon{Chr{+c}, t} R.P{R.Te{h, m}, +out}:
+      lem.many(j, e, t, R.step(e, R.P{R.Te{h, m}, out}, c))
+    case 1n+j SCon{Chr{+c}, t} R.P{R.Conn{h, cl, ka, mc, mk}, +out}:
+      lem.many(j, e, t, R.step(e, R.P{R.Conn{h, cl, ka, mc, mk}, out}, c))
+    case 1n+j SCon{Chr{+c}, t} R.P{R.Eoh{h}, +out}:
+      lem.many(j, e, t, R.step(e, R.P{R.Eoh{h}, out}, c))
+    case 1n+j SCon{Chr{+c}, t} R.P{R.Chk{h, at, n0, got, left}, +out}:
+      lem.many(j, e, t, R.step(e, R.P{R.Chk{h, at, n0, got, left}, out}, c))
+
 # every move
 def lem.adv.at(+e: R.Ask, st: R.St, +s: Bytes(), +out: List<&2, U32>) ->
   {last(e, R.adv.at(e, st, s, out)) == slow(e, s, R.P{st, out}) : R.P}:
@@ -2450,35 +2500,35 @@ def lem.adv.at(+e: R.Ask, st: R.St, +s: Bytes(), +out: List<&2, U32>) ->
     case R.Bad{}:
       Equal.sym(R.P, slow(e, s, R.P{R.Bad{}, out}), R.P{R.Bad{}, out}, lem.bad(e, s, out))
     case R.SVer{a, b}:
-      lem.one(e, R.P{R.SVer{a, b}, out}, s)
+      lem.many(Bytes.len(s), e, s, R.P{R.SVer{a, b}, out})
     case R.SCode{v10, n, k}:
-      lem.one(e, R.P{R.SCode{v10, n, k}, out}, s)
+      lem.many(Bytes.len(s), e, s, R.P{R.SCode{v10, n, k}, out})
     case R.SWhy{v10, code}:
-      lem.one(e, R.P{R.SWhy{v10, code}, out}, s)
+      lem.many(Bytes.len(s), e, s, R.P{R.SWhy{v10, code}, out})
     case R.Eol{h}:
-      lem.one(e, R.P{R.Eol{h}, out}, s)
+      lem.many(Bytes.len(s), e, s, R.P{R.Eol{h}, out})
     case R.Lin{h}:
-      lem.one(e, R.P{R.Lin{h}, out}, s)
+      lem.many(Bytes.len(s), e, s, R.P{R.Lin{h}, out})
     case R.Nam{h, a, b, d}:
-      lem.one(e, R.P{R.Nam{h, a, b, d}, out}, s)
+      lem.many(Bytes.len(s), e, s, R.P{R.Nam{h, a, b, d}, out})
     case R.Oth{h}:
-      lem.one(e, R.P{R.Oth{h}, out}, s)
+      lem.many(Bytes.len(s), e, s, R.P{R.Oth{h}, out})
     case R.Len0{h}:
-      lem.one(e, R.P{R.Len0{h}, out}, s)
+      lem.many(Bytes.len(s), e, s, R.P{R.Len0{h}, out})
     case R.Len{h, n}:
-      lem.one(e, R.P{R.Len{h, n}, out}, s)
+      lem.many(Bytes.len(s), e, s, R.P{R.Len{h, n}, out})
     case R.LenW{h, n}:
-      lem.one(e, R.P{R.LenW{h, n}, out}, s)
+      lem.many(Bytes.len(s), e, s, R.P{R.LenW{h, n}, out})
     case R.Te0{h}:
-      lem.one(e, R.P{R.Te0{h}, out}, s)
+      lem.many(Bytes.len(s), e, s, R.P{R.Te0{h}, out})
     case R.Te{h, m}:
-      lem.one(e, R.P{R.Te{h, m}, out}, s)
+      lem.many(Bytes.len(s), e, s, R.P{R.Te{h, m}, out})
     case R.Conn{h, cl, ka, mc, mk}:
-      lem.one(e, R.P{R.Conn{h, cl, ka, mc, mk}, out}, s)
+      lem.many(Bytes.len(s), e, s, R.P{R.Conn{h, cl, ka, mc, mk}, out})
     case R.Eoh{h}:
-      lem.one(e, R.P{R.Eoh{h}, out}, s)
+      lem.many(Bytes.len(s), e, s, R.P{R.Eoh{h}, out})
     case R.Chk{h, at, n, got, left}:
-      lem.one(e, R.P{R.Chk{h, at, n, got, left}, out}, s)
+      lem.many(Bytes.len(s), e, s, R.P{R.Chk{h, at, n, got, left}, out})
 
 # the kit's obligation: every move lands where stepping its bytes does
 def adv_ok(+e: R.Ask, +s: Bytes(), p: R.P) ->

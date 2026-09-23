@@ -1022,6 +1022,59 @@ def one(+e: Ask, p: P, s: Bytes()) -> P & Bytes():
     case SCon{Chr{c}, t}:
       (step(e, p, c), t)
 
+# the states that read a byte at a time, stepped on in one move until a
+# state that takes a run (a body, what follows the response, a refusal)
+# or the read's end: the kit's walk, without going back to the kit for
+# every byte (n bounds the steps)
+def many(n: Nat, +e: Ask, s: Bytes(), p: P) -> P & Bytes():
+  match n s p:
+    case 0n SNil{} P{st, out}:
+      (P{st, out}, SNil{})
+    case 0n SCon{Chr{c}, t} P{st, out}:
+      (P{st, out}, SCon{Chr{c}, t})
+    case 1n+j SNil{} P{st, out}:
+      (P{st, out}, SNil{})
+    case 1n+j SCon{Chr{+c}, t} P{Bod{h, r, b}, out}:
+      (P{Bod{h, r, b}, out}, SCon{Chr{c}, t})
+    case 1n+j SCon{Chr{+c}, t} P{Dat{h, r, b, left}, out}:
+      (P{Dat{h, r, b, left}, out}, SCon{Chr{c}, t})
+    case 1n+j SCon{Chr{+c}, t} P{Clo{h, b, left}, out}:
+      (P{Clo{h, b, left}, out}, SCon{Chr{c}, t})
+    case 1n+j SCon{Chr{+c}, t} P{Fin{r, rest}, out}:
+      (P{Fin{r, rest}, out}, SCon{Chr{c}, t})
+    case 1n+j SCon{Chr{+c}, t} P{Bad{}, out}:
+      (P{Bad{}, out}, SCon{Chr{c}, t})
+    case 1n+j SCon{Chr{+c}, t} P{SVer{a, b}, out}:
+      many(j, e, t, step(e, P{SVer{a, b}, out}, c))
+    case 1n+j SCon{Chr{+c}, t} P{SCode{v10, n0, k}, out}:
+      many(j, e, t, step(e, P{SCode{v10, n0, k}, out}, c))
+    case 1n+j SCon{Chr{+c}, t} P{SWhy{v10, code}, out}:
+      many(j, e, t, step(e, P{SWhy{v10, code}, out}, c))
+    case 1n+j SCon{Chr{+c}, t} P{Eol{h}, out}:
+      many(j, e, t, step(e, P{Eol{h}, out}, c))
+    case 1n+j SCon{Chr{+c}, t} P{Lin{h}, out}:
+      many(j, e, t, step(e, P{Lin{h}, out}, c))
+    case 1n+j SCon{Chr{+c}, t} P{Nam{h, a, b, d}, out}:
+      many(j, e, t, step(e, P{Nam{h, a, b, d}, out}, c))
+    case 1n+j SCon{Chr{+c}, t} P{Oth{h}, out}:
+      many(j, e, t, step(e, P{Oth{h}, out}, c))
+    case 1n+j SCon{Chr{+c}, t} P{Len0{h}, out}:
+      many(j, e, t, step(e, P{Len0{h}, out}, c))
+    case 1n+j SCon{Chr{+c}, t} P{Len{h, n0}, out}:
+      many(j, e, t, step(e, P{Len{h, n0}, out}, c))
+    case 1n+j SCon{Chr{+c}, t} P{LenW{h, n0}, out}:
+      many(j, e, t, step(e, P{LenW{h, n0}, out}, c))
+    case 1n+j SCon{Chr{+c}, t} P{Te0{h}, out}:
+      many(j, e, t, step(e, P{Te0{h}, out}, c))
+    case 1n+j SCon{Chr{+c}, t} P{Te{h, m}, out}:
+      many(j, e, t, step(e, P{Te{h, m}, out}, c))
+    case 1n+j SCon{Chr{+c}, t} P{Conn{h, cl, ka, mc, mk}, out}:
+      many(j, e, t, step(e, P{Conn{h, cl, ka, mc, mk}, out}, c))
+    case 1n+j SCon{Chr{+c}, t} P{Eoh{h}, out}:
+      many(j, e, t, step(e, P{Eoh{h}, out}, c))
+    case 1n+j SCon{Chr{+c}, t} P{Chk{h, at, n0, got, left}, out}:
+      many(j, e, t, step(e, P{Chk{h, at, n0, got, left}, out}, c))
+
 def adv.at(+e: Ask, st: St, +s: Bytes(), out: List<&2, U32>) -> P & Bytes():
   match st:
     case Bod{h, +r, b}:
@@ -1035,35 +1088,35 @@ def adv.at(+e: Ask, st: St, +s: Bytes(), out: List<&2, U32>) -> P & Bytes():
     case Bad{}:
       (P{Bad{}, out}, "")
     case SVer{a, b}:
-      one(e, P{SVer{a, b}, out}, s)
+      many(Bytes.len(s), e, s, P{SVer{a, b}, out})
     case SCode{v10, n, k}:
-      one(e, P{SCode{v10, n, k}, out}, s)
+      many(Bytes.len(s), e, s, P{SCode{v10, n, k}, out})
     case SWhy{v10, code}:
-      one(e, P{SWhy{v10, code}, out}, s)
+      many(Bytes.len(s), e, s, P{SWhy{v10, code}, out})
     case Eol{h}:
-      one(e, P{Eol{h}, out}, s)
+      many(Bytes.len(s), e, s, P{Eol{h}, out})
     case Lin{h}:
-      one(e, P{Lin{h}, out}, s)
+      many(Bytes.len(s), e, s, P{Lin{h}, out})
     case Nam{h, a, b, d}:
-      one(e, P{Nam{h, a, b, d}, out}, s)
+      many(Bytes.len(s), e, s, P{Nam{h, a, b, d}, out})
     case Oth{h}:
-      one(e, P{Oth{h}, out}, s)
+      many(Bytes.len(s), e, s, P{Oth{h}, out})
     case Len0{h}:
-      one(e, P{Len0{h}, out}, s)
+      many(Bytes.len(s), e, s, P{Len0{h}, out})
     case Len{h, n}:
-      one(e, P{Len{h, n}, out}, s)
+      many(Bytes.len(s), e, s, P{Len{h, n}, out})
     case LenW{h, n}:
-      one(e, P{LenW{h, n}, out}, s)
+      many(Bytes.len(s), e, s, P{LenW{h, n}, out})
     case Te0{h}:
-      one(e, P{Te0{h}, out}, s)
+      many(Bytes.len(s), e, s, P{Te0{h}, out})
     case Te{h, m}:
-      one(e, P{Te{h, m}, out}, s)
+      many(Bytes.len(s), e, s, P{Te{h, m}, out})
     case Conn{h, cl, ka, mc, mk}:
-      one(e, P{Conn{h, cl, ka, mc, mk}, out}, s)
+      many(Bytes.len(s), e, s, P{Conn{h, cl, ka, mc, mk}, out})
     case Eoh{h}:
-      one(e, P{Eoh{h}, out}, s)
+      many(Bytes.len(s), e, s, P{Eoh{h}, out})
     case Chk{h, at, n, got, left}:
-      one(e, P{Chk{h, at, n, got, left}, out}, s)
+      many(Bytes.len(s), e, s, P{Chk{h, at, n, got, left}, out})
 
 def adv(+e: Ask, s: Bytes(), p: P) -> P & Bytes():
   match p:
