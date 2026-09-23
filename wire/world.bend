@@ -283,7 +283,7 @@ def sim.page(
   may: Maybe<&2, Bytes()>, sh: Bool, st: L.Em<World>
 ) -> L.Em<World>:
   L.send.page(~Id, ~Id.pure, ~Id.bind, ~World, ~Bytes(), ~w.tx, ~w.say, ~w.fopen, ~w.fsize,
-    ~w.fsend, ~w.fclose, ~shut, ~fhead, ~miss, ~lnote, ~lsize, ms, root, path, ct, head, may, sh, st)
+    ~w.fread, ~w.fsend, ~w.fclose, ~shut, ~fhead, ~miss, ~lnote, ~lsize, ms, root, path, ct, head, may, sh, st)
 
 def sim.go(
   ~shut: Bool -> Bytes() -> Bytes(), ~fhead: List<&2, U32> -> U32 -> Bytes(),
@@ -291,13 +291,13 @@ def sim.go(
   ~lsize: Bytes() -> Bytes() -> U32 -> String, xs: List<&2, L.Seg>, +ms: U32, may: Maybe<&2, Bytes()>, sh: Bool, st: L.Em<World>
 ) -> L.Put(World):
   L.send.go(~Id, ~Id.pure, ~Id.bind, ~World, ~Bytes(), ~w.tx, ~w.say, ~w.fopen, ~w.fsize,
-    ~w.fsend, ~w.fclose, ~shut, ~fhead, ~miss, ~lnote, ~lsize, xs, ms, may, sh, st)
+    ~w.fread, ~w.fsend, ~w.fclose, ~shut, ~fhead, ~miss, ~lnote, ~lsize, xs, ms, may, sh, st)
 
 def sim.segs(~shut: Bool -> Bytes() -> Bytes(), ~fhead: List<&2, U32> -> U32 -> Bytes(),
   ~miss: Bool -> Bytes(), ~lnote: Bytes() -> Bytes() -> String,
   ~lsize: Bytes() -> Bytes() -> U32 -> String, s: World, xs: List<&2, L.Seg>, +ms: U32) -> L.Put(World):
   L.send.segs(~Id, ~Id.pure, ~Id.bind, ~World, ~Bytes(), ~w.tx, ~w.say, ~w.fopen, ~w.fsize,
-    ~w.fsend, ~w.fclose, ~shut, ~fhead, ~miss, ~lnote, ~lsize, s, xs, ms)
+    ~w.fread, ~w.fsend, ~w.fclose, ~shut, ~fhead, ~miss, ~lnote, ~lsize, s, xs, ms)
 
 def sim.turn.h(~E: Data, ~P: Data, ~U: Data, ~idle: E -> U32, ~hdms: E -> U32,
   ~plan: E -> Bytes() -> P -> L.Plan<P, U>, ~big: Bytes(), +srv: E, s: World, p: P, hw: L.Hw) -> (World & L.Plan<P, U>) & L.Hw:
@@ -328,11 +328,19 @@ def sim.fsent(g: World & Bytes() & Result<&1, &1, U32 & String, Unit>) -> L.Em<W
 def sim.headed(+ms: U32, f: Bytes(), n: U32, m: L.Put(World)) -> L.Em<World>:
   L.page.headed(~Id, ~Id.pure, ~Id.bind, ~World, ~Bytes(), ~w.fsend, ~w.fclose, ms, f, n, m)
 
+def sim.read(+ms: U32, got: Bytes() & Result<&1, &1, U32 & String, Bytes()>, +n: U32, s: World,
+  pre: Bytes()) -> L.Em<World>:
+  L.page.read(~Id, ~Id.pure, ~Id.bind, ~World, ~Bytes(), ~w.tx, ~w.fclose, ms, got, n, s, pre)
+
+def sim.body(+ms: U32, f: Bytes(), +n: U32, s: World, pre: Bytes(), small: Bool) -> L.Em<World>:
+  L.page.body(~Id, ~Id.pure, ~Id.bind, ~World, ~Bytes(), ~w.tx, ~w.fread, ~w.fsend, ~w.fclose, ms,
+    f, n, s, pre, small)
+
 def sim.pstart(
   ~lsize: Bytes() -> Bytes() -> U32 -> String, +ms: U32, f: Bytes(), +n: U32, +hd: Bytes(),
   head: Bool, may: Maybe<&2, Bytes()>, s: World, acc: Bytes()
 ) -> L.Em<World>:
-  L.page.start(~Id, ~Id.pure, ~Id.bind, ~World, ~Bytes(), ~w.tx, ~w.say, ~w.fsend, ~w.fclose,
+  L.page.start(~Id, ~Id.pure, ~Id.bind, ~World, ~Bytes(), ~w.tx, ~w.say, ~w.fread, ~w.fsend, ~w.fclose,
     ~lsize, ms, f, n, hd, head, may, s, acc)
 
 def sim.psized(
@@ -341,7 +349,7 @@ def sim.psized(
   ~lsize: Bytes() -> Bytes() -> U32 -> String, +ms: U32, got: Bytes() & Result<&1, &1, U32 & String, U32>, ct: List<&2, U32>,
   head: Bool, may: Maybe<&2, Bytes()>, sh: Bool, s: World, acc: Bytes()
 ) -> L.Em<World>:
-  L.page.sized(~Id, ~Id.pure, ~Id.bind, ~World, ~Bytes(), ~w.tx, ~w.say, ~w.fsend, ~w.fclose,
+  L.page.sized(~Id, ~Id.pure, ~Id.bind, ~World, ~Bytes(), ~w.tx, ~w.say, ~w.fread, ~w.fsend, ~w.fclose,
     ~shut, ~fhead, ~miss, ~lnote, ~lsize, ms, got, ct, head, may, sh, s, acc)
 
 def sim.opened(
@@ -350,7 +358,7 @@ def sim.opened(
   ~lsize: Bytes() -> Bytes() -> U32 -> String, +ms: U32, m: World & Result<&1, &1, U32 & String, Bytes()>, ct: List<&2, U32>,
   head: Bool, may: Maybe<&2, Bytes()>, sh: Bool, acc: Bytes()
 ) -> L.Em<World>:
-  L.page.opened(~Id, ~Id.pure, ~Id.bind, ~World, ~Bytes(), ~w.tx, ~w.say, ~w.fsize, ~w.fsend,
+  L.page.opened(~Id, ~Id.pure, ~Id.bind, ~World, ~Bytes(), ~w.tx, ~w.say, ~w.fsize, ~w.fread, ~w.fsend,
     ~w.fclose, ~shut, ~fhead, ~miss, ~lnote, ~lsize, ms, m, ct, head, may, sh, acc)
 
 def sim.turn(~E: Data, ~P: Data, ~U: Data, ~idle: E -> U32, ~hdms: E -> U32,
@@ -371,7 +379,7 @@ def sim.conn(~E: Data, ~P: Data, ~U: Data, ~idle: E -> U32, ~hdms: E -> U32,
   ~miss: Bool -> Bytes(), ~lnote: Bytes() -> Bytes() -> String,
   ~lsize: Bytes() -> Bytes() -> U32 -> String, f: Nat, +srv: E, sph: (World & L.Plan<P, U>) & L.Hw, w: Nat) -> World:
   L.conn(~Id, ~Id.pure, ~Id.bind, ~World, ~Bytes(), ~w.rx, ~w.tx, ~w.clk, ~w.nap, ~w.say,
-    ~w.fopen, ~w.fsize, ~w.fsend, ~w.fclose, ~E, ~P, ~U, ~idle, ~hdms, ~plan, ~mid, ~big, ~uplan, ~gap, ~event, ~shut, ~fhead, ~miss, ~lnote, ~lsize, f, srv, sph, w)
+    ~w.fopen, ~w.fsize, ~w.fread, ~w.fsend, ~w.fclose, ~E, ~P, ~U, ~idle, ~hdms, ~plan, ~mid, ~big, ~uplan, ~gap, ~event, ~shut, ~fhead, ~miss, ~lnote, ~lsize, f, srv, sph, w)
 
 def sim.start(~E: Data, ~P: Data, ~U: Data, ~idle: E -> U32, ~hdms: E -> U32,
   ~plan: E -> Bytes() -> P -> L.Plan<P, U>, ~mid: P -> Bool, ~big: Bytes(),
@@ -380,7 +388,7 @@ def sim.start(~E: Data, ~P: Data, ~U: Data, ~idle: E -> U32, ~hdms: E -> U32,
   ~miss: Bool -> Bytes(), ~lnote: Bytes() -> Bytes() -> String,
   ~lsize: Bytes() -> Bytes() -> U32 -> String, +srv: E, p0: P, s: World) -> World:
   L.conn.start(~Id, ~Id.pure, ~Id.bind, ~World, ~Bytes(), ~w.rx, ~w.tx, ~w.clk, ~w.nap,
-    ~w.say, ~w.fopen, ~w.fsize, ~w.fsend, ~w.fclose, ~E, ~P, ~U, ~idle, ~hdms, ~plan, ~mid, ~big, ~uplan, ~gap, ~event, ~shut, ~fhead, ~miss, ~lnote, ~lsize, srv, p0, s)
+    ~w.say, ~w.fopen, ~w.fsize, ~w.fread, ~w.fsend, ~w.fclose, ~E, ~P, ~U, ~idle, ~hdms, ~plan, ~mid, ~big, ~uplan, ~gap, ~event, ~shut, ~fhead, ~miss, ~lnote, ~lsize, srv, p0, s)
 
 # The mute peer
 # =============
@@ -424,7 +432,7 @@ def mute.conn(~E: Data, ~P: Data, ~U: Data, ~idle: E -> U32, ~hdms: E -> U32,
   ~miss: Bool -> Bytes(), ~lnote: Bytes() -> Bytes() -> String,
   ~lsize: Bytes() -> Bytes() -> U32 -> String, f: Nat, +srv: E, sph: (World & L.Plan<P, U>) & L.Hw, w: Nat) -> World:
   L.conn(~Id, ~Id.pure, ~Id.bind, ~World, ~Bytes(), ~m.rx, ~m.tx, ~w.clk, ~m.nap, ~w.say,
-    ~w.fopen, ~w.fsize, ~m.fsend, ~w.fclose, ~E, ~P, ~U, ~idle, ~hdms, ~plan, ~mid, ~big, ~uplan, ~gap, ~event, ~shut, ~fhead, ~miss, ~lnote, ~lsize, f, srv, sph, w)
+    ~w.fopen, ~w.fsize, ~w.fread, ~m.fsend, ~w.fclose, ~E, ~P, ~U, ~idle, ~hdms, ~plan, ~mid, ~big, ~uplan, ~gap, ~event, ~shut, ~fhead, ~miss, ~lnote, ~lsize, f, srv, sph, w)
 
 def mute.turn(~E: Data, ~P: Data, ~U: Data, ~idle: E -> U32, ~hdms: E -> U32,
   ~plan: E -> Bytes() -> P -> L.Plan<P, U>, ~big: Bytes(), +srv: E, m: L.Put(World), p: P, hw: L.Hw) ->
@@ -435,7 +443,7 @@ def mute.segs(~shut: Bool -> Bytes() -> Bytes(), ~fhead: List<&2, U32> -> U32 ->
   ~miss: Bool -> Bytes(), ~lnote: Bytes() -> Bytes() -> String,
   ~lsize: Bytes() -> Bytes() -> U32 -> String, s: World, xs: List<&2, L.Seg>, +ms: U32) -> L.Put(World):
   L.send.segs(~Id, ~Id.pure, ~Id.bind, ~World, ~Bytes(), ~m.tx, ~w.say, ~w.fopen, ~w.fsize,
-    ~m.fsend, ~w.fclose, ~shut, ~fhead, ~miss, ~lnote, ~lsize, s, xs, ms)
+    ~w.fread, ~m.fsend, ~w.fclose, ~shut, ~fhead, ~miss, ~lnote, ~lsize, s, xs, ms)
 
 def mute.turn.h(~E: Data, ~P: Data, ~U: Data, ~idle: E -> U32, ~hdms: E -> U32,
   ~plan: E -> Bytes() -> P -> L.Plan<P, U>, ~big: Bytes(), +srv: E, s: World, p: P, hw: L.Hw) -> (World & L.Plan<P, U>) & L.Hw:
@@ -462,7 +470,7 @@ def mute.go(
   ~lsize: Bytes() -> Bytes() -> U32 -> String, xs: List<&2, L.Seg>, +ms: U32, may: Maybe<&2, Bytes()>, sh: Bool, st: L.Em<World>
 ) -> L.Put(World):
   L.send.go(~Id, ~Id.pure, ~Id.bind, ~World, ~Bytes(), ~m.tx, ~w.say, ~w.fopen, ~w.fsize,
-    ~m.fsend, ~w.fclose, ~shut, ~fhead, ~miss, ~lnote, ~lsize, xs, ms, may, sh, st)
+    ~w.fread, ~m.fsend, ~w.fclose, ~shut, ~fhead, ~miss, ~lnote, ~lsize, xs, ms, may, sh, st)
 
 def empty(bs: Bytes()) -> Bool:
   match bs:
@@ -1320,6 +1328,55 @@ def wl.headed_fine(ms, f, n, m):
     case Done{u}:
       wl.fsent_fine(w.fsend(s, f, 0, n, ms))
 
+law wl.blk_fine:
+  for m: L.Put(World)
+  for whole: Bool
+  {em.fine(L.page.blk(World, m, whole)) == True{} : Bool}
+
+def wl.blk_fine(m, whole):
+  (s, r) = m
+  match r:
+    case Done{u}:
+      match whole:
+        case True{}:
+          {==}
+        case False{}:
+          {==}
+    case Fail{e}:
+      {==}
+
+law wl.read_fine:
+  for +ms: U32
+  for got: Bytes() & Result<&1, &1, U32 & String, Bytes()>
+  for +n: U32
+  for s: World
+  for pre: Bytes()
+  {em.fine(sim.read(ms, got, n, s, pre)) == True{} : Bool}
+
+def wl.read_fine(ms, got, n, s, pre):
+  (f, r) = got
+  match r:
+    case Fail{e}:
+      {==}
+    case Done{+bs}:
+      wl.blk_fine(w.tx(s, Bytes.append(pre, bs), ms), Nat.is_eq(Bytes.len(bs), U32.to_nat(n)))
+
+law wl.body_fine:
+  for +ms: U32
+  for +f: Bytes()
+  for +n: U32
+  for +s: World
+  for +pre: Bytes()
+  for small: Bool
+  {em.fine(sim.body(ms, f, n, s, pre, small)) == True{} : Bool}
+
+def wl.body_fine(ms, f, n, s, pre, small):
+  match small:
+    case True{}:
+      wl.read_fine(ms, w.fread(f, n), n, s, pre)
+    case False{}:
+      wl.headed_fine(ms, f, n, w.tx(s, pre, ms))
+
 law wl.miss_fine:
   for ~shut: Bool -> Bytes() -> Bytes()
   for ~miss: Bool -> Bytes()
@@ -1352,7 +1409,7 @@ def wl.pstart_fine(lsize, ms, f, n, hd, head, may, s, acc):
     case True{}:
       hold_fine(ms, s, Bytes.append(acc, hd))
     case False{}:
-      wl.headed_fine(ms, f, n, w.tx(s, Bytes.append(acc, hd), ms))
+      wl.body_fine(ms, f, n, s, Bytes.append(acc, hd), U32.is_lt(n, L.page.small()))
 
 law wl.psized_fine:
   for ~shut: Bool -> Bytes() -> Bytes()
@@ -2602,6 +2659,138 @@ def wl.headed_wire(ms, f, rd, now, fs, o, en):
     {sim.fsent(_) == L.Em{eager(rd, now, fs, Bytes.append(o, f)), "", True{}} : L.Em<World>}
   {==}
 
+def wl.eq_refl(+n: Nat) -> {Nat.is_eq(n, n) == True{} : Bool}:
+  match n:
+    case 0n:
+      {==}
+    case 1n+p:
+      wl.eq_refl(p)
+
+law wl.blk_eager:
+  for +rd: List<&2, Rd>
+  for +now: Nat
+  for +fs: List<&2, Fil>
+  for +out: Bytes()
+  for +x: Bytes()
+  for +whole: Bool
+  for +ms: U32
+  {L.page.blk(World, w.tx(eager(rd, now, fs, out), x, ms), whole) ==
+    L.Em{eager(rd, now, fs, Bytes.append(out, x)), "", whole} : L.Em<World>}
+
+def wl.blk_eager(rd, now, fs, out, x, whole, ms):
+  %Equal.sym(L.Put(World), w.tx(eager(rd, now, fs, out), x, ms),
+    sent(rd, now, fs, Bytes.append(out, x)), wl.tx_eager(rd, now, fs, out, x, ms)) :
+    {L.page.blk(World, _, whole) == L.Em{eager(rd, now, fs, Bytes.append(out, x)), "", whole} :
+      L.Em<World>}
+  {==}
+
+law wl.take_n:
+  for +f: Bytes()
+  for en: {U32.to_nat(U32.from_nat(Bytes.len(f))) == Bytes.len(f) : Nat}
+  {String.take(f, U32.to_nat(U32.from_nat(Bytes.len(f)))) == f : Bytes()}
+
+def wl.take_n(f, en):
+  %Equal.sym(Nat, U32.to_nat(U32.from_nat(Bytes.len(f))), Bytes.len(f), en) :
+    {String.take(f, _) == f : Bytes()}
+  wl.take_all(f)
+
+law wl.whole_n:
+  for +f: Bytes()
+  for +en: {U32.to_nat(U32.from_nat(Bytes.len(f))) == Bytes.len(f) : Nat}
+  {Nat.is_eq(Bytes.len(String.take(f, U32.to_nat(U32.from_nat(Bytes.len(f))))),
+    U32.to_nat(U32.from_nat(Bytes.len(f)))) == True{} : Bool}
+
+def wl.whole_n(f, en):
+  %Equal.sym(Bytes(), String.take(f, U32.to_nat(U32.from_nat(Bytes.len(f)))), f, wl.take_n(f, en)) :
+    {Nat.is_eq(Bytes.len(_), U32.to_nat(U32.from_nat(Bytes.len(f)))) == True{} : Bool}
+  %Equal.sym(Nat, U32.to_nat(U32.from_nat(Bytes.len(f))), Bytes.len(f), en) :
+    {Nat.is_eq(Bytes.len(f), _) == True{} : Bool}
+  wl.eq_refl(Bytes.len(f))
+
+law wl.read_wire.at:
+  for +f: Bytes()
+  for +rd: List<&2, Rd>
+  for +now: Nat
+  for +fs: List<&2, Fil>
+  for +out: Bytes()
+  for +pre: Bytes()
+  for +en: {U32.to_nat(U32.from_nat(Bytes.len(f))) == Bytes.len(f) : Nat}
+  {L.Em{eager(rd, now, fs, Bytes.append(out,
+      Bytes.append(pre, String.take(f, U32.to_nat(U32.from_nat(Bytes.len(f))))))), "",
+      Nat.is_eq(Bytes.len(String.take(f, U32.to_nat(U32.from_nat(Bytes.len(f))))),
+        U32.to_nat(U32.from_nat(Bytes.len(f))))} ==
+    L.Em{eager(rd, now, fs, Bytes.append(Bytes.append(out, pre), f)), "", True{}} : L.Em<World>}
+
+def wl.read_wire.at(f, rd, now, fs, out, pre, en):
+  %Equal.sym(Bool, Nat.is_eq(Bytes.len(String.take(f, U32.to_nat(U32.from_nat(Bytes.len(f))))),
+      U32.to_nat(U32.from_nat(Bytes.len(f)))), True{}, wl.whole_n(f, en)) :
+    {L.Em{eager(rd, now, fs, Bytes.append(out,
+      Bytes.append(pre, String.take(f, U32.to_nat(U32.from_nat(Bytes.len(f))))))), "", _} ==
+      L.Em{eager(rd, now, fs, Bytes.append(Bytes.append(out, pre), f)), "", True{}} : L.Em<World>}
+  %Equal.sym(Bytes(), String.take(f, U32.to_nat(U32.from_nat(Bytes.len(f)))), f, wl.take_n(f, en)) :
+    {L.Em{eager(rd, now, fs, Bytes.append(out, Bytes.append(pre, _))), "", True{}} ==
+      L.Em{eager(rd, now, fs, Bytes.append(Bytes.append(out, pre), f)), "", True{}} : L.Em<World>}
+  Equal.cong(Bytes(), L.Em<World>, y => L.Em{eager(rd, now, fs, y), "", True{}},
+    Bytes.append(out, Bytes.append(pre, f)), Bytes.append(Bytes.append(out, pre), f),
+    Equal.sym(Bytes(), Bytes.append(Bytes.append(out, pre), f), Bytes.append(out, Bytes.append(pre, f)),
+      wl.app_assoc(out, pre, f)))
+
+# a small file: read whole, and on the wire with its head in one send
+law wl.read_wire:
+  for +ms: U32
+  for +f: Bytes()
+  for +rd: List<&2, Rd>
+  for +now: Nat
+  for +fs: List<&2, Fil>
+  for +out: Bytes()
+  for +pre: Bytes()
+  for +en: {U32.to_nat(U32.from_nat(Bytes.len(f))) == Bytes.len(f) : Nat}
+  {sim.read(ms, w.fread(f, U32.from_nat(Bytes.len(f))), U32.from_nat(Bytes.len(f)),
+      eager(rd, now, fs, out), pre) ==
+    L.Em{eager(rd, now, fs, Bytes.append(Bytes.append(out, pre), f)), "", True{}} : L.Em<World>}
+
+def wl.read_wire(ms, f, rd, now, fs, out, pre, en):
+  Equal.trans(L.Em<World>,
+    L.page.blk(World, w.tx(eager(rd, now, fs, out),
+        Bytes.append(pre, String.take(f, U32.to_nat(U32.from_nat(Bytes.len(f))))), ms),
+      Nat.is_eq(Bytes.len(String.take(f, U32.to_nat(U32.from_nat(Bytes.len(f))))),
+        U32.to_nat(U32.from_nat(Bytes.len(f))))),
+    L.Em{eager(rd, now, fs, Bytes.append(out,
+        Bytes.append(pre, String.take(f, U32.to_nat(U32.from_nat(Bytes.len(f))))))), "",
+      Nat.is_eq(Bytes.len(String.take(f, U32.to_nat(U32.from_nat(Bytes.len(f))))),
+        U32.to_nat(U32.from_nat(Bytes.len(f))))},
+    L.Em{eager(rd, now, fs, Bytes.append(Bytes.append(out, pre), f)), "", True{}},
+    wl.blk_eager(rd, now, fs, out,
+      Bytes.append(pre, String.take(f, U32.to_nat(U32.from_nat(Bytes.len(f))))),
+      Nat.is_eq(Bytes.len(String.take(f, U32.to_nat(U32.from_nat(Bytes.len(f))))),
+        U32.to_nat(U32.from_nat(Bytes.len(f)))), ms),
+    wl.read_wire.at(f, rd, now, fs, out, pre, en))
+
+law wl.body_wire:
+  for +ms: U32
+  for +f: Bytes()
+  for +rd: List<&2, Rd>
+  for +now: Nat
+  for +fs: List<&2, Fil>
+  for +out: Bytes()
+  for +pre: Bytes()
+  for small: Bool
+  for +en: {U32.to_nat(U32.from_nat(Bytes.len(f))) == Bytes.len(f) : Nat}
+  {sim.body(ms, f, U32.from_nat(Bytes.len(f)), eager(rd, now, fs, out), pre, small) ==
+    L.Em{eager(rd, now, fs, Bytes.append(Bytes.append(out, pre), f)), "", True{}} : L.Em<World>}
+
+def wl.body_wire(ms, f, rd, now, fs, out, pre, small, en):
+  match small:
+    case True{}:
+      wl.read_wire(ms, f, rd, now, fs, out, pre, en)
+    case False{}:
+      %Equal.sym(L.Put(World), w.tx(eager(rd, now, fs, out), pre, ms),
+        sent(rd, now, fs, Bytes.append(out, pre)), wl.tx_eager(rd, now, fs, out, pre, ms)) :
+        {sim.headed(ms, f, U32.from_nat(Bytes.len(f)), _) ==
+          L.Em{eager(rd, now, fs, Bytes.append(Bytes.append(out, pre), f)), "", True{}} :
+          L.Em<World>}
+      wl.headed_wire(ms, f, rd, now, fs, Bytes.append(out, pre), en)
+
 law page_wire:
   for ~shut: Bool -> Bytes() -> Bytes()
   for ~fhead: List<&2, U32> -> U32 -> Bytes()
@@ -2621,7 +2810,7 @@ law page_wire:
   for +acc: Bytes()
   for +body: Bytes()
   for ef: {w.find(fs, L.text(path)) == Done{body} : Result<&1, &1, U32 & String, Bytes()>}
-  for en: {U32.to_nat(U32.from_nat(Bytes.len(body))) == Bytes.len(body) : Nat}
+  for +en: {U32.to_nat(U32.from_nat(Bytes.len(body))) == Bytes.len(body) : Nat}
   {sim.page(~shut, ~fhead, ~miss, ~lnote, ~lsize, ms, root, path, ct, False{}, may, sh,
       L.Em{eager(rd, now, fs, out), acc, True{}}) ==
     L.Em{eager(rd, now, fs, Bytes.append(Bytes.append(out,
@@ -2636,19 +2825,9 @@ def page_wire(shut, fhead, miss, lnote, lsize, ms, root, path, ct, may, sh, rd, 
       L.Em{eager(rd, now, fs, Bytes.append(Bytes.append(out,
         Bytes.append(acc, shut(sh, fhead(ct, U32.from_nat(Bytes.len(body)))))), body)), "",
         True{}} : L.Em<World>}
-  %Equal.sym(L.Put(World),
-    w.tx(eager(rd, now, fs, out), Bytes.append(acc, shut(sh, fhead(ct,
-      U32.from_nat(Bytes.len(body))))), ms),
-    sent(rd, now, fs, Bytes.append(out, Bytes.append(acc, shut(sh, fhead(ct,
-      U32.from_nat(Bytes.len(body))))))),
-    wl.tx_eager(rd, now, fs, out, Bytes.append(acc, shut(sh, fhead(ct,
-      U32.from_nat(Bytes.len(body))))), ms)) :
-    {sim.headed(ms, body, U32.from_nat(Bytes.len(body)), _) ==
-      L.Em{eager(rd, now, fs, Bytes.append(Bytes.append(out,
-        Bytes.append(acc, shut(sh, fhead(ct, U32.from_nat(Bytes.len(body)))))), body)), "",
-        True{}} : L.Em<World>}
-  wl.headed_wire(ms, body, rd, now, fs, Bytes.append(out,
-    Bytes.append(acc, shut(sh, fhead(ct, U32.from_nat(Bytes.len(body)))))), en)
+  wl.body_wire(ms, body, rd, now, fs, out,
+    Bytes.append(acc, shut(sh, fhead(ct, U32.from_nat(Bytes.len(body))))),
+    U32.is_lt(U32.from_nat(Bytes.len(body)), L.page.small()), en)
 
 # LAW: nothing after a failed sendfile. A file's body that did not all
 # go out -- the send failed or stalled, or the file came up short --
@@ -2674,6 +2853,37 @@ law page_head_fail:
 
 def page_head_fail(ms, f, n, s, e):
   {==}
+
+# ... and a small file's read that came back short ends it too, after
+# what the read had: a head's length is never followed by fewer bytes
+# and then more
+def em.ok(em: L.Em<World>) -> Bool:
+  match em:
+    case L.Em{s, acc, ok}:
+      ok
+
+def wl.blk_short(m: L.Put(World)) -> {em.ok(L.page.blk(World, m, False{})) == False{} : Bool}:
+  (s, r) = m
+  match r:
+    case Done{u}:
+      {==}
+    case Fail{e}:
+      {==}
+
+law page_read_short:
+  for +ms: U32
+  for f: Bytes()
+  for +bs: Bytes()
+  for +n: U32
+  for +s: World
+  for +pre: Bytes()
+  for e: {Nat.is_eq(Bytes.len(bs), U32.to_nat(n)) == False{} : Bool}
+  {em.ok(sim.read(ms, (f, Done{bs}), n, s, pre)) == False{} : Bool}
+
+def page_read_short(ms, f, bs, n, s, pre, e):
+  %Equal.sym(Bool, Nat.is_eq(Bytes.len(bs), U32.to_nat(n)), False{}, e) :
+    {em.ok(L.page.blk(World, w.tx(s, Bytes.append(pre, bs), ms), _)) == False{} : Bool}
+  wl.blk_short(w.tx(s, Bytes.append(pre, bs), ms))
 
 law fread_model:
   for +f: Bytes()

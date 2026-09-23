@@ -75,8 +75,14 @@ MUTANTS = [
     case Some{buf}:
       (s, plan.read(~E, ~P, ~U, ~plan, srv, buf, p))'''),
   ('a file sent by the kernel without its head', LOOP,
-    '''        bind(Put(S), Em<S>, tx(s, Bytes.append(acc, hd), ms), m =>''',
-    '''        bind(Put(S), Em<S>, tx(s, acc, ms), m =>'''),
+    '''      bind(Put(S), Em<S>, tx(s, pre, ms), m =>''',
+    '''      bind(Put(S), Em<S>, tx(s, "", ms), m =>'''),
+  ('a small file read short is taken as whole', LOOP,
+    '''          pure(Em<S>, page.blk(S, m, Nat.is_eq(Bytes.len(bs), U32.to_nat(n))))))''',
+    '''          pure(Em<S>, page.blk(S, m, True{}))))'''),
+  ('a small file sent without its head', LOOP,
+    '''        bind(Put(S), Em<S>, tx(s, Bytes.append(pre, bs), ms), m =>''',
+    '''        bind(Put(S), Em<S>, tx(s, bs, ms), m =>'''),
   ('a file sent from the wrong place: sendfile from its second byte', LOOP,
     '''fsend(s, f, 0, n, ms), g =>''',
     '''fsend(s, f, 1, n, ms), g =>'''),
@@ -88,10 +94,12 @@ MUTANTS = [
     '''    pure(Em<S>, Em{s, "", True{}}))'''),
   ('a file whose head did not go out is sent all the same', LOOP,
     '''    case Fail{e}:
-      bind(Unit, Em<S>, fclose(f), u => pure(Em<S>, Em{s, "", False{}}))''',
+      bind(Unit, Em<S>, fclose(f), u => pure(Em<S>, Em{s, "", False{}}))
+    case Done{u}:''',
     '''    case Fail{e}:
       bind(S & F & Result<&1, &1, U32 & String, Unit>, Em<S>, fsend(s, f, 0, n, ms), g =>
-        page.fsent(~M, ~pure, ~bind, ~S, ~F, ~fclose, g))'''),
+        page.fsent(~M, ~pure, ~bind, ~S, ~F, ~fclose, g))
+    case Done{u}:'''),
 ]
 
 # the framing's mutants: (what, file, before, after)

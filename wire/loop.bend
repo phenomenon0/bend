@@ -23,7 +23,8 @@
 #   ~clk               the clock, in ms, beside the socket
 #   ~nap               sleep, beside the socket
 #   ~say               a log line
-#   ~fopen ~fsize ~fsend ~fclose   a file under a root, sent by the kernel
+#   ~fopen ~fsize ~fread ~fsend ~fclose   a file under a root: read and
+#                      sent when small, sent by the kernel when not
 #
 # The protocol:
 #
@@ -130,10 +131,11 @@ def flat.note(
 # copies it from the page cache to the socket, and under TLS the effect
 # writes it through the session a block at a time. Either way the
 # connection holds no block of the file of its own, however large the
-# file, and a pipelined batch of files holds none either. The body is
-# exactly the length its head promised: a sendfile that comes up short
-# (the file shrank) fails, and the connection ends, since nothing after
-# it could be framed.
+# file, and a pipelined batch of files holds none either. (A small file
+# is read and sent with its head in one send: page.small.) The body is
+# exactly the length its head promised: a sendfile or a read that comes
+# up short (the file shrank) fails, and the connection ends, since
+# nothing after it could be framed.
 
 # The batch budget. Fixed replies wait in one block, and once the block
 # reaches send.cap() bytes it goes out before the next reply is taken:
@@ -243,10 +245,53 @@ def page.headed(
       bind(S & F & Result<&1, &1, U32 & String, Unit>, Em<S>, fsend(s, f, 0, n, ms), g =>
         page.fsent(~M, ~pure, ~bind, ~S, ~F, ~fclose, g))
 
+# A file under page.small() bytes is read whole, and goes out with its
+# head in the one send: a second send for the body would cost a small
+# file more than the copy the kernel spares. A read that comes back
+# short (the file shrank) ends the connection, after what it had.
+def page.small() -> U32:
+  16384
+
+def page.blk(-S: Type, m: Put(S), whole: Bool) -> Em<S>:
+  (s, r) = m
+  Em{s, "", Result.is_done(&1, &1, U32 & String, Unit, r) && whole}
+
+def page.read(
+  ~M: Type -> Type, ~pure: @-A: Type -> A -> M(A),
+  ~bind: @-A: Type -> @-B: Type -> M(A) -> (A -> M(B)) -> M(B), ~S: Type, ~F: Type,
+  ~tx: S -> Bytes() -> U32 -> M(Put(S)), ~fclose: F -> M(Unit), +ms: U32,
+  got: F & Result<&1, &1, U32 & String, Bytes()>, +n: U32, s: S, pre: Bytes()
+) -> M(Em<S>):
+  (f, r) = got
+  match r:
+    case Fail{e}:
+      bind(Unit, Em<S>, fclose(f), u => pure(Em<S>, Em{s, "", False{}}))
+    case Done{+bs}:
+      bind(Unit, Em<S>, fclose(f), u =>
+        bind(Put(S), Em<S>, tx(s, Bytes.append(pre, bs), ms), m =>
+          pure(Em<S>, page.blk(S, m, Nat.is_eq(Bytes.len(bs), U32.to_nat(n))))))
+
+def page.body(
+  ~M: Type -> Type, ~pure: @-A: Type -> A -> M(A),
+  ~bind: @-A: Type -> @-B: Type -> M(A) -> (A -> M(B)) -> M(B), ~S: Type, ~F: Type,
+  ~tx: S -> Bytes() -> U32 -> M(Put(S)),
+  ~fread: F -> U32 -> M(F & Result<&1, &1, U32 & String, Bytes()>),
+  ~fsend: S -> F -> U32 -> U32 -> U32 -> M(S & F & Result<&1, &1, U32 & String, Unit>),
+  ~fclose: F -> M(Unit), +ms: U32, f: F, +n: U32, s: S, pre: Bytes(), small: Bool
+) -> M(Em<S>):
+  match small:
+    case True{}:
+      bind(F & Result<&1, &1, U32 & String, Bytes()>, Em<S>, fread(f, n), got =>
+        page.read(~M, ~pure, ~bind, ~S, ~F, ~tx, ~fclose, ms, got, n, s, pre))
+    case False{}:
+      bind(Put(S), Em<S>, tx(s, pre, ms), m =>
+        page.headed(~M, ~pure, ~bind, ~S, ~F, ~fsend, ~fclose, ms, f, n, m))
+
 def page.start(
   ~M: Type -> Type, ~pure: @-A: Type -> A -> M(A),
   ~bind: @-A: Type -> @-B: Type -> M(A) -> (A -> M(B)) -> M(B), ~S: Type, ~F: Type,
   ~tx: S -> Bytes() -> U32 -> M(Put(S)), ~say: String -> M(Unit),
+  ~fread: F -> U32 -> M(F & Result<&1, &1, U32 & String, Bytes()>),
   ~fsend: S -> F -> U32 -> U32 -> U32 -> M(S & F & Result<&1, &1, U32 & String, Unit>),
   ~fclose: F -> M(Unit), ~lsize: Bytes() -> Bytes() -> U32 -> String, +ms: U32, f: F, +n: U32,
   +hd: Bytes(), head: Bool, may: Maybe<&2, Bytes()>, s: S, acc: Bytes()
@@ -258,13 +303,14 @@ def page.start(
           send.hold(~M, ~pure, ~bind, ~S, ~tx, ms, s, Bytes.append(acc, hd))))
     case False{}:
       bind(Unit, Em<S>, log.sized(~M, ~pure, ~bind, ~say, ~lsize, may, hd, n), u =>
-        bind(Put(S), Em<S>, tx(s, Bytes.append(acc, hd), ms), m =>
-          page.headed(~M, ~pure, ~bind, ~S, ~F, ~fsend, ~fclose, ms, f, n, m)))
+        page.body(~M, ~pure, ~bind, ~S, ~F, ~tx, ~fread, ~fsend, ~fclose, ms, f, n, s,
+          Bytes.append(acc, hd), U32.is_lt(n, page.small())))
 
 def page.sized(
   ~M: Type -> Type, ~pure: @-A: Type -> A -> M(A),
   ~bind: @-A: Type -> @-B: Type -> M(A) -> (A -> M(B)) -> M(B), ~S: Type, ~F: Type,
   ~tx: S -> Bytes() -> U32 -> M(Put(S)), ~say: String -> M(Unit),
+  ~fread: F -> U32 -> M(F & Result<&1, &1, U32 & String, Bytes()>),
   ~fsend: S -> F -> U32 -> U32 -> U32 -> M(S & F & Result<&1, &1, U32 & String, Unit>),
   ~fclose: F -> M(Unit), ~shut: Bool -> Bytes() -> Bytes(),
   ~fhead: List<&2, U32> -> U32 -> Bytes(), ~miss: Bool -> Bytes(),
@@ -279,7 +325,7 @@ def page.sized(
         page.miss(~M, ~pure, ~bind, ~S, ~tx, ~say, ~shut, ~miss, ~lnote, ms, head, may, sh, s,
           acc))
     case Done{+n}:
-      page.start(~M, ~pure, ~bind, ~S, ~F, ~tx, ~say, ~fsend, ~fclose, ~lsize, ms, f, n,
+      page.start(~M, ~pure, ~bind, ~S, ~F, ~tx, ~say, ~fread, ~fsend, ~fclose, ~lsize, ms, f, n,
         shut(sh, fhead(ct, n)), head, may, s, acc)
 
 def page.opened(
@@ -287,6 +333,7 @@ def page.opened(
   ~bind: @-A: Type -> @-B: Type -> M(A) -> (A -> M(B)) -> M(B), ~S: Type, ~F: Type,
   ~tx: S -> Bytes() -> U32 -> M(Put(S)), ~say: String -> M(Unit),
   ~fsize: F -> M(F & Result<&1, &1, U32 & String, U32>),
+  ~fread: F -> U32 -> M(F & Result<&1, &1, U32 & String, Bytes()>),
   ~fsend: S -> F -> U32 -> U32 -> U32 -> M(S & F & Result<&1, &1, U32 & String, Unit>),
   ~fclose: F -> M(Unit), ~shut: Bool -> Bytes() -> Bytes(),
   ~fhead: List<&2, U32> -> U32 -> Bytes(), ~miss: Bool -> Bytes(),
@@ -300,7 +347,7 @@ def page.opened(
       page.miss(~M, ~pure, ~bind, ~S, ~tx, ~say, ~shut, ~miss, ~lnote, ms, head, may, sh, s, acc)
     case Done{f}:
       bind(F & Result<&1, &1, U32 & String, U32>, Em<S>, fsize(f), got =>
-        page.sized(~M, ~pure, ~bind, ~S, ~F, ~tx, ~say, ~fsend, ~fclose, ~shut, ~fhead, ~miss,
+        page.sized(~M, ~pure, ~bind, ~S, ~F, ~tx, ~say, ~fread, ~fsend, ~fclose, ~shut, ~fhead, ~miss,
             ~lnote, ~lsize, ms, got, ct, head, may, sh, s, acc))
 
 def send.page(
@@ -309,6 +356,7 @@ def send.page(
   ~tx: S -> Bytes() -> U32 -> M(Put(S)), ~say: String -> M(Unit),
   ~fopen: S -> String -> String -> M(S & Result<&1, &1, U32 & String, F>),
   ~fsize: F -> M(F & Result<&1, &1, U32 & String, U32>),
+  ~fread: F -> U32 -> M(F & Result<&1, &1, U32 & String, Bytes()>),
   ~fsend: S -> F -> U32 -> U32 -> U32 -> M(S & F & Result<&1, &1, U32 & String, Unit>),
   ~fclose: F -> M(Unit), ~shut: Bool -> Bytes() -> Bytes(),
   ~fhead: List<&2, U32> -> U32 -> Bytes(), ~miss: Bool -> Bytes(),
@@ -323,7 +371,7 @@ def send.page(
           pure(Em<S>, Em{s, acc, False{}})
         case True{}:
           bind(S & Result<&1, &1, U32 & String, F>, Em<S>, fopen(s, text(root), text(path)), m =>
-            page.opened(~M, ~pure, ~bind, ~S, ~F, ~tx, ~say, ~fsize, ~fsend, ~fclose, ~shut,
+            page.opened(~M, ~pure, ~bind, ~S, ~F, ~tx, ~say, ~fsize, ~fread, ~fsend, ~fclose, ~shut,
                 ~fhead, ~miss, ~lnote, ~lsize, ms, m, ct, head, may, sh, acc))
 
 def send.raw(
@@ -370,6 +418,7 @@ def send.go(
   ~tx: S -> Bytes() -> U32 -> M(Put(S)), ~say: String -> M(Unit),
   ~fopen: S -> String -> String -> M(S & Result<&1, &1, U32 & String, F>),
   ~fsize: F -> M(F & Result<&1, &1, U32 & String, U32>),
+  ~fread: F -> U32 -> M(F & Result<&1, &1, U32 & String, Bytes()>),
   ~fsend: S -> F -> U32 -> U32 -> U32 -> M(S & F & Result<&1, &1, U32 & String, Unit>),
   ~fclose: F -> M(Unit), ~shut: Bool -> Bytes() -> Bytes(),
   ~fhead: List<&2, U32> -> U32 -> Bytes(), ~miss: Bool -> Bytes(),
@@ -382,22 +431,22 @@ def send.go(
     case Con{g, t}:
       match g:
         case Note{bs}:
-          send.go(~M, ~pure, ~bind, ~S, ~F, ~tx, ~say, ~fopen, ~fsize, ~fsend, ~fclose, ~shut,
+          send.go(~M, ~pure, ~bind, ~S, ~F, ~tx, ~say, ~fopen, ~fsize, ~fread, ~fsend, ~fclose, ~shut,
               ~fhead, ~miss, ~lnote, ~lsize, t, ms, Some{bs}, sh, st)
         case Shut{}:
-          send.go(~M, ~pure, ~bind, ~S, ~F, ~tx, ~say, ~fopen, ~fsize, ~fsend, ~fclose, ~shut,
+          send.go(~M, ~pure, ~bind, ~S, ~F, ~tx, ~say, ~fopen, ~fsize, ~fread, ~fsend, ~fclose, ~shut,
               ~fhead, ~miss, ~lnote, ~lsize, t, ms, may, True{}, st)
         case Raw{bs}:
           bind(Em<S>, Put(S), send.raw(~M, ~pure, ~bind, ~S, ~tx, ~say, ~lnote, ms, may,
               shut(sh, bs), st), st2 =>
-            send.go(~M, ~pure, ~bind, ~S, ~F, ~tx, ~say, ~fopen, ~fsize, ~fsend, ~fclose, ~shut,
+            send.go(~M, ~pure, ~bind, ~S, ~F, ~tx, ~say, ~fopen, ~fsize, ~fread, ~fsend, ~fclose, ~shut,
                 ~fhead, ~miss, ~lnote, ~lsize, t, ms, None{}, False{}, st2))
         case Page{root, path, ct, head}:
           bind(Em<S>, Put(S),
-            send.page(~M, ~pure, ~bind, ~S, ~F, ~tx, ~say, ~fopen, ~fsize, ~fsend, ~fclose,
+            send.page(~M, ~pure, ~bind, ~S, ~F, ~tx, ~say, ~fopen, ~fsize, ~fread, ~fsend, ~fclose,
                 ~shut, ~fhead, ~miss, ~lnote, ~lsize, ms, root, path, ct, head, may, sh, st),
             st2 =>
-            send.go(~M, ~pure, ~bind, ~S, ~F, ~tx, ~say, ~fopen, ~fsize, ~fsend, ~fclose, ~shut,
+            send.go(~M, ~pure, ~bind, ~S, ~F, ~tx, ~say, ~fopen, ~fsize, ~fread, ~fsend, ~fclose, ~shut,
                 ~fhead, ~miss, ~lnote, ~lsize, t, ms, None{}, False{}, st2))
 
 # The one hook the connection loop calls: write a plan's segments to the
@@ -410,13 +459,14 @@ def send.segs(
   ~tx: S -> Bytes() -> U32 -> M(Put(S)), ~say: String -> M(Unit),
   ~fopen: S -> String -> String -> M(S & Result<&1, &1, U32 & String, F>),
   ~fsize: F -> M(F & Result<&1, &1, U32 & String, U32>),
+  ~fread: F -> U32 -> M(F & Result<&1, &1, U32 & String, Bytes()>),
   ~fsend: S -> F -> U32 -> U32 -> U32 -> M(S & F & Result<&1, &1, U32 & String, Unit>),
   ~fclose: F -> M(Unit), ~shut: Bool -> Bytes() -> Bytes(),
   ~fhead: List<&2, U32> -> U32 -> Bytes(), ~miss: Bool -> Bytes(),
   ~lnote: Bytes() -> Bytes() -> String, ~lsize: Bytes() -> Bytes() -> U32 -> String, s: S,
   xs: List<&2, Seg>, +ms: U32
 ) -> M(Put(S)):
-  send.go(~M, ~pure, ~bind, ~S, ~F, ~tx, ~say, ~fopen, ~fsize, ~fsend, ~fclose, ~shut, ~fhead,
+  send.go(~M, ~pure, ~bind, ~S, ~F, ~tx, ~say, ~fopen, ~fsize, ~fread, ~fsend, ~fclose, ~shut, ~fhead,
       ~miss, ~lnote, ~lsize, xs, ms, None{}, False{}, Em{s, "", True{}})
 
 # Reading
@@ -768,6 +818,7 @@ def conn(
   ~clk: S -> M(S & Nat), ~nap: S -> U32 -> M(S), ~say: String -> M(Unit),
   ~fopen: S -> String -> String -> M(S & Result<&1, &1, U32 & String, F>),
   ~fsize: F -> M(F & Result<&1, &1, U32 & String, U32>),
+  ~fread: F -> U32 -> M(F & Result<&1, &1, U32 & String, Bytes()>),
   ~fsend: S -> F -> U32 -> U32 -> U32 -> M(S & F & Result<&1, &1, U32 & String, Unit>),
   ~fclose: F -> M(Unit), ~E: Data, ~P: Data, ~U: Data, ~idle: E -> U32, ~hdms: E -> U32,
   ~plan: E -> Bytes() -> P -> Plan<P, U>, ~mid: P -> Bool, ~big: Bytes(),
@@ -787,7 +838,7 @@ def conn(
           pure(S, s)
         case End{out}:
           bind(Put(S), S, send.segs(~M, ~pure, ~bind, ~S, ~F, ~tx, ~say, ~fopen, ~fsize,
-              ~fsend, ~fclose, ~shut, ~fhead, ~miss, ~lnote, ~lsize, s, out, idle(srv)), m =>
+              ~fread, ~fsend, ~fclose, ~shut, ~fhead, ~miss, ~lnote, ~lsize, s, out, idle(srv)), m =>
             pure(S, put.s(S, m)))
         case Wait{+p2}:
           match w:
@@ -797,24 +848,24 @@ def conn(
               bind((S & Plan<P, U>) & Hw, S, turn.h(~M, ~pure, ~bind, ~S, ~rx, ~clk, ~E, ~P, ~U,
                   ~idle, ~hdms, ~plan, ~big, srv, s, p2, hw.next(mid(p2), hw)),
                 sp2 => conn(~M, ~pure, ~bind, ~S, ~F, ~rx, ~tx, ~clk, ~nap, ~say, ~fopen, ~fsize,
-                    ~fsend, ~fclose, ~E, ~P, ~U, ~idle, ~hdms, ~plan, ~mid, ~big, ~uplan, ~gap,
+                    ~fread, ~fsend, ~fclose, ~E, ~P, ~U, ~idle, ~hdms, ~plan, ~mid, ~big, ~uplan, ~gap,
                     ~event, ~shut, ~fhead, ~miss, ~lnote, ~lsize, g, srv, sp2, v))
         case Feed{out, n}:
           bind(Put(S), S, send.segs(~M, ~pure, ~bind, ~S, ~F, ~tx, ~say, ~fopen, ~fsize,
-              ~fsend, ~fclose, ~shut, ~fhead, ~miss, ~lnote, ~lsize, s, out, idle(srv)), m =>
+              ~fread, ~fsend, ~fclose, ~shut, ~fhead, ~miss, ~lnote, ~lsize, s, out, idle(srv)), m =>
             bind(S & Plan<P, U>, S, tick(~M, ~pure, ~bind, ~S, ~nap, ~P, ~U, ~gap, ~event, m, n),
               sp2 =>
               conn(~M, ~pure, ~bind, ~S, ~F, ~rx, ~tx, ~clk, ~nap, ~say, ~fopen, ~fsize,
-                  ~fsend, ~fclose, ~E, ~P, ~U, ~idle, ~hdms, ~plan, ~mid, ~big, ~uplan, ~gap,
+                  ~fread, ~fsend, ~fclose, ~E, ~P, ~U, ~idle, ~hdms, ~plan, ~mid, ~big, ~uplan, ~gap,
                   ~event, ~shut, ~fhead, ~miss, ~lnote, ~lsize, g, srv, (sp2, NoHead{}),
                   conn.waits())))
         case Sock{out, wr}:
           bind(Put(S), S, send.segs(~M, ~pure, ~bind, ~S, ~F, ~tx, ~say, ~fopen, ~fsize,
-              ~fsend, ~fclose, ~shut, ~fhead, ~miss, ~lnote, ~lsize, s, out, idle(srv)), m =>
+              ~fread, ~fsend, ~fclose, ~shut, ~fhead, ~miss, ~lnote, ~lsize, s, out, idle(srv)), m =>
             bind(S & Plan<P, U>, S, turn.up(~M, ~pure, ~bind, ~S, ~rx, ~E, ~P, ~U, ~idle, ~uplan,
                 srv, m, wr), sp2 =>
               conn(~M, ~pure, ~bind, ~S, ~F, ~rx, ~tx, ~clk, ~nap, ~say, ~fopen, ~fsize,
-                  ~fsend, ~fclose, ~E, ~P, ~U, ~idle, ~hdms, ~plan, ~mid, ~big, ~uplan, ~gap,
+                  ~fread, ~fsend, ~fclose, ~E, ~P, ~U, ~idle, ~hdms, ~plan, ~mid, ~big, ~uplan, ~gap,
                   ~event, ~shut, ~fhead, ~miss, ~lnote, ~lsize, g, srv, (sp2, NoHead{}),
                   conn.waits())))
         case Hold{wr}:
@@ -825,15 +876,15 @@ def conn(
               bind(S & Plan<P, U>, S, turn.wr(~M, ~pure, ~bind, ~S, ~rx, ~E, ~P, ~U, ~idle, ~uplan,
                   srv, s, wr), sp2 =>
                 conn(~M, ~pure, ~bind, ~S, ~F, ~rx, ~tx, ~clk, ~nap, ~say, ~fopen, ~fsize,
-                    ~fsend, ~fclose, ~E, ~P, ~U, ~idle, ~hdms, ~plan, ~mid, ~big, ~uplan, ~gap,
+                    ~fread, ~fsend, ~fclose, ~E, ~P, ~U, ~idle, ~hdms, ~plan, ~mid, ~big, ~uplan, ~gap,
                     ~event, ~shut, ~fhead, ~miss, ~lnote, ~lsize, g, srv, (sp2, NoHead{}), v))
         case Go{out, +p2}:
           bind(Put(S), S, send.segs(~M, ~pure, ~bind, ~S, ~F, ~tx, ~say, ~fopen, ~fsize,
-              ~fsend, ~fclose, ~shut, ~fhead, ~miss, ~lnote, ~lsize, s, out, idle(srv)), m =>
+              ~fread, ~fsend, ~fclose, ~shut, ~fhead, ~miss, ~lnote, ~lsize, s, out, idle(srv)), m =>
             bind((S & Plan<P, U>) & Hw, S, turn(~M, ~pure, ~bind, ~S, ~rx, ~clk, ~E, ~P, ~U,
                 ~idle, ~hdms, ~plan, ~big, srv, m, p2, hw.next(mid(p2), NoHead{})),
               sp2 => conn(~M, ~pure, ~bind, ~S, ~F, ~rx, ~tx, ~clk, ~nap, ~say, ~fopen, ~fsize,
-                  ~fsend, ~fclose, ~E, ~P, ~U, ~idle, ~hdms, ~plan, ~mid, ~big, ~uplan, ~gap,
+                  ~fread, ~fsend, ~fclose, ~E, ~P, ~U, ~idle, ~hdms, ~plan, ~mid, ~big, ~uplan, ~gap,
                   ~event, ~shut, ~fhead, ~miss, ~lnote, ~lsize, g, srv, sp2, conn.waits())))
 
 # A connection from its first read, with the state p0 a fresh connection
@@ -845,6 +896,7 @@ def conn.start(
   ~clk: S -> M(S & Nat), ~nap: S -> U32 -> M(S), ~say: String -> M(Unit),
   ~fopen: S -> String -> String -> M(S & Result<&1, &1, U32 & String, F>),
   ~fsize: F -> M(F & Result<&1, &1, U32 & String, U32>),
+  ~fread: F -> U32 -> M(F & Result<&1, &1, U32 & String, Bytes()>),
   ~fsend: S -> F -> U32 -> U32 -> U32 -> M(S & F & Result<&1, &1, U32 & String, Unit>),
   ~fclose: F -> M(Unit), ~E: Data, ~P: Data, ~U: Data, ~idle: E -> U32, ~hdms: E -> U32,
   ~plan: E -> Bytes() -> P -> Plan<P, U>, ~mid: P -> Bool, ~big: Bytes(),
@@ -854,7 +906,7 @@ def conn.start(
   ~lsize: Bytes() -> Bytes() -> U32 -> String, +srv: E, p0: P, s: S
 ) -> M(S):
   bind(Got(S), S, rx(s, chunk(), idle(srv)), m =>
-    conn(~M, ~pure, ~bind, ~S, ~F, ~rx, ~tx, ~clk, ~nap, ~say, ~fopen, ~fsize, ~fsend, ~fclose,
+    conn(~M, ~pure, ~bind, ~S, ~F, ~rx, ~tx, ~clk, ~nap, ~say, ~fopen, ~fsize, ~fread, ~fsend, ~fclose,
         ~E, ~P, ~U, ~idle, ~hdms, ~plan, ~mid, ~big, ~uplan, ~gap, ~event, ~shut, ~fhead, ~miss,
         ~lnote, ~lsize, conn.fuel(), srv, (plan.poll(~E, ~P, ~U, ~plan, S, srv, m, p0), NoHead{}),
         conn.waits()))

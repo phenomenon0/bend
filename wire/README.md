@@ -123,9 +123,10 @@ stopped peer is let go within three turns, from any state),
 `accept_calm` and `accept_ends` (the accept loop stays up, and ends
 only as it may), `page_wire` (a file's reply puts on the wire what
 waited, its head, and then the file's own bytes, every one and nothing
-else), `page_fail` and `page_head_fail` (a sendfile or a head that did
-not all go out ends the writer); and of the model against the effects'
-contracts, `rx_model`, `tx_stalled`, `tx_served`, `fread_model`,
+else, by sendfile or, for a small file, by one read), `page_fail`,
+`page_head_fail` and `page_read_short` (a sendfile, a head or a small
+file's read that did not all go out ends the writer); and of the model
+against the effects' contracts, `rx_model`, `tx_stalled`, `tx_served`, `fread_model`,
 `fsend_model` (a sendfile to a reading peer puts the file's bytes from
 its offset on the wire and is Done only when the file had them all),
 `fsend_stalled`. `conform.bend` checks the real effects keep the same
@@ -135,8 +136,13 @@ contracts.
 len, ms)`: on a plain socket the kernel copies it from the page cache
 to the socket (Linux and macOS sendfile), under TLS the effect writes it
 through the session a 64 KiB block at a time; either way the
-connection holds none of the file itself, and a body that comes up
-short (the file shrank) fails, ending the connection.
+connection holds none of the file itself. A file under `page.small()`
+(16 KiB) is read whole instead and goes out with its head in one send,
+which costs a small file less than a second send would. A body that
+comes up short (the file shrank) fails, ending the connection
+(`page_fail`, `page_read_short`). One core, `wrk -t2 -c32`, against
+nginx with one worker and sendfile on: 4 KiB 20.5k req/s to nginx's
+37.4k (as before), 1 MiB 2.3-2.6k req/s to nginx's 1.7k (1.6k before).
 
 ## Bodies as streams
 
