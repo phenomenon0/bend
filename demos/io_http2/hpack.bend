@@ -748,12 +748,21 @@ def hit.one(h: Hit, +i: Nat, e: Fld, f: Fld) -> Hit:
     case Hit{full, name} Fld{+en, ev} Fld{+fn, fv}:
       Hit{hit.or(full, i, beq(en, fn) && beq(ev, fv)), hit.or(name, i, beq(en, fn))}
 
+# The scan stops at the first entry exactly equal: by then the first
+# entry with f's name is already found (it is that one, or earlier), so
+# the answer is the one a scan to the end would give.
 def find(es: List<&2, Fld>, +i: Nat, +f: Fld, h: Hit) -> Hit:
   match es:
     case Nil{}:
       h
     case Con{e, t}:
-      find(t, 1n+i, f, hit.one(h, i, e, f))
+      match h:
+        case Hit{full, name}:
+          match full:
+            case Some{j}:
+              Hit{Some{j}, name}
+            case None{}:
+              find(t, 1n+i, f, hit.one(Hit{None{}, name}, i, e, f))
 
 # A field written against the encoder's own table, as RFC 7541 Appendix
 # C's encoder writes it: an entry exactly equal is indexed; a name in
@@ -788,8 +797,8 @@ def enc.field(e: Enc, +f: Fld, huff: Bool) -> Enc:
     case Enc{t, out}:
       match t:
         case Tbl{+es, max}:
-          enc.hit(Tbl{es, max}, out, f, find(List.append(&2, Fld, static(), es), 1n, f,
-            Hit{None{}, None{}}), huff)
+          enc.hit(Tbl{es, max}, out, f, find(es, 62n, f,
+            find(static(), 1n, f, Hit{None{}, None{}})), huff)
 
 def enc.fields(fs: List<&2, Fld>, e: Enc, +huff: Bool) -> Enc:
   match fs:
