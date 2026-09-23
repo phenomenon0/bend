@@ -356,6 +356,24 @@ def own5(+n: Bytes()) -> Bool:
 def is.via(+n: Bytes()) -> Bool:
   Eng.bytes.eq(n, "via")
 
+# the hop-by-hop fields, as RFC 9110 7.6.1 lists them, spelled out here
+# and not taken from core.bend: Connection, and every field it names,
+# Keep-Alive, Proxy-Connection, TE, Transfer-Encoding, Upgrade, Trailer
+def hop.fixed(+n: Bytes()) -> Bool:
+  Eng.bytes.eq(n, "connection") || Eng.bytes.eq(n, "keep-alive") || Eng.bytes.eq(n, "proxy-connection")
+    || Eng.bytes.eq(n, "te") || Eng.bytes.eq(n, "transfer-encoding") || Eng.bytes.eq(n, "upgrade")
+    || Eng.bytes.eq(n, "trailer")
+
+def named(+n: Bytes(), ns: List<&2, Bytes()>) -> Bool:
+  match ns:
+    case Nil{}:
+      False{}
+    case Con{x, t}:
+      Eng.bytes.eq(n, x) || named(n, t)
+
+def hop(+ns: List<&2, Bytes()>, +n: Bytes()) -> Bool:
+  hop.fixed(n) || named(n, ns)
+
 # no field is a hop's, save the ones this proxy writes for its own hop
 def clean(~mine: @+n: Bytes() -> Bool, +ns: List<&2, Bytes()>, fs: List<&2, X.Field>) -> Bool:
   match fs:
@@ -364,7 +382,7 @@ def clean(~mine: @+n: Bytes() -> Bool, +ns: List<&2, Bytes()>, fs: List<&2, X.Fi
     case Con{f, t}:
       match f:
         case X.Field{+n, v}:
-          (mine(n) || Bool.not(X.hop(ns, n))) && clean(~mine, ns, t)
+          (mine(n) || Bool.not(hop(ns, n))) && clean(~mine, ns, t)
 
 def msg.fields(m: X.Msg) -> List<&2, X.Field>:
   match m:

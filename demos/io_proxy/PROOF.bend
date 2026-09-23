@@ -1986,7 +1986,7 @@ def clean.app(~m: @+n: Bytes() -> Bool, +ns: List<&2, Bytes()>, a: List<&2, X.Fi
     case Con{f, t}:
       match f:
         case X.Field{+n, v}:
-          clean.app.at(m(n) || Bool.not(X.hop(ns, n)), Laws.clean(~m, ns, t), Laws.clean(~m, ns, b),
+          clean.app.at(m(n) || Bool.not(Laws.hop(ns, n)), Laws.clean(~m, ns, t), Laws.clean(~m, ns, b),
             Laws.clean(~m, ns, List.append(&2, X.Field, t, b)), clean.app(~m, ns, t, b))
 
 # a field kept is not a hop's
@@ -2015,10 +2015,23 @@ def or.true(a: Bool) -> {(a || True{}) == True{} : Bool}:
     case False{}:
       {==}
 
+# the laws' own list of the hop's fields is core.bend's
+def named.eq(+n: Bytes(), ns: List<&2, Bytes()>) -> {Laws.named(n, ns) == X.in.names(n, ns) : Bool}:
+  match ns:
+    case Nil{}:
+      {==}
+    case Con{+x, +t}:
+      Equal.cong(Bool, Bool, b => Eng.bytes.eq(n, x) || b, Laws.named(n, t), X.in.names(n, t), named.eq(n, t))
+
+def hop.eq(+ns: List<&2, Bytes()>, +n: Bytes()) -> {Laws.hop(ns, n) == X.hop(ns, n) : Bool}:
+  Equal.cong(Bool, Bool, b => Laws.hop.fixed(n) || b, Laws.named(n, ns), X.in.names(n, ns), named.eq(n, ns))
+
 # a field kept, then the rest clean
 def kept.clean(~m: @+n: Bytes() -> Bool, +ns: List<&2, Bytes()>, +n: Bytes(), hb: {X.hop(ns, n) == False{} : Bool},
   -rest: List<&2, X.Field>, ih: {Laws.clean(~m, ns, rest) == True{} : Bool}) ->
-  {((m(n) || Bool.not(X.hop(ns, n))) && Laws.clean(~m, ns, rest)) == True{} : Bool}:
+  {((m(n) || Bool.not(Laws.hop(ns, n))) && Laws.clean(~m, ns, rest)) == True{} : Bool}:
+  %Equal.sym(Bool, Laws.hop(ns, n), X.hop(ns, n), hop.eq(ns, n)) :
+    {((m(n) || Bool.not(_)) && Laws.clean(~m, ns, rest)) == True{} : Bool}
   %Equal.sym(Bool, X.hop(ns, n), False{}, hb) :
     {((m(n) || Bool.not(_)) && Laws.clean(~m, ns, rest)) == True{} : Bool}
   %Equal.sym(Bool, (m(n) || True{}), True{}, or.true(m(n))) :

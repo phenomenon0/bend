@@ -57,6 +57,7 @@ allow(/^bench\/checker\/_pin_\/[a-z0-9_]+\.txt$/, 2000);
 allow(/^bench\/runtime\/[a-z-]+\/main\.(bend|c|lean|ts)$/, 8000);
 allow(/^bench\/runtime\/_pin_\/[a-z0-9_]+\.txt$/, 2000);
 allow(/^bench\/nbench[a-z_]*\.(bend|c)$/, 2000);
+allow(/^demos\/io_proxy\/[A-Za-z0-9_]+\.(bend|c|js|md|py)$/, 120000);
 allow(/^demos\/[a-z0-9_]+\/[A-Za-z0-9_]+\.bend$/, 64000);
 allow(/^demos\/[a-z0-9_]+\/[A-Za-z_]+\.(c|sh|md)$/, 4000);
 allow(/^demos\/[a-z0-9_]+\/[A-Za-z0-9_]+\.py$/, 8000);

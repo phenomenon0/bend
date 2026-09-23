@@ -1,0 +1,86 @@
+#!/usr/bin/env python3
+# The proxy's laws are not vacuous. Each mutant breaks core.bend the way
+# a bug would -- the client's raw bytes passed through, a hop-by-hop
+# field forwarded, a field the client's Connection named kept, a refused
+# stream read on, a request sent unchecked or with a field a framing
+# reads, a length that is not the body's -- and PROOF.bend must refuse
+# it. Each runs in a scratch copy of the tree the proof imports (the
+# proxy, the engine, wire/), checked clean first.
+#
+#   python3 demos/io_proxy/mutants.py        (from the repo root)
+import os, re, shutil, subprocess, sys, tempfile
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+ROOT = os.path.dirname(os.path.dirname(HERE))
+
+MUTANTS = [
+  ('the client\'s raw bytes passed through (forward_canonical, no_smuggle)',
+    '''    case Con{t, r}:
+      wire.at(fwd(w, t), wire(w, r))''',
+    '''    case Con{t, r}:
+      match t:
+        case Took{raw, r0}:
+          Bytes.append(raw, wire(w, r))'''),
+  ('TE forwarded (hop_by_hop_removed)',
+    '''|| Eng.bytes.eq(n, "te") ''', ''''''),
+  ('a response\'s Transfer-Encoding sent back (hop_by_hop_removed_rsp)',
+    '''|| Eng.bytes.eq(n, "transfer-encoding") ''', ''''''),
+  ('the fields the client\'s Connection named kept (hop_by_hop_removed)',
+    '''  is.other(Eng.fld.of(n)) && Bool.not(hop(ns, n)) && Bool.not(own(n))''',
+    '''  is.other(Eng.fld.of(n)) && Bool.not(hop.fixed(n)) && Bool.not(own(n))'''),
+  ('a refused stream read on, as if a request began (scan_is_spec, refused_not_forwarded)',
+    '''    case _ SBad{}:
+      done(acc, TBad{})''',
+    '''    case _ SBad{}:
+      done(acc, TWait{scan.new()})'''),
+  ('a request sent unchecked (no_smuggle)',
+    '''  Bool.pick(Maybe<&2, Msg>, valid(m), Some{m}, None{})''',
+    '''  Some{m}'''),
+  ('a field a framing reads let through the check (no_smuggle)',
+    '''      full(n) && ok.all(Spec.TName{}, n) && is.other(Eng.fld.of(Eng.lows(n))) && ok.all(Spec.TVal{}, v)''',
+    '''      full(n) && ok.all(Spec.TName{}, n) && ok.all(Spec.TVal{}, v)'''),
+  ('a Content-Length one more than the body (no_smuggle)',
+    '''    case True{}:
+      [Field{"content-length", Nat.show(Bytes.len(body))}]''',
+    '''    case True{}:
+      [Field{"content-length", Nat.show(1n+Bytes.len(body))}]'''),
+]
+
+def check(path):
+  r = subprocess.run(['bun', os.path.join(ROOT, 'bend2', 'main.ts'), path],
+    capture_output=True, text=True, cwd=ROOT)
+  return (r.stdout + r.stderr).strip()
+
+def where(out):
+  m = re.search(r'Location: ([\w.]+)', out)
+  return m.group(1) if m else out.splitlines()[0] if out else '?'
+
+def main():
+  bad = 0
+  top = tempfile.mkdtemp(prefix='proxy_laws_')
+  try:
+    for d in ('demos/io_proxy', 'demos/io_http_engine', 'wire'):
+      shutil.copytree(os.path.join(ROOT, d), os.path.join(top, d))
+    proof = os.path.join(top, 'demos/io_proxy/PROOF.bend')
+    core = os.path.join(top, 'demos/io_proxy/core.bend')
+    out = check(proof)
+    if out != 'All terms check.':
+      print('the copy of PROOF.bend does not check clean: %s' % out)
+      sys.exit(1)
+    for name, a, b in MUTANTS:
+      src = open(core).read()
+      if src.count(a) != 1:
+        print('MISSING  %s' % name); bad += 1; continue
+      open(core, 'w').write(src.replace(a, b))
+      out = check(proof)
+      open(core, 'w').write(src)
+      if out == 'All terms check.':
+        print('SURVIVED %s' % name); bad += 1
+      else:
+        print('KILLED   %s -- %s' % (name, where(out)))
+  finally:
+    shutil.rmtree(top, ignore_errors=True)
+  print('mutants: %d / %d killed' % (len(MUTANTS) - bad, len(MUTANTS)))
+  sys.exit(1 if bad else 0)
+
+main()
