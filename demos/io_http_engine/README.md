@@ -162,13 +162,54 @@ printable ASCII other than `/` and `\`, and no dotfile, so `/.env` and
 `/.git/config` are a 404. Percent escapes are not decoded, so an
 escaped `..` names a file that does not exist rather than a climb.
 
-The name is opened by `File.open_under(root, path)`
-(`bend2/effs/file_open_under.{c,js}`): an `openat` per component with
-`O_NOFOLLOW`, so a symbolic link anywhere under the root, to a file or
-to a directory, is refused rather than followed out of it; the end must
-be a regular file, so a directory or a FIFO is a miss. The root itself
-is the operator's and is opened as given. The type comes from the
-extension.
+A path of plain names -- a `/`, then names of printable bytes, none
+empty and none starting with a `.` -- is how almost every request asks,
+and it is read where it lies: one walk over its bytes (`fast`) says it
+is one, the file is the path after its `/` (a view of the target), and
+the type is the bytes after its last `.`. Any other path goes through
+`fnames.of`'s byte lists. `page_is_spec` says the two are one function
+of the target, for every target, so `path_safe` and every law of
+`fnames.of` is a law of the code that runs.
+
+The name is opened by `File.get_under(root, path, small)`
+(`bend2/effs/file_open_under.{c,js}`), which is `File.open_under` and
+its `fstat` in one effect, and for a file under `small` (16 KiB) its
+read and close too: a small file is one effect, and the loop's size,
+read and close of it cost none. On Linux 5.6 and later the path is
+resolved in one `openat2` under `RESOLVE_BENEATH | RESOLVE_NO_SYMLINKS`,
+after the walk's own refusals by shape (an empty, `.` or `..` part);
+elsewhere, or where a sandbox refuses `openat2`, it is an `openat` per
+component with `O_NOFOLLOW`. Either way a symbolic link anywhere under
+the root, to a file or to a directory, is refused rather than followed
+out of it, and the end must be a regular file, so a directory or a FIFO
+is a miss. The root itself is the operator's and is opened as given;
+its descriptor is kept for up to a second, so a root swapped by a
+deploy is seen within one. `wire/conform.bend` drives both ways through
+a file, a missing one, a link, a link to a directory, a directory, a
+climb and a dotfile (which the effect opens: refusing it is the
+engine's).
+
+What `File.get_under` read of a small file it keeps, per thread, by
+root and path, and answers again for a second without a syscall, as
+nginx's `open_file_cache` answers within its valid time; past the
+second the file is opened again, and its bytes are kept when its inode,
+size and mtime are unchanged and read again when not. It holds at most
+256 files under 16 KiB (4 MiB a thread), and never a refusal.
+`wire/world.bend` models it and proves it bounded (`memo_bounded`) and
+its answers the file system's when they were read (`memo_answers`,
+`memo_keeps`); conform's `fget.memo` rewrites a file it holds and sees
+the new size after the second.
+
+The type comes from the extension, by a table whose rows keep the head
+a 200 of that type starts with, so a file's head is three pieces joined;
+`file_head_is_built` says it is the head `reply.n.head` builds.
+
+On one core, against nginx with one worker (`sendfile on`, no
+`open_file_cache`) under `wrk -t2 -c32` on loopback, a 4 KiB file went
+from 20.5k to 40.8k req/s (nginx 37.4k): the one effect and the path
+kept as bytes 25.8k, the memo 33.7k, the path read where it lies 39-41k.
+At `-c256` it is 41.3k against 37.5k, and a 1 MiB file 2.35k against
+1.69k.
 
 A reply is a list of segments: bytes as they are, or a file to write
 when the reply is written. Fixed routes stay pure and cost what they

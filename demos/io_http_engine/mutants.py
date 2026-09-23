@@ -5,8 +5,8 @@
 # - the world's: each breaks the loop the way one of the review's bugs
 #   did (or would), and PROOF.bend must then fail, naming a law of the
 #   world. Applied in place to bend-wire's loop (wire/loop.bend), whose
-#   laws PROOF.bend states at the engine's hooks, or to main.bend's
-#   planner.
+#   laws PROOF.bend states at the engine's hooks, to main.bend's
+#   planner and its files, or to the memo wire/world.bend models.
 #
 # - the framing's: each breaks the reader (or the spec) the way a
 #   smuggling or framing bug would, and must be refused by frame_sim
@@ -24,6 +24,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(HERE))
 LOOP = os.path.join(ROOT, 'wire', 'loop.bend')
 MAIN = os.path.join(HERE, 'main.bend')
+WORLD = os.path.join(ROOT, 'wire', 'world.bend')
 
 # the world's mutants: (what, file, before, after). The loops are
 # bend-wire's (wire/loop.bend), and their laws are proven there for
@@ -100,6 +101,37 @@ MUTANTS = [
       bind(S & F & Result<&1, &1, U32 & String, Unit>, Em<S>, fsend(s, f, 0, n, ms), g =>
         page.fsent(~M, ~pure, ~bind, ~S, ~F, ~fclose, g))
     case Done{u}:'''),
+  # the file a path names: page_is_spec holds the fast path to
+  # fnames.of, and file_head_is_built the heads kept ready to the built
+  ('the fast path serves a dotfile', MAIN,
+    '''      fname.byte(c) && Bool.not(U32.is_eq(c, 46))''',
+    '''      fname.byte(c)'''),
+  ('the fast path takes an empty segment ("//")', MAIN,
+    '''      fname.byte(c) && Bool.not(U32.is_eq(c, 46))''',
+    '''      (U32.is_eq(c, 47) || fname.byte(c)) && Bool.not(U32.is_eq(c, 46))'''),
+  ('the fast path takes a trailing "/"', MAIN,
+    '''    case SNil{}:
+      Bool.not(st)''',
+    '''    case SNil{}:
+      True{}'''),
+  ('the fast path keeps the path\'s "/"', MAIN,
+    '''L.Page{root, Bytes.drop(path, 1n),''',
+    '''L.Page{root, path,'''),
+  ('the fast path reads a type across a "/"', MAIN,
+    '''ext.buf(r, ext.step(cur, c, U32.is_eq(c, 46) || U32.is_eq(c, 47)))''',
+    '''ext.buf(r, ext.step(cur, c, U32.is_eq(c, 46)))'''),
+  ('a head kept ready names another type', MAIN,
+    '''    Mime{"png", "image/png",
+      "HTTP/1.1 200 OK\\r\\ncontent-type: image/png\\r\\ncontent-length: "},''',
+    '''    Mime{"png", "image/png",
+      "HTTP/1.1 200 OK\\r\\ncontent-type: image/jpeg\\r\\ncontent-length: "},'''),
+  # File.get_under's memo, as wire/world.bend models it
+  ('the memo keeps every answer, past its cap', WORLD,
+    '''  memo.take(Con{Memo{key, now, got}, ms}, memo.cap())''',
+    '''  memo.take(Con{Memo{key, now, got}, ms}, 1n+memo.cap())'''),
+  ('the memo answers for a key it was not asked', WORLD,
+    '''      memo.find.at(same(k, key) && Nat.is_lt(now, Nat.add(at, ttl)), got,''',
+    '''      memo.find.at(Nat.is_lt(now, Nat.add(at, ttl)), got,'''),
 ]
 
 # the framing's mutants: (what, file, before, after)
@@ -192,7 +224,7 @@ def strip(d):
 def main():
   bad = 0
   total = len(MUTANTS) + len(FRAMING)
-  origs = {f: open(f).read() for f in (LOOP, MAIN)}
+  origs = {f: open(f).read() for f in (LOOP, MAIN, WORLD)}
   try:
     for name, f, a, b in MUTANTS:
       orig = origs[f]

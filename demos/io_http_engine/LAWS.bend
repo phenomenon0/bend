@@ -786,12 +786,12 @@ law bad_is_built:
 # byte, on the replies the engine keeps ready.
 law head_of_health:
   {Eng.head.of(Eng.resp.health()) ==
-    Eng.reply.n.head("200 OK", Eng.bytes("application/json"), 11) :
+    Eng.reply.n.head("200 OK", "application/json", 11) :
     Bytes()}
 
 law head_of_missing:
   {Eng.head.of(Eng.resp.missing()) ==
-    Eng.reply.n.head("404 Not Found", Eng.bytes("text/plain"), 9) :
+    Eng.reply.n.head("404 Not Found", "text/plain", 9) :
     Bytes()}
 
 # LAW: the default table answers what the engine has always answered;
@@ -970,6 +970,25 @@ law fnames_dots:
 law fnames_plain:
   {Eng.fnames.of(False{}, Eng.bytes("/sub/b.css")) ==
     Some{[Eng.bytes("sub"), Eng.bytes("b.css")]} : Maybe<&2, List<&2, List<&2, U32>>>}
+
+# LAW: the file a request is answered with is the one the reference
+# names. A path of plain names (Eng.fast) is read where it lies -- the
+# file is the path after its '/', its type the bytes after its last '.'
+# -- and any other goes through fnames.of's byte lists; for every root,
+# every target and HEAD or not the two are one segment, so path_safe and
+# every law above of fnames.of is a law of the code that runs.
+law page_is_spec:
+  for root: Bytes()
+  for +t: Bytes()
+  for head: Bool
+  {Eng.page(root, t, head) == Eng.page.spec(root, Bytes.to_list(t), head) : L.Seg}
+
+# LAW: a file's head, kept ready per type, is the head reply.n.head
+# builds from the type's name, for every extension and every length.
+law file_head_is_built:
+  for +e: Bytes()
+  for +n: U32
+  {Eng.h.fhead(Eng.mime.head(e), n) == Eng.reply.n.head("200 OK", Eng.mime.name(e), n) : Bytes()}
 
 # LAW: SHA-1 is SHA-1. The three vectors of RFC 3174, computed by the
 # checker through a Bend that shifts one bit at a time.
@@ -1532,9 +1551,9 @@ law raw_fine:
 
 law page_fine:
   for +ms: U32
-  for root: List<&2, U32>
-  for path: List<&2, U32>
-  for ct: List<&2, U32>
+  for root: Bytes()
+  for path: Bytes()
+  for ct: Bytes()
   for head: Bool
   for may: Maybe<&2, Bytes()>
   for sh: Bool
@@ -1548,9 +1567,9 @@ law page_fine:
 # out ends the connection with nothing after it.
 law page_wire:
   for +ms: U32
-  for root: List<&2, U32>
-  for path: List<&2, U32>
-  for +ct: List<&2, U32>
+  for root: Bytes()
+  for path: Bytes()
+  for +ct: Bytes()
   for may: Maybe<&2, Bytes()>
   for +sh: Bool
   for +rd: List<&2, WW.Rd>
@@ -1559,7 +1578,7 @@ law page_wire:
   for +out: Bytes()
   for +acc: Bytes()
   for +body: Bytes()
-  for ef: {WW.w.find(fs, L.text(path)) == Done{body} : Result<&1, &1, U32 & String, Bytes()>}
+  for ef: {WW.w.find(fs, path) == Done{body} : Result<&1, &1, U32 & String, Bytes()>}
   for en: {U32.to_nat(U32.from_nat(Bytes.len(body))) == Bytes.len(body) : Nat}
   {W.sim.page(ms, root, path, ct, False{}, may, sh, L.Em{WW.eager(rd, now, fs, out), acc, True{}}) ==
     L.Em{WW.eager(rd, now, fs, Bytes.append(Bytes.append(out,

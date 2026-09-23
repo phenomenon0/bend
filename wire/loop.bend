@@ -24,7 +24,10 @@
 #   ~nap               sleep, beside the socket
 #   ~say               a log line
 #   ~fopen ~fsize ~fread ~fsend ~fclose   a file under a root: read and
-#                      sent when small, sent by the kernel when not
+#                      sent when small, sent by the kernel when not (the
+#                      real ones: File.get_under opens, fstats and reads
+#                      a small file in one effect, so its size, read and
+#                      close are pure; wire/effects.bend's Fh)
 #
 # The protocol:
 #
@@ -74,22 +77,14 @@ law Put:
 def Put(S):
   S & Result<&1, &1, U32 & String, Unit>
 
-# bytes back to text, for the effects that take a String
-def text(bs: List<&2, U32>) -> String:
-  match bs:
-    case Nil{}:
-      SNil{}
-    case Con{c, t}:
-      SCon{Chr{c}, text(t)}
-
 # One piece of a reply: bytes as they are, a file to write when the
-# reply is written (the root, the path under it, the type, and whether
-# only the head is wanted), a note for the access log that the next
-# piece completes, or a mark that the next reply is the connection's
-# last.
+# reply is written (the root, the path under it, as bytes that go to the
+# effect as they are, what ~fhead makes its head from, and whether only
+# the head is wanted), a note for the access log that the next piece
+# completes, or a mark that the next reply is the connection's last.
 type Seg is Data:
   Raw{bs: Bytes()}
-  Page{root: List<&2, U32>, path: List<&2, U32>, ct: List<&2, U32>, head: Bool}
+  Page{root: Bytes(), path: Bytes(), ct: Bytes(), head: Bool}
   Note{bs: Bytes()}
   Shut{}
 
@@ -313,9 +308,9 @@ def page.sized(
   ~fread: F -> U32 -> M(F & Result<&1, &1, U32 & String, Bytes()>),
   ~fsend: S -> F -> U32 -> U32 -> U32 -> M(S & F & Result<&1, &1, U32 & String, Unit>),
   ~fclose: F -> M(Unit), ~shut: Bool -> Bytes() -> Bytes(),
-  ~fhead: List<&2, U32> -> U32 -> Bytes(), ~miss: Bool -> Bytes(),
+  ~fhead: Bytes() -> U32 -> Bytes(), ~miss: Bool -> Bytes(),
   ~lnote: Bytes() -> Bytes() -> String, ~lsize: Bytes() -> Bytes() -> U32 -> String, +ms: U32,
-  got: F & Result<&1, &1, U32 & String, U32>, ct: List<&2, U32>, head: Bool,
+  got: F & Result<&1, &1, U32 & String, U32>, ct: Bytes(), head: Bool,
   may: Maybe<&2, Bytes()>, sh: Bool, s: S, acc: Bytes()
 ) -> M(Em<S>):
   (f, r) = got
@@ -336,9 +331,9 @@ def page.opened(
   ~fread: F -> U32 -> M(F & Result<&1, &1, U32 & String, Bytes()>),
   ~fsend: S -> F -> U32 -> U32 -> U32 -> M(S & F & Result<&1, &1, U32 & String, Unit>),
   ~fclose: F -> M(Unit), ~shut: Bool -> Bytes() -> Bytes(),
-  ~fhead: List<&2, U32> -> U32 -> Bytes(), ~miss: Bool -> Bytes(),
+  ~fhead: Bytes() -> U32 -> Bytes(), ~miss: Bool -> Bytes(),
   ~lnote: Bytes() -> Bytes() -> String, ~lsize: Bytes() -> Bytes() -> U32 -> String, +ms: U32,
-  m: S & Result<&1, &1, U32 & String, F>, ct: List<&2, U32>, head: Bool,
+  m: S & Result<&1, &1, U32 & String, F>, ct: Bytes(), head: Bool,
   may: Maybe<&2, Bytes()>, sh: Bool, acc: Bytes()
 ) -> M(Em<S>):
   (s, r) = m
@@ -359,9 +354,9 @@ def send.page(
   ~fread: F -> U32 -> M(F & Result<&1, &1, U32 & String, Bytes()>),
   ~fsend: S -> F -> U32 -> U32 -> U32 -> M(S & F & Result<&1, &1, U32 & String, Unit>),
   ~fclose: F -> M(Unit), ~shut: Bool -> Bytes() -> Bytes(),
-  ~fhead: List<&2, U32> -> U32 -> Bytes(), ~miss: Bool -> Bytes(),
+  ~fhead: Bytes() -> U32 -> Bytes(), ~miss: Bool -> Bytes(),
   ~lnote: Bytes() -> Bytes() -> String, ~lsize: Bytes() -> Bytes() -> U32 -> String, +ms: U32,
-  root: List<&2, U32>, path: List<&2, U32>, ct: List<&2, U32>, head: Bool,
+  root: Bytes(), path: Bytes(), ct: Bytes(), head: Bool,
   may: Maybe<&2, Bytes()>, sh: Bool, st: Em<S>
 ) -> M(Em<S>):
   match st:
@@ -370,7 +365,7 @@ def send.page(
         case False{}:
           pure(Em<S>, Em{s, acc, False{}})
         case True{}:
-          bind(S & Result<&1, &1, U32 & String, F>, Em<S>, fopen(s, text(root), text(path)), m =>
+          bind(S & Result<&1, &1, U32 & String, F>, Em<S>, fopen(s, root, path), m =>
             page.opened(~M, ~pure, ~bind, ~S, ~F, ~tx, ~say, ~fsize, ~fread, ~fsend, ~fclose, ~shut,
                 ~fhead, ~miss, ~lnote, ~lsize, ms, m, ct, head, may, sh, acc))
 
@@ -421,7 +416,7 @@ def send.go(
   ~fread: F -> U32 -> M(F & Result<&1, &1, U32 & String, Bytes()>),
   ~fsend: S -> F -> U32 -> U32 -> U32 -> M(S & F & Result<&1, &1, U32 & String, Unit>),
   ~fclose: F -> M(Unit), ~shut: Bool -> Bytes() -> Bytes(),
-  ~fhead: List<&2, U32> -> U32 -> Bytes(), ~miss: Bool -> Bytes(),
+  ~fhead: Bytes() -> U32 -> Bytes(), ~miss: Bool -> Bytes(),
   ~lnote: Bytes() -> Bytes() -> String, ~lsize: Bytes() -> Bytes() -> U32 -> String,
   xs: List<&2, Seg>, +ms: U32, may: Maybe<&2, Bytes()>, sh: Bool, st: Em<S>
 ) -> M(Put(S)):
@@ -462,7 +457,7 @@ def send.segs(
   ~fread: F -> U32 -> M(F & Result<&1, &1, U32 & String, Bytes()>),
   ~fsend: S -> F -> U32 -> U32 -> U32 -> M(S & F & Result<&1, &1, U32 & String, Unit>),
   ~fclose: F -> M(Unit), ~shut: Bool -> Bytes() -> Bytes(),
-  ~fhead: List<&2, U32> -> U32 -> Bytes(), ~miss: Bool -> Bytes(),
+  ~fhead: Bytes() -> U32 -> Bytes(), ~miss: Bool -> Bytes(),
   ~lnote: Bytes() -> Bytes() -> String, ~lsize: Bytes() -> Bytes() -> U32 -> String, s: S,
   xs: List<&2, Seg>, +ms: U32
 ) -> M(Put(S)):
@@ -823,7 +818,7 @@ def conn(
   ~fclose: F -> M(Unit), ~E: Data, ~P: Data, ~U: Data, ~idle: E -> U32, ~hdms: E -> U32,
   ~plan: E -> Bytes() -> P -> Plan<P, U>, ~mid: P -> Bool, ~big: Bytes(),
   ~uplan: U -> Bytes() -> Plan<P, U>, ~gap: U32, ~event: U32 -> Bytes(),
-  ~shut: Bool -> Bytes() -> Bytes(), ~fhead: List<&2, U32> -> U32 -> Bytes(),
+  ~shut: Bool -> Bytes() -> Bytes(), ~fhead: Bytes() -> U32 -> Bytes(),
   ~miss: Bool -> Bytes(), ~lnote: Bytes() -> Bytes() -> String,
   ~lsize: Bytes() -> Bytes() -> U32 -> String, f: Nat, +srv: E, sph: (S & Plan<P, U>) & Hw, w: Nat
 ) -> M(S):
@@ -901,7 +896,7 @@ def conn.start(
   ~fclose: F -> M(Unit), ~E: Data, ~P: Data, ~U: Data, ~idle: E -> U32, ~hdms: E -> U32,
   ~plan: E -> Bytes() -> P -> Plan<P, U>, ~mid: P -> Bool, ~big: Bytes(),
   ~uplan: U -> Bytes() -> Plan<P, U>, ~gap: U32, ~event: U32 -> Bytes(),
-  ~shut: Bool -> Bytes() -> Bytes(), ~fhead: List<&2, U32> -> U32 -> Bytes(),
+  ~shut: Bool -> Bytes() -> Bytes(), ~fhead: Bytes() -> U32 -> Bytes(),
   ~miss: Bool -> Bytes(), ~lnote: Bytes() -> Bytes() -> String,
   ~lsize: Bytes() -> Bytes() -> U32 -> String, +srv: E, p0: P, s: S
 ) -> M(S):
@@ -937,7 +932,7 @@ def no.event(n: U32) -> Bytes():
 def no.shut(sh: Bool, bs: Bytes()) -> Bytes():
   bs
 
-def no.fhead(ct: List<&2, U32>, n: U32) -> Bytes():
+def no.fhead(ct: Bytes(), n: U32) -> Bytes():
   ""
 
 def no.miss(head: Bool) -> Bytes():

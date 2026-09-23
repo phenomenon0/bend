@@ -24,10 +24,11 @@
 #
 # The model is only as good as the contracts: what it assumes of each
 # effect is written below as a relation on what the effect answers
-# (rx.ok, tx.ok, lsn.ok, fopen.ok, fread.ok, fsend.ok; cx.ok and tls.ok
-# for the client's connects, idle.ok for its pool's probe), the model is
-# proved to keep them (rx_model, tx_stalled, tx_served, fread_model,
-# fsend_model, fsend_stalled), and
+# (rx.ok, tx.ok, lsn.ok, fopen.ok, fget.ok, fread.ok, fsend.ok; cx.ok
+# and tls.ok for the client's connects, idle.ok for its pool's probe),
+# the model is proved to keep them (rx_model, tx_stalled, tx_served,
+# fread_model, fsend_model, fsend_stalled; File.get_under's memo:
+# memo_bounded, memo_answers, memo_keeps), and
 # wire/conform.bend drives each real effect through the same cases and
 # checks the same relations against what it observes. That is the
 # bridge; what is left trusted is that the effects keep their contract
@@ -277,23 +278,23 @@ def sim.raw(
   L.send.raw(~Id, ~Id.pure, ~Id.bind, ~World, ~w.tx, ~w.say, ~lnote, ms, may, bs, st)
 
 def sim.page(
-  ~shut: Bool -> Bytes() -> Bytes(), ~fhead: List<&2, U32> -> U32 -> Bytes(),
+  ~shut: Bool -> Bytes() -> Bytes(), ~fhead: Bytes() -> U32 -> Bytes(),
   ~miss: Bool -> Bytes(), ~lnote: Bytes() -> Bytes() -> String,
-  ~lsize: Bytes() -> Bytes() -> U32 -> String, +ms: U32, root: List<&2, U32>, path: List<&2, U32>, ct: List<&2, U32>, head: Bool,
+  ~lsize: Bytes() -> Bytes() -> U32 -> String, +ms: U32, root: Bytes(), path: Bytes(), ct: Bytes(), head: Bool,
   may: Maybe<&2, Bytes()>, sh: Bool, st: L.Em<World>
 ) -> L.Em<World>:
   L.send.page(~Id, ~Id.pure, ~Id.bind, ~World, ~Bytes(), ~w.tx, ~w.say, ~w.fopen, ~w.fsize,
     ~w.fread, ~w.fsend, ~w.fclose, ~shut, ~fhead, ~miss, ~lnote, ~lsize, ms, root, path, ct, head, may, sh, st)
 
 def sim.go(
-  ~shut: Bool -> Bytes() -> Bytes(), ~fhead: List<&2, U32> -> U32 -> Bytes(),
+  ~shut: Bool -> Bytes() -> Bytes(), ~fhead: Bytes() -> U32 -> Bytes(),
   ~miss: Bool -> Bytes(), ~lnote: Bytes() -> Bytes() -> String,
   ~lsize: Bytes() -> Bytes() -> U32 -> String, xs: List<&2, L.Seg>, +ms: U32, may: Maybe<&2, Bytes()>, sh: Bool, st: L.Em<World>
 ) -> L.Put(World):
   L.send.go(~Id, ~Id.pure, ~Id.bind, ~World, ~Bytes(), ~w.tx, ~w.say, ~w.fopen, ~w.fsize,
     ~w.fread, ~w.fsend, ~w.fclose, ~shut, ~fhead, ~miss, ~lnote, ~lsize, xs, ms, may, sh, st)
 
-def sim.segs(~shut: Bool -> Bytes() -> Bytes(), ~fhead: List<&2, U32> -> U32 -> Bytes(),
+def sim.segs(~shut: Bool -> Bytes() -> Bytes(), ~fhead: Bytes() -> U32 -> Bytes(),
   ~miss: Bool -> Bytes(), ~lnote: Bytes() -> Bytes() -> String,
   ~lsize: Bytes() -> Bytes() -> U32 -> String, s: World, xs: List<&2, L.Seg>, +ms: U32) -> L.Put(World):
   L.send.segs(~Id, ~Id.pure, ~Id.bind, ~World, ~Bytes(), ~w.tx, ~w.say, ~w.fopen, ~w.fsize,
@@ -344,18 +345,18 @@ def sim.pstart(
     ~lsize, ms, f, n, hd, head, may, s, acc)
 
 def sim.psized(
-  ~shut: Bool -> Bytes() -> Bytes(), ~fhead: List<&2, U32> -> U32 -> Bytes(),
+  ~shut: Bool -> Bytes() -> Bytes(), ~fhead: Bytes() -> U32 -> Bytes(),
   ~miss: Bool -> Bytes(), ~lnote: Bytes() -> Bytes() -> String,
-  ~lsize: Bytes() -> Bytes() -> U32 -> String, +ms: U32, got: Bytes() & Result<&1, &1, U32 & String, U32>, ct: List<&2, U32>,
+  ~lsize: Bytes() -> Bytes() -> U32 -> String, +ms: U32, got: Bytes() & Result<&1, &1, U32 & String, U32>, ct: Bytes(),
   head: Bool, may: Maybe<&2, Bytes()>, sh: Bool, s: World, acc: Bytes()
 ) -> L.Em<World>:
   L.page.sized(~Id, ~Id.pure, ~Id.bind, ~World, ~Bytes(), ~w.tx, ~w.say, ~w.fread, ~w.fsend, ~w.fclose,
     ~shut, ~fhead, ~miss, ~lnote, ~lsize, ms, got, ct, head, may, sh, s, acc)
 
 def sim.opened(
-  ~shut: Bool -> Bytes() -> Bytes(), ~fhead: List<&2, U32> -> U32 -> Bytes(),
+  ~shut: Bool -> Bytes() -> Bytes(), ~fhead: Bytes() -> U32 -> Bytes(),
   ~miss: Bool -> Bytes(), ~lnote: Bytes() -> Bytes() -> String,
-  ~lsize: Bytes() -> Bytes() -> U32 -> String, +ms: U32, m: World & Result<&1, &1, U32 & String, Bytes()>, ct: List<&2, U32>,
+  ~lsize: Bytes() -> Bytes() -> U32 -> String, +ms: U32, m: World & Result<&1, &1, U32 & String, Bytes()>, ct: Bytes(),
   head: Bool, may: Maybe<&2, Bytes()>, sh: Bool, acc: Bytes()
 ) -> L.Em<World>:
   L.page.opened(~Id, ~Id.pure, ~Id.bind, ~World, ~Bytes(), ~w.tx, ~w.say, ~w.fsize, ~w.fread, ~w.fsend,
@@ -375,7 +376,7 @@ def sim.tick(~P: Data, ~U: Data, ~gap: U32, ~event: U32 -> Bytes(), m: L.Put(Wor
 def sim.conn(~E: Data, ~P: Data, ~U: Data, ~idle: E -> U32, ~hdms: E -> U32,
   ~plan: E -> Bytes() -> P -> L.Plan<P, U>, ~mid: P -> Bool, ~big: Bytes(),
   ~uplan: U -> Bytes() -> L.Plan<P, U>, ~gap: U32, ~event: U32 -> Bytes(),
-  ~shut: Bool -> Bytes() -> Bytes(), ~fhead: List<&2, U32> -> U32 -> Bytes(),
+  ~shut: Bool -> Bytes() -> Bytes(), ~fhead: Bytes() -> U32 -> Bytes(),
   ~miss: Bool -> Bytes(), ~lnote: Bytes() -> Bytes() -> String,
   ~lsize: Bytes() -> Bytes() -> U32 -> String, f: Nat, +srv: E, sph: (World & L.Plan<P, U>) & L.Hw, w: Nat) -> World:
   L.conn(~Id, ~Id.pure, ~Id.bind, ~World, ~Bytes(), ~w.rx, ~w.tx, ~w.clk, ~w.nap, ~w.say,
@@ -384,7 +385,7 @@ def sim.conn(~E: Data, ~P: Data, ~U: Data, ~idle: E -> U32, ~hdms: E -> U32,
 def sim.start(~E: Data, ~P: Data, ~U: Data, ~idle: E -> U32, ~hdms: E -> U32,
   ~plan: E -> Bytes() -> P -> L.Plan<P, U>, ~mid: P -> Bool, ~big: Bytes(),
   ~uplan: U -> Bytes() -> L.Plan<P, U>, ~gap: U32, ~event: U32 -> Bytes(),
-  ~shut: Bool -> Bytes() -> Bytes(), ~fhead: List<&2, U32> -> U32 -> Bytes(),
+  ~shut: Bool -> Bytes() -> Bytes(), ~fhead: Bytes() -> U32 -> Bytes(),
   ~miss: Bool -> Bytes(), ~lnote: Bytes() -> Bytes() -> String,
   ~lsize: Bytes() -> Bytes() -> U32 -> String, +srv: E, p0: P, s: World) -> World:
   L.conn.start(~Id, ~Id.pure, ~Id.bind, ~World, ~Bytes(), ~w.rx, ~w.tx, ~w.clk, ~w.nap,
@@ -428,7 +429,7 @@ def m.fsend(s: World, f: Bytes(), off: U32, len: U32, ms: U32) ->
 def mute.conn(~E: Data, ~P: Data, ~U: Data, ~idle: E -> U32, ~hdms: E -> U32,
   ~plan: E -> Bytes() -> P -> L.Plan<P, U>, ~mid: P -> Bool, ~big: Bytes(),
   ~uplan: U -> Bytes() -> L.Plan<P, U>, ~gap: U32, ~event: U32 -> Bytes(),
-  ~shut: Bool -> Bytes() -> Bytes(), ~fhead: List<&2, U32> -> U32 -> Bytes(),
+  ~shut: Bool -> Bytes() -> Bytes(), ~fhead: Bytes() -> U32 -> Bytes(),
   ~miss: Bool -> Bytes(), ~lnote: Bytes() -> Bytes() -> String,
   ~lsize: Bytes() -> Bytes() -> U32 -> String, f: Nat, +srv: E, sph: (World & L.Plan<P, U>) & L.Hw, w: Nat) -> World:
   L.conn(~Id, ~Id.pure, ~Id.bind, ~World, ~Bytes(), ~m.rx, ~m.tx, ~w.clk, ~m.nap, ~w.say,
@@ -439,7 +440,7 @@ def mute.turn(~E: Data, ~P: Data, ~U: Data, ~idle: E -> U32, ~hdms: E -> U32,
   (World & L.Plan<P, U>) & L.Hw:
   L.turn(~Id, ~Id.pure, ~Id.bind, ~World, ~m.rx, ~w.clk, ~E, ~P, ~U, ~idle, ~hdms, ~plan, ~big, srv, m, p, hw)
 
-def mute.segs(~shut: Bool -> Bytes() -> Bytes(), ~fhead: List<&2, U32> -> U32 -> Bytes(),
+def mute.segs(~shut: Bool -> Bytes() -> Bytes(), ~fhead: Bytes() -> U32 -> Bytes(),
   ~miss: Bool -> Bytes(), ~lnote: Bytes() -> Bytes() -> String,
   ~lsize: Bytes() -> Bytes() -> U32 -> String, s: World, xs: List<&2, L.Seg>, +ms: U32) -> L.Put(World):
   L.send.segs(~Id, ~Id.pure, ~Id.bind, ~World, ~Bytes(), ~m.tx, ~w.say, ~w.fopen, ~w.fsize,
@@ -465,7 +466,7 @@ def mute.held(+ms: U32, s: World, acc: Bytes(), c: Cmp) -> L.Em<World>:
   L.send.held(~Id, ~Id.pure, ~Id.bind, ~World, ~m.tx, ms, s, acc, c)
 
 def mute.go(
-  ~shut: Bool -> Bytes() -> Bytes(), ~fhead: List<&2, U32> -> U32 -> Bytes(),
+  ~shut: Bool -> Bytes() -> Bytes(), ~fhead: Bytes() -> U32 -> Bytes(),
   ~miss: Bool -> Bytes(), ~lnote: Bytes() -> Bytes() -> String,
   ~lsize: Bytes() -> Bytes() -> U32 -> String, xs: List<&2, L.Seg>, +ms: U32, may: Maybe<&2, Bytes()>, sh: Bool, st: L.Em<World>
 ) -> L.Put(World):
@@ -625,6 +626,258 @@ def fopen.ok(k: Name, r: Result<&1, &1, U32 & String, Unit>) -> Bool:
       Result.is_fail(&1, &1, U32 & String, Unit, r)
     case Climbs{}:
       Result.is_fail(&1, &1, U32 & String, Unit, r)
+
+# What File.get_under answered of a file, as data: the size it gave,
+# whether it held the body (and closed the file) or left the file open,
+# and how many bytes the body had.
+type Got is Data:
+  Got{n: U32, held: Bool, len: Nat}
+
+def fget.body(+small: U32, +size: U32, g: Got) -> Bool:
+  match g:
+    case Got{+n, held, +len}:
+      match held:
+        case True{}:
+          U32.is_eq(n, size) && U32.is_lt(size, small) && Nat.is_eq(len, U32.to_nat(size))
+        case False{}:
+          U32.is_eq(n, size) && Nat.is_eq(len, 0n)
+
+# File.get_under(root, path, small), with the file size bytes long: it
+# opens what open_under opens (fopen.ok), and answers a regular file's
+# size, with its body whole when it is under small bytes, or no body and
+# the file open (at or past small, or a small file whose bytes the page
+# cache does not hold, which the loop then reads as a large one). Its
+# answer may be one it read up to a second before (the memo, below):
+# conform.bend's fget.memo checks a changed file is seen after that.
+def fget.ok(k: Name, +small: U32, +size: U32, r: Result<&1, &1, U32 & String, Got>) -> Bool:
+  match k r:
+    case Plain{} Done{g}:
+      fget.body(small, size, g)
+    case Plain{} Fail{e}:
+      False{}
+    case _ Done{g}:
+      False{}
+    case _ Fail{e}:
+      True{}
+
+# The memo
+# ========
+#
+# File.get_under answers a small file it read less than a second before
+# from memory (bend2/effs/file_open_under.c: FILE_MEMO_NS, FILE_MEMO_N).
+# As a model: what it read, newest first, each by its key (the root and
+# the path), the time it read it (ms) and what it answered; a lookup
+# takes the newest entry for its key read less than ttl before now, and
+# keeping an answer puts it first and keeps at most memo.cap() entries.
+# Its laws hold for any comparison of keys that is equality (~same,
+# ~same_ok): the C memo compares a key's bytes with memcmp.
+type Memo is Data:
+  Memo{key: Bytes(), at: Nat, got: Bytes()}
+
+def memo.cap() -> Nat:
+  256n
+
+def memo.find.at(hit: Bool, got: Bytes(), rest: Maybe<&2, Bytes()>) -> Maybe<&2, Bytes()>:
+  match hit:
+    case True{}:
+      Some{got}
+    case False{}:
+      rest
+
+def memo.find(~same: Bytes() -> Bytes() -> Bool, ms: List<&2, Memo>, +key: Bytes(), +now: Nat, +ttl: Nat) ->
+  Maybe<&2, Bytes()>:
+  match ms:
+    case Nil{}:
+      None{}
+    case Con{Memo{k, +at, got}, t}:
+      memo.find.at(same(k, key) && Nat.is_lt(now, Nat.add(at, ttl)), got, memo.find(~same, t, key, now, ttl))
+
+# the first n entries
+def memo.take(ms: List<&2, Memo>, n: Nat) -> List<&2, Memo>:
+  match ms n:
+    case Nil{} _:
+      Nil{}
+    case Con{m, t} 0n:
+      Nil{}
+    case Con{m, t} 1n+p:
+      Con{m, memo.take(t, p)}
+
+def memo.put(ms: List<&2, Memo>, key: Bytes(), now: Nat, got: Bytes()) -> List<&2, Memo>:
+  memo.take(Con{Memo{key, now, got}, ms}, memo.cap())
+
+# the effect with its memo: the memo's answer when it holds one, else
+# the file system's (fresh), which it keeps
+def memo.get.at(may: Maybe<&2, Bytes()>, ms: List<&2, Memo>, key: Bytes(), now: Nat, +fresh: Bytes()) ->
+  List<&2, Memo> & Bytes():
+  match may:
+    case Some{g}:
+      (ms, g)
+    case None{}:
+      (memo.put(ms, key, now, fresh), fresh)
+
+def memo.get(~same: Bytes() -> Bytes() -> Bool, +ms: List<&2, Memo>, +key: Bytes(), +now: Nat, +ttl: Nat,
+  fresh: Bytes()) -> List<&2, Memo> & Bytes():
+  memo.get.at(memo.find(~same, ms, key, now, ttl), ms, key, now, fresh)
+
+def memo.kept(g: List<&2, Memo> & Bytes()) -> List<&2, Memo>:
+  (ms, a) = g
+  ms
+
+def memo.ans(g: List<&2, Memo> & Bytes()) -> Bytes():
+  (ms, a) = g
+  a
+
+# at most n entries
+def memo.within(ms: List<&2, Memo>, n: Nat) -> Bool:
+  match ms n:
+    case Nil{} _:
+      True{}
+    case Con{m, t} 0n:
+      False{}
+    case Con{m, t} 1n+p:
+      memo.within(t, p)
+
+# every answer kept is what the file system (~fs) answers its key with
+def memo.AG(~fs: Bytes() -> Bytes(), ms: List<&2, Memo>) -> Type:
+  match ms:
+    case Nil{}:
+      Unit
+    case Con{Memo{k, at, g}, t}:
+      {g == fs(k) : Bytes()} & memo.AG(~fs, t)
+
+# LAW: the memo is bounded: after any lookup it holds at most memo.cap()
+# entries, as it did before.
+law memo_bounded:
+  for ~same: Bytes() -> Bytes() -> Bool
+  for +ms: List<&2, Memo>
+  for +key: Bytes()
+  for +now: Nat
+  for +ttl: Nat
+  for fresh: Bytes()
+  for e: {memo.within(ms, memo.cap()) == True{} : Bool}
+  {memo.within(memo.kept(memo.get(~same, ms, key, now, ttl, fresh)), memo.cap()) == True{} : Bool}
+
+def memo.take_within(ms: List<&2, Memo>, n: Nat) -> {memo.within(memo.take(ms, n), n) == True{} : Bool}:
+  match ms n:
+    case Nil{} 0n:
+      {==}
+    case Nil{} 1n+p:
+      {==}
+    case Con{m, t} 0n:
+      {==}
+    case Con{m, t} 1n+p:
+      memo.take_within(t, p)
+
+def memo.bound.at(may: Maybe<&2, Bytes()>, +ms: List<&2, Memo>, +key: Bytes(), +now: Nat, fresh: Bytes(),
+  e: {memo.within(ms, memo.cap()) == True{} : Bool}) ->
+  {memo.within(memo.kept(memo.get.at(may, ms, key, now, fresh)), memo.cap()) == True{} : Bool}:
+  match may:
+    case Some{g}:
+      e
+    case None{}:
+      memo.take_within(Con{Memo{key, now, fresh}, ms}, memo.cap())
+
+def memo_bounded(same, ms, key, now, ttl, fresh, e):
+  memo.bound.at(memo.find(~same, ms, key, now, ttl), ms, key, now, fresh, e)
+
+# LAW: a cached answer is what the effect answered when it read it. For
+# a file system that has not changed since the memo's answers were read
+# (memo.AG), the answer the memo gives any key is the file system's.
+law memo_answers:
+  for ~same: Bytes() -> Bytes() -> Bool
+  for ~same_ok: @a: Bytes() -> @b: Bytes() -> {same(a, b) == True{} : Bool} -> {a == b : Bytes()}
+  for ~fs: Bytes() -> Bytes()
+  for +ms: List<&2, Memo>
+  for ag: memo.AG(~fs, ms)
+  for +key: Bytes()
+  for +now: Nat
+  for +ttl: Nat
+  {memo.ans(memo.get(~same, ms, key, now, ttl, fs(key))) == fs(key) : Bytes()}
+
+def memo.FOK(~fs: Bytes() -> Bytes(), +key: Bytes(), may: Maybe<&2, Bytes()>) -> Type:
+  match may:
+    case None{}:
+      Unit
+    case Some{g}:
+      {g == fs(key) : Bytes()}
+
+def memo.hit.at(~same: Bytes() -> Bytes() -> Bool,
+  ~same_ok: @a: Bytes() -> @b: Bytes() -> {same(a, b) == True{} : Bool} -> {a == b : Bytes()},
+  ~fs: Bytes() -> Bytes(), +k: Bytes(), +key: Bytes(), +got: Bytes(), lt: Bool, b: Bool,
+  e1: {got == fs(k) : Bytes()}, rest: Maybe<&2, Bytes()>, ih: memo.FOK(~fs, key, rest)) ->
+  {Bool.and(same(k, key), lt) == b : Bool} ->
+  memo.FOK(~fs, key, memo.find.at(Bool.and(same(k, key), lt), got, rest)):
+  match b:
+    case True{}:
+      +eb =>
+        %Equal.sym(Bool, Bool.and(same(k, key), lt), True{}, eb) :
+          memo.FOK(~fs, key, memo.find.at(_, got, rest))
+        %same_ok(k, key, Bool.and_l(same(k, key), lt, eb)) : {got == fs(_) : Bytes()}
+        e1
+    case False{}:
+      +eb =>
+        %Equal.sym(Bool, Bool.and(same(k, key), lt), False{}, eb) :
+          memo.FOK(~fs, key, memo.find.at(_, got, rest))
+        ih
+
+def memo.hit(~same: Bytes() -> Bytes() -> Bool,
+  ~same_ok: @a: Bytes() -> @b: Bytes() -> {same(a, b) == True{} : Bool} -> {a == b : Bytes()},
+  ~fs: Bytes() -> Bytes(), ms: List<&2, Memo>, ag: memo.AG(~fs, ms), +key: Bytes(), +now: Nat, +ttl: Nat) ->
+  memo.FOK(~fs, key, memo.find(~same, ms, key, now, ttl)):
+  match ms:
+    case Nil{}:
+      Unit{}
+    case Con{Memo{+k, +at, +got}, +t}:
+      (e1, ag2) = ag
+      memo.hit.at(~same, ~same_ok, ~fs, k, key, got, Nat.is_lt(now, Nat.add(at, ttl)),
+        Bool.and(same(k, key), Nat.is_lt(now, Nat.add(at, ttl))), e1,
+        memo.find(~same, t, key, now, ttl), memo.hit(~same, ~same_ok, ~fs, t, ag2, key, now, ttl))({==})
+
+def memo.ans.at(~fs: Bytes() -> Bytes(), may: Maybe<&2, Bytes()>, +ms: List<&2, Memo>, +key: Bytes(), +now: Nat,
+  ok: memo.FOK(~fs, key, may)) -> {memo.ans(memo.get.at(may, ms, key, now, fs(key))) == fs(key) : Bytes()}:
+  match may:
+    case Some{g}:
+      ok
+    case None{}:
+      {==}
+
+def memo_answers(same, same_ok, fs, ms, ag, key, now, ttl):
+  memo.ans.at(~fs, memo.find(~same, ms, key, now, ttl), ms, key, now,
+    memo.hit(~same, ~same_ok, ~fs, ms, ag, key, now, ttl))
+
+# LAW: and the memo stays so: what it keeps after a lookup is what the
+# file system answers, so memo_answers holds at the next lookup too.
+law memo_keeps:
+  for ~same: Bytes() -> Bytes() -> Bool
+  for ~fs: Bytes() -> Bytes()
+  for +ms: List<&2, Memo>
+  for ag: memo.AG(~fs, ms)
+  for +key: Bytes()
+  for +now: Nat
+  for +ttl: Nat
+  memo.AG(~fs, memo.kept(memo.get(~same, ms, key, now, ttl, fs(key))))
+
+def memo.take_ag(~fs: Bytes() -> Bytes(), ms: List<&2, Memo>, n: Nat, ag: memo.AG(~fs, ms)) ->
+  memo.AG(~fs, memo.take(ms, n)):
+  match ms n:
+    case Nil{} _:
+      Unit{}
+    case Con{Memo{k, at, g}, t} 0n:
+      Unit{}
+    case Con{Memo{k, at, g}, t} 1n+p:
+      (e1, ag2) = ag
+      (e1, memo.take_ag(~fs, t, p, ag2))
+
+def memo.keep.at(~fs: Bytes() -> Bytes(), may: Maybe<&2, Bytes()>, +ms: List<&2, Memo>, +key: Bytes(),
+  +now: Nat, ag: memo.AG(~fs, ms)) -> memo.AG(~fs, memo.kept(memo.get.at(may, ms, key, now, fs(key)))):
+  match may:
+    case Some{g}:
+      ag
+    case None{}:
+      memo.take_ag(~fs, Con{Memo{key, now, fs(key)}, ms}, memo.cap(), ({==}, ag))
+
+def memo_keeps(same, fs, ms, ag, key, now, ttl):
+  memo.keep.at(~fs, memo.find(~same, ms, key, now, ttl), ms, key, now, ag)
 
 # File.read_buf(f, max) with left bytes left in the file: at most max
 # bytes and at most what is left, and none only at the end
@@ -941,7 +1194,7 @@ law end_is_last:
   for ~gap: U32
   for ~event: U32 -> Bytes()
   for ~shut: Bool -> Bytes() -> Bytes()
-  for ~fhead: List<&2, U32> -> U32 -> Bytes()
+  for ~fhead: Bytes() -> U32 -> Bytes()
   for ~miss: Bool -> Bytes()
   for ~lnote: Bytes() -> Bytes() -> String
   for ~lsize: Bytes() -> Bytes() -> U32 -> String
@@ -970,7 +1223,7 @@ law stop_is_last:
   for ~gap: U32
   for ~event: U32 -> Bytes()
   for ~shut: Bool -> Bytes() -> Bytes()
-  for ~fhead: List<&2, U32> -> U32 -> Bytes()
+  for ~fhead: Bytes() -> U32 -> Bytes()
   for ~miss: Bool -> Bytes()
   for ~lnote: Bytes() -> Bytes() -> String
   for ~lsize: Bytes() -> Bytes() -> U32 -> String
@@ -1000,7 +1253,7 @@ law go_order:
   for ~gap: U32
   for ~event: U32 -> Bytes()
   for ~shut: Bool -> Bytes() -> Bytes()
-  for ~fhead: List<&2, U32> -> U32 -> Bytes()
+  for ~fhead: Bytes() -> U32 -> Bytes()
   for ~miss: Bool -> Bytes()
   for ~lnote: Bytes() -> Bytes() -> String
   for ~lsize: Bytes() -> Bytes() -> U32 -> String
@@ -1035,7 +1288,7 @@ law fail_go:
   for ~gap: U32
   for ~event: U32 -> Bytes()
   for ~shut: Bool -> Bytes() -> Bytes()
-  for ~fhead: List<&2, U32> -> U32 -> Bytes()
+  for ~fhead: Bytes() -> U32 -> Bytes()
   for ~miss: Bool -> Bytes()
   for ~lnote: Bytes() -> Bytes() -> String
   for ~lsize: Bytes() -> Bytes() -> U32 -> String
@@ -1080,7 +1333,7 @@ law fail_up:
   for ~gap: U32
   for ~event: U32 -> Bytes()
   for ~shut: Bool -> Bytes() -> Bytes()
-  for ~fhead: List<&2, U32> -> U32 -> Bytes()
+  for ~fhead: Bytes() -> U32 -> Bytes()
   for ~miss: Bool -> Bytes()
   for ~lnote: Bytes() -> Bytes() -> String
   for ~lsize: Bytes() -> Bytes() -> U32 -> String
@@ -1125,7 +1378,7 @@ law fail_feed:
   for ~gap: U32
   for ~event: U32 -> Bytes()
   for ~shut: Bool -> Bytes() -> Bytes()
-  for ~fhead: List<&2, U32> -> U32 -> Bytes()
+  for ~fhead: Bytes() -> U32 -> Bytes()
   for ~miss: Bool -> Bytes()
   for ~lnote: Bytes() -> Bytes() -> String
   for ~lsize: Bytes() -> Bytes() -> U32 -> String
@@ -1413,13 +1666,13 @@ def wl.pstart_fine(lsize, ms, f, n, hd, head, may, s, acc):
 
 law wl.psized_fine:
   for ~shut: Bool -> Bytes() -> Bytes()
-  for ~fhead: List<&2, U32> -> U32 -> Bytes()
+  for ~fhead: Bytes() -> U32 -> Bytes()
   for ~miss: Bool -> Bytes()
   for ~lnote: Bytes() -> Bytes() -> String
   for ~lsize: Bytes() -> Bytes() -> U32 -> String
   for +ms: U32
   for got: Bytes() & Result<&1, &1, U32 & String, U32>
-  for ct: List<&2, U32>
+  for ct: Bytes()
   for head: Bool
   for may: Maybe<&2, Bytes()>
   for sh: Bool
@@ -1437,13 +1690,13 @@ def wl.psized_fine(shut, fhead, miss, lnote, lsize, ms, got, ct, head, may, sh, 
 
 law wl.opened_fine:
   for ~shut: Bool -> Bytes() -> Bytes()
-  for ~fhead: List<&2, U32> -> U32 -> Bytes()
+  for ~fhead: Bytes() -> U32 -> Bytes()
   for ~miss: Bool -> Bytes()
   for ~lnote: Bytes() -> Bytes() -> String
   for ~lsize: Bytes() -> Bytes() -> U32 -> String
   for +ms: U32
   for m: World & Result<&1, &1, U32 & String, Bytes()>
-  for ct: List<&2, U32>
+  for ct: Bytes()
   for head: Bool
   for may: Maybe<&2, Bytes()>
   for sh: Bool
@@ -1460,14 +1713,14 @@ def wl.opened_fine(shut, fhead, miss, lnote, lsize, ms, m, ct, head, may, sh, ac
 
 law page_fine:
   for ~shut: Bool -> Bytes() -> Bytes()
-  for ~fhead: List<&2, U32> -> U32 -> Bytes()
+  for ~fhead: Bytes() -> U32 -> Bytes()
   for ~miss: Bool -> Bytes()
   for ~lnote: Bytes() -> Bytes() -> String
   for ~lsize: Bytes() -> Bytes() -> U32 -> String
   for +ms: U32
-  for root: List<&2, U32>
-  for path: List<&2, U32>
-  for ct: List<&2, U32>
+  for root: Bytes()
+  for path: Bytes()
+  for ct: Bytes()
   for head: Bool
   for may: Maybe<&2, Bytes()>
   for sh: Bool
@@ -1481,7 +1734,7 @@ def page_fine(shut, fhead, miss, lnote, lsize, ms, root, path, ct, head, may, sh
         case False{}:
           {==}
         case True{}:
-          wl.opened_fine(~shut, ~fhead, ~miss, ~lnote, ~lsize, ms, w.fopen(s, L.text(root), L.text(path)), ct, head, may, sh, acc)
+          wl.opened_fine(~shut, ~fhead, ~miss, ~lnote, ~lsize, ms, w.fopen(s, root, path), ct, head, may, sh, acc)
 
 # LAW: the batch budget. After a reply of any size joins the batch,
 # what stays waiting is below send.cap(): a batch at or past the cap has
@@ -1726,7 +1979,7 @@ def wl.note_is(lnote, may, x):
 
 law wl.held_eager:
   for ~shut: Bool -> Bytes() -> Bytes()
-  for ~fhead: List<&2, U32> -> U32 -> Bytes()
+  for ~fhead: Bytes() -> U32 -> Bytes()
   for ~miss: Bool -> Bytes()
   for ~lnote: Bytes() -> Bytes() -> String
   for ~lsize: Bytes() -> Bytes() -> U32 -> String
@@ -1786,7 +2039,7 @@ def wl.held_eager(shut, fhead, miss, lnote, lsize, t, ms, rd, now, fs, out, a, c
 
 law wl.go_wire:
   for ~shut: Bool -> Bytes() -> Bytes()
-  for ~fhead: List<&2, U32> -> U32 -> Bytes()
+  for ~fhead: Bytes() -> U32 -> Bytes()
   for ~miss: Bool -> Bytes()
   for ~lnote: Bytes() -> Bytes() -> String
   for ~lsize: Bytes() -> Bytes() -> U32 -> String
@@ -1854,7 +2107,7 @@ def wl.go_wire(shut, fhead, miss, lnote, lsize, xs, ms, may, sh, rd, now, fs, ou
 
 law segs_wire:
   for ~shut: Bool -> Bytes() -> Bytes()
-  for ~fhead: List<&2, U32> -> U32 -> Bytes()
+  for ~fhead: Bytes() -> U32 -> Bytes()
   for ~miss: Bool -> Bytes()
   for ~lnote: Bytes() -> Bytes() -> String
   for ~lsize: Bytes() -> Bytes() -> U32 -> String
@@ -1893,7 +2146,7 @@ law wl.mute_left:
   for ~gap: U32
   for ~event: U32 -> Bytes()
   for ~shut: Bool -> Bytes() -> Bytes()
-  for ~fhead: List<&2, U32> -> U32 -> Bytes()
+  for ~fhead: Bytes() -> U32 -> Bytes()
   for ~miss: Bool -> Bytes()
   for ~lnote: Bytes() -> Bytes() -> String
   for ~lsize: Bytes() -> Bytes() -> U32 -> String
@@ -1929,7 +2182,7 @@ law wl.mute_turn_h:
   for ~gap: U32
   for ~event: U32 -> Bytes()
   for ~shut: Bool -> Bytes() -> Bytes()
-  for ~fhead: List<&2, U32> -> U32 -> Bytes()
+  for ~fhead: Bytes() -> U32 -> Bytes()
   for ~miss: Bool -> Bytes()
   for ~lnote: Bytes() -> Bytes() -> String
   for ~lsize: Bytes() -> Bytes() -> U32 -> String
@@ -1966,7 +2219,7 @@ law wl.mute_turn:
   for ~gap: U32
   for ~event: U32 -> Bytes()
   for ~shut: Bool -> Bytes() -> Bytes()
-  for ~fhead: List<&2, U32> -> U32 -> Bytes()
+  for ~fhead: Bytes() -> U32 -> Bytes()
   for ~miss: Bool -> Bytes()
   for ~lnote: Bytes() -> Bytes() -> String
   for ~lsize: Bytes() -> Bytes() -> U32 -> String
@@ -2000,7 +2253,7 @@ law wl.mute_up:
   for ~gap: U32
   for ~event: U32 -> Bytes()
   for ~shut: Bool -> Bytes() -> Bytes()
-  for ~fhead: List<&2, U32> -> U32 -> Bytes()
+  for ~fhead: Bytes() -> U32 -> Bytes()
   for ~miss: Bool -> Bytes()
   for ~lnote: Bytes() -> Bytes() -> String
   for ~lsize: Bytes() -> Bytes() -> U32 -> String
@@ -2023,7 +2276,7 @@ def wl.mute_up(E, P, U, idle, hdms, plan, mid, big, uplan, gap, event, shut, fhe
 # a send of bytes to a stopped peer fails; of none, succeeds
 law wl.mute_held:
   for ~shut: Bool -> Bytes() -> Bytes()
-  for ~fhead: List<&2, U32> -> U32 -> Bytes()
+  for ~fhead: Bytes() -> U32 -> Bytes()
   for ~miss: Bool -> Bytes()
   for ~lnote: Bytes() -> Bytes() -> String
   for ~lsize: Bytes() -> Bytes() -> U32 -> String
@@ -2047,7 +2300,7 @@ def wl.mute_held(shut, fhead, miss, lnote, lsize, ms, s, h, t, c):
 # (the bytes a Raw puts out are the protocol's shut of them)
 law wl.mute_raw.at:
   for ~shut: Bool -> Bytes() -> Bytes()
-  for ~fhead: List<&2, U32> -> U32 -> Bytes()
+  for ~fhead: Bytes() -> U32 -> Bytes()
   for ~miss: Bool -> Bytes()
   for ~lnote: Bytes() -> Bytes() -> String
   for ~lsize: Bytes() -> Bytes() -> U32 -> String
@@ -2066,7 +2319,7 @@ def wl.mute_raw.at(shut, fhead, miss, lnote, lsize, ms, s, x):
 
 law wl.mute_raw:
   for ~shut: Bool -> Bytes() -> Bytes()
-  for ~fhead: List<&2, U32> -> U32 -> Bytes()
+  for ~fhead: Bytes() -> U32 -> Bytes()
   for ~miss: Bool -> Bytes()
   for ~lnote: Bytes() -> Bytes() -> String
   for ~lsize: Bytes() -> Bytes() -> U32 -> String
@@ -2091,7 +2344,7 @@ law wl.mute_tick_failed:
   for ~gap: U32
   for ~event: U32 -> Bytes()
   for ~shut: Bool -> Bytes() -> Bytes()
-  for ~fhead: List<&2, U32> -> U32 -> Bytes()
+  for ~fhead: Bytes() -> U32 -> Bytes()
   for ~miss: Bool -> Bytes()
   for ~lnote: Bytes() -> Bytes() -> String
   for ~lsize: Bytes() -> Bytes() -> U32 -> String
@@ -2127,7 +2380,7 @@ law wl.mute_more:
   for ~gap: U32
   for ~event: U32 -> Bytes()
   for ~shut: Bool -> Bytes() -> Bytes()
-  for ~fhead: List<&2, U32> -> U32 -> Bytes()
+  for ~fhead: Bytes() -> U32 -> Bytes()
   for ~miss: Bool -> Bytes()
   for ~lnote: Bytes() -> Bytes() -> String
   for ~lsize: Bytes() -> Bytes() -> U32 -> String
@@ -2166,7 +2419,7 @@ law wl.mute_tick:
   for ~gap: U32
   for ~event: U32 -> Bytes()
   for ~shut: Bool -> Bytes() -> Bytes()
-  for ~fhead: List<&2, U32> -> U32 -> Bytes()
+  for ~fhead: Bytes() -> U32 -> Bytes()
   for ~miss: Bool -> Bytes()
   for ~lnote: Bytes() -> Bytes() -> String
   for ~lsize: Bytes() -> Bytes() -> U32 -> String
@@ -2200,7 +2453,7 @@ law stall_ends:
   for ~gap: U32
   for ~event: U32 -> Bytes()
   for ~shut: Bool -> Bytes() -> Bytes()
-  for ~fhead: List<&2, U32> -> U32 -> Bytes()
+  for ~fhead: Bytes() -> U32 -> Bytes()
   for ~miss: Bool -> Bytes()
   for ~lnote: Bytes() -> Bytes() -> String
   for ~lsize: Bytes() -> Bytes() -> U32 -> String
@@ -2793,14 +3046,14 @@ def wl.body_wire(ms, f, rd, now, fs, out, pre, small, en):
 
 law page_wire:
   for ~shut: Bool -> Bytes() -> Bytes()
-  for ~fhead: List<&2, U32> -> U32 -> Bytes()
+  for ~fhead: Bytes() -> U32 -> Bytes()
   for ~miss: Bool -> Bytes()
   for ~lnote: Bytes() -> Bytes() -> String
   for ~lsize: Bytes() -> Bytes() -> U32 -> String
   for +ms: U32
-  for root: List<&2, U32>
-  for path: List<&2, U32>
-  for +ct: List<&2, U32>
+  for root: Bytes()
+  for path: Bytes()
+  for +ct: Bytes()
   for may: Maybe<&2, Bytes()>
   for +sh: Bool
   for +rd: List<&2, Rd>
@@ -2809,7 +3062,7 @@ law page_wire:
   for +out: Bytes()
   for +acc: Bytes()
   for +body: Bytes()
-  for ef: {w.find(fs, L.text(path)) == Done{body} : Result<&1, &1, U32 & String, Bytes()>}
+  for ef: {w.find(fs, path) == Done{body} : Result<&1, &1, U32 & String, Bytes()>}
   for +en: {U32.to_nat(U32.from_nat(Bytes.len(body))) == Bytes.len(body) : Nat}
   {sim.page(~shut, ~fhead, ~miss, ~lnote, ~lsize, ms, root, path, ct, False{}, may, sh,
       L.Em{eager(rd, now, fs, out), acc, True{}}) ==
@@ -2819,7 +3072,7 @@ law page_wire:
 
 def page_wire(shut, fhead, miss, lnote, lsize, ms, root, path, ct, may, sh, rd, now, fs, out, acc,
   body, ef, en):
-  %Equal.sym(Result<&1, &1, U32 & String, Bytes()>, w.find(fs, L.text(path)), Done{body}, ef) :
+  %Equal.sym(Result<&1, &1, U32 & String, Bytes()>, w.find(fs, path), Done{body}, ef) :
     {sim.opened(~shut, ~fhead, ~miss, ~lnote, ~lsize, ms, (eager(rd, now, fs, out), _), ct,
         False{}, may, sh, acc) ==
       L.Em{eager(rd, now, fs, Bytes.append(Bytes.append(out,

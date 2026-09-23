@@ -327,11 +327,23 @@ def File.open(path: String, mode: String) ->
   import "./effs/file_open.js"
 
 # path read-only below the directory root, never through a symbolic link
-# Contract (demos/io_http_engine/world.bend, fopen.ok): Done only for a
-# regular file; a missing name, a symbolic link, a directory and a path
-# that climbs out of root all fail.
+# (one openat2 on Linux 5.6+, else an openat per component; the root's
+# descriptor is kept up to a second). Contract (wire/world.bend,
+# fopen.ok): Done only for a regular file; a missing name, a symbolic
+# link, a directory and a path that climbs out of root all fail.
 def File.open_under(root: String, path: String) ->
   IO(Result<&1, &1, U32 & String, File>):
+  import "./effs/file_open_under.c"
+  import "./effs/file_open_under.js"
+
+# File.open_under with its fstat, and a file under small bytes read and
+# closed: (size, (mtime in s, (None, its bytes))), or a larger one left
+# open at 0 (Some, ""). Contract (wire/world.bend, fget.ok): opens what
+# open_under opens; a body is the whole file, under small. On C a small
+# file's answer is kept a second per thread and answered again from
+# memory (the memo: memo_bounded, memo_answers); the JS twin always asks.
+def File.get_under(root: String, path: String, small: U32) ->
+  IO(Result<&1, &1, U32 & String, U32 & U32 & Maybe<&1, File> & Bytes()>):
   import "./effs/file_open_under.c"
   import "./effs/file_open_under.js"
 

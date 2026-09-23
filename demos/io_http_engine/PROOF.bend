@@ -2018,6 +2018,597 @@ def Laws.fnames_dots():
 def Laws.fnames_plain():
   {==}
 
+# page_is_spec: the fast walk (Eng.fast.go) is a state machine over the
+# path's bytes -- at a segment's start or inside one -- and each of its
+# facts is proved of the reference's pieces by one induction over the
+# bytes, walking segs.go's Cut from the end: the segments joined are the
+# bytes (pg.join), the first is never empty (pg.lead), every one is a
+# name fname.ok takes (pg.ok), every byte is one clean takes (pg.clean),
+# and the last '.' the walk finds is the last segment's (pg.ext). Over
+# names the normaliser reverses twice (pg.norm), so fnames.of hands back
+# the segments whole and page.name builds the Page the fast path did.
+
+# U32 equality is equality (as io_proxy's proof has it)
+def beq.b(ab: Bool, bb: Bool, h: {Cmp.is_eq(Bool.cmp(ab, bb)) == True{} : Bool}) -> {ab == bb : Bool}:
+  match ab bb:
+    case True{} True{}:
+      {==}
+    case False{} False{}:
+      {==}
+    case True{} False{}:
+      no({True{} == False{} : Bool}, h)
+    case False{} True{}:
+      no({False{} == True{} : Bool}, h)
+
+def fin.eq(+ab: Bool, +bb: Bool, t: Cmp, h: {Cmp.is_eq(Word.cmp.fin(ab, bb, t)) == True{} : Bool}) ->
+  {Cmp.is_eq(t) == True{} : Bool} & {ab == bb : Bool}:
+  match t:
+    case LT{}:
+      no({Cmp.is_eq(LT{}) == True{} : Bool} & {ab == bb : Bool}, h)
+    case GT{}:
+      no({Cmp.is_eq(GT{}) == True{} : Bool} & {ab == bb : Bool}, h)
+    case EQ{}:
+      ({==}, beq.b(ab, bb, h))
+
+def word.at(p: Nat, +ab: Bool, +at: Word(p), +bb: Bool, +bt: Word(p),
+  hh: {Cmp.is_eq(Word.cmp(p, at, bt)) == True{} : Bool} & {ab == bb : Bool},
+  ih: {Cmp.is_eq(Word.cmp(p, at, bt)) == True{} : Bool} -> {at == bt : Word(p)}) ->
+  {WCon{ab, at} == WCon{bb, bt} : Word(1n+p)}:
+  (e1, e2) = hh
+  %e2 : {WCon{ab, at} == WCon{_, bt} : Word(1n+p)}
+  Equal.cong(Word(p), Word(1n+p), w => WCon{ab, w}, at, bt, ih(e1))
+
+def word.eq(n: Nat, a: Word(n), b: Word(n), h: {Cmp.is_eq(Word.cmp(n, a, b)) == True{} : Bool}) -> {a == b : Word(n)}:
+  match n:
+    case 0n:
+      match a b:
+        case WNil{} WNil{}:
+          {==}
+    case 1n+(+p):
+      match a b:
+        case WCon{+ab, +at} WCon{+bb, +bt}:
+          word.at(p, ab, at, bb, bt, fin.eq(ab, bb, Word.cmp(p, at, bt), h), e => word.eq(p, at, bt, e))
+
+def u32.eq(a: U32, b: U32, h: {U32.is_eq(a, b) == True{} : Bool}) -> {a == b : U32}:
+  match a b:
+    case U32{x} U32{y}:
+      Equal.cong(Word(32n), U32, w => U32{w}, x, y, word.eq(32n, x, y, h))
+
+def or.false(a: Bool) -> {Bool.or(a, False{}) == a : Bool}:
+  match a:
+    case False{}:
+      {==}
+    case True{}:
+      {==}
+
+# a byte fname.byte takes is not '/'
+def pg.fb47(+c: U32, e: {Eng.fname.byte(c) == True{} : Bool}) -> {U32.is_eq(c, 47) == False{} : Bool}:
+  Bool.not_true(U32.is_eq(c, 47),
+    Bool.and_r(Bool.and(U32.is_le(33, c), U32.is_le(c, 126)), Bool.not(U32.is_eq(c, 47)),
+      Bool.and_l(Bool.and(Bool.and(U32.is_le(33, c), U32.is_le(c, 126)), Bool.not(U32.is_eq(c, 47))),
+        Bool.not(U32.is_eq(c, 92)), e)))
+
+# what one step of the fast walk says of its byte and of the rest
+def pg.fw.ok(+st: Bool, +c: U32, t: Bytes(), e: {Eng.fast.go(SCon{Chr{c}, t}, st) == True{} : Bool}) ->
+  {Eng.fast.ok(st, c) == True{} : Bool}:
+  Bool.and_l(Eng.fast.ok(st, c), Eng.fast.go(t, U32.is_eq(c, 47)), e)
+
+def pg.fw.rest(+st: Bool, +c: U32, t: Bytes(), e: {Eng.fast.go(SCon{Chr{c}, t}, st) == True{} : Bool}) ->
+  {Eng.fast.go(t, U32.is_eq(c, 47)) == True{} : Bool}:
+  Bool.and_r(Eng.fast.ok(st, c), Eng.fast.go(t, U32.is_eq(c, 47)), e)
+
+def pg.fw.clean(+st: Bool, +c: U32, e: {Eng.fast.ok(st, c) == True{} : Bool}) ->
+  {Eng.clean.pick(Eng.ctl(c), c) == True{} : Bool}:
+  Bool.and_l(Eng.clean.pick(Eng.ctl(c), c), Eng.fast.ok.go(st, c), e)
+
+def pg.fw.go(+st: Bool, +c: U32, e: {Eng.fast.ok(st, c) == True{} : Bool}) ->
+  {Eng.fast.ok.go(st, c) == True{} : Bool}:
+  Bool.and_r(Eng.clean.pick(Eng.ctl(c), c), Eng.fast.ok.go(st, c), e)
+
+# at a segment's start the byte is a name's, and not '/'
+def pg.fw.start(+c: U32, e: {Eng.fast.ok(True{}, c) == True{} : Bool}) -> {Eng.fname.byte(c) == True{} : Bool}:
+  Bool.and_l(Eng.fname.byte(c), Bool.not(U32.is_eq(c, 46)), pg.fw.go(True{}, c, e))
+
+def pg.fw.nodot(+c: U32, e: {Eng.fast.ok(True{}, c) == True{} : Bool}) -> {U32.is_eq(c, 46) == False{} : Bool}:
+  Bool.not_true(U32.is_eq(c, 46),
+    Bool.and_r(Eng.fname.byte(c), Bool.not(U32.is_eq(c, 46)), pg.fw.go(True{}, c, e)))
+
+# the cut of what is left of a path
+def pg.K(r: Bytes()) -> Eng.Cut:
+  Eng.segs.go(Bytes.to_list(r))
+
+def pg.cut.lead(k: Eng.Cut) -> Bool:
+  match k:
+    case Eng.Cut{Nil{}, rest}:
+      False{}
+    case Eng.Cut{Con{c, t}, rest}:
+      True{}
+
+def pg.lead.at(+c: U32, k: Eng.Cut, f: {U32.is_eq(c, 47) == False{} : Bool}) ->
+  {pg.cut.lead(Eng.segs.at(U32.is_eq(c, 47), c, k)) == True{} : Bool}:
+  match k:
+    case Eng.Cut{cur, rest}:
+      %Equal.sym(Bool, U32.is_eq(c, 47), False{}, f) :
+        {pg.cut.lead(Eng.segs.at(_, c, Eng.Cut{cur, rest})) == True{} : Bool}
+      {==}
+
+# at a segment's start the walk reads a name: the cut's first segment
+# is not empty
+def pg.lead(r: Bytes()) -> {Eng.fast.go(r, True{}) == True{} : Bool} -> {pg.cut.lead(pg.K(r)) == True{} : Bool}:
+  match r:
+    case SNil{}:
+      e => no({pg.cut.lead(pg.K(SNil{})) == True{} : Bool}, e)
+    case SCon{Chr{+c}, +t}:
+      e => pg.lead.at(c, pg.K(t), pg.fb47(c, pg.fw.start(c, pg.fw.ok(True{}, c, t, e))))
+
+
+# the bytes a cut stands for: its first segment, then '/' and each after
+def pg.cut.join(k: Eng.Cut) -> List<&2, U32>:
+  match k:
+    case Eng.Cut{cur, rest}:
+      Eng.cat(cur, Eng.join.rest(rest))
+
+# a '/': the segment after it is not empty, so it stays a segment
+def pg.join.sl(+c: U32, k: Eng.Cut, xs: List<&2, U32>, c47: {c == 47 : U32},
+  lead: {pg.cut.lead(k) == True{} : Bool}, ih: {pg.cut.join(k) == xs : List<&2, U32>}) ->
+  {pg.cut.join(Eng.segs.at(True{}, c, k)) == Con{c, xs} : List<&2, U32>}:
+  match k:
+    case Eng.Cut{Nil{}, rest}:
+      no({pg.cut.join(Eng.segs.at(True{}, c, Eng.Cut{Nil{}, rest})) == Con{c, xs} : List<&2, U32>}, lead)
+    case Eng.Cut{Con{h, u}, rest}:
+      %Equal.sym(U32, c, 47, c47) :
+        {pg.cut.join(Eng.segs.at(True{}, c, Eng.Cut{Con{h, u}, rest})) == Con{_, xs} : List<&2, U32>}
+      Equal.cong(List<&2, U32>, List<&2, U32>, ys => Con{47, ys}, pg.cut.join(Eng.Cut{Con{h, u}, rest}), xs, ih)
+
+# a name's byte joins the segment it is in
+def pg.join.ch(+c: U32, k: Eng.Cut, xs: List<&2, U32>, ih: {pg.cut.join(k) == xs : List<&2, U32>}) ->
+  {pg.cut.join(Eng.segs.at(False{}, c, k)) == Con{c, xs} : List<&2, U32>}:
+  match k:
+    case Eng.Cut{cur, rest}:
+      Equal.cong(List<&2, U32>, List<&2, U32>, ys => Con{c, ys}, pg.cut.join(Eng.Cut{cur, rest}), xs, ih)
+
+def pg.join.at(+c: U32, +t: Bytes(), b: Bool,
+  er: {Eng.fast.go(t, U32.is_eq(c, 47)) == True{} : Bool},
+  ih: {pg.cut.join(pg.K(t)) == Bytes.to_list(t) : List<&2, U32>},
+  lead: {Eng.fast.go(t, True{}) == True{} : Bool} -> {pg.cut.lead(pg.K(t)) == True{} : Bool}) ->
+  {U32.is_eq(c, 47) == b : Bool} ->
+  {pg.cut.join(Eng.segs.at(U32.is_eq(c, 47), c, pg.K(t))) == Con{c, Bytes.to_list(t)} : List<&2, U32>}:
+  match b:
+    case True{}:
+      +eb =>
+        %Equal.sym(Bool, U32.is_eq(c, 47), True{}, eb) :
+          {pg.cut.join(Eng.segs.at(_, c, pg.K(t))) == Con{c, Bytes.to_list(t)} : List<&2, U32>}
+        pg.join.sl(c, pg.K(t), Bytes.to_list(t), u32.eq(c, 47, eb),
+          lead(Equal.trans(Bool, Eng.fast.go(t, True{}), Eng.fast.go(t, U32.is_eq(c, 47)), True{},
+            Equal.cong(Bool, Bool, x => Eng.fast.go(t, x), True{}, U32.is_eq(c, 47),
+              Equal.sym(Bool, U32.is_eq(c, 47), True{}, eb)), er)), ih)
+    case False{}:
+      +eb =>
+        %Equal.sym(Bool, U32.is_eq(c, 47), False{}, eb) :
+          {pg.cut.join(Eng.segs.at(_, c, pg.K(t))) == Con{c, Bytes.to_list(t)} : List<&2, U32>}
+        pg.join.ch(c, pg.K(t), Bytes.to_list(t), ih)
+
+# the segments of a path the fast walk takes, joined, are its bytes
+def pg.join(r: Bytes(), +st: Bool) ->
+  {Eng.fast.go(r, st) == True{} : Bool} -> {pg.cut.join(pg.K(r)) == Bytes.to_list(r) : List<&2, U32>}:
+  match r:
+    case SNil{}:
+      e => {==}
+    case SCon{Chr{+c}, +t}:
+      +e => pg.join.at(c, t, U32.is_eq(c, 47), pg.fw.rest(st, c, t, e),
+        pg.join(t, U32.is_eq(c, 47))(pg.fw.rest(st, c, t, e)), pg.lead(t))({==})
+
+# the segments after a cut's first are names by fname.ok, and its first
+# segment's bytes are a name's (OKT False) -- or, at a segment's start,
+# every segment it stands for is (OKT True)
+def pg.cut.okF(k: Eng.Cut) -> Bool:
+  match k:
+    case Eng.Cut{cur, rest}:
+      Bool.and(Eng.fname.bytes(cur), Eng.fnames.ok(False{}, rest))
+
+def pg.OKT(st: Bool, k: Eng.Cut) -> Type:
+  match st:
+    case True{}:
+      {Eng.fnames.ok(False{}, Eng.segs.out(k)) == True{} : Bool}
+    case False{}:
+      {pg.cut.okF(k) == True{} : Bool}
+
+def pg.cast(b0: Bool, b1: Bool, k: Eng.Cut, e: {b0 == b1 : Bool}, h: pg.OKT(b0, k)) -> pg.OKT(b1, k):
+  %e : pg.OKT(_, k)
+  h
+
+def pg.ok.nil(st: Bool) -> {Eng.fast.go(SNil{}, st) == True{} : Bool} -> pg.OKT(st, pg.K(SNil{})):
+  match st:
+    case True{}:
+      e => no(pg.OKT(True{}, pg.K(SNil{})), e)
+    case False{}:
+      e => {==}
+
+def pg.ok.sl(+c: U32, k: Eng.Cut, ih: pg.OKT(True{}, k)) -> {pg.cut.okF(Eng.segs.at(True{}, c, k)) == True{} : Bool}:
+  match k:
+    case Eng.Cut{cur, rest}:
+      ih
+
+def pg.ok.ch(+c: U32, k: Eng.Cut, fb: {Eng.fname.byte(c) == True{} : Bool}, ih: {pg.cut.okF(k) == True{} : Bool}) ->
+  {pg.cut.okF(Eng.segs.at(False{}, c, k)) == True{} : Bool}:
+  match k:
+    case Eng.Cut{cur, rest}:
+      %Equal.sym(Bool, Eng.fname.byte(c), True{}, fb) :
+        {Bool.and(Bool.and(_, Eng.fname.bytes(cur)), Eng.fnames.ok(False{}, rest)) == True{} : Bool}
+      ih
+
+def pg.ok.st(+c: U32, k: Eng.Cut, fb: {Eng.fname.byte(c) == True{} : Bool},
+  nd: {U32.is_eq(c, 46) == False{} : Bool}, ih: {pg.cut.okF(k) == True{} : Bool}) ->
+  {Eng.fnames.ok(False{}, Eng.segs.out(Eng.segs.at(False{}, c, k))) == True{} : Bool}:
+  match k:
+    case Eng.Cut{cur, rest}:
+      %Equal.sym(Bool, U32.is_eq(c, 46), False{}, nd) :
+        {Bool.and(Bool.and(Bool.not(_), Bool.and(Eng.fname.byte(c), Eng.fname.bytes(cur))),
+          Eng.fnames.ok(False{}, rest)) == True{} : Bool}
+      %Equal.sym(Bool, Eng.fname.byte(c), True{}, fb) :
+        {Bool.and(Bool.and(_, Eng.fname.bytes(cur)), Eng.fnames.ok(False{}, rest)) == True{} : Bool}
+      ih
+
+# inside a name, a byte that is not '/' is a name's byte
+def pg.fw.inner(+c: U32, eo: {Eng.fast.ok(False{}, c) == True{} : Bool}, eb: {U32.is_eq(c, 47) == False{} : Bool}) ->
+  {Eng.fname.byte(c) == True{} : Bool}:
+  %eb : {Bool.or(_, Eng.fname.byte(c)) == True{} : Bool}
+  pg.fw.go(False{}, c, eo)
+
+# '/' where a name must start is refused
+def pg.fw.sl.start(+c: U32, eo: {Eng.fast.ok(True{}, c) == True{} : Bool}, eb: {U32.is_eq(c, 47) == True{} : Bool}) ->
+  {False{} == True{} : Bool}:
+  Equal.trans(Bool, False{}, U32.is_eq(c, 47), True{},
+    Equal.sym(Bool, U32.is_eq(c, 47), False{}, pg.fb47(c, pg.fw.start(c, eo))), eb)
+
+def pg.ok.sw(+c: U32, +t: Bytes(), eb: {U32.is_eq(c, 47) == True{} : Bool}, ih: pg.OKT(U32.is_eq(c, 47), pg.K(t)),
+  st: Bool) -> {Eng.fast.ok(st, c) == True{} : Bool} -> pg.OKT(st, Eng.segs.at(True{}, c, pg.K(t))):
+  match st:
+    case True{}:
+      eo => no(pg.OKT(True{}, Eng.segs.at(True{}, c, pg.K(t))), pg.fw.sl.start(c, eo, eb))
+    case False{}:
+      eo => pg.ok.sl(c, pg.K(t), pg.cast(U32.is_eq(c, 47), True{}, pg.K(t), eb, ih))
+
+def pg.ok.sn(+c: U32, +t: Bytes(), +eb: {U32.is_eq(c, 47) == False{} : Bool}, ih: pg.OKT(U32.is_eq(c, 47), pg.K(t)),
+  st: Bool) -> {Eng.fast.ok(st, c) == True{} : Bool} -> pg.OKT(st, Eng.segs.at(False{}, c, pg.K(t))):
+  match st:
+    case False{}:
+      eo => pg.ok.ch(c, pg.K(t), pg.fw.inner(c, eo, eb), pg.cast(U32.is_eq(c, 47), False{}, pg.K(t), eb, ih))
+    case True{}:
+      +eo => pg.ok.st(c, pg.K(t), pg.fw.start(c, eo), pg.fw.nodot(c, eo),
+        pg.cast(U32.is_eq(c, 47), False{}, pg.K(t), eb, ih))
+
+def pg.ok.at(st: Bool, +c: U32, +t: Bytes(), b: Bool, ih: pg.OKT(U32.is_eq(c, 47), pg.K(t))) ->
+  {Eng.fast.ok(st, c) == True{} : Bool} -> {U32.is_eq(c, 47) == b : Bool} ->
+  pg.OKT(st, Eng.segs.at(U32.is_eq(c, 47), c, pg.K(t))):
+  match b:
+    case True{}:
+      eo => +eb =>
+        %Equal.sym(Bool, U32.is_eq(c, 47), True{}, eb) : pg.OKT(st, Eng.segs.at(_, c, pg.K(t)))
+        pg.ok.sw(c, t, eb, ih, st)(eo)
+    case False{}:
+      eo => +eb =>
+        %Equal.sym(Bool, U32.is_eq(c, 47), False{}, eb) : pg.OKT(st, Eng.segs.at(_, c, pg.K(t)))
+        pg.ok.sn(c, t, eb, ih, st)(eo)
+
+def pg.ok(r: Bytes(), +st: Bool) -> {Eng.fast.go(r, st) == True{} : Bool} -> pg.OKT(st, pg.K(r)):
+  match r:
+    case SNil{}:
+      pg.ok.nil(st)
+    case SCon{Chr{+c}, +t}:
+      +e => pg.ok.at(st, c, t, U32.is_eq(c, 47),
+        pg.ok(t, U32.is_eq(c, 47))(pg.fw.rest(st, c, t, e)))(pg.fw.ok(st, c, t, e), {==})
+
+# every byte the fast walk takes is one clean() takes
+def pg.clean(r: Bytes(), +st: Bool) ->
+  {Eng.fast.go(r, st) == True{} : Bool} -> {Eng.clean.go(Bytes.to_list(r), True{}) == True{} : Bool}:
+  match r:
+    case SNil{}:
+      e => {==}
+    case SCon{Chr{+c}, +t}:
+      +e =>
+        %Equal.sym(Bool, Eng.clean.pick(Eng.ctl(c), c), True{}, pg.fw.clean(st, c, pg.fw.ok(st, c, t, e))) :
+          {Eng.clean.go(Bytes.to_list(t), _) == True{} : Bool}
+        pg.clean(t, U32.is_eq(c, 47))(pg.fw.rest(st, c, t, e))
+
+# the type a cut's path has: the bytes after the last '.' of its last
+# segment, or of the one being read (from cur) when it is the last
+def pg.ext.tail(rs: List<&2, List<&2, U32>>, p: List<&2, U32>, cur: List<&2, U32>) -> List<&2, U32>:
+  match rs:
+    case Nil{}:
+      Eng.ext.go(p, cur)
+    case Con{s, u}:
+      Eng.ext.go(Eng.last(u, s), Nil{})
+
+def pg.cut.ext(k: Eng.Cut, cur: List<&2, U32>) -> List<&2, U32>:
+  match k:
+    case Eng.Cut{p, rs}:
+      pg.ext.tail(rs, p, cur)
+
+def pg.ext.sl(+c: U32, k: Eng.Cut, cur: List<&2, U32>, lead: {pg.cut.lead(k) == True{} : Bool}) ->
+  {pg.cut.ext(k, Nil{}) == pg.cut.ext(Eng.segs.at(True{}, c, k), cur) : List<&2, U32>}:
+  match k:
+    case Eng.Cut{Nil{}, rs}:
+      no({pg.cut.ext(Eng.Cut{Nil{}, rs}, Nil{}) == pg.cut.ext(Eng.segs.at(True{}, c, Eng.Cut{Nil{}, rs}), cur) :
+        List<&2, U32>}, lead)
+    case Eng.Cut{Con{h, u}, Nil{}}:
+      {==}
+    case Eng.Cut{Con{h, u}, Con{s, v}}:
+      {==}
+
+def pg.ext.ch(+c: U32, k: Eng.Cut, cur: List<&2, U32>) ->
+  {pg.cut.ext(k, Eng.ext.step(cur, c, U32.is_eq(c, 46))) == pg.cut.ext(Eng.segs.at(False{}, c, k), cur) :
+    List<&2, U32>}:
+  match k:
+    case Eng.Cut{p, Nil{}}:
+      {==}
+    case Eng.Cut{p, Con{s, v}}:
+      {==}
+
+def pg.ext.at(+c: U32, +t: Bytes(), +cur: List<&2, U32>, b: Bool,
+  ih0: {Eng.ext.buf(t, Nil{}) == pg.cut.ext(pg.K(t), Nil{}) : List<&2, U32>},
+  ih1: {Eng.ext.buf(t, Eng.ext.step(cur, c, U32.is_eq(c, 46))) ==
+    pg.cut.ext(pg.K(t), Eng.ext.step(cur, c, U32.is_eq(c, 46))) : List<&2, U32>},
+  lead: {Eng.fast.go(t, True{}) == True{} : Bool} -> {pg.cut.lead(pg.K(t)) == True{} : Bool},
+  er: {Eng.fast.go(t, U32.is_eq(c, 47)) == True{} : Bool}) ->
+  {U32.is_eq(c, 47) == b : Bool} ->
+  {Eng.ext.buf(t, Eng.ext.step(cur, c, Bool.or(U32.is_eq(c, 46), U32.is_eq(c, 47)))) ==
+    pg.cut.ext(Eng.segs.at(U32.is_eq(c, 47), c, pg.K(t)), cur) : List<&2, U32>}:
+  match b:
+    case True{}:
+      +eb =>
+        %Equal.sym(Bool, U32.is_eq(c, 47), True{}, eb) :
+          {Eng.ext.buf(t, Eng.ext.step(cur, c, Bool.or(U32.is_eq(c, 46), _))) ==
+            pg.cut.ext(Eng.segs.at(_, c, pg.K(t)), cur) : List<&2, U32>}
+        %Equal.sym(Bool, Bool.or(U32.is_eq(c, 46), True{}), True{}, Bool.or_true(U32.is_eq(c, 46))) :
+          {Eng.ext.buf(t, Eng.ext.step(cur, c, _)) == pg.cut.ext(Eng.segs.at(True{}, c, pg.K(t)), cur) :
+            List<&2, U32>}
+        Equal.trans(List<&2, U32>, Eng.ext.buf(t, Nil{}), pg.cut.ext(pg.K(t), Nil{}),
+          pg.cut.ext(Eng.segs.at(True{}, c, pg.K(t)), cur), ih0,
+          pg.ext.sl(c, pg.K(t), cur, lead(Equal.trans(Bool, Eng.fast.go(t, True{}), Eng.fast.go(t, U32.is_eq(c, 47)),
+            True{}, Equal.cong(Bool, Bool, x => Eng.fast.go(t, x), True{}, U32.is_eq(c, 47),
+              Equal.sym(Bool, U32.is_eq(c, 47), True{}, eb)), er))))
+    case False{}:
+      +eb =>
+        %Equal.sym(Bool, U32.is_eq(c, 47), False{}, eb) :
+          {Eng.ext.buf(t, Eng.ext.step(cur, c, Bool.or(U32.is_eq(c, 46), _))) ==
+            pg.cut.ext(Eng.segs.at(_, c, pg.K(t)), cur) : List<&2, U32>}
+        %Equal.sym(Bool, Bool.or(U32.is_eq(c, 46), False{}), U32.is_eq(c, 46), or.false(U32.is_eq(c, 46))) :
+          {Eng.ext.buf(t, Eng.ext.step(cur, c, _)) == pg.cut.ext(Eng.segs.at(False{}, c, pg.K(t)), cur) :
+            List<&2, U32>}
+        Equal.trans(List<&2, U32>, Eng.ext.buf(t, Eng.ext.step(cur, c, U32.is_eq(c, 46))),
+          pg.cut.ext(pg.K(t), Eng.ext.step(cur, c, U32.is_eq(c, 46))),
+          pg.cut.ext(Eng.segs.at(False{}, c, pg.K(t)), cur), ih1, pg.ext.ch(c, pg.K(t), cur))
+
+# the type the fast walk reads is the type of the segments' last
+def pg.ext(r: Bytes(), +st: Bool, +cur: List<&2, U32>) ->
+  {Eng.fast.go(r, st) == True{} : Bool} -> {Eng.ext.buf(r, cur) == pg.cut.ext(pg.K(r), cur) : List<&2, U32>}:
+  match r:
+    case SNil{}:
+      e => {==}
+    case SCon{Chr{+c}, +t}:
+      +e => pg.ext.at(c, t, cur, U32.is_eq(c, 47),
+        pg.ext(t, U32.is_eq(c, 47), Nil{})(pg.fw.rest(st, c, t, e)),
+        pg.ext(t, U32.is_eq(c, 47), Eng.ext.step(cur, c, U32.is_eq(c, 46)))(pg.fw.rest(st, c, t, e)),
+        pg.lead(t), pg.fw.rest(st, c, t, e))({==})
+
+# a name is not "." or ".."
+def pg.beqf(u: List<&2, U32>, xs: List<&2, U32>) -> {Eng.beq(u, xs, False{}) == False{} : Bool}:
+  match u xs:
+    case Nil{} Nil{}:
+      {==}
+    case Nil{} Con{y, w}:
+      {==}
+    case Con{x, t} Nil{}:
+      {==}
+    case Con{x, t} Con{y, w}:
+      pg.beqf(t, w)
+
+def pg.piece(s: List<&2, U32>) -> {Eng.fname.ok(False{}, s) == True{} : Bool} -> {Eng.piece(s) == Eng.Name{} : Eng.Piece}:
+  match s:
+    case Nil{}:
+      e => no({Eng.piece(Nil{}) == Eng.Name{} : Eng.Piece}, e)
+    case Con{+c, +u}:
+      e =>
+        %Equal.sym(Bool, U32.is_eq(c, 46), False{}, Bool.not_true(U32.is_eq(c, 46),
+          Bool.and_l(Bool.not(U32.is_eq(c, 46)), Eng.fname.bytes(Con{c, u}), e))) :
+          {Eng.piece.of(Eng.beq(u, [46], _), Eng.beq(u, Nil{}, _)) == Eng.Name{} : Eng.Piece}
+        %Equal.sym(Bool, Eng.beq(u, [46], False{}), False{}, pg.beqf(u, [46])) :
+          {Eng.piece.of(_, Eng.beq(u, Nil{}, False{})) == Eng.Name{} : Eng.Piece}
+        %Equal.sym(Bool, Eng.beq(u, Nil{}, False{}), False{}, pg.beqf(u, Nil{})) :
+          {Eng.piece.of(False{}, _) == Eng.Name{} : Eng.Piece}
+        {==}
+
+# over names, the normaliser only reverses, twice
+def pg.norm.go(ss: List<&2, List<&2, U32>>, acc: List<&2, List<&2, U32>>) ->
+  {Eng.fnames.ok(False{}, ss) == True{} : Bool} ->
+  {Eng.norm.go(ss, Some{acc}) == Some{List.reverse.go(&2, List<&2, U32>, ss, acc)} :
+    Maybe<&2, List<&2, List<&2, U32>>>}:
+  match ss:
+    case Nil{}:
+      e => {==}
+    case Con{+s, +t}:
+      +e =>
+        %Equal.sym(Eng.Piece, Eng.piece(s), Eng.Name{},
+          pg.piece(s)(Bool.and_l(Eng.fname.ok(False{}, s), Eng.fnames.ok(False{}, t), e))) :
+          {Eng.norm.go(t, Eng.norm.step(_, s, acc)) ==
+            Some{List.reverse.go(&2, List<&2, U32>, t, Con{s, acc})} : Maybe<&2, List<&2, List<&2, U32>>>}
+        pg.norm.go(t, Con{s, acc})(Bool.and_r(Eng.fname.ok(False{}, s), Eng.fnames.ok(False{}, t), e))
+
+def pg.rr(xs: List<&2, List<&2, U32>>, acc: List<&2, List<&2, U32>>) ->
+  {List.reverse.go(&2, List<&2, U32>, List.reverse.go(&2, List<&2, U32>, xs, acc), Nil{}) ==
+    List.reverse.go(&2, List<&2, U32>, acc, xs) : List<&2, List<&2, U32>>}:
+  match xs:
+    case Nil{}:
+      {==}
+    case Con{h, t}:
+      pg.rr(t, Con{h, acc})
+
+def pg.norm(+ss: List<&2, List<&2, U32>>, e: {Eng.fnames.ok(False{}, ss) == True{} : Bool}) ->
+  {Eng.norm(ss) == Some{ss} : Maybe<&2, List<&2, List<&2, U32>>>}:
+  %Equal.sym(Maybe<&2, List<&2, List<&2, U32>>>, Eng.norm.go(ss, Some{Nil{}}),
+    Some{List.reverse.go(&2, List<&2, U32>, ss, Nil{})}, pg.norm.go(ss, Nil{})(e)) :
+    {Eng.norm.rev(_) == Some{ss} : Maybe<&2, List<&2, List<&2, U32>>>}
+  %Equal.sym(List<&2, List<&2, U32>>,
+    List.reverse.go(&2, List<&2, U32>, List.reverse.go(&2, List<&2, U32>, ss, Nil{}), Nil{}),
+    List.reverse.go(&2, List<&2, U32>, Nil{}, ss), pg.rr(ss, Nil{})) :
+    {Some{_} == Some{ss} : Maybe<&2, List<&2, List<&2, U32>>>}
+  {==}
+
+def pg.ft(b: Bytes()) -> {Bytes.from_list(Bytes.to_list(b)) == b : Bytes()}:
+  match b:
+    case SNil{}:
+      {==}
+    case SCon{Chr{c}, t}:
+      Equal.cong(Bytes(), Bytes(), x => SCon{Chr{c}, x}, Bytes.from_list(Bytes.to_list(t)), t, pg.ft(t))
+
+def pg.drop0(r: Bytes()) -> {String.drop(r, 0n) == r : Bytes()}:
+  match r:
+    case SNil{}:
+      {==}
+    case SCon{h, t}:
+      {==}
+
+def pg.last(rs: List<&2, List<&2, U32>>, p: List<&2, U32>) ->
+  {pg.ext.tail(rs, p, Nil{}) == Eng.ext.go(Eng.last(rs, p), Nil{}) : List<&2, U32>}:
+  match rs:
+    case Nil{}:
+      {==}
+    case Con{s, u}:
+      {==}
+
+# the reference, at a path the fast walk took, names the same file
+def pg.fin(root: Bytes(), +r: Bytes(), head: Bool, +c0: U32, k: Eng.Cut,
+  lead: {pg.cut.lead(k) == True{} : Bool}, j: {pg.cut.join(k) == Bytes.to_list(r) : List<&2, U32>},
+  +ok: {Eng.fnames.ok(False{}, Eng.segs.out(k)) == True{} : Bool},
+  x: {Eng.ext.buf(r, Nil{}) == pg.cut.ext(k, Nil{}) : List<&2, U32>}) ->
+  {L.Page{root, r, Eng.mime.head(Bytes.from_list(Eng.ext.buf(r, Nil{}))), head} ==
+    Eng.page.pick(root, Eng.fnames.guard(False{}, Eng.norm(Eng.segs.out(Eng.segs.at(True{}, c0, k)))), head) :
+    L.Seg}:
+  match k:
+    case Eng.Cut{Nil{}, rs}:
+      no({L.Page{root, r, Eng.mime.head(Bytes.from_list(Eng.ext.buf(r, Nil{}))), head} ==
+        Eng.page.pick(root, Eng.fnames.guard(False{}, Eng.norm(Eng.segs.out(Eng.segs.at(True{}, c0,
+          Eng.Cut{Nil{}, rs})))), head) : L.Seg}, lead)
+    case Eng.Cut{Con{+h, +u}, +rs}:
+      %Equal.sym(Maybe<&2, List<&2, List<&2, U32>>>, Eng.norm(Con{Con{h, u}, rs}), Some{Con{Con{h, u}, rs}},
+        pg.norm(Con{Con{h, u}, rs}, ok)) :
+        {L.Page{root, r, Eng.mime.head(Bytes.from_list(Eng.ext.buf(r, Nil{}))), head} ==
+          Eng.page.pick(root, Eng.fnames.guard(False{}, _), head) : L.Seg}
+      %Equal.sym(Bool, Eng.fnames.ok(False{}, Con{Con{h, u}, rs}), True{}, ok) :
+        {L.Page{root, r, Eng.mime.head(Bytes.from_list(Eng.ext.buf(r, Nil{}))), head} ==
+          Eng.page.pick(root, Eng.fnames.keep(Con{Con{h, u}, rs}, _), head) : L.Seg}
+      %Equal.sym(List<&2, U32>, pg.cut.join(Eng.Cut{Con{h, u}, rs}), Bytes.to_list(r), j) :
+        {L.Page{root, r, Eng.mime.head(Bytes.from_list(Eng.ext.buf(r, Nil{}))), head} ==
+          L.Page{root, Bytes.from_list(_),
+            Eng.mime.head(Bytes.from_list(Eng.ext.go(Eng.last(rs, Con{h, u}), Nil{}))), head} : L.Seg}
+      %Equal.sym(Bytes(), Bytes.from_list(Bytes.to_list(r)), r, pg.ft(r)) :
+        {L.Page{root, r, Eng.mime.head(Bytes.from_list(Eng.ext.buf(r, Nil{}))), head} ==
+          L.Page{root, _, Eng.mime.head(Bytes.from_list(Eng.ext.go(Eng.last(rs, Con{h, u}), Nil{}))), head} :
+          L.Seg}
+      %Equal.sym(List<&2, U32>, Eng.ext.buf(r, Nil{}), pg.cut.ext(Eng.Cut{Con{h, u}, rs}, Nil{}), x) :
+        {L.Page{root, r, Eng.mime.head(Bytes.from_list(_)), head} ==
+          L.Page{root, r, Eng.mime.head(Bytes.from_list(Eng.ext.go(Eng.last(rs, Con{h, u}), Nil{}))), head} :
+          L.Seg}
+      %Equal.sym(List<&2, U32>, pg.ext.tail(rs, Con{h, u}, Nil{}), Eng.ext.go(Eng.last(rs, Con{h, u}), Nil{}),
+        pg.last(rs, Con{h, u})) :
+        {L.Page{root, r, Eng.mime.head(Bytes.from_list(_)), head} ==
+          L.Page{root, r, Eng.mime.head(Bytes.from_list(Eng.ext.go(Eng.last(rs, Con{h, u}), Nil{}))), head} :
+          L.Seg}
+      {==}
+
+def pg.fast.at(root: Bytes(), +c0: U32, +r: Bytes(), head: Bool,
+  +e: {Eng.fast(SCon{Chr{c0}, r}) == True{} : Bool}) ->
+  {Eng.page.go(root, SCon{Chr{c0}, r}, head, True{}) == Eng.page.spec(root, Bytes.to_list(SCon{Chr{c0}, r}), head) :
+    L.Seg}:
+  +ea = Bool.and_l(Bool.and(Eng.clean.pick(Eng.ctl(c0), c0), U32.is_eq(c0, 47)), Eng.fast.go(r, True{}), e)
+  +er = Bool.and_r(Bool.and(Eng.clean.pick(Eng.ctl(c0), c0), U32.is_eq(c0, 47)), Eng.fast.go(r, True{}), e)
+  %Equal.sym(Bool, U32.is_eq(c0, 47), True{}, Bool.and_r(Eng.clean.pick(Eng.ctl(c0), c0), U32.is_eq(c0, 47), ea)) :
+    {L.Page{root, String.drop(r, 0n),
+      Eng.mime.head(Bytes.from_list(Eng.ext.buf(r, Eng.ext.step(Nil{}, c0, Bool.or(U32.is_eq(c0, 46), _))))), head} ==
+      Eng.page.pick(root, Eng.fnames.gate(Eng.clean.go(Bytes.to_list(r), Eng.clean.pick(Eng.ctl(c0), c0)),
+        Eng.fnames.guard(False{}, Eng.norm(Eng.segs.out(Eng.segs.at(_, c0, pg.K(r)))))), head) : L.Seg}
+  %Equal.sym(Bool, Bool.or(U32.is_eq(c0, 46), True{}), True{}, Bool.or_true(U32.is_eq(c0, 46))) :
+    {L.Page{root, String.drop(r, 0n),
+      Eng.mime.head(Bytes.from_list(Eng.ext.buf(r, Eng.ext.step(Nil{}, c0, _)))), head} ==
+      Eng.page.pick(root, Eng.fnames.gate(Eng.clean.go(Bytes.to_list(r), Eng.clean.pick(Eng.ctl(c0), c0)),
+        Eng.fnames.guard(False{}, Eng.norm(Eng.segs.out(Eng.segs.at(True{}, c0, pg.K(r)))))), head) : L.Seg}
+  %Equal.sym(Bool, Eng.clean.pick(Eng.ctl(c0), c0), True{},
+    Bool.and_l(Eng.clean.pick(Eng.ctl(c0), c0), U32.is_eq(c0, 47), ea)) :
+    {L.Page{root, String.drop(r, 0n), Eng.mime.head(Bytes.from_list(Eng.ext.buf(r, Nil{}))), head} ==
+      Eng.page.pick(root, Eng.fnames.gate(Eng.clean.go(Bytes.to_list(r), _),
+        Eng.fnames.guard(False{}, Eng.norm(Eng.segs.out(Eng.segs.at(True{}, c0, pg.K(r)))))), head) : L.Seg}
+  %Equal.sym(Bool, Eng.clean.go(Bytes.to_list(r), True{}), True{}, pg.clean(r, True{})(er)) :
+    {L.Page{root, String.drop(r, 0n), Eng.mime.head(Bytes.from_list(Eng.ext.buf(r, Nil{}))), head} ==
+      Eng.page.pick(root, Eng.fnames.gate(_,
+        Eng.fnames.guard(False{}, Eng.norm(Eng.segs.out(Eng.segs.at(True{}, c0, pg.K(r)))))), head) : L.Seg}
+  %Equal.sym(Bytes(), String.drop(r, 0n), r, pg.drop0(r)) :
+    {L.Page{root, _, Eng.mime.head(Bytes.from_list(Eng.ext.buf(r, Nil{}))), head} ==
+      Eng.page.pick(root, Eng.fnames.guard(False{}, Eng.norm(Eng.segs.out(Eng.segs.at(True{}, c0, pg.K(r))))), head) :
+      L.Seg}
+  pg.fin(root, r, head, c0, pg.K(r), pg.lead(r)(er), pg.join(r, True{})(er), pg.ok(r, True{})(er),
+    pg.ext(r, True{}, Nil{})(er))
+
+def pg.fast(root: Bytes(), t: Bytes(), head: Bool) ->
+  {Eng.fast(t) == True{} : Bool} ->
+  {Eng.page.go(root, t, head, True{}) == Eng.page.spec(root, Bytes.to_list(t), head) : L.Seg}:
+  match t:
+    case SNil{}:
+      e => no({Eng.page.go(root, SNil{}, head, True{}) == Eng.page.spec(root, Bytes.to_list(SNil{}), head) :
+        L.Seg}, e)
+    case SCon{Chr{+c0}, +r}:
+      +e => pg.fast.at(root, c0, r, head, e)
+
+def pg.page(root: Bytes(), +t: Bytes(), head: Bool, b: Bool) ->
+  {Eng.fast(t) == b : Bool} ->
+  {Eng.page.go(root, t, head, b) == Eng.page.spec(root, Bytes.to_list(t), head) : L.Seg}:
+  match b:
+    case False{}:
+      e => {==}
+    case True{}:
+      e => pg.fast(root, t, head)(e)
+
+def Laws.page_is_spec(root, t, head):
+  pg.page(root, t, head, Eng.fast(t))({==})
+
+
+# file_head_is_built: every row of the table, and the row for what no
+# row names, keeps its head equal to the built one; so does whichever
+# row the lookup lands on
+def pg.FH(+n: U32, m: Eng.Mime) -> Type:
+  {Eng.h.fhead(Eng.mime.head.of(m), n) == Eng.reply.n.head("200 OK", Eng.mime.name.of(m), n) : Bytes()}
+
+def pg.FHS(+n: U32, tbl: List<&2, Eng.Mime>) -> Type:
+  match tbl:
+    case Nil{}:
+      pg.FH(n, Eng.mime.other())
+    case Con{m, t}:
+      pg.FH(n, m) & pg.FHS(n, t)
+
+def pg.fh.table(+n: U32) -> pg.FHS(n, Eng.mime.table()):
+  ({==}, ({==}, ({==}, ({==}, ({==}, ({==}, ({==}, ({==}, ({==}, ({==}, ({==}, ({==}, ({==}, ({==},
+    {==}))))))))))))))
+
+def pg.fh.at(+n: U32, hit: Bool, m: Eng.Mime, rest: Eng.Mime, a: pg.FH(n, m), b: pg.FH(n, rest)) ->
+  pg.FH(n, Eng.mime.find.at(hit, m, rest)):
+  match hit:
+    case True{}:
+      a
+    case False{}:
+      b
+
+def pg.fh.find(+n: U32, tbl: List<&2, Eng.Mime>, +e: Bytes(), all: pg.FHS(n, tbl)) ->
+  pg.FH(n, Eng.mime.find(tbl, e)):
+  match tbl:
+    case Nil{}:
+      all
+    case Con{+m, +t}:
+      (a, rest) = all
+      pg.fh.at(n, Eng.bytes.eq(Eng.mime.ext(m), e), m, Eng.mime.find(t, e), a, pg.fh.find(n, t, e, rest))
+
+def Laws.file_head_is_built(e, n):
+  pg.fh.find(n, Eng.mime.table(), e, pg.fh.table(n))
+
 def Laws.sha1_empty():
   {==}
 

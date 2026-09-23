@@ -2423,11 +2423,11 @@ def args.done(st: Args) -> IO(Cfg):
 # A reply head for a body of n bytes, and the reply around a body whose
 # size is already known, as a file's is. reply() measures its body;
 # these do not. The type is a byte list from the mime table.
-def reply.n.head(status: Bytes(), ct: List<&2, U32>, n: U32) -> Bytes():
-  Bytes.concat(["HTTP/1.1 ", status, "\r\ncontent-type: ", Bytes.from_list(ct),
+def reply.n.head(status: Bytes(), ct: Bytes(), n: U32) -> Bytes():
+  Bytes.concat(["HTTP/1.1 ", status, "\r\ncontent-type: ", ct,
     "\r\ncontent-length: ", U32.show(n), "\r\nconnection: keep-alive\r\n\r\n"])
 
-def reply.n(status: Bytes(), ct: List<&2, U32>, n: U32, body: Bytes()) -> Bytes():
+def reply.n(status: Bytes(), ct: Bytes(), n: U32, body: Bytes()) -> Bytes():
   Bytes.append(reply.n.head(status, ct, n), body)
 
 # the 405 names the methods that would have worked
@@ -2563,88 +2563,84 @@ def distinct(rs: List<&2, Route>) -> Bool:
 
 # what every connection shares: the configuration and its table
 type Srv is Data:
-  Srv{cfg: Cfg, table: List<&2, Route>}
+  Srv{cfg: Cfg, table: List<&2, Route>, root: Bytes()}
 
 def srv.new(+c: Cfg) -> Srv:
-  Srv{c, routes(c)}
+  Srv{c, routes(c), Bytes.from_list(cfg.root(c))}
 
 def srv.table(s: Srv) -> List<&2, Route>:
   match s:
-    case Srv{c, table}:
+    case Srv{c, table, root}:
       table
 
-def srv.root(s: Srv) -> List<&2, U32>:
+def srv.root(s: Srv) -> Bytes():
   match s:
-    case Srv{c, table}:
-      cfg.root(c)
+    case Srv{c, table, root}:
+      root
 
 def srv.log(s: Srv) -> Bool:
   match s:
-    case Srv{c, table}:
+    case Srv{c, table, root}:
       cfg.log(c)
 
 def srv.idle(s: Srv) -> U32:
   match s:
-    case Srv{c, table}:
+    case Srv{c, table, root}:
       cfg.idle(c)
 
 def srv.conns(s: Srv) -> U32:
   match s:
-    case Srv{c, table}:
+    case Srv{c, table, root}:
       cfg.conns(c)
 
 def srv.grace(s: Srv) -> U32:
   match s:
-    case Srv{c, table}:
+    case Srv{c, table, root}:
       cfg.grace(c)
 
 def srv.head(s: Srv) -> U32:
   match s:
-    case Srv{c, table}:
+    case Srv{c, table, root}:
       cfg.head(c)
 
 # Static files
 # ============
 
-# The request path as segments, split on '/', empty ones dropped.
-def segs.push(cur: List<&2, U32>, acc: List<&2, List<&2, U32>>) -> List<&2, List<&2, U32>>:
+# The request path as segments, split on '/', empty ones dropped, read
+# from its end: a Cut is the bytes before the first '/' of what is left,
+# and the segments after that '/'.
+type Cut is Data:
+  Cut{cur: List<&2, U32>, rest: List<&2, List<&2, U32>>}
+
+# a segment, unless it is empty
+def segs.cons(cur: List<&2, U32>, rest: List<&2, List<&2, U32>>) -> List<&2, List<&2, U32>>:
   match cur:
     case Nil{}:
-      acc
+      rest
     case Con{c, t}:
-      Con{rev(Con{c, t}), acc}
+      Con{Con{c, t}, rest}
 
-# the splitter's state: the segment being read (reversed) and the
-# segments done (reversed)
-type Sg is Data:
-  Sg{cur: List<&2, U32>, acc: List<&2, List<&2, U32>>}
+def segs.at(slash: Bool, c: U32, k: Cut) -> Cut:
+  match slash k:
+    case True{} Cut{cur, rest}:
+      Cut{Nil{}, segs.cons(cur, rest)}
+    case False{} Cut{cur, rest}:
+      Cut{Con{c, cur}, rest}
 
-def segs.step.go(cur: List<&2, U32>, acc: List<&2, List<&2, U32>>, c: U32, slash: Bool) -> Sg:
-  match slash:
-    case True{}:
-      Sg{Nil{}, segs.push(cur, acc)}
-    case False{}:
-      Sg{Con{c, cur}, acc}
-
-def segs.step(st: Sg, +c: U32) -> Sg:
-  match st:
-    case Sg{cur, acc}:
-      segs.step.go(cur, acc, c, U32.is_eq(c, 47))
-
-def segs.out(st: Sg) -> List<&2, List<&2, U32>>:
-  match st:
-    case Sg{cur, acc}:
-      segs.push(cur, acc)
-
-def segs.go(bs: List<&2, U32>, st: Sg) -> List<&2, List<&2, U32>>:
+def segs.go(bs: List<&2, U32>) -> Cut:
   match bs:
     case Nil{}:
-      segs.out(st)
-    case Con{c, t}:
-      segs.go(t, segs.step(st, c))
+      Cut{Nil{}, Nil{}}
+    case Con{+c, t}:
+      segs.at(U32.is_eq(c, 47), c, segs.go(t))
+
+def segs.out(k: Cut) -> List<&2, List<&2, U32>>:
+  match k:
+    case Cut{cur, rest}:
+      segs.cons(cur, rest)
 
 def segs(path: List<&2, U32>) -> List<&2, List<&2, U32>>:
-  List.reverse(&2, List<&2, U32>, segs.go(path, Sg{Nil{}, Nil{}}))
+  segs.out(segs.go(path))
 
 # A segment is a name, ".", or "..".
 type Piece is Data:
@@ -2833,33 +2829,86 @@ def ext.go(bs: List<&2, U32>, cur: List<&2, U32>) -> List<&2, U32>:
     case Con{+c, t}:
       ext.go(t, ext.step(cur, c, U32.is_eq(c, 46)))
 
-# A file's type, by the bytes after its last '.'. The names are literals,
-# static blocks: finding one allocates nothing, and only the one found is
-# made the byte list a page's head is built from.
-def mime.pick(ok: Bool, a: Bytes(), b: Bytes()) -> Bytes():
-  match ok:
+# A file's type, by the bytes after its last '.': a table of the
+# extensions this engine names, each with its type and the head a 200 of
+# it starts with (the status line, the type and the name of the length,
+# one literal, kept ready: a file's head is three pieces joined rather
+# than seven; file_head_is_built says they are the bytes reply.n.head
+# builds). The names are literals, static blocks: finding one allocates
+# nothing.
+type Mime is Data:
+  Mime{ext: Bytes(), name: Bytes(), head: Bytes()}
+
+def mime.table() -> List<&2, Mime>:
+  [
+    Mime{"html", "text/html; charset=utf-8",
+      "HTTP/1.1 200 OK\r\ncontent-type: text/html; charset=utf-8\r\ncontent-length: "},
+    Mime{"htm", "text/html; charset=utf-8",
+      "HTTP/1.1 200 OK\r\ncontent-type: text/html; charset=utf-8\r\ncontent-length: "},
+    Mime{"css", "text/css; charset=utf-8",
+      "HTTP/1.1 200 OK\r\ncontent-type: text/css; charset=utf-8\r\ncontent-length: "},
+    Mime{"js", "application/javascript; charset=utf-8",
+      "HTTP/1.1 200 OK\r\ncontent-type: application/javascript; charset=utf-8\r\ncontent-length: "},
+    Mime{"json", "application/json",
+      "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: "},
+    Mime{"txt", "text/plain; charset=utf-8",
+      "HTTP/1.1 200 OK\r\ncontent-type: text/plain; charset=utf-8\r\ncontent-length: "},
+    Mime{"svg", "image/svg+xml",
+      "HTTP/1.1 200 OK\r\ncontent-type: image/svg+xml\r\ncontent-length: "},
+    Mime{"png", "image/png",
+      "HTTP/1.1 200 OK\r\ncontent-type: image/png\r\ncontent-length: "},
+    Mime{"jpg", "image/jpeg",
+      "HTTP/1.1 200 OK\r\ncontent-type: image/jpeg\r\ncontent-length: "},
+    Mime{"jpeg", "image/jpeg",
+      "HTTP/1.1 200 OK\r\ncontent-type: image/jpeg\r\ncontent-length: "},
+    Mime{"gif", "image/gif",
+      "HTTP/1.1 200 OK\r\ncontent-type: image/gif\r\ncontent-length: "},
+    Mime{"ico", "image/x-icon",
+      "HTTP/1.1 200 OK\r\ncontent-type: image/x-icon\r\ncontent-length: "},
+    Mime{"wasm", "application/wasm",
+      "HTTP/1.1 200 OK\r\ncontent-type: application/wasm\r\ncontent-length: "},
+    Mime{"pdf", "application/pdf",
+      "HTTP/1.1 200 OK\r\ncontent-type: application/pdf\r\ncontent-length: "}
+  ]
+
+def mime.other() -> Mime:
+  Mime{"", "application/octet-stream",
+    "HTTP/1.1 200 OK\r\ncontent-type: application/octet-stream\r\ncontent-length: "}
+
+def mime.find.at(hit: Bool, m: Mime, rest: Mime) -> Mime:
+  match hit:
     case True{}:
-      a
+      m
     case False{}:
-      b
+      rest
+
+def mime.ext(m: Mime) -> Bytes():
+  match m:
+    case Mime{ext, name, head}:
+      ext
+
+def mime.find(tbl: List<&2, Mime>, +e: Bytes()) -> Mime:
+  match tbl:
+    case Nil{}:
+      mime.other()
+    case Con{+m, t}:
+      mime.find.at(bytes.eq(mime.ext(m), e), m, mime.find(t, e))
+
+def mime.name.of(m: Mime) -> Bytes():
+  match m:
+    case Mime{ext, name, head}:
+      name
+
+def mime.head.of(m: Mime) -> Bytes():
+  match m:
+    case Mime{ext, name, head}:
+      head
 
 def mime.name(+e: Bytes()) -> Bytes():
-  mime.pick(bytes.eq(e, "html") || bytes.eq(e, "htm"), "text/html; charset=utf-8",
-  mime.pick(bytes.eq(e, "css"), "text/css; charset=utf-8",
-  mime.pick(bytes.eq(e, "js"), "application/javascript; charset=utf-8",
-  mime.pick(bytes.eq(e, "json"), "application/json",
-  mime.pick(bytes.eq(e, "txt"), "text/plain; charset=utf-8",
-  mime.pick(bytes.eq(e, "svg"), "image/svg+xml",
-  mime.pick(bytes.eq(e, "png"), "image/png",
-  mime.pick(bytes.eq(e, "jpg") || bytes.eq(e, "jpeg"), "image/jpeg",
-  mime.pick(bytes.eq(e, "gif"), "image/gif",
-  mime.pick(bytes.eq(e, "ico"), "image/x-icon",
-  mime.pick(bytes.eq(e, "wasm"), "application/wasm",
-  mime.pick(bytes.eq(e, "pdf"), "application/pdf",
-    "application/octet-stream"))))))))))))
+  mime.name.of(mime.find(mime.table(), e))
 
-def ctype(e: List<&2, U32>) -> List<&2, U32>:
-  Bytes.to_list(mime.name(Bytes.from_list(e)))
+def mime.head(+e: Bytes()) -> Bytes():
+  mime.head.of(mime.find(mime.table(), e))
 
 # One piece of a reply is bend-wire's L.Seg: bytes as they are, or a
 # file to write when the reply is written (the root, the path under it,
@@ -2874,17 +2923,18 @@ def miss(head: Bool) -> Bytes():
     case False{}:
       resp.missing()
 
-def page.name(root: List<&2, U32>, +ss: List<&2, List<&2, U32>>, head: Bool) -> L.Seg:
-  L.Page{root, join(ss), ctype(ext.go(last(ss, Nil{}), Nil{})), head}
+def page.name(root: Bytes(), +ss: List<&2, List<&2, U32>>, head: Bool) -> L.Seg:
+  L.Page{root, Bytes.from_list(join(ss)), mime.head(Bytes.from_list(ext.go(last(ss, Nil{}), Nil{}))),
+    head}
 
-def page.of(root: List<&2, U32>, ss: List<&2, List<&2, U32>>, head: Bool) -> L.Seg:
+def page.of(root: Bytes(), ss: List<&2, List<&2, U32>>, head: Bool) -> L.Seg:
   match ss:
     case Nil{}:
-      L.Page{root, bytes("index.html"), bytes("text/html; charset=utf-8"), head}
+      L.Page{root, "index.html", mime.head("html"), head}
     case Con{s, t}:
       page.name(root, Con{s, t}, head)
 
-def page.pick(root: List<&2, U32>, may: Maybe<&2, List<&2, List<&2, U32>>>, head: Bool) -> L.Seg:
+def page.pick(root: Bytes(), may: Maybe<&2, List<&2, List<&2, U32>>>, head: Bool) -> L.Seg:
   match may:
     case None{}:
       L.Raw{miss(head)}
@@ -2896,8 +2946,60 @@ def page.pick(root: List<&2, U32>, may: Maybe<&2, List<&2, List<&2, U32>>>, head
 # escapes are not decoded, so an escaped ".." is a name no file has
 # rather than a climb. The name is opened by File.open_under, which
 # follows no symbolic link and opens nothing but a regular file.
-def page(root: List<&2, U32>, +path: List<&2, U32>, head: Bool) -> L.Seg:
+def page.spec(root: Bytes(), +path: List<&2, U32>, head: Bool) -> L.Seg:
   page.pick(root, fnames.of(False{}, path), head)
+
+# The path as it is almost always asked for -- a '/', then names of
+# printable bytes, none empty and none starting with a '.' -- is read
+# where it lies: one walk over its bytes (fast) says it is such a path,
+# the file is the path after its '/', a view, and its type is the bytes
+# after its last '.'. Any other path takes page.spec. page_is_spec: the
+# two are one function of the path.
+# every byte is one clean() takes; one at the start of a segment (st)
+# begins a name that is not a dotfile, one inside a name is a name's
+# byte or the '/' that ends it
+def fast.ok.go(st: Bool, +c: U32) -> Bool:
+  match st:
+    case True{}:
+      fname.byte(c) && Bool.not(U32.is_eq(c, 46))
+    case False{}:
+      U32.is_eq(c, 47) || fname.byte(c)
+
+def fast.ok(st: Bool, +c: U32) -> Bool:
+  clean.pick(ctl(c), c) && fast.ok.go(st, c)
+
+# the path after its '/', which must not end in a segment's start
+def fast.go(t: Bytes(), st: Bool) -> Bool:
+  match t:
+    case SNil{}:
+      Bool.not(st)
+    case SCon{Chr{+c}, r}:
+      fast.ok(st, c) && fast.go(r, U32.is_eq(c, 47))
+
+def fast(t: Bytes()) -> Bool:
+  match t:
+    case SNil{}:
+      False{}
+    case SCon{Chr{+c}, r}:
+      (clean.pick(ctl(c), c) && U32.is_eq(c, 47)) && fast.go(r, True{})
+
+# the bytes after the last '.' or '/', as ext.go reads a name's
+def ext.buf(t: Bytes(), cur: List<&2, U32>) -> List<&2, U32>:
+  match t:
+    case SNil{}:
+      rev(cur)
+    case SCon{Chr{+c}, r}:
+      ext.buf(r, ext.step(cur, c, U32.is_eq(c, 46) || U32.is_eq(c, 47)))
+
+def page.go(root: Bytes(), +path: Bytes(), head: Bool, ok: Bool) -> L.Seg:
+  match ok:
+    case True{}:
+      L.Page{root, Bytes.drop(path, 1n), mime.head(Bytes.from_list(ext.buf(path, Nil{}))), head}
+    case False{}:
+      page.spec(root, Bytes.to_list(path), head)
+
+def page(root: Bytes(), +path: Bytes(), head: Bool) -> L.Seg:
+  page.go(root, path, head, fast(path))
 
 # The access log: one line per request, what was asked, the status it
 # got and how many bytes went back, on stderr and nowhere else, so
@@ -3018,7 +3120,7 @@ def act.run(
     case Live{}:
       live.answer(key, ws, head)
     case Files{}:
-      Ans{[page(srv.root(srv), Bytes.to_list(path), head)], False{}, 0, False{}}
+      Ans{[page(srv.root(srv), path, head)], False{}, 0, False{}}
 
 def serve.act(
   +srv: Srv, found: Maybe<&2, Act>, path: Bytes(), body: Bytes(), head: Bool, ws: Bool,
@@ -3316,8 +3418,9 @@ def h.mid(p: P) -> Bool:
 def h.shut(sh: Bool, bs: Bytes()) -> Bytes():
   flat.shut(sh, bs)
 
-def h.fhead(ct: List<&2, U32>, n: U32) -> Bytes():
-  reply.n.head("200 OK", ct, n)
+# a file's head: the head its type keeps ready (mime.head), its length
+def h.fhead(pre: Bytes(), n: U32) -> Bytes():
+  Bytes.concat([pre, U32.show(n), "\r\nconnection: keep-alive\r\n\r\n"])
 
 def h.lnote(note: Bytes(), out: Bytes()) -> String:
   log.line(note, out)

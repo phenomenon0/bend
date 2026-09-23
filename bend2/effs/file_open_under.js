@@ -5,8 +5,9 @@
 // before the next, so a symbolic link anywhere under root fails with
 // ELOOP; an empty, "." or ".." component with EACCES; an end that is
 // not a regular file with EISDIR or EACCES. The end is opened with
-// O_NOFOLLOW and checked again on the open descriptor.
-function file_open_under(root, path) {
+// O_NOFOLLOW and checked again on the open descriptor. The answer is
+// [fd, stat] or a Fail.
+function file_open_under_at(root, path) {
   const fs = require("fs");
   const mac = process.platform === "darwin";
   const top = io_bytes(root);
@@ -45,8 +46,50 @@ function file_open_under(root, path) {
       fs.closeSync(fd);
       return io_fail(st.isDirectory() ? 21 : 13);
     }
-    return io_done(fd);
+    return [fd, st];
   } catch (e) {
     return io_fail(Math.abs(e.errno ?? 5));
   }
+}
+
+function file_open_under(root, path) {
+  const got = file_open_under_at(root, path);
+  return Array.isArray(got) ? io_done(got[0]) : got;
+}
+
+// File.get_under(root, path, small), as file_open_under.c: the open,
+// its size and mtime, and a file under small bytes read whole and
+// closed (None and its bytes) or a larger one left open (Some, "").
+function file_get_under(root, path, small) {
+  const fs = require("fs");
+  const got = file_open_under_at(root, path);
+  if (!Array.isArray(got)) {
+    return got;
+  }
+  const [fd, st] = got;
+  const n = st.size;
+  if (n > 4294967295) {
+    fs.closeSync(fd);
+    return io_fail(process.platform === "darwin" ? 84 : 75);
+  }
+  const mt = Math.floor(st.mtimeMs / 1000) >>> 0;
+  if (n >= Number(small)) {
+    return io_done(io_tup(n, mt, { $: "Some", value: fd }, ""));
+  }
+  const b = new Uint8Array(Math.max(n, 1));
+  let k = 0;
+  try {
+    for (let r = 1; k < n && r > 0; k += r) {
+      r = fs.readSync(fd, b, k, n - k, k);
+    }
+  } catch (e) {
+    fs.closeSync(fd);
+    return io_fail(Math.abs(e.errno ?? 5));
+  }
+  fs.closeSync(fd);
+  let s = "";
+  for (let i = 0; i < k; i += 8192) {
+    s += String.fromCharCode.apply(null, b.subarray(i, Math.min(k, i + 8192)));
+  }
+  return io_done(io_tup(n, mt, { $: "None" }, s));
 }
