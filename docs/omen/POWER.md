@@ -35,7 +35,7 @@ Substrate — the three containers everything else is built from:
 | file | what it is | reference |
 |---|---|---|
 | `vec.bend` | a growable packed sequence of U32 over Base's `Array`, one flat block of native cells; one owner, every write in place | — |
-| `bytes.bend` | a growable byte buffer, four bytes to a U32 cell, little end first; `len` is the truth, so pop and truncate move no data | — |
+| `bytes.bend` | power's byte-buffer names over Base's `Bytes()` — the String the IO effects hand back, packed a byte a cell, cut by view, appended in place; the one byte type, so a socket's buffer goes to `json` or `blake3` unconverted | — |
 | `bitset.bend` | 32 flags to a cell, a fixed `32 * 2^depth` bits; and / or / xor / andnot / count as one index loop, popcount as the SWAR ladder | — |
 
 Order and arrangement:
@@ -62,6 +62,7 @@ Parsing and text:
 | file | what it is | reference |
 |---|---|---|
 | `json.bend` | JSON as an event stream: one token per `next()`, a span into the caller's own Bytes, never a tree and never a copy | CPython `json`, `py_scanstring` and `NUMBER_RE` **†** |
+| `json_value.bend` | JSON as a value over `json`'s stream: `parse` under a depth cap, a byte budget and a duplicate-key policy; canonical `show`; `get`, `at`, `to_f64`, `to_i64`. Numbers keep their lexeme and unescaped strings are views of the input | CPython `json` (`object_pairs_hook`, `json.dumps`' escaper) **†** |
 | `grammar.bend` | a parser state that is a *value*, plus the set of next bytes it will accept — lane 5's machine with the document taken out, so it forks | XGrammar's mask; CPython `json` as the acceptance authority **†** |
 | `text.bend` | identity over bytes: UTF-8 with every code point's offset, grapheme cluster boundaries, and a normalizer that hands back the map from normalized text to the original's byte ranges | UAX #29, CPython `unicodedata` **†** |
 
@@ -283,6 +284,22 @@ compiled index loop over a flat block.
 exhausted fuel is a refusal with a price attached, never a partial answer and
 never a hang.
 
+## Known cost: a byte at a time over Base's Bytes()
+
+`bytes.bend` moved from four bytes to a Vec cell onto Base's `Bytes()`, so the
+IO effects' buffers need no conversion; the bulk operations (slice, drop, find,
+append a run) are native and copy nothing. A single byte is not: on C,
+`Bytes.get` is a reference count up and down, a `Some` node allocated and freed
+and a fresh view descriptor, about 30 ns against the Vec cell's 2; a push
+allocates the one-byte buffer it appends (85 ns); an uncons walk, which
+advances the descriptor in place, is 7 ns. On JS a positional read walks the
+string from the front. Measured on this sandbox (1T, medians of three, same
+checksums before and after): json 0.56 -> 2.97 s, bytes 0.57 -> 10.8,
+blake3 0.29 -> 3.7, cdc 0.30 -> 3.3, text 2.19 -> 4.9. The fix is two
+primitives in the compiler, not here: a borrowing `Bytes.get` answering a U32
+(no Maybe, no count; `Map.bit` already borrows this way) and a `Bytes.push`
+that writes one byte into the buffer's room.
+
 ## Known hazard: dropping an F64 on the C backend
 
 Three lanes hit this independently in three shapes. An `F64` is stored
@@ -301,6 +318,11 @@ Exactly two surfaces put a double in that position:
    `Nat` below `2^48` so its tag is always 0.)
 2. **Polymorphic parameters.** A def's signature is memoized by name, so the one
    compiled `Bool.pick` emits `term_sink` on whatever word arrives.
+
+The same holds for `I64` and `U64`, which share the unboxed 64-bit slot:
+`Bool.pick(Maybe<&2, I64>, False{}, Some{x}, None{})` faults when `x` is
+`2^63 - 1` (json_value's `to_i64` met it on `-9223372036854775809`, and matches
+instead).
 
 Generic *containers* are fine: `List<F64>`, `Maybe<F64>`, `Pair<F64,F64>` get
 real `w64` fields. Whether a given double is a landmine is exact and computable
@@ -328,10 +350,10 @@ the predicate.
 
 ## Not built
 
-The packed `File.read_bytes` effect from the plan's substrate row. It needs a
-row in `bend2/effs/`, no primitive here reads a file, and adding an effect would
-put the whole existing battery at risk for zero consumers. Flagged rather than
-silently cut.
+The packed `File.read_bytes` effect from the plan's substrate row is no longer
+needed: Base grew `Bytes()` and `File.read_buf` / `TCP.recv_buf` return it, and
+`bytes.bend` is now power's names over that type, so there is one byte buffer
+in the language rather than two.
 
 ## The reports
 
