@@ -2984,3 +2984,17 @@ def round_trip(+x: Bytes(), +cap: Nat, +tb: D.Tabs, +vx: {D.valid(x) == True{} :
 
 def Laws.stored_round_trip(x, cap, vx, fits):
   round_trip(x, cap, D.tabs(), vx, fits)
+
+# The code tables, closed: each side computed
+def Laws.length_codes():
+  ({==}, {==})
+
+def Laws.dist_codes():
+  ({==}, {==})
+
+# The codes and the fixed tables, closed
+def Laws.canonical():
+  ({==}, {==}, {==})
+
+def Laws.fixed_tables():
+  ({==}, {==})
