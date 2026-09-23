@@ -1,0 +1,23 @@
+[
+ {
+  "headers": [
+   [
+    ":method",
+    "GET"
+   ],
+   [
+    ":path",
+    "/"
+   ],
+   [
+    ":scheme",
+    "http"
+   ],
+   [
+    ":authority",
+    "a"
+   ]
+  ],
+  "end_stream": true
+ }
+]

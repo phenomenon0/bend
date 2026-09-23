@@ -1,0 +1,27 @@
+[
+ {
+  "headers": [
+   [
+    ":method",
+    "GET"
+   ],
+   [
+    ":path",
+    "/"
+   ],
+   [
+    ":scheme",
+    "http"
+   ],
+   [
+    ":authority",
+    "a"
+   ],
+   [
+    ":protocol",
+    "websocket"
+   ]
+  ],
+  "end_stream": true
+ }
+]
