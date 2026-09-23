@@ -1,18 +1,19 @@
-# The HTTP engine's gate, and bend-wire's (wire/) that it and RESP are
-# built on: the laws check, the server builds, the checks pass against
-# it and against the C control, the fuzzer finds no difference between
-# the two, the RESP server answers, and the binary is kept. Runs on the
-# branch that carries the engine and only when it, the library, RESP or
-# the runtime moves.
+# The HTTP engine's gate, and bend-wire's (wire/) that it, RESP and
+# bend-h2 are built on: the laws check, the server builds, the checks
+# pass against it and against the C control, the fuzzer finds no
+# difference between the two, the RESP server answers, bend-h2 passes
+# h2spec and its own checks, and the binaries are kept. Runs on the
+# branch that carries the engine and only when it, the library, RESP,
+# bend-h2 or the runtime moves.
 name: http engine
 on:
   push:
     branches: [omen-http, claude/next-gen-tier-review-xss592]
-    paths: ["demos/io_http_engine/**", "demos/io_resp/**", "wire/**", "power/csv*", "bend2/**", "kernel/**",
-      ".github/workflows/http.yml"]
+    paths: ["demos/io_http_engine/**", "demos/io_resp/**", "demos/io_http2/**", "wire/**", "power/csv*",
+      "bend2/**", "kernel/**", ".github/workflows/http.yml"]
   pull_request:
-    paths: ["demos/io_http_engine/**", "demos/io_resp/**", "wire/**", "power/csv*", "bend2/**", "kernel/**",
-      ".github/workflows/http.yml"]
+    paths: ["demos/io_http_engine/**", "demos/io_resp/**", "demos/io_http2/**", "wire/**", "power/csv*",
+      "bend2/**", "kernel/**", ".github/workflows/http.yml"]
 jobs:
   engine:
     runs-on: ubuntu-24.04
@@ -31,7 +32,8 @@ jobs:
       # @unsafe or a foreign def exits 0 with "All terms check, but ..."
       - name: the laws hold
         run: |
-          for f in demos/io_http_engine/PROOF.bend demos/io_resp/PROOF.bend power/csv_proof.bend; do
+          for f in demos/io_http_engine/PROOF.bend demos/io_resp/PROOF.bend power/csv_proof.bend \
+            demos/io_http2/PROOF.bend; do
             out=$(bun bend2/main.ts "$f"); echo "$out"
             [ "$out" = "All terms check." ] || { echo "$f: not a clean proof"; exit 1; }
           done
@@ -42,7 +44,8 @@ jobs:
         run: |
           cargo build --release --manifest-path kernel/Cargo.toml
           bash kernel/tests/run.sh
-          for f in demos/io_http_engine/PROOF.bend demos/io_resp/PROOF.bend power/csv_proof.bend; do
+          for f in demos/io_http_engine/PROOF.bend demos/io_resp/PROOF.bend power/csv_proof.bend \
+            demos/io_http2/PROOF.bend; do
             bun bend2/main.ts "$f" --export proof.core
             kernel/target/release/bend-kernel -q proof.core || { echo "$f: the kernel refuses it"; exit 1; }
           done
@@ -52,6 +55,11 @@ jobs:
       # breaks the reader or the spec, and frame_sim alone must refuse it
       - name: the laws are not vacuous
         run: python3 demos/io_http_engine/mutants.py
+      # each of bend-h2's mutants breaks HPACK, the framing, the stream
+      # states, flow control, a budget or the request checks, and the
+      # proof must refuse every one
+      - name: bend-h2's laws are not vacuous
+        run: python3 demos/io_http2/mutants.py
       - name: the server builds
         run: |
           bun bend2/main.ts demos/io_http_engine/main.bend -o httpd
@@ -131,7 +139,29 @@ jobs:
           ./httpd --shared --port 8085 & A=$!; ./httpd --shared --port 8085 & B=$!; up 8085
           LOAD_SPIN=1 demos/io_http_engine/load 8085 32 2 8 /health
           kill $A $B; wait $A $B || true
+      # bend-h2: h2c by prior knowledge and h2 over TLS by ALPN, each run
+      # through h2spec (every section, strict), then check.py's client:
+      # requests, fifty streams at once, 1 MB through the windows both
+      # ways, and each flood budget met
+      - name: bend-h2 answers, and passes h2spec
+        run: |
+          up() { for i in $(seq 1 50); do (exec 3<>/dev/tcp/127.0.0.1/$1) 2>/dev/null && return 0; sleep 0.1; done; return 1; }
+          pip install -q h2
+          curl -fsSL -o h2spec.tgz https://github.com/summerwind/h2spec/releases/download/v2.6.0/h2spec_linux_amd64.tar.gz
+          tar xzf h2spec.tgz h2spec
+          bun bend2/main.ts demos/io_http2/main.bend -o h2d
+          ./h2d --port 8443 & up 8443
+          ./h2spec -h 127.0.0.1 -p 8443 -S
+          python3 demos/io_http2/check.py 8443
+          kill $!; wait $! || true
+          ./h2d --port 8444 --tls-cert cert.pem --tls-key key.pem & up 8444
+          ./h2spec -h 127.0.0.1 -p 8444 -t -k -S
+          kill $!; wait $! || true
       - uses: actions/upload-artifact@v4
         with:
           name: httpd-linux-x86_64
           path: httpd
+      - uses: actions/upload-artifact@v4
+        with:
+          name: h2d-linux-x86_64
+          path: h2d
