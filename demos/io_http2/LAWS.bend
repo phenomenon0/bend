@@ -9,6 +9,7 @@ import ./hpack.bend as K
 import ./vectors.bend as V
 import ./frame.bend as Fm
 import ./spec.bend as Sp
+import ./conn.bend as C
 
 # HPACK: integers (RFC 7541 5.1)
 # ==============================
@@ -400,3 +401,308 @@ law frame_cut:
 law frame_fields:
   {Sp.frames(16384n, List.append(&2, U32, pfx(), [0, 0, 0, 6, 1, 128, 0, 1, 3])) ==
     Sp.Frames{[Fm.Frm{6, 1, 259, ""}], Sp.Open{Nil{}}} : Sp.Frames}
+
+# Streams (RFC 9113 5.1)
+# ======================
+
+# LAW: the state machine is the RFC's. For every stream state and every
+# frame type, what the connection's verdict lets a frame do is what
+# spec.bend reads off RFC 9113 5.1: taken, a stream error, or a
+# connection error, with the RFC's code.
+law verdict_rfc:
+  for +s: C.Ss
+  for +t: C.Ty
+  {C.verdict(s, t) == Sp.verdict(s, t) : C.Vd}
+
+# The machine, one frame at a time: a connection stepped on a frame, and
+# whether it is over after it.
+def dead(o: C.Out) -> Bool:
+  match o:
+    case C.Out{c, w, rq, d}:
+      d
+
+def one(+root: H.Ht, c: C.Cn, w: Bytes(), rq: List<&2, C.Req>, f: Fm.Frm) -> C.Out:
+  C.step(root, C.Out{c, w, rq, False{}}, f)
+
+# LAW: no frame is accepted in a state the RFC forbids, whatever else
+# the connection holds. DATA on an idle stream (one above every id the
+# client has used) ends the connection with PROTOCOL_ERROR, padded or
+# not, whatever its flags and payload ...
+law idle_data:
+  for +root: H.Ht
+  for +c: C.Cn
+  for +w: Bytes()
+  for +rq: List<&2, C.Req>
+  for +fl: U32
+  for +sid: U32
+  for +pay: Bytes()
+  for hb: {C.cn.blk(c) == C.BNone{} : C.Blk}
+  for hs: {C.state(c, sid) == C.SIdle{} : C.Ss}
+  for hz: {U32.is_zero(sid) == False{} : Bool}
+  {one(root, c, w, rq, Fm.Frm{0, fl, sid, pay}) == C.die(c, w, rq, C.e.proto()) : C.Out}
+
+# ... and so does it on a closed one, with STREAM_CLOSED (when it is
+# not padded: a pad length past the payload is a PROTOCOL_ERROR first) ...
+law closed_data:
+  for +root: H.Ht
+  for +c: C.Cn
+  for +w: Bytes()
+  for +rq: List<&2, C.Req>
+  for +fl: U32
+  for +sid: U32
+  for +pay: Bytes()
+  for hb: {C.cn.blk(c) == C.BNone{} : C.Blk}
+  for hs: {C.state(c, sid) == C.SClosed{} : C.Ss}
+  for hz: {U32.is_zero(sid) == False{} : Bool}
+  for hp: {C.flag(fl, 8) == False{} : Bool}
+  {one(root, c, w, rq, Fm.Frm{0, fl, sid, pay}) == C.die(c, w, rq, C.e.closed()) : C.Out}
+
+# ... and on a half-closed (remote) one it is a stream error
+# STREAM_CLOSED, the connection's window given back what the frame took
+law half_data:
+  for +root: H.Ht
+  for +c: C.Cn
+  for +w: Bytes()
+  for +rq: List<&2, C.Req>
+  for +fl: U32
+  for +sid: U32
+  for +pay: Bytes()
+  for hb: {C.cn.blk(c) == C.BNone{} : C.Blk}
+  for hs: {C.state(c, sid) == C.SHalf{} : C.Ss}
+  for hz: {U32.is_zero(sid) == False{} : Bool}
+  for hp: {C.flag(fl, 8) == False{} : Bool}
+  {one(root, c, w, rq, Fm.Frm{0, fl, sid, pay}) ==
+    C.rst(c, Bytes.append(w, C.give(0, Bytes.len(pay))), rq, sid, C.e.closed()) : C.Out}
+
+# LAW: stream ids (5.1.1). A HEADERS that would open a stream with an
+# even id ends the connection with PROTOCOL_ERROR ...
+law even_id:
+  for +root: H.Ht
+  for +c: C.Cn
+  for +w: Bytes()
+  for +rq: List<&2, C.Req>
+  for +fl: U32
+  for +sid: U32
+  for +pay: Bytes()
+  for hb: {C.cn.blk(c) == C.BNone{} : C.Blk}
+  for hs: {C.state(c, sid) == C.SIdle{} : C.Ss}
+  for hz: {U32.is_zero(sid) == False{} : Bool}
+  for he: {U32.is_zero(U32.and(sid, 1)) == True{} : Bool}
+  {dead(one(root, c, w, rq, Fm.Frm{1, fl, sid, pay})) == True{} : Bool}
+
+# ... and the highest id seen only ever grows: opening a stream moves it
+# to the stream's id when that is above it, and never below it
+law ids_grow:
+  for +last: U32
+  for +sid: U32
+  {U32.is_le(last, C.last.max(last, sid, U32.is_lt(last, sid))) == True{} : Bool}
+
+# LAW: CONTINUATION follows its HEADERS without interleaving (6.10):
+# inside a header block, any frame but a CONTINUATION on the block's
+# stream ends the connection with PROTOCOL_ERROR
+law cont_only:
+  for +root: H.Ht
+  for +c: C.Cn
+  for +w: Bytes()
+  for +rq: List<&2, C.Req>
+  for +bsid: U32
+  for +end: Bool
+  for +k: C.Bk
+  for +size: Nat
+  for +ty: U32
+  for +fl: U32
+  for +sid: U32
+  for +pay: Bytes()
+  for hb: {C.cn.blk(c) == C.BIn{bsid, end, k, size} : C.Blk}
+  for hn: {Bool.and(U32.is_eq(ty, 9), U32.is_eq(sid, bsid)) == False{} : Bool}
+  {one(root, c, w, rq, Fm.Frm{ty, fl, sid, pay}) == C.die(c, w, rq, C.e.proto()) : C.Out}
+
+# Flow control (RFC 9113 6.9)
+# ===========================
+
+def Sw.val.up(w: C.Sw) -> Nat:
+  match w:
+    case C.Sw{up, down}:
+      up
+
+def Sw.val.down(w: C.Sw) -> Nat:
+  match w:
+    case C.Sw{up, down}:
+      down
+
+def lands(m: Maybe<&2, C.Sw>, -w: C.Sw, -n: Nat) -> Type:
+  match m:
+    case None{}:
+      Unit
+    case Some{w2}:
+      {Nat.is_le(Sw.val.up(w2), C.win.max()) == True{} : Bool} &
+        {Nat.add(Sw.val.up(w2), Sw.val.down(w)) == Nat.add(Nat.add(Sw.val.up(w), n), Sw.val.down(w2)) : Nat}
+
+# LAW: a WINDOW_UPDATE (or a larger initial window) that is taken never
+# takes a window past 2^31-1, and moves it by exactly the increment:
+# up2 - down2 = up - down + n, for every window and increment
+law win_add:
+  for +w: C.Sw
+  for +n: Nat
+  lands(C.sw.add(w, n), w, n)
+
+# LAW: and one that would pass 2^31-1 is refused (a FLOW_CONTROL_ERROR)
+law win_over:
+  for +u: Nat
+  for +n: Nat
+  for h: {Nat.is_lt(C.win.max(), Nat.add(u, n)) == True{} : Bool}
+  {C.sw.add(C.Sw{u, 0n}, n) == None{} : Maybe<&2, C.Sw>}
+
+# LAW: what the peer may send us never goes below zero: DATA within the
+# window leaves the window less the DATA, and DATA past it is refused
+law rw_take:
+  for +w: Nat
+  for +n: Nat
+  for h: {Nat.is_le(n, w) == True{} : Bool}
+  {C.rw.take(w, n) == Some{Nat.sub(w, n)} : Maybe<&2, Nat>}
+
+law rw_refuse:
+  for +w: Nat
+  for +n: Nat
+  for h: {Nat.is_le(n, w) == False{} : Bool}
+  {C.rw.take(w, n) == None{} : Maybe<&2, Nat>}
+
+# LAW: every DATA frame the server sends is within the stream's window,
+# the connection's window and the peer's SETTINGS_MAX_FRAME_SIZE, and
+# within what the stream has to send
+law data_fits:
+  for +s: C.St
+  for +csw: C.Sw
+  for +fmax: Nat
+  {Nat.is_le(C.avail(s, csw, fmax), C.sw.up(C.st.sw(s))) && Nat.is_le(C.avail(s, csw, fmax), C.sw.up(csw))
+    && Nat.is_le(C.avail(s, csw, fmax), fmax) && Nat.is_le(C.avail(s, csw, fmax), Bytes.len(C.st.out(s)))
+    == True{} : Bool}
+
+# Budgets (RFC 9113 10.5)
+# =======================
+
+# LAW: every PING answered is paid from the connection's budget: on a
+# PING (not an ACK, eight bytes, stream 0) the connection does exactly
+# what ping.paid says ...
+law ping_through:
+  for +root: H.Ht
+  for +c: C.Cn
+  for +w: Bytes()
+  for +rq: List<&2, C.Req>
+  for +fl: U32
+  for +pay: Bytes()
+  for hb: {C.cn.blk(c) == C.BNone{} : C.Blk}
+  for h8: {Nat.is_eq(Bytes.len(pay), 8n) == True{} : Bool}
+  for ha: {C.flag(fl, 1) == False{} : Bool}
+  {one(root, c, w, rq, Fm.Frm{6, fl, 0, pay}) == C.ping.paid(c, w, rq, pay, C.cn.bud(c)) : C.Out}
+
+# ... which with the budget spent ends the connection with
+# ENHANCE_YOUR_CALM, and otherwise answers and spends one
+law ping_spent:
+  for +c: C.Cn
+  for +w: Bytes()
+  for +rq: List<&2, C.Req>
+  for +pay: Bytes()
+  for +s: Nat
+  for +r: Nat
+  {C.ping.paid(c, w, rq, pay, C.Bud{0n, s, r}) == C.die(c, w, rq, C.e.calm()) : C.Out}
+
+law ping_pays:
+  for +c: C.Cn
+  for +w: Bytes()
+  for +rq: List<&2, C.Req>
+  for +pay: Bytes()
+  for +k: Nat
+  for +s: Nat
+  for +r: Nat
+  {C.ping.paid(c, w, rq, pay, C.Bud{1n+k, s, r}) ==
+    C.ok(C.cn.w.bud(c, C.Bud{k, s, r}), Bytes.append(w, C.f.pong(pay)), rq) : C.Out}
+
+# LAW: and only a response gives the budget back, one of each, never
+# past the cap: a flood of anything meets the cap within that many
+# frames
+def bud.le(b: C.Bud) -> Bool:
+  match b:
+    case C.Bud{p, s, r}:
+      Nat.is_le(p, C.bud.cap()) && Nat.is_le(s, C.bud.cap()) && Nat.is_le(r, C.bud.cap())
+
+law bud_capped:
+  for +b: C.Bud
+  {bud.le(C.bud.refill(b)) == True{} : Bool}
+
+# LAW: a CONTINUATION flood (CVE-2024-27316) meets the block's cap: a
+# CONTINUATION that takes its header block past blk.cap() (64 KiB) ends
+# the connection with ENHANCE_YOUR_CALM, before its fragment is decoded
+law cont_capped:
+  for +root: H.Ht
+  for +c: C.Cn
+  for +w: Bytes()
+  for +rq: List<&2, C.Req>
+  for +bsid: U32
+  for +end: Bool
+  for +k: C.Bk
+  for +size: Nat
+  for +fl: U32
+  for +pay: Bytes()
+  for hb: {C.cn.blk(c) == C.BIn{bsid, end, k, size} : C.Blk}
+  for hbig: {Nat.is_lt(C.blk.cap(), Nat.add(size, Bytes.len(pay))) == True{} : Bool}
+  {one(root, c, w, rq, Fm.Frm{9, fl, bsid, pay}) == C.die(c, w, rq, C.e.calm()) : C.Out}
+
+# Requests (RFC 9113 8.2, 8.3)
+# ============================
+
+def fd(n: String, v: String) -> K.Fld:
+  K.Fld{n, v}
+
+def get(+extra: List<&2, K.Fld>) -> List<&2, K.Fld>:
+  List.append(&2, K.Fld, [fd(":method", "GET"), fd(":scheme", "https"), fd(":path", "/a")], extra)
+
+law req_ok:
+  {C.req.check(get([fd(":authority", "x"), fd("accept", "*/*"), fd("content-length", "0"),
+    fd("te", "trailers")])) == C.HOk{"GET", "/a", Some{0n}} : C.Head}
+
+law req_upper:
+  {C.req.check(get([fd("Accept", "*/*")])) == C.HBad{} : C.Head}
+
+law req_unknown_pseudo:
+  {C.req.check(get([fd(":foo", "x")])) == C.HBad{} : C.Head}
+
+law req_response_pseudo:
+  {C.req.check(get([fd(":status", "200")])) == C.HBad{} : C.Head}
+
+law req_pseudo_late:
+  {C.req.check([fd(":method", "GET"), fd("accept", "*/*"), fd(":scheme", "https"), fd(":path", "/")]) ==
+    C.HBad{} : C.Head}
+
+law req_connection:
+  {C.req.check(get([fd("connection", "keep-alive")])) == C.HBad{} : C.Head}
+
+law req_te:
+  {C.req.check(get([fd("te", "gzip")])) == C.HBad{} : C.Head}
+
+law req_empty_path:
+  {C.req.check([fd(":method", "GET"), fd(":scheme", "https"), fd(":path", "")]) == C.HBad{} : C.Head}
+
+law req_no_method:
+  {C.req.check([fd(":scheme", "https"), fd(":path", "/")]) == C.HBad{} : C.Head}
+
+law req_no_scheme:
+  {C.req.check([fd(":method", "GET"), fd(":path", "/")]) == C.HBad{} : C.Head}
+
+law req_no_path:
+  {C.req.check([fd(":method", "GET"), fd(":scheme", "https")]) == C.HBad{} : C.Head}
+
+law req_twice:
+  {C.req.check(get([fd(":path", "/b")])) == C.HBad{} : C.Head}
+
+law req_clen_disagree:
+  {C.req.check(get([fd("content-length", "1"), fd("content-length", "2")])) == C.HBad{} : C.Head}
+
+law req_clen_digits:
+  {C.req.check(get([fd("content-length", "1x")])) == C.HBad{} : C.Head}
+
+law trailers_pseudo:
+  {C.trailers.ok([fd("x-sum", "1"), fd(":path", "/")]) == False{} : Bool}
+
+law trailers_plain:
+  {C.trailers.ok([fd("x-sum", "1")]) == True{} : Bool}

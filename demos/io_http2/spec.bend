@@ -1,4 +1,4 @@
-# The reference the frame reader is held to: RFC 9113 3.4 and 4.1-4.2,
+# The references the server is held to. First the framing, RFC 9113 3.4 and 4.1-4.2,
 # written for whoever checks it rather than for the clock. The client
 # sends the 24-octet connection preface, then frames; a frame is nine
 # octets of header -- Length (24 bits), Type, Flags, a reserved bit and
@@ -11,6 +11,7 @@
 import Base
 import ../../wire/reader.bend as Wr
 import ./frame.bend as Fm
+import ./conn.bend as C
 
 # 3.4: PRI * HTTP/2.0 CRLF CRLF SM CRLF CRLF
 def preface() -> List<&2, U32>:
@@ -147,3 +148,95 @@ def frames.pre(+max: Nat, bs: List<&2, U32>, p: Pre) -> Frames:
 # a whole input
 def frames(+max: Nat, +bs: List<&2, U32>) -> Frames:
   frames.pre(max, bs, pre(preface(), bs))
+
+# 5.1: what a frame the client sends on a stream may do, by the stream's
+# state, read off the RFC's text state by state: the frames each state
+# permits, and what any other earns.
+#
+#   idle: "Receiving any frame other than HEADERS or PRIORITY on a
+#     stream in this state MUST be treated as a connection error of type
+#     PROTOCOL_ERROR."
+#   open: "may be used by both peers to send frames of any type"
+#   half-closed (local): "An endpoint can receive any type of frame in
+#     this state."
+#   half-closed (remote): "If an endpoint receives additional frames,
+#     other than WINDOW_UPDATE, PRIORITY, or RST_STREAM, for a stream
+#     that is in this state, it MUST respond with a stream error of type
+#     STREAM_CLOSED."
+#   closed: WINDOW_UPDATE, PRIORITY and RST_STREAM may still arrive for a
+#     short while; "An endpoint that receives any frames after receiving
+#     a frame with the END_STREAM flag set MUST treat that as a
+#     connection error of type STREAM_CLOSED."
+#   closed by our RST_STREAM: "the endpoint MUST ignore frames that it
+#     receives on closed streams after it has sent a RST_STREAM frame"
+def code(t: C.Ty) -> Nat:
+  match t:
+    case C.TData{}:
+      0n
+    case C.THeaders{}:
+      1n
+    case C.TPrio{}:
+      2n
+    case C.TRst{}:
+      3n
+    case C.TSettings{}:
+      4n
+    case C.TPush{}:
+      5n
+    case C.TPing{}:
+      6n
+    case C.TGoaway{}:
+      7n
+    case C.TWin{}:
+      8n
+    case C.TCont{}:
+      9n
+    case C.TOther{}:
+      10n
+
+def any() -> List<&2, C.Ty>:
+  [C.TData{}, C.THeaders{}, C.TPrio{}, C.TRst{}, C.TSettings{}, C.TPush{}, C.TPing{}, C.TGoaway{},
+   C.TWin{}, C.TCont{}, C.TOther{}]
+
+def permits(s: C.Ss) -> List<&2, C.Ty>:
+  match s:
+    case C.SIdle{}:
+      [C.THeaders{}, C.TPrio{}]
+    case C.SOpen{}:
+      any()
+    case C.SLocal{}:
+      any()
+    case C.SReset{}:
+      any()
+    case C.SHalf{}:
+      [C.TWin{}, C.TPrio{}, C.TRst{}]
+    case C.SClosed{}:
+      [C.TWin{}, C.TPrio{}, C.TRst{}]
+
+def otherwise(s: C.Ss) -> C.Vd:
+  match s:
+    case C.SIdle{}:
+      C.VConn{1}
+    case C.SHalf{}:
+      C.VStream{5}
+    case C.SClosed{}:
+      C.VConn{5}
+    case _:
+      C.VOk{}
+
+def has(+t: C.Ty, ts: List<&2, C.Ty>) -> Bool:
+  match ts:
+    case Nil{}:
+      False{}
+    case Con{u, rest}:
+      Nat.is_eq(code(t), code(u)) || has(t, rest)
+
+def verdict.pick(ok: Bool, s: C.Ss) -> C.Vd:
+  match ok:
+    case True{}:
+      C.VOk{}
+    case False{}:
+      otherwise(s)
+
+def verdict(+s: C.Ss, +t: C.Ty) -> C.Vd:
+  verdict.pick(has(t, permits(s)), s)

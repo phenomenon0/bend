@@ -241,6 +241,58 @@ def le_add8(+a: Nat, +b: Nat, h: {Nat.is_le(a, b) == True{} : Bool}) -> {Nat.is_
   le_S(a, 7n+b, le_S(a, 6n+b, le_S(a, 5n+b, le_S(a, 4n+b, le_S(a, 3n+b, le_S(a, 2n+b, le_S(a, 1n+b,
     le_S(a, b, h))))))))
 
+def min_le_l(+a: Nat, +b: Nat) -> {Nat.is_le(Nat.min(a, b), a) == True{} : Bool}:
+  match a b:
+    case 0n _:
+      {==}
+    case 1n+p 0n:
+      {==}
+    case 1n+p 1n+q:
+      min_le_l(p, q)
+
+def min_le_r(+a: Nat, +b: Nat) -> {Nat.is_le(Nat.min(a, b), b) == True{} : Bool}:
+  match a b:
+    case 0n _:
+      le0(b)
+    case 1n+p 0n:
+      {==}
+    case 1n+p 1n+q:
+      min_le_r(p, q)
+
+# not a <= b: not a < b
+def nle_nlt(+a: Nat, +b: Nat, h: {Nat.is_le(a, b) == False{} : Bool}) -> {Nat.is_lt(a, b) == False{} : Bool}:
+  match a b:
+    case 0n _:
+      absurd({Nat.is_lt(0n, b) == False{} : Bool}, ft(Equal.trans(Bool, False{}, Nat.is_le(0n, b), True{},
+        Equal.sym(Bool, Nat.is_le(0n, b), False{}, h), le0(b))))
+    case 1n+p 0n:
+      {==}
+    case 1n+p 1n+q:
+      nle_nlt(p, q, h)
+
+def sub_0r(+a: Nat) -> {Nat.sub(a, 0n) == a : Nat}:
+  match a:
+    case 0n:
+      {==}
+    case 1n+p:
+      {==}
+
+# Division by 128
+# ===============
+
+# b <= a: (a - b) + b = a
+def sub_add(+a: Nat, +b: Nat, h: {Nat.is_le(b, a) == True{} : Bool}) -> {Nat.add(Nat.sub(a, b), b) == a : Nat}:
+  match a b:
+    case _ 0n:
+      Equal.trans(Nat, Nat.add(Nat.sub(a, 0n), 0n), Nat.sub(a, 0n), a, add_0r(Nat.sub(a, 0n)), sub_0r(a))
+    case 0n 1n+q:
+      absurd({Nat.add(Nat.sub(0n, 1n+q), 1n+q) == 0n : Nat}, ft(h))
+    case 1n+p 1n+q:
+      %Equal.sym(Nat, Nat.add(Nat.sub(p, q), 1n+q), 1n+Nat.add(Nat.sub(p, q), q), add_Sr(Nat.sub(p, q), q)) :
+        {_ == 1n+p : Nat}
+      %sub_add(p, q, h) : {1n+Nat.add(Nat.sub(p, q), q) == 1n+_ : Nat}
+      {==}
+
 # s <= b and x <= b - s: s + x <= b
 def le_add_sub(+s: Nat, +b: Nat, -x: Nat, h1: {Nat.is_le(s, b) == True{} : Bool},
   h2: {Nat.is_le(x, Nat.sub(b, s)) == True{} : Bool}) -> {Nat.is_le(Nat.add(s, x), b) == True{} : Bool}:
@@ -266,16 +318,6 @@ def add_sub(+m: Nat, +v: Nat, h: {Nat.is_lt(v, m) == False{} : Bool}) -> {Nat.ad
     case 1n+p 1n+q:
       %add_sub(p, q, h) : {1n+Nat.add(p, Nat.sub(q, p)) == 1n+_ : Nat}
       {==}
-
-def sub_0r(+a: Nat) -> {Nat.sub(a, 0n) == a : Nat}:
-  match a:
-    case 0n:
-      {==}
-    case 1n+p:
-      {==}
-
-# Division by 128
-# ===============
 
 def eta(p: Nat & Nat) -> {p == (Nat.div.fin(p), Nat.mod.fin(p)) : Nat & Nat}:
   match p:

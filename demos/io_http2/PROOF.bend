@@ -8,6 +8,7 @@ import ./nat.bend as N
 import ./huff_proof.bend as HP
 import ./frame.bend as Fm
 import ./spec.bend as Sp
+import ./conn.bend as C
 
 # HPACK integers
 # ==============
@@ -700,3 +701,491 @@ def Laws.frame_cut():
 
 def Laws.frame_fields():
   {==}
+
+
+# Streams, flow control, budgets, requests
+# =======================================
+
+# words compare equal to themselves; a U32 is equal to and at most itself
+def cmp_refl(n: Nat, w: Word(n)) -> {Word.cmp(n, w, w) == EQ{} : Cmp}:
+  match n:
+    case 0n:
+      match w:
+        case WNil{}:
+          {==}
+    case 1n+p:
+      match w:
+        case WCon{True{}, t}:
+          %Equal.sym(Cmp, Word.cmp(p, t, t), EQ{}, cmp_refl(p, t)) : {Word.cmp.fin(True{}, True{}, _) == EQ{} : Cmp}
+          {==}
+        case WCon{False{}, t}:
+          %Equal.sym(Cmp, Word.cmp(p, t, t), EQ{}, cmp_refl(p, t)) : {Word.cmp.fin(False{}, False{}, _) == EQ{} : Cmp}
+          {==}
+
+def u32_eq_refl(x: U32) -> {U32.is_eq(x, x) == True{} : Bool}:
+  match x:
+    case U32{w}:
+      %Equal.sym(Cmp, Word.cmp(32n, w, w), EQ{}, cmp_refl(32n, w)) : {Cmp.is_eq(_) == True{} : Bool}
+      {==}
+
+def u32_le_refl(x: U32) -> {U32.is_le(x, x) == True{} : Bool}:
+  match x:
+    case U32{w}:
+      %Equal.sym(Cmp, Word.cmp(32n, w, w), EQ{}, cmp_refl(32n, w)) : {Cmp.is_le(_) == True{} : Bool}
+      {==}
+
+def cmp_lt_le(c: Cmp, h: {Cmp.is_lt(c) == True{} : Bool}) -> {Cmp.is_le(c) == True{} : Bool}:
+  match c:
+    case LT{}:
+      {==}
+    case EQ{}:
+      N.absurd({Cmp.is_le(EQ{}) == True{} : Bool}, N.ft(h))
+    case GT{}:
+      N.absurd({Cmp.is_le(GT{}) == True{} : Bool}, N.ft(h))
+
+def and3(-a: Bool, -b: Bool, -c: Bool, ea: {a == True{} : Bool}, eb: {b == True{} : Bool},
+  ec: {c == True{} : Bool}) -> {a && b && c == True{} : Bool}:
+  %Equal.sym(Bool, a, True{}, ea) : {_ && b && c == True{} : Bool}
+  %Equal.sym(Bool, b, True{}, eb) : {True{} && _ && c == True{} : Bool}
+  %Equal.sym(Bool, c, True{}, ec) : {True{} && True{} && _ == True{} : Bool}
+  {==}
+
+def and4(-a: Bool, -b: Bool, -c: Bool, -d: Bool, ea: {a == True{} : Bool}, eb: {b == True{} : Bool},
+  ec: {c == True{} : Bool}, ed: {d == True{} : Bool}) -> {a && b && c && d == True{} : Bool}:
+  %Equal.sym(Bool, a, True{}, ea) : {_ && b && c && d == True{} : Bool}
+  %Equal.sym(Bool, b, True{}, eb) : {True{} && _ && c && d == True{} : Bool}
+  %Equal.sym(Bool, c, True{}, ec) : {True{} && True{} && _ && d == True{} : Bool}
+  %Equal.sym(Bool, d, True{}, ed) : {True{} && True{} && True{} && _ == True{} : Bool}
+  {==}
+
+def Laws.verdict_rfc(s, t):
+  match s t:
+    case C.SIdle{} C.TData{}:
+      {==}
+    case C.SIdle{} C.THeaders{}:
+      {==}
+    case C.SIdle{} C.TPrio{}:
+      {==}
+    case C.SIdle{} C.TRst{}:
+      {==}
+    case C.SIdle{} C.TSettings{}:
+      {==}
+    case C.SIdle{} C.TPush{}:
+      {==}
+    case C.SIdle{} C.TPing{}:
+      {==}
+    case C.SIdle{} C.TGoaway{}:
+      {==}
+    case C.SIdle{} C.TWin{}:
+      {==}
+    case C.SIdle{} C.TCont{}:
+      {==}
+    case C.SIdle{} C.TOther{}:
+      {==}
+    case C.SOpen{} C.TData{}:
+      {==}
+    case C.SOpen{} C.THeaders{}:
+      {==}
+    case C.SOpen{} C.TPrio{}:
+      {==}
+    case C.SOpen{} C.TRst{}:
+      {==}
+    case C.SOpen{} C.TSettings{}:
+      {==}
+    case C.SOpen{} C.TPush{}:
+      {==}
+    case C.SOpen{} C.TPing{}:
+      {==}
+    case C.SOpen{} C.TGoaway{}:
+      {==}
+    case C.SOpen{} C.TWin{}:
+      {==}
+    case C.SOpen{} C.TCont{}:
+      {==}
+    case C.SOpen{} C.TOther{}:
+      {==}
+    case C.SHalf{} C.TData{}:
+      {==}
+    case C.SHalf{} C.THeaders{}:
+      {==}
+    case C.SHalf{} C.TPrio{}:
+      {==}
+    case C.SHalf{} C.TRst{}:
+      {==}
+    case C.SHalf{} C.TSettings{}:
+      {==}
+    case C.SHalf{} C.TPush{}:
+      {==}
+    case C.SHalf{} C.TPing{}:
+      {==}
+    case C.SHalf{} C.TGoaway{}:
+      {==}
+    case C.SHalf{} C.TWin{}:
+      {==}
+    case C.SHalf{} C.TCont{}:
+      {==}
+    case C.SHalf{} C.TOther{}:
+      {==}
+    case C.SLocal{} C.TData{}:
+      {==}
+    case C.SLocal{} C.THeaders{}:
+      {==}
+    case C.SLocal{} C.TPrio{}:
+      {==}
+    case C.SLocal{} C.TRst{}:
+      {==}
+    case C.SLocal{} C.TSettings{}:
+      {==}
+    case C.SLocal{} C.TPush{}:
+      {==}
+    case C.SLocal{} C.TPing{}:
+      {==}
+    case C.SLocal{} C.TGoaway{}:
+      {==}
+    case C.SLocal{} C.TWin{}:
+      {==}
+    case C.SLocal{} C.TCont{}:
+      {==}
+    case C.SLocal{} C.TOther{}:
+      {==}
+    case C.SReset{} C.TData{}:
+      {==}
+    case C.SReset{} C.THeaders{}:
+      {==}
+    case C.SReset{} C.TPrio{}:
+      {==}
+    case C.SReset{} C.TRst{}:
+      {==}
+    case C.SReset{} C.TSettings{}:
+      {==}
+    case C.SReset{} C.TPush{}:
+      {==}
+    case C.SReset{} C.TPing{}:
+      {==}
+    case C.SReset{} C.TGoaway{}:
+      {==}
+    case C.SReset{} C.TWin{}:
+      {==}
+    case C.SReset{} C.TCont{}:
+      {==}
+    case C.SReset{} C.TOther{}:
+      {==}
+    case C.SClosed{} C.TData{}:
+      {==}
+    case C.SClosed{} C.THeaders{}:
+      {==}
+    case C.SClosed{} C.TPrio{}:
+      {==}
+    case C.SClosed{} C.TRst{}:
+      {==}
+    case C.SClosed{} C.TSettings{}:
+      {==}
+    case C.SClosed{} C.TPush{}:
+      {==}
+    case C.SClosed{} C.TPing{}:
+      {==}
+    case C.SClosed{} C.TGoaway{}:
+      {==}
+    case C.SClosed{} C.TWin{}:
+      {==}
+    case C.SClosed{} C.TCont{}:
+      {==}
+    case C.SClosed{} C.TOther{}:
+      {==}
+
+# DATA on a stream whose verdict is a connection error: whatever its
+# padding, the connection ends with the verdict's code
+def vd.conn(+c: C.Cn, w: Bytes(), rq: List<&2, C.Req>, +fl: U32, +sid: U32, +len: Nat, +data: Bytes(), +code: U32,
+  hv: {C.verdict(C.state(c, sid), C.TData{}) == C.VConn{code} : C.Vd}) ->
+  {C.data.vd(c, w, rq, fl, sid, len, data, C.verdict(C.state(c, sid), C.TData{})) == C.die(c, w, rq, code) : C.Out}:
+  %Equal.sym(C.Vd, C.verdict(C.state(c, sid), C.TData{}), C.VConn{code}, hv) :
+    {C.data.vd(c, w, rq, fl, sid, len, data, _) == C.die(c, w, rq, code) : C.Out}
+  {==}
+
+def padded.conn(+c: C.Cn, w: Bytes(), rq: List<&2, C.Req>, +fl: U32, +sid: U32, +len: Nat, +data: Bytes(),
+  bad: Bool, +code: U32, +hp: {code == C.e.proto() : U32},
+  +hv: {C.verdict(C.state(c, sid), C.TData{}) == C.VConn{code} : C.Vd}) ->
+  {C.data.padded(c, w, rq, fl, sid, len, data, bad) == C.die(c, w, rq, code) : C.Out}:
+  match bad:
+    case True{}:
+      %Equal.sym(U32, code, C.e.proto(), hp) : {C.die(c, w, rq, C.e.proto()) == C.die(c, w, rq, _) : C.Out}
+      {==}
+    case False{}:
+      vd.conn(c, w, rq, fl, sid, len, data, code, hv)
+
+def pad.conn(+c: C.Cn, w: Bytes(), rq: List<&2, C.Req>, +fl: U32, +sid: U32, +pay: Bytes(), padded: Bool, +len: Nat,
+  +code: U32, +hp: {code == C.e.proto() : U32},
+  +hv: {C.verdict(C.state(c, sid), C.TData{}) == C.VConn{code} : C.Vd}) ->
+  {C.data.pad(c, w, rq, fl, sid, pay, padded, len) == C.die(c, w, rq, code) : C.Out}:
+  match padded len:
+    case False{} _:
+      vd.conn(c, w, rq, fl, sid, len, pay, code, hv)
+    case True{} 0n:
+      %Equal.sym(U32, code, C.e.proto(), hp) : {C.die(c, w, rq, C.e.proto()) == C.die(c, w, rq, _) : C.Out}
+      {==}
+    case True{} 1n+l:
+      padded.conn(c, w, rq, fl, sid, 1n+l, Bytes.slice(pay, 1n, Nat.sub(l, U32.to_nat(Bytes.get(pay, 0n)))),
+        Nat.is_le(1n+l, U32.to_nat(Bytes.get(pay, 0n))), code, hp, hv)
+
+def data.conn.law(+root: H.Ht, +c: C.Cn, w: Bytes(), rq: List<&2, C.Req>, +fl: U32, +sid: U32, +pay: Bytes(),
+  +code: U32, hb: {C.cn.blk(c) == C.BNone{} : C.Blk}, hz: {U32.is_zero(sid) == False{} : Bool},
+  +hp: {code == C.e.proto() : U32},
+  +hv: {C.verdict(C.state(c, sid), C.TData{}) == C.VConn{code} : C.Vd}) ->
+  {Laws.one(root, c, w, rq, Fm.Frm{0, fl, sid, pay}) == C.die(c, w, rq, code) : C.Out}:
+  %Equal.sym(C.Blk, C.cn.blk(c), C.BNone{}, hb) :
+    {C.step.blk(root, c, w, rq, _, Fm.Frm{0, fl, sid, pay}) == C.die(c, w, rq, code) : C.Out}
+  %Equal.sym(Bool, U32.is_zero(sid), False{}, hz) :
+    {C.h.data.go(c, w, rq, fl, sid, pay, _) == C.die(c, w, rq, code) : C.Out}
+  pad.conn(c, w, rq, fl, sid, pay, C.flag(fl, 8), Bytes.len(pay), code, hp, hv)
+
+def Laws.idle_data(root, c, w, rq, fl, sid, pay, hb, hs, hz):
+  data.conn.law(root, c, w, rq, fl, sid, pay, 1, hb, hz, {==},
+    Equal.cong(C.Ss, C.Vd, s => C.verdict(s, C.TData{}), C.state(c, sid), C.SIdle{}, hs))
+
+# an unpadded DATA frame goes straight to its verdict
+def unpadded(+root: H.Ht, +c: C.Cn, w: Bytes(), rq: List<&2, C.Req>, +fl: U32, +sid: U32, +pay: Bytes(),
+  hb: {C.cn.blk(c) == C.BNone{} : C.Blk}, hz: {U32.is_zero(sid) == False{} : Bool},
+  hp: {C.flag(fl, 8) == False{} : Bool}) ->
+  {Laws.one(root, c, w, rq, Fm.Frm{0, fl, sid, pay}) ==
+    C.data.vd(c, w, rq, fl, sid, Bytes.len(pay), pay, C.verdict(C.state(c, sid), C.TData{})) : C.Out}:
+  %Equal.sym(C.Blk, C.cn.blk(c), C.BNone{}, hb) :
+    {C.step.blk(root, c, w, rq, _, Fm.Frm{0, fl, sid, pay}) ==
+      C.data.vd(c, w, rq, fl, sid, Bytes.len(pay), pay, C.verdict(C.state(c, sid), C.TData{})) : C.Out}
+  %Equal.sym(Bool, U32.is_zero(sid), False{}, hz) :
+    {C.h.data.go(c, w, rq, fl, sid, pay, _) ==
+      C.data.vd(c, w, rq, fl, sid, Bytes.len(pay), pay, C.verdict(C.state(c, sid), C.TData{})) : C.Out}
+  %Equal.sym(Bool, C.flag(fl, 8), False{}, hp) :
+    {C.data.pad(c, w, rq, fl, sid, pay, _, Bytes.len(pay)) ==
+      C.data.vd(c, w, rq, fl, sid, Bytes.len(pay), pay, C.verdict(C.state(c, sid), C.TData{})) : C.Out}
+  {==}
+
+def Laws.closed_data(root, c, w, rq, fl, sid, pay, hb, hs, hz, hp):
+  Equal.trans(C.Out, Laws.one(root, c, w, rq, Fm.Frm{0, fl, sid, pay}),
+    C.data.vd(c, w, rq, fl, sid, Bytes.len(pay), pay, C.verdict(C.state(c, sid), C.TData{})),
+    C.die(c, w, rq, C.e.closed()),
+    unpadded(root, c, w, rq, fl, sid, pay, hb, hz, hp),
+    vd.conn(c, w, rq, fl, sid, Bytes.len(pay), pay, 5,
+      Equal.cong(C.Ss, C.Vd, s => C.verdict(s, C.TData{}), C.state(c, sid), C.SClosed{}, hs)))
+
+def Laws.half_data(root, c, w, rq, fl, sid, pay, hb, hs, hz, hp):
+  %Equal.sym(C.Out, Laws.one(root, c, w, rq, Fm.Frm{0, fl, sid, pay}),
+      C.data.vd(c, w, rq, fl, sid, Bytes.len(pay), pay, C.verdict(C.state(c, sid), C.TData{})),
+      unpadded(root, c, w, rq, fl, sid, pay, hb, hz, hp)) :
+    {_ == C.rst(c, Bytes.append(w, C.give(0, Bytes.len(pay))), rq, sid, C.e.closed()) : C.Out}
+  %Equal.sym(C.Ss, C.state(c, sid), C.SHalf{}, hs) :
+    {C.data.vd(c, w, rq, fl, sid, Bytes.len(pay), pay, C.verdict(_, C.TData{})) ==
+      C.rst(c, Bytes.append(w, C.give(0, Bytes.len(pay))), rq, sid, C.e.closed()) : C.Out}
+  {==}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+def Laws.req_ok():
+  {==}
+
+def Laws.req_upper():
+  {==}
+
+def Laws.req_unknown_pseudo():
+  {==}
+
+def Laws.req_response_pseudo():
+  {==}
+
+def Laws.req_pseudo_late():
+  {==}
+
+def Laws.req_connection():
+  {==}
+
+def Laws.req_te():
+  {==}
+
+def Laws.req_empty_path():
+  {==}
+
+def Laws.req_no_method():
+  {==}
+
+def Laws.req_no_scheme():
+  {==}
+
+def Laws.req_no_path():
+  {==}
+
+def Laws.req_twice():
+  {==}
+
+def Laws.req_clen_disagree():
+  {==}
+
+def Laws.req_clen_digits():
+  {==}
+
+def Laws.trailers_pseudo():
+  {==}
+
+def Laws.trailers_plain():
+  {==}
+
+# a HEADERS on an idle stream with an even id: past the padding check,
+# its verdict takes it and the id refuses it
+def even.pay(+root: H.Ht, +c: C.Cn, +w: Bytes(), +rq: List<&2, C.Req>, +fl: U32, +sid: U32, +pay: Bytes(), +off: Nat,
+  +pl: Nat, +prio: Bool, bad: Bool, hs: {C.state(c, sid) == C.SIdle{} : C.Ss},
+  he: {U32.is_zero(U32.and(sid, 1)) == True{} : Bool}) ->
+  {Laws.dead(C.hdr.pay(root, c, w, rq, fl, sid, pay, off, pl, prio, bad)) == True{} : Bool}:
+  match bad:
+    case True{}:
+      {==}
+    case False{}:
+      %Equal.sym(C.Ss, C.state(c, sid), C.SIdle{}, hs) :
+        {Laws.dead(C.hdr.go(root, c, w, rq, fl, sid, Bytes.slice(pay, off, Nat.sub(Nat.sub(Bytes.len(pay), off), pl)),
+          prio && U32.is_eq(C.u31(C.be32(pay, C.on(C.flag(fl, 8), 1n, 0n))), sid), _, C.verdict(_, C.THeaders{})))
+          == True{} : Bool}
+      %Equal.sym(Bool, U32.is_zero(U32.and(sid, 1)), True{}, he) :
+        {Laws.dead(C.hdr.open(root, c, w, rq, fl, sid, Bytes.slice(pay, off, Nat.sub(Nat.sub(Bytes.len(pay), off), pl)),
+          prio && U32.is_eq(C.u31(C.be32(pay, C.on(C.flag(fl, 8), 1n, 0n))), sid), C.SIdle{}, _)) == True{} : Bool}
+      {==}
+
+def Laws.even_id(root, c, w, rq, fl, sid, pay, hb, hs, hz, he):
+  %Equal.sym(C.Blk, C.cn.blk(c), C.BNone{}, hb) :
+    {Laws.dead(C.step.blk(root, c, w, rq, _, Fm.Frm{1, fl, sid, pay})) == True{} : Bool}
+  %Equal.sym(Bool, U32.is_zero(sid), False{}, hz) :
+    {Laws.dead(C.h.headers.go(root, c, w, rq, fl, sid, pay, _)) == True{} : Bool}
+  even.pay(root, c, w, rq, fl, sid, pay,
+    Nat.add(C.on(C.flag(fl, 8), 1n, 0n), C.on(C.flag(fl, 32), 5n, 0n)),
+    C.on(C.flag(fl, 8), U32.to_nat(Bytes.get(pay, 0n)), 0n), C.flag(fl, 32),
+    Nat.is_lt(Bytes.len(pay), Nat.add(Nat.add(C.on(C.flag(fl, 8), 1n, 0n), C.on(C.flag(fl, 32), 5n, 0n)),
+      C.on(C.flag(fl, 8), U32.to_nat(Bytes.get(pay, 0n)), 0n))), hs, he)
+
+def ids.go(+last: U32, +sid: U32, b: Bool, e: {U32.is_lt(last, sid) == b : Bool}) ->
+  {U32.is_le(last, C.last.max(last, sid, b)) == True{} : Bool}:
+  match b:
+    case True{}:
+      cmp_lt_le(U32.cmp(last, sid), e)
+    case False{}:
+      u32_le_refl(last)
+
+def Laws.ids_grow(last, sid):
+  ids.go(last, sid, U32.is_lt(last, sid), {==})
+
+def Laws.cont_only(root, c, w, rq, bsid, end, k, size, ty, fl, sid, pay, hb, hn):
+  %Equal.sym(C.Blk, C.cn.blk(c), C.BIn{bsid, end, k, size}, hb) :
+    {C.step.blk(root, c, w, rq, _, Fm.Frm{ty, fl, sid, pay}) == C.die(c, w, rq, C.e.proto()) : C.Out}
+  %Equal.sym(Bool, Bool.and(U32.is_eq(ty, 9), U32.is_eq(sid, bsid)), False{}, hn) :
+    {C.h.cont(root, c, w, rq, fl, pay, C.BIn{bsid, end, k, size}, _) == C.die(c, w, rq, C.e.proto()) : C.Out}
+  {==}
+
+def Laws.cont_capped(root, c, w, rq, bsid, end, k, size, fl, pay, hb, hbig):
+  %Equal.sym(C.Blk, C.cn.blk(c), C.BIn{bsid, end, k, size}, hb) :
+    {C.step.blk(root, c, w, rq, _, Fm.Frm{9, fl, bsid, pay}) == C.die(c, w, rq, C.e.calm()) : C.Out}
+  %Equal.sym(Bool, U32.is_eq(bsid, bsid), True{}, u32_eq_refl(bsid)) :
+    {C.h.cont(root, c, w, rq, fl, pay, C.BIn{bsid, end, k, size}, _) == C.die(c, w, rq, C.e.calm()) : C.Out}
+  %Equal.sym(Bool, Nat.is_lt(C.blk.cap(), Nat.add(size, Bytes.len(pay))), True{}, hbig) :
+    {C.blk.more(root, c, w, rq, bsid, end, k, Nat.add(size, Bytes.len(pay)), pay, _, C.flag(fl, 4)) ==
+      C.die(c, w, rq, C.e.calm()) : C.Out}
+  {==}
+
+# Flow control
+# ------------
+
+def wa.fit(-up: Nat, -down: Nat, -n: Nat, w2: C.Sw, ok: Bool,
+  eok: {Nat.is_le(C.sw.up(w2), C.win.max()) == ok : Bool},
+  fact: {Nat.add(Laws.Sw.val.up(w2), down) == Nat.add(Nat.add(up, n), Laws.Sw.val.down(w2)) : Nat}) ->
+  Laws.lands(C.sw.fit(w2, ok), C.Sw{up, down}, n):
+  match w2 ok:
+    case C.Sw{u2, d2} False{}:
+      Unit{}
+    case C.Sw{u2, d2} True{}:
+      (eok, fact)
+
+def wa(+up: Nat, +down: Nat, +n: Nat, ge: Bool, ege: {Nat.is_le(down, Nat.add(up, n)) == ge : Bool}) ->
+  Laws.lands(C.sw.fit(C.sw.norm(Nat.add(up, n), down, ge),
+    Nat.is_le(C.sw.up(C.sw.norm(Nat.add(up, n), down, ge)), C.win.max())), C.Sw{up, down}, n):
+  match ge:
+    case True{}:
+      wa.fit(up, down, n, C.Sw{Nat.sub(Nat.add(up, n), down), 0n},
+        Nat.is_le(Nat.sub(Nat.add(up, n), down), C.win.max()), {==},
+        Equal.trans(Nat, Nat.add(Nat.sub(Nat.add(up, n), down), down), Nat.add(up, n), Nat.add(Nat.add(up, n), 0n),
+          N.sub_add(Nat.add(up, n), down, ege), Equal.sym(Nat, Nat.add(Nat.add(up, n), 0n), Nat.add(up, n),
+            N.add_0r(Nat.add(up, n)))))
+    case False{}:
+      wa.fit(up, down, n, C.Sw{0n, Nat.sub(down, Nat.add(up, n))}, Nat.is_le(0n, C.win.max()), {==},
+        Equal.sym(Nat, Nat.add(Nat.add(up, n), Nat.sub(down, Nat.add(up, n))), down,
+          N.add_sub(Nat.add(up, n), down, N.nle_nlt(down, Nat.add(up, n), ege))))
+
+def Laws.win_add(w, n):
+  match w:
+    case C.Sw{+up, +down}:
+      wa(up, down, n, Nat.is_le(down, Nat.add(up, n)), {==})
+
+def Laws.win_over(u, n, h):
+  %Equal.sym(Bool, Nat.is_le(0n, Nat.add(u, n)), True{}, N.le0(Nat.add(u, n))) :
+    {C.sw.fit(C.sw.norm(Nat.add(u, n), 0n, _), Nat.is_le(C.sw.up(C.sw.norm(Nat.add(u, n), 0n, _)), C.win.max())) ==
+      None{} : Maybe<&2, C.Sw>}
+  %Equal.sym(Nat, Nat.sub(Nat.add(u, n), 0n), Nat.add(u, n), N.sub_0r(Nat.add(u, n))) :
+    {C.sw.fit(C.Sw{_, 0n}, Nat.is_le(_, C.win.max())) == None{} : Maybe<&2, C.Sw>}
+  %Equal.sym(Bool, Nat.is_le(Nat.add(u, n), C.win.max()), False{}, N.lt_nle(C.win.max(), Nat.add(u, n), h)) :
+    {C.sw.fit(C.Sw{Nat.add(u, n), 0n}, _) == None{} : Maybe<&2, C.Sw>}
+  {==}
+
+def Laws.rw_take(w, n, h):
+  %Equal.sym(Bool, Nat.is_le(n, w), True{}, h) : {C.rw.fit(w, n, _) == Some{Nat.sub(w, n)} : Maybe<&2, Nat>}
+  {==}
+
+def Laws.rw_refuse(w, n, h):
+  %Equal.sym(Bool, Nat.is_le(n, w), False{}, h) : {C.rw.fit(w, n, _) == None{} : Maybe<&2, Nat>}
+  {==}
+
+def Laws.data_fits(s, csw, fmax):
+  +a = Bytes.len(C.st.out(s))
+  +b = C.sw.up(C.st.sw(s))
+  +cc = C.sw.up(csw)
+  +m3 = Nat.min(cc, fmax)
+  +m2 = Nat.min(b, m3)
+  and4(Nat.is_le(Nat.min(a, m2), b), Nat.is_le(Nat.min(a, m2), cc), Nat.is_le(Nat.min(a, m2), fmax),
+    Nat.is_le(Nat.min(a, m2), a),
+    N.le_trans(Nat.min(a, m2), m2, b, N.min_le_r(a, m2), N.min_le_l(b, m3)),
+    N.le_trans(Nat.min(a, m2), m2, cc, N.min_le_r(a, m2), N.le_trans(m2, m3, cc, N.min_le_r(b, m3), N.min_le_l(cc, fmax))),
+    N.le_trans(Nat.min(a, m2), m2, fmax, N.min_le_r(a, m2), N.le_trans(m2, m3, fmax, N.min_le_r(b, m3),
+      N.min_le_r(cc, fmax))),
+    N.min_le_l(a, m2))
+
+# Budgets
+# -------
+
+def Laws.ping_through(root, c, w, rq, fl, pay, hb, h8, ha):
+  %Equal.sym(C.Blk, C.cn.blk(c), C.BNone{}, hb) :
+    {C.step.blk(root, c, w, rq, _, Fm.Frm{6, fl, 0, pay}) == C.ping.paid(c, w, rq, pay, C.cn.bud(c)) : C.Out}
+  %Equal.sym(Bool, Nat.is_eq(Bytes.len(pay), 8n), True{}, h8) :
+    {C.h.ping(c, w, rq, fl, pay, True{}, _) == C.ping.paid(c, w, rq, pay, C.cn.bud(c)) : C.Out}
+  %Equal.sym(Bool, C.flag(fl, 1), False{}, ha) :
+    {C.ping.ack(c, w, rq, pay, _) == C.ping.paid(c, w, rq, pay, C.cn.bud(c)) : C.Out}
+  {==}
+
+def Laws.ping_spent(c, w, rq, pay, s, r):
+  {==}
+
+def Laws.ping_pays(c, w, rq, pay, k, s, r):
+  {==}
+
+def Laws.bud_capped(b):
+  match b:
+    case C.Bud{+p, +s, +r}:
+      and3(Nat.is_le(C.bud.up(p), C.bud.cap()), Nat.is_le(C.bud.up(s), C.bud.cap()),
+        Nat.is_le(C.bud.up(r), C.bud.cap()),
+        N.min_le_r(1n+p, C.bud.cap()), N.min_le_r(1n+s, C.bud.cap()), N.min_le_r(1n+r, C.bud.cap()))

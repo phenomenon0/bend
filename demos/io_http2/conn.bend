@@ -346,9 +346,18 @@ def chk.clen.go(c: Chk, +n: Nat, dg: Bool) -> Chk:
     case Chk{ok, reg, m, s, p, a, +cl}:
       Chk{ok && dg && clen.fine(cl, n), True{}, m, s, p, a, Some{n}}
 
+# a content-length's value: its digits, at most fourteen (below 10^14,
+# which a Nat holds)
+def dec.digits(s: Bytes(), +acc: Nat) -> Nat:
+  match s:
+    case SNil{}:
+      acc
+    case SCon{Chr{c}, t}:
+      dec.digits(t, Nat.add(Nat.mul(acc, 10n), U32.to_nat(U32.sub(c, 48))))
+
 def chk.clen(c: Chk, +v: Bytes()) -> Chk:
-  chk.clen.go(c, Maybe.default(&2, Nat, Nat.read(v), 0n),
-    Bool.not(String.is_empty(v)) && digits.all(v))
+  chk.clen.go(c, dec.digits(v, 0n),
+    Bool.not(String.is_empty(v)) && digits.all(v) && Nat.is_le(Bytes.len(v), 14n))
 
 # a connection-specific field is malformed in HTTP/2 (8.2.2), and TE
 # may only say "trailers"
@@ -1109,8 +1118,8 @@ def hdr.kind(+c: Cn, +sid: U32, s: Ss, self: Bool) -> Bk:
     case _ False{}:
       BkDrop{0}
 
-def last.max(+last: U32, +sid: U32, idle: Bool) -> U32:
-  match idle:
+def last.max(+last: U32, +sid: U32, above: Bool) -> U32:
+  match above:
     case True{}:
       sid
     case False{}:
@@ -1129,7 +1138,7 @@ def hdr.open(+root: H.Ht, +c: Cn, w: Bytes(), rq: List<&2, Req>, +fl: U32, +sid:
     case True{}:
       die(c, w, rq, e.proto())
     case False{}:
-      blk.start(root, cn.w.last(c, last.max(cn.last(c), sid, is.idle(s))), w, rq, sid, flag(fl, 1),
+      blk.start(root, cn.w.last(c, last.max(cn.last(c), sid, U32.is_lt(cn.last(c), sid))), w, rq, sid, flag(fl, 1),
         hdr.kind(c, sid, s, self), frag, flag(fl, 4))
 
 def hdr.go(+root: H.Ht, +c: Cn, w: Bytes(), rq: List<&2, Req>, +fl: U32, +sid: U32, +frag: Bytes(), +self: Bool,
