@@ -857,8 +857,20 @@ function str_prepend(c, s) {
   if (typeof c !== "string") { throw "bend: JS strings cannot contain non-scalar Char values"; }
   return c + s;
 }
-function str_length(s) { let n = 0n; for (const c of s) { n++; } return n; }
+// A string with no surrogate is its own code points: a position is an
+// index. The last string asked about is remembered, so a scanner reading
+// one buffer at many positions tests it once.
+let STR_FLAT_S = "", STR_FLAT = true;
+function str_flat(s) {
+  if (s !== STR_FLAT_S) { STR_FLAT_S = s; STR_FLAT = !/[\uD800-\uDFFF]/.test(s); }
+  return STR_FLAT;
+}
+function str_length(s) {
+  if (str_flat(s)) { return BigInt(s.length); }
+  let n = 0n; for (const c of s) { n++; } return n;
+}
 function str_offset(s, n) {
+  if (n >= 32n && str_flat(s)) { return n < BigInt(s.length) ? Number(n) : s.length; }
   let i = 0;
   while (n > 0n && i < s.length) { i += s.codePointAt(i) > 0xffff ? 2 : 1; n--; }
   return i;
@@ -5044,10 +5056,13 @@ INLINE Term blk_new(Env e, bool arr, Nat d, u32 lgs, u32 n, THR Term* v) {
 // never changes nar; a write of a wider cell reallocates in str_reserve.
 // Peek borrows. Take consumes metadata and moves/retains the payload BEFORE
 // releasing a shared descriptor. Only taken parts may enter str_writable.
+// Taken from its one owner, a heap descriptor is not released but kept as
+// home, and str_view_owned writes the new view back into it: a cut, a push
+// or an append on an unshared string frees and allocates no descriptor.
 #define STR_LIMIT (1ull << 31)
 #define str_nar(p) ((p).data ? (u32)(term_aux((p).data) >> 5) & 3 : 2)
 #define str_cap(d) (1ull << (blk_cls(d) + ((term_aux(d) >> 5) & 3)))
-typedef struct { Term data; u32 off; u32 len; } StrParts;
+typedef struct { Term data; u32 off; u32 len; Term home; } StrParts;
 
 INLINE u32 str_fit(u32 c) { return c < 256 ? 2 : c < 65536 ? 1 : 0; }
 
@@ -5064,7 +5079,10 @@ INLINE StrParts str_peek(Env e, Term s) {
 
 INLINE StrParts str_take(Env e, Term s) {
   StrParts p = str_peek(e, s);
-  if (p.len) {
+  if (p.len && term_rfc(s)
+      && (rfc_view(e, term_loc(s)) & RFC_CNT) == 1) {
+    p.home = s;
+  } else if (p.len) {
     Term data[1];
     Loc l = ctr_take(e, s, 1, data);
     p.data = data[0];
@@ -5073,16 +5091,35 @@ INLINE StrParts str_take(Env e, Term s) {
   return p;
 }
 
+// A home no view goes back into: its count cell and node are freed, the
+// payload it held having been taken with the parts.
+INLINE void str_home_free(Env e, Term h) {
+  if (h) {
+    Loc r = term_loc(h);
+    Loc l = rfc_view(e, r) >> 24;
+    heap_free(e, 0, r);
+    spare_free(e, 1, l);
+  }
+}
+
 INLINE Term str_view_owned(Env e, StrParts p) {
   if (!p.len || err_seen(e.mem)) {
+    str_home_free(e, p.home);
     term_sink(e, p.data);
     return term_pak(CID_SNIL, 0);
   }
   u64 cap = str_cap(p.data);
   if (cap > STR_LIMIT || p.len > cap || p.off > cap - p.len) {
     err_post(e.mem, ERR_STRS);
+    str_home_free(e, p.home);
     term_sink(e, p.data);
     return term_pak(CID_SNIL, 0);
+  }
+  if (p.home) {
+    Loc l = rfc_view(e, term_loc(p.home)) >> 24;
+    e.mem[l] = p.data;
+    e.mem[l + 1] = ((u64)p.off << 32) | p.len;
+    return p.home;
   }
   Loc l = heap_alloc(e, 1);
   if (err_seen(e.mem)) { term_sink(e, p.data); return term_pak(CID_SNIL, 0); }
@@ -5151,7 +5188,7 @@ INLINE StrParts str_reserve(Env e, StrParts p, u64 need, bool front, u32 nar) {
   if (n > STR_LIMIT) {
     err_post(e.mem, ERR_STRS);
     term_sink(e, p.data);
-    StrParts z = {0, 0, 0}; return z;
+    StrParts z = {0, 0, 0, p.home}; return z;
   }
   u64 cap = p.data ? str_cap(p.data) : 0;
   if (str_nar(p) < nar) { nar = str_nar(p); }
@@ -5167,6 +5204,7 @@ INLINE StrParts str_reserve(Env e, StrParts p, u64 need, bool front, u32 nar) {
     str_copy_cells(e, q, 0, p);
   }
   term_sink(e, p.data);
+  q.home = p.home;
   return q;
 }
 
@@ -5175,7 +5213,7 @@ INLINE Term str_prepend_take(Env e, u32 c, Term s) {
   // Putting back the cell an uncons just stepped past is a view, not a
   // write: nothing is stored, so a shared or static payload qualifies.
   if (p.data && p.off > 0) {
-    StrParts b = {p.data, p.off - 1, p.len + 1};
+    StrParts b = {p.data, p.off - 1, p.len + 1, p.home};
     if (str_at_peek(e, b, 0) == c) { return str_view_owned(e, b); }
   }
   p = str_reserve(e, p, 1, true, str_fit(c));
