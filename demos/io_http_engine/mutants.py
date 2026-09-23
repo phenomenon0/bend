@@ -129,8 +129,8 @@ FRAMING = [
     '''  step.te.at(bytes.eq(lows(v), te.lit()), pd, out)''',
     '''  step.te.at(Bytes.starts_with(lows(v), te.lit()), pd, out)'''),
   ('an HTTP/1.0 request is kept alive without asking', 'main.bend',
-    '''      pend.req.go(meth, path, body, close || (v10 && Bool.not(ka)), Bool.not(v10), up.asked(ws))''',
-    '''      pend.req.go(meth, path, body, close, Bool.not(v10), up.asked(ws))'''),
+    '''      pend.req.go(meth, path, body, close || (v10 && Bool.not(ka)), Bool.not(v10), up.asked(ws), hd.of(hx, v10))''',
+    '''      pend.req.go(meth, path, body, close, Bool.not(v10), up.asked(ws), hd.of(hx, v10))'''),
   ('the spec lets a chunk\'s data end in a bare LF', 'spec.bend',
     '''    case ADataCr{} Eng.XCr{}:
       GTo{ADataLf{}, False{}}''',

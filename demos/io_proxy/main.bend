@@ -411,15 +411,6 @@ def answer(+srv: Srv, +head: Bool, +closing: Bool, v10: Bool, a: Ans, cs: Socket
     case AStale{}:
       refuse(srv, head, cs, "502 Bad Gateway")
 
-def head.v10(m: Maybe<&2, X.Head>) -> Bool:
-  match m:
-    case Some{h}:
-      match h:
-        case X.Head{meth, target, v10, fs}:
-          v10
-    case None{}:
-      False{}
-
 def serve.msg(+srv: Srv, mm: Maybe<&2, X.Msg>, +v10: Bool, +closing: Bool, cs: Socket, more: Socket -> IO(Socket)) ->
   IO(Socket):
   match mm:
@@ -432,16 +423,15 @@ def serve.msg(+srv: Srv, mm: Maybe<&2, X.Msg>, +v10: Bool, +closing: Bool, cs: S
     case None{}:
       refuse(srv, False{}, cs, "400 Bad Request")
 
-# the request forwarded is core.bend's fwd.at of the head read again
-def serve.head(+srv: Srv, +ip: Bytes(), +m: Maybe<&2, X.Head>, +r: Eng.Req, cs: Socket,
-  more: Socket -> IO(Socket)) -> IO(Socket):
-  serve.msg(srv, X.fwd.at(srv.fwd(srv, ip), m, r), head.v10(m), Eng.req.close(r) || Eng.req.ws(r), cs, more)
+def hd.v10(h: Eng.Hd) -> Bool:
+  match h:
+    case Eng.Hd{meth, v10, fs, cn}:
+      v10
 
-# one request: forwarded, answered, and then more
-def serve(+srv: Srv, +ip: Bytes(), t: X.Took, cs: Socket, more: Socket -> IO(Socket)) -> IO(Socket):
-  match t:
-    case X.Took{+raw, r}:
-      serve.head(srv, ip, X.head.of(raw), r, cs, more)
+# one request: forwarded (core.bend's fwd of what the reader read),
+# answered, and then more
+def serve(+srv: Srv, +ip: Bytes(), +r: Eng.Req, cs: Socket, more: Socket -> IO(Socket)) -> IO(Socket):
+  serve.msg(srv, X.fwd(srv.fwd(srv, ip), r), hd.v10(Eng.req.hd(r)), Eng.req.close(r) || Eng.req.ws(r), cs, more)
 
 # a request whose head is whole and whose body is coming, asking to be
 # told to send it (RFC 9110 10.1.1): told once
@@ -450,19 +440,10 @@ def expects.low(xs: List<&2, Bytes()>) -> List<&2, Bytes()>:
     case Nil{}:
       Nil{}
     case Con{x, t}:
-      Con{Eng.lows(x), expects.low(t)}
+      Con{Eng.lows(X.trim(x)), expects.low(t)}
 
-def expects.of(m: Maybe<&2, X.Head>) -> List<&2, Bytes()>:
-  match m:
-    case Some{h}:
-      match h:
-        case X.Head{meth, target, v10, fs}:
-          expects.low(X.values("expect", fs))
-    case None{}:
-      Nil{}
-
-def expects(+raw: Bytes()) -> Bool:
-  X.in.names("100-continue", expects.of(X.head.of(raw)))
+def expects(+p: Eng.P) -> Bool:
+  X.in.names("100-continue", expects.low(X.values("expect", Eng.p.fields(p))))
 
 def cont.send(on: Bool, cs: Socket, +ms: U32) -> IO(Socket):
   match on:
@@ -472,23 +453,21 @@ def cont.send(on: Bool, cs: Socket, +ms: U32) -> IO(Socket):
     case False{}:
       IO.pure(Socket, cs)
 
-def wait.at(+srv: Srv, big: Bool, body: Bool, cont: Bool, p: Eng.P, +raw: Bytes(), cs: Socket,
+def wait.at(+srv: Srv, big: Bool, body: Bool, cont: Bool, +p: Eng.P, +n: Nat, cs: Socket,
   again: Socket -> X.Scan -> Bool -> IO(Socket)) -> IO(Socket):
   match big body cont:
     case True{} _ _:
       refuse(srv, False{}, cs, "431 Request Header Fields Too Large")
     case False{} True{} False{}:
-      IO.bind(Socket, Socket, cont.send(expects(raw), cs, srv.idle(srv)), s2 => again(s2, X.Scan{p, raw}, True{}))
+      IO.bind(Socket, Socket, cont.send(expects(p), cs, srv.idle(srv)), s2 => again(s2, X.Scan{p, n}, True{}))
     case False{} _ _:
-      again(cs, X.Scan{p, raw}, cont)
+      again(cs, X.Scan{p, n}, cont)
 
 # waiting for more: a head past its cap is refused with 431
 def wait(+srv: Srv, sc: X.Scan, cont: Bool, cs: Socket, again: Socket -> X.Scan -> Bool -> IO(Socket)) -> IO(Socket):
   match sc:
-    case X.Scan{+p, +raw}:
-      +hd = Eng.p.head(p)
-      wait.at(srv, hd && U32.is_lt(srv.head(srv), U32.from_nat(Bytes.len(raw))),
-        Bool.not(hd) && Bool.not(String.is_empty(raw)), cont, p, raw, cs, again)
+    case X.Scan{+p, +n}:
+      wait.at(srv, Eng.p.head(p) && U32.is_lt(srv.head(srv), U32.from_nat(n)), Eng.p.body(p), cont, p, n, cs, again)
 
 def tail(+srv: Srv, t: X.Tail, cont: Bool, cs: Socket, again: Socket -> X.Scan -> Bool -> IO(Socket)) -> IO(Socket):
   match t:
@@ -501,7 +480,7 @@ def tail(+srv: Srv, t: X.Tail, cont: Bool, cs: Socket, again: Socket -> X.Scan -
 
 # the requests a read completed, one after another, and then its tail;
 # a request completed resets the Expect check
-def took(+srv: Srv, +ip: Bytes(), ts: List<&2, X.Took>, t: X.Tail, cont: Bool, cs: Socket,
+def took(+srv: Srv, +ip: Bytes(), ts: List<&2, Eng.Req>, t: X.Tail, cont: Bool, cs: Socket,
   again: Socket -> X.Scan -> Bool -> IO(Socket)) -> IO(Socket):
   match ts:
     case Nil{}:

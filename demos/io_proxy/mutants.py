@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # The proxy's laws are not vacuous. Each mutant breaks core.bend the way
-# a bug would -- the client's raw bytes passed through, a hop-by-hop
+# a bug would -- the client's bytes passed through, a hop-by-hop
 # field forwarded, a field the client's Connection named kept, a refused
 # stream read on, a request sent unchecked or with a field a framing
 # reads, a length that is not the body's; a response sent back
@@ -9,7 +9,7 @@
 # the client is not told of, a 502 with a body to HEAD -- and PROOF.bend
 # must refuse it. Each runs in a scratch copy of the tree the proof
 # imports (the proxy, the engine, wire/), where the engine's own proof, which the proxy's
-# uses (frame_sim, bad_feeds, cls_every, ...), is replaced by its statements
+# uses (frame_sim, feed_buf_is_feed, bad_feeds, ...), is replaced by its statements
 # left open: the copy then checks to exactly its count of open holes, and a
 # mutant that the proxy's proof refuses shows an error instead. (The laws
 # hold step checks PROOF.bend whole, the engine's proof included.)
@@ -21,13 +21,13 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(HERE))
 
 MUTANTS = [
-  ('the client\'s raw bytes passed through (forward_canonical, no_smuggle)',
+  ('the client\'s bytes passed through, not rebuilt (forward_canonical, no_smuggle)',
     '''    case Con{t, r}:
       wire.at(fwd(w, t), wire(w, r))''',
     '''    case Con{t, r}:
       match t:
-        case Took{raw, r0}:
-          Bytes.append(raw, wire(w, r))'''),
+        case Eng.Req{meth, path, body, close, ws, key, hd}:
+          Bytes.append(body, wire(w, r))'''),
   ('TE forwarded (hop_by_hop_removed)',
     '''|| Eng.bytes.eq(n, "te") ''', ''''''),
   ('a response\'s Transfer-Encoding sent back (hop_by_hop_removed_rsp)',
@@ -36,10 +36,10 @@ MUTANTS = [
     '''  is.other(Eng.fld.of(n)) && Bool.not(hop(ns, n)) && Bool.not(own(n))''',
     '''  is.other(Eng.fld.of(n)) && Bool.not(hop.fixed(n)) && Bool.not(own(n))'''),
   ('a refused stream read on, as if a request began (scan_is_spec, refused_not_forwarded)',
-    '''    case _ SBad{}:
-      done(acc, TBad{})''',
-    '''    case _ SBad{}:
-      done(acc, TWait{scan.new()})'''),
+    '''    case Eng.Bad{}:
+      TBad{}''',
+    '''    case Eng.Bad{}:
+      TWait{scan.new()}'''),
   ('a request sent unchecked (no_smuggle)',
     '''  Bool.pick(Maybe<&2, Msg>, valid(m), Some{m}, None{})''',
     '''  Some{m}'''),
@@ -48,9 +48,9 @@ MUTANTS = [
     '''      full(n) && ok.all(Spec.TName{}, n) && ok.all(Spec.TVal{}, v)'''),
   ('a Content-Length one more than the body (no_smuggle)',
     '''    case True{}:
-      [Field{"content-length", Nat.show(Bytes.len(body))}]''',
+      [Wr.Field{"content-length", Nat.show(Bytes.len(body))}]''',
     '''    case True{}:
-      [Field{"content-length", Nat.show(1n+Bytes.len(body))}]'''),
+      [Wr.Field{"content-length", Nat.show(1n+Bytes.len(body))}]'''),
   ('a response sent back unchecked (rsp_reframed)',
     '''  Bool.pick(Maybe<&2, Rsp>, rvalid(head, code, r), Some{r}, None{})''',
     '''  Some{r}'''),
@@ -95,6 +95,9 @@ def EL.frame_sim(bs):
   ?TODO
 
 def EL.feed_split(a, b, p):
+  ?TODO
+
+def EL.feed_buf_is_feed(b, p):
   ?TODO
 
 def EL.cls_every(c):

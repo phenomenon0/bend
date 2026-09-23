@@ -369,23 +369,36 @@ def tok.keepalive() -> Bytes():
 # Requests
 # ========
 
+# The head a message came with, for whoever passes it on: the method's
+# bytes, whether the request line said HTTP/1.0, the field lines this
+# engine does not act on and the Host, in the order they came (each its
+# name lowercased and its value as it came, spec.bend's view of it), and
+# every member a Connection listed, lowercased.
+type Hd is Data:
+  Hd{meth: Bytes(), v10: Bool, fields: List<&2, Wr.Field>, conn: List<&2, Bytes()>}
+
 # A parsed message: the method, the target and body as bytes, whether
-# the peer asked to close, and whether it asked to become a WebSocket
-# and with what key. A target, a body and a key that arrived within one
-# read are views of it.
+# the peer asked to close, whether it asked to become a WebSocket and
+# with what key, and its head. A target, a body, a key and a field's
+# value that arrived within one read are views of it.
 type Req is Data:
   Req{meth: Meth, path: Bytes(), body: Bytes(), close: Bool,
-    ws: Bool, key: Bytes()}
+    ws: Bool, key: Bytes(), hd: Hd}
 
 def req.close(r: Req) -> Bool:
   match r:
-    case Req{meth, path, body, close, ws, key}:
+    case Req{meth, path, body, close, ws, key, hd}:
       close
 
 def req.ws(r: Req) -> Bool:
   match r:
-    case Req{meth, path, body, close, ws, key}:
+    case Req{meth, path, body, close, ws, key, hd}:
       ws
+
+def req.hd(r: Req) -> Hd:
+  match r:
+    case Req{meth, path, body, close, ws, key, hd}:
+      hd
 
 # What a message has said about becoming a WebSocket. Plain{} is the
 # answer for every request that never names one of the three headers,
@@ -473,31 +486,38 @@ type Fx is Data:
 # one heap node, not fourteen words carried in P: nx, always None and
 # carried along as it came, makes the type recursive, and a recursive
 # type is a node, so a byte's step moves one word for it.
+# What the head has said for whoever passes it on (Hd): the method's
+# bytes; the name of the field whose value is being read, or of the last
+# one passed on; the fields passed on so far, newest first; and the
+# members every Connection so far listed.
+type Hx is Data:
+  Hx{meth: Bytes(), name: Bytes(), fields: List<&2, Wr.Field>, conn: List<&2, Bytes()>}
+
 type Pend is Data:
   Pend{meth: Meth, path: Bytes(), cl: Cl, close: Bool, host: Hosts,
-    ws: Up, fx: Fx, nx: Maybe<&2, Pend>}
+    ws: Up, fx: Fx, hx: Hx, nx: Maybe<&2, Pend>}
 
 def pend.new() -> Pend:
-  Pend{MOther{}, "", NoCl{}, False{}, H0{}, Plain{}, Fx{False{}, False{}, False{}}, None{}}
+  Pend{MOther{}, "", NoCl{}, False{}, H0{}, Plain{}, Fx{False{}, False{}, False{}}, Hx{"", "", Nil{}, Nil{}}, None{}}
 
 # a new method token starts a new message, so the rest resets with it
-def pend.meth(pd: Pend, m: Meth) -> Pend:
+def pend.meth(pd: Pend, m: Meth, mb: Bytes()) -> Pend:
   match pd:
-    case Pend{meth, path, cl, close, host, ws, fx, nx}:
-      Pend{m, "", NoCl{}, False{}, H0{}, Plain{}, Fx{False{}, False{}, False{}}, nx}
+    case Pend{meth, path, cl, close, host, ws, fx, hx, nx}:
+      Pend{m, "", NoCl{}, False{}, H0{}, Plain{}, Fx{False{}, False{}, False{}}, Hx{mb, "", Nil{}, Nil{}}, nx}
 
 def pend.path(pd: Pend, p: Bytes()) -> Pend:
   match pd:
-    case Pend{meth, path, cl, close, host, ws, fx, nx}:
-      Pend{meth, p, cl, close, host, ws, fx, nx}
+    case Pend{meth, path, cl, close, host, ws, fx, hx, nx}:
+      Pend{meth, p, cl, close, host, ws, fx, hx, nx}
 
 # the request line said HTTP/1.0
 def pend.v10(pd: Pend) -> Pend:
   match pd:
-    case Pend{meth, path, cl, close, host, ws, fx, nx}:
+    case Pend{meth, path, cl, close, host, ws, fx, hx, nx}:
       match fx:
         case Fx{v10, ka, te}:
-          Pend{meth, path, cl, close, host, ws, Fx{True{}, ka, te}, nx}
+          Pend{meth, path, cl, close, host, ws, Fx{True{}, ka, te}, hx, nx}
 
 def hosts.more(h: Hosts) -> Hosts:
   match h:
@@ -510,8 +530,8 @@ def hosts.more(h: Hosts) -> Hosts:
 
 def pend.host(pd: Pend) -> Pend:
   match pd:
-    case Pend{meth, path, cl, close, host, ws, fx, nx}:
-      Pend{meth, path, cl, close, hosts.more(host), ws, fx, nx}
+    case Pend{meth, path, cl, close, host, ws, fx, hx, nx}:
+      Pend{meth, path, cl, close, hosts.more(host), ws, fx, hx, nx}
 
 def fx.ka(fx: Fx, k: Bool) -> Fx:
   match fx:
@@ -523,42 +543,71 @@ def fx.ka(fx: Fx, k: Bool) -> Fx:
 # HTTP/1.0 connection to stay open
 def pend.conn(pd: Pend, cl: Bool, up: Bool, ka: Bool) -> Pend:
   match pd:
-    case Pend{meth, path, c, close, host, ws, fx, nx}:
-      Pend{meth, path, c, close || cl, host, up.cu(ws, up), fx.ka(fx, ka), nx}
+    case Pend{meth, path, c, close, host, ws, fx, hx, nx}:
+      Pend{meth, path, c, close || cl, host, up.cu(ws, up), fx.ka(fx, ka), hx, nx}
 
 def pend.up(pd: Pend, v: Bool) -> Pend:
   match pd:
-    case Pend{meth, path, cl, close, host, ws, fx, nx}:
-      Pend{meth, path, cl, close, host, up.up(ws, v), fx, nx}
+    case Pend{meth, path, cl, close, host, ws, fx, hx, nx}:
+      Pend{meth, path, cl, close, host, up.up(ws, v), fx, hx, nx}
 
 def pend.key(pd: Pend, k: Bytes()) -> Pend:
   match pd:
-    case Pend{meth, path, cl, close, host, ws, fx, nx}:
-      Pend{meth, path, cl, close, host, up.key(ws, k), fx, nx}
+    case Pend{meth, path, cl, close, host, ws, fx, hx, nx}:
+      Pend{meth, path, cl, close, host, up.key(ws, k), fx, hx, nx}
 
 def pend.ver(pd: Pend, v: Bool) -> Pend:
   match pd:
-    case Pend{meth, path, cl, close, host, ws, fx, nx}:
-      Pend{meth, path, cl, close, host, up.ver(ws, v), fx, nx}
+    case Pend{meth, path, cl, close, host, ws, fx, hx, nx}:
+      Pend{meth, path, cl, close, host, up.ver(ws, v), fx, hx, nx}
+
+# The head passed on grows at a field's end: a field passed on joins
+# the front, named by the name its colon closed; a Connection's members
+# join the members.
+def pend.nm(pd: Pend, n: Bytes()) -> Pend:
+  match pd:
+    case Pend{meth, path, cl, close, host, ws, fx, hx, nx}:
+      match hx:
+        case Hx{m, o, fs, cn}:
+          Pend{meth, path, cl, close, host, ws, fx, Hx{m, n, fs, cn}, nx}
+
+def pend.fld(pd: Pend, v: Bytes()) -> Pend:
+  match pd:
+    case Pend{meth, path, cl, close, host, ws, fx, hx, nx}:
+      match hx:
+        case Hx{m, +n, fs, cn}:
+          Pend{meth, path, cl, close, host, ws, fx, Hx{m, n, Con{Wr.Field{n, v}, fs}, cn}, nx}
+
+def pend.cn(pd: Pend, ms: List<&2, Bytes()>) -> Pend:
+  match pd:
+    case Pend{meth, path, cl, close, host, ws, fx, hx, nx}:
+      match hx:
+        case Hx{m, n, fs, cn}:
+          Pend{meth, path, cl, close, host, ws, fx, Hx{m, n, fs, List.append(&2, Bytes(), ms, cn)}, nx}
+
+def hd.of(hx: Hx, v10: Bool) -> Hd:
+  match hx:
+    case Hx{m, n, fs, cn}:
+      Hd{m, v10, List.reverse(&2, Wr.Field, fs), cn}
 
 def pend.req.go(
-  meth: Meth, path: Bytes(), body: Bytes(), close: Bool, gate: Bool, asked: Bool & Bytes()
+  meth: Meth, path: Bytes(), body: Bytes(), close: Bool, gate: Bool, asked: Bool & Bytes(), hd: Hd
 ) -> Req:
   (ws, key) = asked
-  Req{meth, path, body, close, gate && ws, key}
+  Req{meth, path, body, close, gate && ws, key, hd}
 
 # an HTTP/1.0 request closes after its reply unless it asked to keep
 # alive (RFC 9112 9.3), and never upgrades: a server MUST ignore an
 # Upgrade in HTTP/1.0 (RFC 9110 7.8)
-def pend.req.fx(meth: Meth, path: Bytes(), body: Bytes(), close: Bool, ws: Up, fx: Fx) -> Req:
+def pend.req.fx(meth: Meth, path: Bytes(), body: Bytes(), close: Bool, ws: Up, fx: Fx, hx: Hx) -> Req:
   match fx:
     case Fx{+v10, ka, te}:
-      pend.req.go(meth, path, body, close || (v10 && Bool.not(ka)), Bool.not(v10), up.asked(ws))
+      pend.req.go(meth, path, body, close || (v10 && Bool.not(ka)), Bool.not(v10), up.asked(ws), hd.of(hx, v10))
 
 def pend.req(pd: Pend, body: Bytes()) -> Req:
   match pd:
-    case Pend{meth, path, cl, close, host, ws, fx, nx}:
-      pend.req.fx(meth, path, body, close, ws, fx)
+    case Pend{meth, path, cl, close, host, ws, fx, hx, nx}:
+      pend.req.fx(meth, path, body, close, ws, fx, hx)
 
 # The chunked body
 # ================
@@ -863,9 +912,11 @@ def chk.next(pos: ChPos, x: XK) -> Mv:
 # Lin  at the start of a field line  InN  a field name, as it came
 # InL0 a Content-Length, no digit    InL  its digits, v so far
 # InLt the whitespace after them     InLc a Connection list: the member
-#                                         being read, close and upgrade seen
+#                                         being read, close and upgrade
+#                                         seen, the members before it
 # InLu an Upgrade list, websocket    InLk0/InLk a Sec-WebSocket-Key value
-# InLv a Sec-WebSocket-Version value InLx any other value, skipped
+# InLv a Sec-WebSocket-Version value InLx the Host's value, or any other
+#                                         field's: passed on as it came
 # InLe0/InLe a Transfer-Encoding's coding
 # CrL  the CR of the blank line      Bod  the body so far, and r more
 #                                         bytes after the next one
@@ -886,12 +937,12 @@ type St is Data:
   InL0{}
   InL{v: U32}
   InLt{v: U32}
-  InLc{t: Bytes(), cl: Bool, up: Bool, ka: Bool}
+  InLc{t: Bytes(), cl: Bool, up: Bool, ka: Bool, ms: List<&2, Bytes()>}
   InLu{t: Bytes(), ws: Bool}
   InLk0{}
   InLk{k: Bytes()}
   InLv{v: Bytes()}
-  InLx{}
+  InLx{v: Bytes()}
   InLe0{}
   InLe{v: Bytes()}
   CrL{}
@@ -920,8 +971,8 @@ def emit.next(ws: Bool) -> St:
 
 def emit.go(r: Req, out: List<&2, Req>) -> P:
   match r:
-    case Req{meth, path, body, close, +ws, key}:
-      P{emit.next(ws), pend.new(), Req{meth, path, body, close, ws, key} <> out}
+    case Req{meth, path, body, close, +ws, key, hd}:
+      P{emit.next(ws), pend.new(), Req{meth, path, body, close, ws, key, hd} <> out}
 
 # a completed message rolls the machine straight into the next one
 def emit(pd: Pend, body: Bytes(), out: List<&2, Req>) -> P:
@@ -929,7 +980,7 @@ def emit(pd: Pend, body: Bytes(), out: List<&2, Req>) -> P:
 
 # the method closes at its space, and a new message starts with it
 def step.meth(+m: Bytes(), pd: Pend, out: List<&2, Req>) -> P:
-  P{InT{""}, pend.meth(pd, meth.of(m)), out}
+  P{InT{""}, pend.meth(pd, meth.of(m), m), out}
 
 # the target closes at its space; an empty one is no target
 def step.target(p: Bytes(), pd: Pend, out: List<&2, Req>) -> P:
@@ -950,25 +1001,26 @@ def step.ver(v11: Bool, v10: Bool, pd: Pend, out: List<&2, Req>) -> P:
       P{Bad{}, pd, out}
 
 # a name closes at its colon, and the field it is decides how its value
-# is read
-def step.name(f: Fld, pd: Pend, out: List<&2, Req>) -> P:
+# is read; the value of one it passes on (the Host, and any it does not
+# act on) is kept, and the name, lowercased, with it
+def step.name(f: Fld, n: Bytes(), pd: Pend, out: List<&2, Req>) -> P:
   match f:
     case FTe{}:
       P{InLe0{}, pd, out}
     case FCl{}:
       P{InL0{}, pd, out}
     case FConn{}:
-      P{InLc{"", False{}, False{}, False{}}, pd, out}
+      P{InLc{"", False{}, False{}, False{}, Nil{}}, pd, out}
     case FUp{}:
       P{InLu{"", False{}}, pd, out}
     case FKey{}:
       P{InLk0{}, pd, out}
     case FHost{}:
-      P{InLx{}, pend.host(pd), out}
+      P{InLx{""}, pend.nm(pend.host(pd), lows(n)), out}
     case FVer{}:
       P{InLv{""}, pd, out}
     case FOther{}:
-      P{InLx{}, pd, out}
+      P{InLx{""}, pend.nm(pd, lows(n)), out}
 
 # the most body this engine will hold for one message. A length past it
 # is refused at the digit that crosses it, so an announced length is
@@ -999,29 +1051,31 @@ def step.clen.dup(pd: Pend, out: List<&2, Req>, agree: Bool) -> P:
       P{Bad{}, pd, out}
 
 def step.clen.go(
-  meth: Meth, path: Bytes(), cl: Cl, close: Bool, host: Hosts, ws: Up, fx: Fx,
+  meth: Meth, path: Bytes(), cl: Cl, close: Bool, host: Hosts, ws: Up, fx: Fx, hx: Hx,
   nx: Maybe<&2, Pend>, +v: U32, out: List<&2, Req>
 ) -> P:
   match cl:
     case NoCl{}:
-      P{CrM{}, Pend{meth, path, Has{v}, close, host, ws, fx, nx}, out}
+      P{CrM{}, Pend{meth, path, Has{v}, close, host, ws, fx, hx, nx}, out}
     case Has{+w}:
-      step.clen.dup(Pend{meth, path, Has{w}, close, host, ws, fx, nx}, out, U32.is_eq(v, w))
+      step.clen.dup(Pend{meth, path, Has{w}, close, host, ws, fx, hx, nx}, out, U32.is_eq(v, w))
 
 # a Content-Length value closes
 def step.clen(+v: U32, pd: Pend, out: List<&2, Req>) -> P:
   match pd:
-    case Pend{meth, path, cl, close, host, ws, fx, nx}:
-      step.clen.go(meth, path, cl, close, host, ws, fx, nx, v, out)
+    case Pend{meth, path, cl, close, host, ws, fx, hx, nx}:
+      step.clen.go(meth, path, cl, close, host, ws, fx, hx, nx, v, out)
 
-# a list member closes at a comma, a space or the line's end
-def step.conn(+t: Bytes(), cl: Bool, up: Bool, ka: Bool, pd: Pend, out: List<&2, Req>) -> P:
-  P{CrM{}, pend.conn(pd, cl || bytes.eq(t, tok.close()), up || bytes.eq(t, tok.upgrade()),
-    ka || bytes.eq(t, tok.keepalive())), out}
+# a list member closes at a comma, a space or the line's end; a
+# Connection's members, the last with them, join the head's at its end
+def step.conn(+t: Bytes(), cl: Bool, up: Bool, ka: Bool, ms: List<&2, Bytes()>, pd: Pend,
+  out: List<&2, Req>) -> P:
+  P{CrM{}, pend.cn(pend.conn(pd, cl || bytes.eq(t, tok.close()), up || bytes.eq(t, tok.upgrade()),
+    ka || bytes.eq(t, tok.keepalive())), Con{t, ms}), out}
 
-def tok.conn(+t: Bytes(), cl: Bool, up: Bool, ka: Bool) -> St:
+def tok.conn(+t: Bytes(), cl: Bool, up: Bool, ka: Bool, ms: List<&2, Bytes()>) -> St:
   InLc{"", cl || bytes.eq(t, tok.close()), up || bytes.eq(t, tok.upgrade()),
-    ka || bytes.eq(t, tok.keepalive())}
+    ka || bytes.eq(t, tok.keepalive()), Con{t, ms}}
 
 def step.upv(+t: Bytes(), ws: Bool, pd: Pend, out: List<&2, Req>) -> P:
   P{CrM{}, pend.up(pd, ws || bytes.eq(t, tok.websocket())), out}
@@ -1085,19 +1139,19 @@ def step.wsv(v: Bytes(), pd: Pend, out: List<&2, Req>) -> P:
 # last). Any other coding, a list, or whitespace after it is refused
 # here, and so is a second Transfer-Encoding.
 def step.te.go(ok: Bool, meth: Meth, path: Bytes(), cl: Cl, close: Bool, host: Hosts, ws: Up,
-  v10: Bool, ka: Bool, nx: Maybe<&2, Pend>, out: List<&2, Req>, te: Bool) -> P:
+  v10: Bool, ka: Bool, hx: Hx, nx: Maybe<&2, Pend>, out: List<&2, Req>, te: Bool) -> P:
   match ok:
     case True{}:
-      P{CrM{}, Pend{meth, path, cl, close, host, ws, Fx{v10, ka, True{}}, nx}, out}
+      P{CrM{}, Pend{meth, path, cl, close, host, ws, Fx{v10, ka, True{}}, hx, nx}, out}
     case False{}:
-      P{Bad{}, Pend{meth, path, cl, close, host, ws, Fx{v10, ka, te}, nx}, out}
+      P{Bad{}, Pend{meth, path, cl, close, host, ws, Fx{v10, ka, te}, hx, nx}, out}
 
 def step.te.at(ok: Bool, pd: Pend, out: List<&2, Req>) -> P:
   match pd:
-    case Pend{meth, path, cl, close, host, ws, fx, nx}:
+    case Pend{meth, path, cl, close, host, ws, fx, hx, nx}:
       match fx:
         case Fx{v10, ka, +te}:
-          step.te.go(ok && Bool.not(te), meth, path, cl, close, host, ws, v10, ka, nx, out, te)
+          step.te.go(ok && Bool.not(te), meth, path, cl, close, host, ws, v10, ka, hx, nx, out, te)
 
 def step.te(v: Bytes(), pd: Pend, out: List<&2, Req>) -> P:
   step.te.at(bytes.eq(lows(v), te.lit()), pd, out)
@@ -1170,8 +1224,8 @@ def step.head.fx(pd: Pend, host: Hosts, cl: Cl, fx: Fx, out: List<&2, Req>) -> P
 # few is refused; then its body is framed as body.kind says
 def step.head(pd: Pend, out: List<&2, Req>) -> P:
   match pd:
-    case Pend{meth, path, +cl, close, +host, ws, +fx, nx}:
-      step.head.fx(Pend{meth, path, cl, close, host, ws, fx, nx}, host, cl, fx, out)
+    case Pend{meth, path, +cl, close, +host, ws, +fx, hx, nx}:
+      step.head.fx(Pend{meth, path, cl, close, host, ws, fx, hx, nx}, host, cl, fx, out)
 
 # A chunk's framing, one byte: where the grammar takes it, and the
 # budget. Every byte of a chunk line before its CR is paid from the
@@ -1298,8 +1352,8 @@ def step.at(st: St, k: Cls, +c: U32, pd: Pend, out: List<&2, Req>) -> P:
       P{InN{one(c)}, pd, out}
     case Lin{} _:
       P{Bad{}, pd, out}
-    case InN{n} KCo{}:
-      step.name(fld.name(n), pd, out)
+    case InN{+n} KCo{}:
+      step.name(fld.name(n), n, pd, out)
     case InN{n} KTk{}:
       P{InN{push(n, c)}, pd, out}
     case InN{n} KDg{}:
@@ -1332,20 +1386,20 @@ def step.at(st: St, k: Cls, +c: U32, pd: Pend, out: List<&2, Req>) -> P:
       step.clen(v, pd, out)
     case InLt{v} _:
       P{Bad{}, pd, out}
-    case InLc{t, a, b, e} KCr{}:
-      step.conn(t, a, b, e, pd, out)
-    case InLc{t, a, b, e} KSp{}:
-      P{tok.conn(t, a, b, e), pd, out}
-    case InLc{t, a, b, e} KHt{}:
-      P{tok.conn(t, a, b, e), pd, out}
-    case InLc{t, a, b, e} KCm{}:
-      P{tok.conn(t, a, b, e), pd, out}
-    case InLc{t, a, b, e} KLf{}:
+    case InLc{t, a, b, e, ms} KCr{}:
+      step.conn(t, a, b, e, ms, pd, out)
+    case InLc{t, a, b, e, ms} KSp{}:
+      P{tok.conn(t, a, b, e, ms), pd, out}
+    case InLc{t, a, b, e, ms} KHt{}:
+      P{tok.conn(t, a, b, e, ms), pd, out}
+    case InLc{t, a, b, e, ms} KCm{}:
+      P{tok.conn(t, a, b, e, ms), pd, out}
+    case InLc{t, a, b, e, ms} KLf{}:
       P{Bad{}, pd, out}
-    case InLc{t, a, b, e} KCt{}:
+    case InLc{t, a, b, e, ms} KCt{}:
       P{Bad{}, pd, out}
-    case InLc{t, a, b, e} _:
-      P{InLc{push(t, lower(c)), a, b, e}, pd, out}
+    case InLc{t, a, b, e, ms} _:
+      P{InLc{push(t, lower(c)), a, b, e, ms}, pd, out}
     case InLu{t, w} KCr{}:
       step.upv(t, w, pd, out)
     case InLu{t, w} KSp{}:
@@ -1388,14 +1442,14 @@ def step.at(st: St, k: Cls, +c: U32, pd: Pend, out: List<&2, Req>) -> P:
       P{Bad{}, pd, out}
     case InLv{v} _:
       P{InLv{push(v, c)}, pd, out}
-    case InLx{} KCr{}:
-      P{CrM{}, pd, out}
-    case InLx{} KLf{}:
+    case InLx{v} KCr{}:
+      P{CrM{}, pend.fld(pd, v), out}
+    case InLx{v} KLf{}:
       P{Bad{}, pd, out}
-    case InLx{} KCt{}:
+    case InLx{v} KCt{}:
       P{Bad{}, pd, out}
-    case InLx{} _:
-      P{InLx{}, pd, out}
+    case InLx{v} _:
+      P{InLx{push(v, c)}, pd, out}
     case InLe0{} KSp{}:
       P{InLe0{}, pd, out}
     case InLe0{} KHt{}:
@@ -1455,7 +1509,7 @@ def feed_buf.slow(s: Bytes(), p: P) -> P:
 
 # The walk the engine runs. Where a state reads a run of bytes without
 # a transition -- a method, a target, a version, a name, a key, a value
-# it skips, a body -- the run is found and taken whole: one cut of the
+# it passes on, a body -- the run is found and taken whole: one cut of the
 # read, so a target or a body within one read is a view of it and not a
 # byte rebuilt. Every other byte is one step. LAWS.bend proves the walk
 # is feed, byte for byte.
@@ -1533,7 +1587,7 @@ def st.put(sel: Run, acc: Bytes()) -> St:
     case RK{}:
       InLk{acc}
     case RX{}:
-      InLx{}
+      InLx{acc}
 
 def run.inc(ok: Bool, k: Nat) -> Nat:
   match ok:
@@ -1586,6 +1640,13 @@ def run.vis(+s: Bytes(), +sel: Run) -> Nat:
   +n = Bytes.span(s, 0n, 33, 127)
   Nat.add(n, run.len(String.drop(s, n), True{}, sel, 0n))
 
+# a value's run: the space and the visible ASCII (32 up to 127) it is
+# mostly made of, found the same way, then run.len on from the first
+# byte past them (PROOF.bend's lem.fast: the same count as run.len)
+def run.val(+s: Bytes()) -> Nat:
+  +n = Bytes.span(s, 0n, 32, 127)
+  Nat.add(n, run.len(String.drop(s, n), True{}, RX{}, 0n))
+
 def run.fast(+s: Bytes(), +sel: Run) -> Nat:
   match sel:
     case RT{}:
@@ -1599,7 +1660,7 @@ def run.fast(+s: Bytes(), +sel: Run) -> Nat:
     case RN{}:
       run.len(s, True{}, RN{}, 0n)
     case RX{}:
-      run.len(s, True{}, RX{}, 0n)
+      run.val(s)
 
 def run.go(+sel: Run, acc: Bytes(), +s: Bytes(), pd: Pend, out: List<&2, Req>) -> P & Bytes():
   run.cut(sel, acc, s, pd, out, run.fast(s, sel))
@@ -1671,46 +1732,6 @@ def ent.len(+e: Ent, +s: Bytes()) -> Nat:
 def ent.go(+e: Ent, +s: Bytes(), pd: Pend, out: List<&2, Req>) -> P & Bytes():
   ent.cut(e, s, pd, out, ent.len(e, s))
 
-# a value skipped: walked where it lies and nothing kept, and the byte
-# that ends it stepped at once. go says whether c, the byte before s,
-# was part of the value; the first call has none.
-def skip(s: Bytes(), go: Bool, c: U32, pd: Pend, out: List<&2, Req>) -> P & Bytes():
-  match s go:
-    case _ False{}:
-      (step(P{InLx{}, pd, out}, c), s)
-    case SNil{} True{}:
-      (P{InLx{}, pd, out}, SNil{})
-    case SCon{Chr{+x}, t} True{}:
-      skip(t, run.stay(RX{}, cls(x)), x, pd, out)
-
-# The same walk, with the space and the visible ASCII (32 up to 127) a
-# value is mostly made of found by Bytes.span in one borrowed pass: a
-# byte the value goes on past (a tab, obs-text) is stepped as skip steps
-# it, and the span goes on after it. What k bounds is only how many
-# spans: past it, skip walks the rest. PROOF.bend's lem.skip.vis: the
-# same walk as skip, and so as feed.
-def skip.jump(ok: Bool, +t: Bytes()) -> Bytes():
-  match ok:
-    case True{}:
-      String.drop(t, Bytes.span(t, 0n, 32, 127))
-    case False{}:
-      t
-
-def skip.run(k: Nat, s: Bytes(), on: Bool, c: U32, pd: Pend, out: List<&2, Req>) -> P & Bytes():
-  match k s on:
-    case 0n _ _:
-      skip(s, on, c, pd, out)
-    case 1n+j _ False{}:
-      (step(P{InLx{}, pd, out}, c), s)
-    case 1n+j SNil{} True{}:
-      (P{InLx{}, pd, out}, SNil{})
-    case 1n+j SCon{Chr{+x}, t} True{}:
-      +ok = run.stay(RX{}, cls(x))
-      skip.run(j, skip.jump(ok, t), ok, x, pd, out)
-
-def skip.vis(+s: Bytes(), pd: Pend, out: List<&2, Req>) -> P & Bytes():
-  skip.run(Bytes.len(s), skip.jump(True{}, s), True{}, 0, pd, out)
-
 # a body: all of the read when the body goes on past it, else the r + 1
 # bytes that end it, with the message emitted
 def bod.took(pd: Pend, out: List<&2, Req>, b: Bytes(), xy: Bytes() & Bytes()) -> P & Bytes():
@@ -1761,8 +1782,8 @@ def adv.at(st: St, s: Bytes(), pd: Pend, out: List<&2, Req>) -> P & Bytes():
       run.go(RN{}, n, s, pd, out)
     case InLk{k}:
       run.go(RK{}, k, s, pd, out)
-    case InLx{}:
-      skip.vis(s, pd, out)
+    case InLx{v}:
+      run.go(RX{}, v, s, pd, out)
     case Bod{r, b}:
       bod.go(r, b, s, pd, out)
     case Chd{r, b, left}:
@@ -1789,8 +1810,8 @@ def adv.at(st: St, s: Bytes(), pd: Pend, out: List<&2, Req>) -> P & Bytes():
       one.step(P{InL{v}, pd, out}, s)
     case InLt{v}:
       one.step(P{InLt{v}, pd, out}, s)
-    case InLc{t, a, b, e}:
-      one.step(P{InLc{t, a, b, e}, pd, out}, s)
+    case InLc{t, a, b, e, ms}:
+      one.step(P{InLc{t, a, b, e, ms}, pd, out}, s)
     case InLu{t, w}:
       one.step(P{InLu{t, w}, pd, out}, s)
     case InLk0{}:
@@ -1863,8 +1884,8 @@ def st.dead(st: St) -> St & Bool:
       (InL{v}, False{})
     case InLt{v}:
       (InLt{v}, False{})
-    case InLc{t, a, b, e}:
-      (InLc{t, a, b, e}, False{})
+    case InLc{t, a, b, e, ms}:
+      (InLc{t, a, b, e, ms}, False{})
     case InLe0{}:
       (InLe0{}, False{})
     case InLe{v}:
@@ -1881,8 +1902,8 @@ def st.dead(st: St) -> St & Bool:
       (InLk{k}, False{})
     case InLv{v}:
       (InLv{v}, False{})
-    case InLx{}:
-      (InLx{}, False{})
+    case InLx{v}:
+      (InLx{v}, False{})
     case CrL{}:
       (CrL{}, False{})
     case Bod{r, b}:
@@ -1968,6 +1989,35 @@ def p.head(+p: P) -> Bool:
   match p:
     case P{st, pd, out}:
       st.head(st)
+
+# whether the reader is part way through a body: past its head, short
+# of its end (a chunked body's trailer included)
+def st.body(st: St) -> Bool:
+  match st:
+    case Bod{r, b}:
+      True{}
+    case Chd{r, b, left}:
+      True{}
+    case Chk{pos, n, b, left}:
+      True{}
+    case _:
+      False{}
+
+def p.body(+p: P) -> Bool:
+  match p:
+    case P{st, pd, out}:
+      st.body(st)
+
+# the fields passed on so far of the message being read, newest first:
+# a proxy asks them whether a client waits to be told to send its body
+def p.fields(+p: P) -> List<&2, Wr.Field>:
+  match p:
+    case P{st, pd, out}:
+      match pd:
+        case Pend{meth, path, cl, close, host, ws, fx, hx, nx}:
+          match hx:
+            case Hx{m, n, fs, cn}:
+              fs
 
 
 # Routes
@@ -3053,7 +3103,7 @@ def serve.fit(
 
 def serve.log(+srv: Srv, r: Req) -> Ans:
   match r:
-    case Req{+meth, +path, body, close, ws, key}:
+    case Req{+meth, +path, body, close, ws, key, hd}:
       noted(srv.log(srv), meth, path,
         serve.fit(srv, path.of(path), body, meth.get(meth) || meth.head(meth),
           meth.head(meth), ws, key, long(target.cap(), path)))

@@ -7,12 +7,14 @@
 # the upstream obeys). bend-proxy forwards no byte it was sent. It
 # frames the client's stream with the HTTP engine's reader -- held to
 # spec.bend's frame() by frame_sim -- and sends each request it framed
-# rebuilt from what it read. The laws say, in order:
+# rebuilt from what it read: the head as the reader read it, spec.bend's
+# views of its lines, which the reader hands over with each request
+# (the engine's hd_framed). The laws say, in order:
 #
 #   scan_is_spec    the proxy frames the client's stream, however it is
 #                   cut into reads, as spec.bend's walk frames it, a
 #                   fresh walk after each request: the same requests,
-#                   with the same bytes, and a refusal where it refuses
+#                   heads and all, and a refusal where it refuses
 #   frames_agree    and that framing is spec.bend's frame() itself
 #   forward_canonical  so the bytes upstream are exactly the requests
 #                   frame() framed, each rebuilt: serialize(parsed)
@@ -116,30 +118,27 @@ def frame(bs: List<&2, U32>) -> PScanned:
 # The proxy's framing, seen as the reference's
 # ============================================
 #
-# A request the proxy took is its bytes, as a list, and the engine's
-# request; the scan it waits with is the reference's walk over the same
-# bytes, with the engine's reader fed them (the reader is compared to
-# the walk only through frame_sim).
+# A request the proxy took is the engine's request, its head with it;
+# the scan it waits with is the reference's walk over the bytes since
+# the last request, with the engine's reader fed them (the reader is
+# compared to the walk only through frame_sim).
 
-def took.of(t: X.Took) -> PTook:
-  match t:
-    case X.Took{raw, r}:
-      PTook{Bytes.to_list(raw), r}
-
-def tooks.of(ts: List<&2, X.Took>) -> List<&2, PTook>:
+def took.reqs(ts: List<&2, PTook>) -> List<&2, Eng.Req>:
   match ts:
     case Nil{}:
       Nil{}
     case Con{t, r}:
-      Con{took.of(t), tooks.of(r)}
+      match t:
+        case PTook{raw, q}:
+          Con{q, took.reqs(r)}
 
-# a scan waiting agrees with a walk waiting: the same bytes, the reader
-# fed them from fresh, the walk walked over them from fresh
+# a scan waiting agrees with a walk waiting: the reader fed the bytes
+# since the last request from fresh, the walk walked over them from
+# fresh
 def Waits(sc: X.Scan, w: Spec.W, raw: List<&2, U32>) -> Type:
   match sc:
-    case X.Scan{p, b}:
-      {Bytes.to_list(b) == raw : List<&2, U32>} & {p == Eng.feed(raw, Eng.p.new()) : Eng.P}
-        & {w == Spec.walk(raw, w0()) : Spec.W}
+    case X.Scan{p, n}:
+      {p == Eng.feed(raw, Eng.p.new()) : Eng.P} & {w == Spec.walk(raw, w0()) : Spec.W}
 
 def Tails(t: X.Tail, u: PTail) -> Type:
   match t u:
@@ -155,18 +154,18 @@ def Tails(t: X.Tail, u: PTail) -> Type:
 def Scans(s: X.Scanned, f: PScanned) -> Type:
   match s f:
     case X.Scanned{ts, t} PScanned{us, u}:
-      {tooks.of(ts) == us : List<&2, PTook>} & Tails(t, u)
+      {ts == took.reqs(us) : List<&2, Eng.Req>} & Tails(t, u)
 
 # the reads of a connection, as main.bend runs them: each through the
 # scan the last one left, the requests taken in order, until a read
 # ends refused or upgraded
 type Conn is Data:
-  Conn{took: List<&2, X.Took>, tail: X.Tail}
+  Conn{took: List<&2, Eng.Req>, tail: X.Tail}
 
-def conn.more(ts: List<&2, X.Took>, c: Conn) -> Conn:
+def conn.more(ts: List<&2, Eng.Req>, c: Conn) -> Conn:
   match c:
     case Conn{us, t}:
-      Conn{List.append(&2, X.Took, ts, us), t}
+      Conn{List.append(&2, Eng.Req, ts, us), t}
 
 def reads.at(s: X.Scanned, go: X.Scan -> Conn) -> Conn:
   match s:
@@ -200,15 +199,6 @@ def Conns(c: Conn, f: PScanned) -> Type:
 # The requests a framing took, and how its end reads against frame()'s:
 # waiting where frame() ends as the walk it waits with ends, refused
 # where frame() refuses, after an upgrade where frame() says upgraded.
-
-def took.reqs(ts: List<&2, PTook>) -> List<&2, Eng.Req>:
-  match ts:
-    case Nil{}:
-      Nil{}
-    case Con{t, r}:
-      match t:
-        case PTook{raw, q}:
-          Con{q, took.reqs(r)}
 
 def wend(w: Spec.W) -> Spec.End:
   match w:
@@ -249,9 +239,9 @@ law frames_agree:
 
 # LAW: the proxy frames as the spec does. For every stream a client
 # sends, however TCP cuts it into reads, the requests the proxy takes
-# are the reference framing's -- the same bytes for each, the same
-# request read from them, in order -- and it ends where the reference
-# ends: waiting on the same bytes, refused, or after an upgrade.
+# are the reference framing's -- the same requests, each with the head
+# spec.bend read, in order -- and it ends where the reference ends:
+# waiting on the same bytes, refused, or after an upgrade.
 law scan_is_spec:
   for +rs: List<&2, Bytes()>
   Conns(reads(rs), frame(Bytes.to_list(Bytes.concat(rs))))
@@ -259,23 +249,14 @@ law scan_is_spec:
 # Forwarding
 # ==========
 #
-# What goes upstream for the reference framing's requests: each one's
-# head read again from its bytes, the request rebuilt (core.bend's
-# fwd.at and ser, the very functions the proxy runs).
-
-def ref.fwd(+w: X.Fwd, t: PTook) -> Maybe<&2, X.Msg>:
-  match t:
-    case PTook{raw, r}:
-      X.fwd.at(w, X.head.of(Bytes.from_list(raw)), r)
+# What goes upstream for the reference framing's requests: each one
+# rebuilt from its head as spec.bend read it, its target and its framed
+# body (core.bend's fwd and ser, the very functions the proxy runs).
 
 def ref.wire(+w: X.Fwd, us: List<&2, PTook>) -> Bytes():
-  match us:
-    case Nil{}:
-      ""
-    case Con{t, r}:
-      X.wire.at(ref.fwd(w, t), ref.wire(w, r))
+  X.wire(w, took.reqs(us))
 
-def conn.took(c: Conn) -> List<&2, X.Took>:
+def conn.took(c: Conn) -> List<&2, Eng.Req>:
   match c:
     case Conn{ts, t}:
       ts
@@ -289,8 +270,9 @@ def scanned.took(f: PScanned) -> List<&2, PTook>:
 # however cut, the bytes the proxy sends upstream are exactly the
 # serialization of the requests the reference framing takes from the
 # stream whole -- which frames_agree says are frame()'s -- each rebuilt
-# from its own head and framed body, in order: no byte the client sent
-# reaches the upstream but through what the spec read.
+# from its head as spec.bend read it and its framed body, in order: no
+# byte the client sent reaches the upstream but through what the spec
+# read.
 law forward_canonical:
   for +w: X.Fwd
   for +rs: List<&2, Bytes()>
@@ -301,19 +283,32 @@ law forward_canonical:
 law refused_not_forwarded:
   for +rs: List<&2, Bytes()>
   for r: {Spec.frame(Bytes.to_list(Bytes.concat(rs))) == Spec.Frames{Nil{}, Spec.Refused{}} : Spec.Frames}
-  {conn.took(reads(rs)) == Nil{} : List<&2, X.Took>}
+  {conn.took(reads(rs)) == Nil{} : List<&2, Eng.Req>}
 
 # Reading it back
 # ===============
 #
 # What spec.bend reads from a request the proxy forwarded: its method,
 # its target and its body, a request that neither closes nor upgrades
-# (the proxy's hop is its own: no Connection, no Upgrade goes up).
+# (the proxy's hop is its own: no Connection, no Upgrade goes up), and
+# its head: the method, HTTP/1.1, the Host and then every field the
+# proxy sent, each named in lowercase with its value as it came (after
+# the one space the proxy writes after the colon), and no Connection.
+
+def sent(fs: List<&2, Wr.Field>) -> List<&2, Wr.Field>:
+  match fs:
+    case Nil{}:
+      Nil{}
+    case Con{f, t}:
+      match f:
+        case Wr.Field{n, v}:
+          Con{Wr.Field{Spec.lows(n), Bytes.append(" ", v)}, sent(t)}
 
 def spec.req(m: X.Msg) -> Eng.Req:
   match m:
-    case X.Msg{meth, target, host, fs, body, framed}:
-      Eng.Req{Spec.method(meth), target, body, False{}, False{}, ""}
+    case X.Msg{+meth, target, host, fs, body, framed}:
+      Eng.Req{Spec.method(meth), target, body, False{}, False{}, "",
+        Eng.Hd{meth, False{}, Con{Wr.Field{"host", Bytes.append(" ", host)}, sent(fs)}, Nil{}}}
 
 def spec.reqs(ms: List<&2, X.Msg>) -> List<&2, Eng.Req>:
   match ms:
@@ -330,7 +325,7 @@ def fwd.msgs.at(m: Maybe<&2, X.Msg>, rest: List<&2, X.Msg>) -> List<&2, X.Msg>:
     case None{}:
       Nil{}
 
-def fwd.msgs(+w: X.Fwd, ts: List<&2, X.Took>) -> List<&2, X.Msg>:
+def fwd.msgs(+w: X.Fwd, ts: List<&2, Eng.Req>) -> List<&2, X.Msg>:
   match ts:
     case Nil{}:
       Nil{}
@@ -341,11 +336,11 @@ def fwd.msgs(+w: X.Fwd, ts: List<&2, X.Took>) -> List<&2, X.Msg>:
 # it sends upstream, framed by spec.bend's frame() -- the upstream's
 # reading, if it reads HTTP/1.1 as the RFC does -- are exactly one
 # request for each one it forwarded, in order, each with the method,
-# target and body it was sent with, and nothing after the last: no
-# request boundary the upstream could draw that the proxy did not.
+# target, body and fields it was sent with, and nothing after the last:
+# no request boundary the upstream could draw that the proxy did not.
 law no_smuggle:
   for +w: X.Fwd
-  for +ts: List<&2, X.Took>
+  for +ts: List<&2, Eng.Req>
   {Spec.frame(Bytes.to_list(X.wire(w, ts))) == Spec.Frames{spec.reqs(fwd.msgs(w, ts)), Spec.Open{Nil{}}} : Spec.Frames}
 
 # The hop's fields
@@ -377,36 +372,39 @@ def hop(+ns: List<&2, Bytes()>, +n: Bytes()) -> Bool:
   hop.fixed(n) || named(n, ns)
 
 # no field is a hop's, save the ones this proxy writes for its own hop
-def clean(~mine: @+n: Bytes() -> Bool, +ns: List<&2, Bytes()>, fs: List<&2, X.Field>) -> Bool:
+def clean(~mine: @+n: Bytes() -> Bool, +ns: List<&2, Bytes()>, fs: List<&2, Wr.Field>) -> Bool:
   match fs:
     case Nil{}:
       True{}
     case Con{f, t}:
       match f:
-        case X.Field{+n, v}:
+        case Wr.Field{+n, v}:
           (mine(n) || Bool.not(hop(ns, n))) && clean(~mine, ns, t)
 
-def msg.fields(m: X.Msg) -> List<&2, X.Field>:
+def msg.fields(m: X.Msg) -> List<&2, Wr.Field>:
   match m:
     case X.Msg{meth, target, host, fs, body, framed}:
       fs
 
-def head.fields(h: X.Head) -> List<&2, X.Field>:
+def hd.conn(h: Eng.Hd) -> List<&2, Bytes()>:
   match h:
-    case X.Head{meth, target, v10, fs}:
-      fs
+    case Eng.Hd{meth, v10, fs, cn}:
+      cn
 
-# LAW: no hop-by-hop field is forwarded. Whatever the client sent, the
-# request that goes upstream carries none of Connection, Keep-Alive,
-# Proxy-Connection, TE, Transfer-Encoding, Upgrade, Trailer, nor any
-# field the client's Connection named -- but for the four this proxy
-# writes itself (X-Forwarded-For, -Proto, -Host, Via), whatever a
-# Connection said of them (and Host, which has a line of its own).
+# LAW: no hop-by-hop field is forwarded. Whatever head the client's
+# request came with, the request that goes upstream carries none of
+# Connection, Keep-Alive, Proxy-Connection, TE, Transfer-Encoding,
+# Upgrade, Trailer, nor any field the client's Connection named (every
+# member of every Connection, as the reader split them) -- but for the
+# four this proxy writes itself (X-Forwarded-For, -Proto, -Host, Via),
+# whatever a Connection said of them (and Host, which has a line of its
+# own).
 law hop_by_hop_removed:
   for +w: X.Fwd
-  for +h: X.Head
+  for +hd: Eng.Hd
+  for target: Bytes()
   for body: Bytes()
-  {clean(~own5, X.conn.names(head.fields(h)), msg.fields(X.msg.of(w, h, body))) == True{} : Bool}
+  {clean(~own5, hd.conn(hd), msg.fields(X.msg.of(w, hd, target, body))) == True{} : Bool}
 
 # LAW: and none is sent back: a response carries none of the upstream's
 # hop-by-hop fields, nor any its Connection named, but the Via it adds.
@@ -414,8 +412,8 @@ law hop_by_hop_removed_rsp:
   for +via: Bytes()
   for +ns: List<&2, Bytes()>
   for +len: Bool
-  for +fs: List<&2, X.Field>
-  {clean(~is.via, ns, List.append(&2, X.Field, X.rends(ns, len, fs), [X.Field{"via", via}])) == True{} : Bool}
+  for +fs: List<&2, Wr.Field>
+  {clean(~is.via, ns, List.append(&2, Wr.Field, X.rends(ns, len, fs), [Wr.Field{"via", via}])) == True{} : Bool}
 
 # The response read back
 # ======================

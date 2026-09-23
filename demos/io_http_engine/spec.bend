@@ -8,6 +8,7 @@
 # say "the engine agrees with this" and a reader can believe the claim
 # by reading one short file instead of main.bend's state machine.
 import Base
+import ../../wire/reader.bend as Wr
 import ./main.bend as Eng
 
 # Bytes
@@ -461,7 +462,8 @@ def req.view(x: List<&2, U32>) -> RLine:
 #   VKey0 / VKey  Sec-WebSocket-Key: OWS, then the key as it came
 #   VVer          Sec-WebSocket-Version, as it came
 #   VTe0 / VTe    Transfer-Encoding: OWS, then the coding as it came
-#   VHost / VSkip Host, or any other field: the value is only checked
+#   VHost / VSkip Host, or any other field: the name, lowercased, and
+#                 the value as it came, which is passed on
 type Val is Data:
   VLen0{}
   VLen{n: U32, ws: Bool}
@@ -472,8 +474,8 @@ type Val is Data:
   VVer{v: List<&2, U32>}
   VTe0{}
   VTe{t: List<&2, U32>}
-  VHost{}
-  VSkip{}
+  VHost{n: Bytes(), v: List<&2, U32>}
+  VSkip{n: Bytes(), v: List<&2, U32>}
 
 type FLine is Data:
   FEmpty{}
@@ -670,15 +672,23 @@ def te.view(sp: Span) -> FLine:
     case Span{w, SAt{k, c, rest}}:
       te.first(allows(TVal{}, k), c, rest)
 
-def skip.view(val: Val, sp: Span) -> FLine:
+# the Host, or any other field: bytes a value may hold, kept
+def host.view(n: Bytes(), sp: Span) -> FLine:
   match sp:
     case Span{v, SEnd{}}:
-      FVal{val}
+      FVal{VHost{n, v}}
+    case Span{v, SAt{k, c, rest}}:
+      FBad{}
+
+def skip.view(n: Bytes(), sp: Span) -> FLine:
+  match sp:
+    case Span{v, SEnd{}}:
+      FVal{VSkip{n, v}}
     case Span{v, SAt{k, c, rest}}:
       FBad{}
 
 # a name's field, and its value read the way the name says
-def field.of(f: Eng.Fld, v: List<&2, U32>) -> FLine:
+def field.of(f: Eng.Fld, n: Bytes(), v: List<&2, U32>) -> FLine:
   match f:
     case Eng.FTe{}:
       te.view(span(TOws{}, v))
@@ -691,11 +701,15 @@ def field.of(f: Eng.Fld, v: List<&2, U32>) -> FLine:
     case Eng.FKey{}:
       key.view(span(TOws{}, v))
     case Eng.FHost{}:
-      skip.view(VHost{}, span(TVal{}, v))
+      host.view(n, span(TVal{}, v))
     case Eng.FVer{}:
       ver.view(span(TVal{}, v))
     case Eng.FOther{}:
-      skip.view(VSkip{}, span(TVal{}, v))
+      skip.view(n, span(TVal{}, v))
+
+# a name, lowercased, and what follows its colon
+def field.at(+k: Bytes(), v: List<&2, U32>) -> FLine:
+  field.of(field(k), k, v)
 
 # a field line is a name and its colon: no space before the colon (RFC
 # 9112 5.1), no line folded onto the one before (a line that starts
@@ -707,7 +721,7 @@ def field.name(sp: Span) -> FLine:
     case Span{Con{h, r}, SEnd{}}:
       FName{Con{h, r}}
     case Span{Con{h, r}, SAt{Eng.KCo{}, c, v}}:
-      field.of(field(lows(Bytes.from_list(Con{h, r}))), v)
+      field.at(lows(Bytes.from_list(Con{h, r})), v)
     case Span{n, SAt{k, c, v}}:
       FBad{}
 
@@ -726,12 +740,14 @@ def field.view(x: List<&2, U32>) -> FLine:
 # to close, how many Host fields came, and for an upgrade (RFC 6455
 # 4.2.1): the last Sec-WebSocket-Key, whether an Upgrade named
 # websocket and a Connection named upgrade, and whether a
-# Sec-WebSocket-Version named anything but 13; and fr: whether the
+# Sec-WebSocket-Version named anything but 13; fr: whether the
 # request line said HTTP/1.0, whether a Connection named keep-alive,
-# and whether a Transfer-Encoding said chunked
+# and whether a Transfer-Encoding said chunked; and hx, what it hands
+# on: the method's bytes, the name of the last field it passes on, those
+# fields (newest first) and the members every Connection listed
 type Head is Data:
   Head{meth: Eng.Meth, target: List<&2, U32>, len: Maybe<&2, U32>, close: Bool,
-    hosts: Nat, key: List<&2, U32>, up: Bool, cu: Bool, vb: Bool, fr: Eng.Fx}
+    hosts: Nat, key: List<&2, U32>, up: Bool, cu: Bool, vb: Bool, fr: Eng.Fx, hx: Eng.Hx}
 
 def meth.pick(get: Bool, head: Bool) -> Eng.Meth:
   match get head:
@@ -747,9 +763,9 @@ def meth.pick(get: Bool, head: Bool) -> Eng.Meth:
 def method(+m: Bytes()) -> Eng.Meth:
   meth.pick(eq(m, "GET"), eq(m, "HEAD"))
 
-def head.new(m: List<&2, U32>, t: List<&2, U32>, v10: Bool) -> Head:
+def head.new(+m: List<&2, U32>, t: List<&2, U32>, v10: Bool) -> Head:
   Head{method(Bytes.from_list(m)), t, None{}, False{}, 0n, Nil{}, False{}, False{}, False{},
-    Eng.Fx{v10, False{}, False{}}}
+    Eng.Fx{v10, False{}, False{}}, Eng.Hx{Bytes.from_list(m), "", Nil{}, Nil{}}}
 
 # whitespace at either end of a value is no part of it (RFC 9110 5.5)
 def ows(k: Eng.Cls) -> Bool:
@@ -811,41 +827,65 @@ def head.len.at(ok: Bool, h: Head) -> Maybe<&2, Head>:
 # (RFC 9112 6.3)
 def head.len(h: Head, +n: U32) -> Maybe<&2, Head>:
   match h:
-    case Head{m, t, l, cl, hs, k, u, c, v, f}:
+    case Head{m, t, l, cl, hs, k, u, c, v, f, x}:
       match l:
         case None{}:
-          Some{Head{m, t, Some{n}, cl, hs, k, u, c, v, f}}
+          Some{Head{m, t, Some{n}, cl, hs, k, u, c, v, f, x}}
         case Some{+w}:
-          head.len.at(U32.is_eq(n, w), Head{m, t, Some{w}, cl, hs, k, u, c, v, f})
+          head.len.at(U32.is_eq(n, w), Head{m, t, Some{w}, cl, hs, k, u, c, v, f, x})
 
 # a Connection list: close, upgrade and keep-alive, each named anywhere
 # in it
 def head.conn(h: Head, a: Bool, b: Bool, ka: Bool) -> Head:
   match h:
-    case Head{m, t, l, cl, hs, k, u, c, v, f}:
+    case Head{m, t, l, cl, hs, k, u, c, v, f, x}:
       match f:
         case Eng.Fx{v10, ka0, te}:
-          Head{m, t, l, cl || a, hs, k, u, c || b, v, Eng.Fx{v10, ka0 || ka, te}}
+          Head{m, t, l, cl || a, hs, k, u, c || b, v, Eng.Fx{v10, ka0 || ka, te}, x}
 
 def head.up(h: Head, w: Bool) -> Head:
   match h:
-    case Head{m, t, l, cl, hs, k, u, c, v, f}:
-      Head{m, t, l, cl, hs, k, u || w, c, v, f}
+    case Head{m, t, l, cl, hs, k, u, c, v, f, x}:
+      Head{m, t, l, cl, hs, k, u || w, c, v, f, x}
 
 def head.key(h: Head, key: List<&2, U32>) -> Head:
   match h:
-    case Head{m, t, l, cl, hs, k, u, c, v, f}:
-      Head{m, t, l, cl, hs, key, u, c, v, f}
+    case Head{m, t, l, cl, hs, k, u, c, v, f, x}:
+      Head{m, t, l, cl, hs, key, u, c, v, f, x}
 
 def head.ver(h: Head, ok: Bool) -> Head:
   match h:
-    case Head{m, t, l, cl, hs, k, u, c, v, f}:
-      Head{m, t, l, cl, hs, k, u, c, v || Bool.not(ok), f}
+    case Head{m, t, l, cl, hs, k, u, c, v, f, x}:
+      Head{m, t, l, cl, hs, k, u, c, v || Bool.not(ok), f, x}
 
 def head.host(h: Head) -> Head:
   match h:
-    case Head{m, t, l, cl, hs, k, u, c, v, f}:
-      Head{m, t, l, cl, 1n+hs, k, u, c, v, f}
+    case Head{m, t, l, cl, hs, k, u, c, v, f, x}:
+      Head{m, t, l, cl, 1n+hs, k, u, c, v, f, x}
+
+# a field passed on, at its line's end: named, and joining the front
+def head.fld(h: Head, +n: Bytes(), vl: List<&2, U32>) -> Head:
+  match h:
+    case Head{m, t, l, cl, hs, k, u, c, v, f, x}:
+      match x:
+        case Eng.Hx{mb, o, fs, cn}:
+          Head{m, t, l, cl, hs, k, u, c, v, f, Eng.Hx{mb, n, Con{Wr.Field{n, Bytes.from_list(vl)}, fs}, cn}}
+
+# a list's members, each lowercased
+def lowall(ms: List<&2, List<&2, U32>>) -> List<&2, Bytes()>:
+  match ms:
+    case Nil{}:
+      Nil{}
+    case Con{y, r}:
+      Con{lows(Bytes.from_list(y)), lowall(r)}
+
+# a Connection's members, at its line's end, joining the members
+def head.cn(h: Head, ms: List<&2, List<&2, U32>>) -> Head:
+  match h:
+    case Head{m, t, l, cl, hs, k, u, c, v, f, x}:
+      match x:
+        case Eng.Hx{mb, o, fs, cn}:
+          Head{m, t, l, cl, hs, k, u, c, v, f, Eng.Hx{mb, o, fs, List.append(&2, Bytes(), lowall(ms), cn)}}
 
 # a Transfer-Encoding: the one coding this engine decodes is chunked,
 # alone (RFC 9112 6.1, 7): named once, and exactly, in any case. A
@@ -853,19 +893,19 @@ def head.host(h: Head) -> Head:
 # applied once; any other coding, or a list, is one it does not
 # implement. Each is refused where its line ends.
 def head.te.at(ok: Bool, m: Eng.Meth, t: List<&2, U32>, l: Maybe<&2, U32>, cl: Bool, hs: Nat,
-  k: List<&2, U32>, u: Bool, c: Bool, v: Bool, v10: Bool, ka: Bool) -> Maybe<&2, Head>:
+  k: List<&2, U32>, u: Bool, c: Bool, v: Bool, v10: Bool, ka: Bool, x: Eng.Hx) -> Maybe<&2, Head>:
   match ok:
     case True{}:
-      Some{Head{m, t, l, cl, hs, k, u, c, v, Eng.Fx{v10, ka, True{}}}}
+      Some{Head{m, t, l, cl, hs, k, u, c, v, Eng.Fx{v10, ka, True{}}, x}}
     case False{}:
       None{}
 
 def head.te(h: Head, chunked: Bool) -> Maybe<&2, Head>:
   match h:
-    case Head{m, t, l, cl, hs, k, u, c, v, f}:
+    case Head{m, t, l, cl, hs, k, u, c, v, f, x}:
       match f:
         case Eng.Fx{v10, ka, te}:
-          head.te.at(chunked && Bool.not(te), m, t, l, cl, hs, k, u, c, v, v10, ka)
+          head.te.at(chunked && Bool.not(te), m, t, l, cl, hs, k, u, c, v, v10, ka, x)
 
 # a whole field line, at its end: what the head says after it, or none
 # when the line is refused
@@ -876,8 +916,8 @@ def field.done(h: Head, val: Val) -> Maybe<&2, Head>:
     case VLen{n, ws}:
       head.len(h, n)
     case VConn{+d, +c}:
-      Some{head.conn(h, named("close", Con{c, d}), named("upgrade", Con{c, d}),
-        named("keep-alive", Con{c, d}))}
+      Some{head.cn(head.conn(h, named("close", Con{c, d}), named("upgrade", Con{c, d}),
+        named("keep-alive", Con{c, d})), Con{c, d})}
     case VUp{d, c}:
       Some{head.up(h, named("websocket", Con{c, d}))}
     case VKey0{}:
@@ -890,10 +930,10 @@ def field.done(h: Head, val: Val) -> Maybe<&2, Head>:
       None{}
     case VTe{t}:
       head.te(h, eq(lows(Bytes.from_list(t)), "chunked"))
-    case VHost{}:
-      Some{head.host(h)}
-    case VSkip{}:
-      Some{h}
+    case VHost{n, v}:
+      Some{head.fld(head.host(h), n, v)}
+    case VSkip{n, v}:
+      Some{head.fld(h, n, v)}
 
 # a request: its method, target and body; whether it asked to close --
 # a Connection named close, or it is HTTP/1.0 and no Connection named
@@ -908,13 +948,19 @@ def has(k: List<&2, U32>) -> Bool:
     case Con{h, t}:
       True{}
 
+# the head handed on: the fields oldest first
+def hd(x: Eng.Hx, v10: Bool) -> Eng.Hd:
+  match x:
+    case Eng.Hx{mb, n, fs, cn}:
+      Eng.Hd{mb, v10, List.reverse(&2, Wr.Field, fs), cn}
+
 def req(h: Head, body: List<&2, U32>) -> Eng.Req:
   match h:
-    case Head{m, t, l, cl, hs, +k, u, c, v, f}:
+    case Head{m, t, l, cl, hs, +k, u, c, v, f, x}:
       match f:
         case Eng.Fx{+v10, ka, te}:
           Eng.Req{m, Bytes.from_list(t), Bytes.from_list(body), cl || (v10 && Bool.not(ka)),
-            Bool.not(v10) && (u && c && has(k) && Bool.not(v)), Bytes.from_list(k)}
+            Bool.not(v10) && (u && c && has(k) && Bool.not(v)), Bytes.from_list(k), hd(x, v10)}
 
 # The chunked body
 # -----------------
@@ -1259,8 +1305,8 @@ def emit.mode(ws: Bool) -> Mode:
 
 def emit.go(r: Eng.Req, out: List<&2, Eng.Req>) -> W:
   match r:
-    case Eng.Req{m, p, b, cl, +ws, k}:
-      W{emit.mode(ws), Con{Eng.Req{m, p, b, cl, ws, k}, out}, Nil{}}
+    case Eng.Req{m, p, b, cl, +ws, k, d}:
+      W{emit.mode(ws), Con{Eng.Req{m, p, b, cl, ws, k, d}, out}, Nil{}}
 
 def emit(h: Head, body: List<&2, U32>, out: List<&2, Eng.Req>) -> W:
   emit.go(req(h, body), out)
@@ -1341,11 +1387,11 @@ def head.at(ok: Bool, b: Body, h: Head, out: List<&2, Eng.Req>, s: List<&2, U32>
 
 def head.done(h: Head, out: List<&2, Eng.Req>, s: List<&2, U32>) -> W:
   match h:
-    case Head{m, t, +l, cl, +hs, k, u, c, v, f}:
+    case Head{m, t, +l, cl, +hs, k, u, c, v, f, x}:
       match f:
         case Eng.Fx{+v10, ka, +te}:
           head.at(hosts.ok(v10, hs), body.of(te, v10, l),
-            Head{m, t, l, cl, hs, k, u, c, v, Eng.Fx{v10, ka, te}}, out, s)
+            Head{m, t, l, cl, hs, k, u, c, v, Eng.Fx{v10, ka, te}, x}, out, s)
 
 # a chunk's framing, one byte: where the grammar takes it (step), and
 # the budget. A paid byte needs the budget to hold it and the chunk's

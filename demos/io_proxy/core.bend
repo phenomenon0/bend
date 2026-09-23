@@ -2,14 +2,14 @@
 # upstream, and what it sends back -- all of it pure, so the laws speak of
 # the very functions the server runs.
 #
-# A request is framed by the HTTP engine's reader (demos/io_http_engine,
-# held to spec.bend's frame() by frame_sim), stepped a byte at a time from
-# a fresh reader until it completes one: the bytes it took are the
-# request's, exactly, and a fresh reader takes the bytes after them. Its
-# head is read again from those bytes by spec.bend's own views (the
-# request line split at its spaces, a field line at its colon, the name
-# lowercased, the value trimmed), and the proxy forwards a request it
-# builds from what was read -- never the bytes that came: the request
+# A client's stream is framed by the HTTP engine's reader
+# (demos/io_http_engine, held to spec.bend's frame() by frame_sim), fed
+# each read whole by its block walk (feed_buf, the byte machine by
+# feed_buf_is_feed). Each request it completes carries its head as
+# spec.bend's views read it (the method's bytes, the field lines it
+# passes on, each name lowercased and its value as it came, and the
+# members of every Connection: hd_framed), and the proxy forwards a
+# request it builds from that -- never the bytes that came: the request
 # line rebuilt, the fields re-emitted one per line, the hop-by-hop ones
 # gone, one Host, one Content-Length counted from the framed body. The
 # response comes back through wire/client.bend (wire/http1/resp.bend's
@@ -25,55 +25,14 @@ import ../../wire/http1/spec.bend as RS
 # Scanning requests
 # =================
 #
-# The reader since the last request completed, and the bytes it took.
+# The reader the requests are read by, and a bound on how much of a
+# head it may be holding: the bytes read since the last read that
+# completed a request (a head in progress began in that read or after).
 type Scan is Data:
-  Scan{p: Eng.P, raw: Bytes()}
+  Scan{p: Eng.P, n: Nat}
 
 def scan.new() -> Scan:
-  Scan{Eng.p.new(), ""}
-
-# What one byte left: still reading (the reader, the bytes so far); a
-# request completed on it (its bytes, and the request); one that asked
-# to upgrade completed on it; or the reader refused.
-type Stp is Data:
-  SGo{p: Eng.P, raw: Bytes()}
-  SMsg{raw: Bytes(), r: Eng.Req}
-  SUp{raw: Bytes(), r: Eng.Req}
-  SBad{}
-
-def stp.req(ws: Bool, raw: Bytes(), r: Eng.Req) -> Stp:
-  match ws:
-    case True{}:
-      SUp{raw, r}
-    case False{}:
-      SMsg{raw, r}
-
-def stp.st(st: Eng.St, pd: Eng.Pend, raw: Bytes()) -> Stp:
-  match st:
-    case Eng.Bad{}:
-      SBad{}
-    case _:
-      SGo{Eng.P{st, pd, Nil{}}, raw}
-
-def stp.out(st: Eng.St, pd: Eng.Pend, out: List<&2, Eng.Req>, raw: Bytes()) -> Stp:
-  match out:
-    case Con{+r, t}:
-      stp.req(Eng.req.ws(r), raw, r)
-    case Nil{}:
-      stp.st(st, pd, raw)
-
-def stp.of(p: Eng.P, raw: Bytes()) -> Stp:
-  match p:
-    case Eng.P{st, pd, out}:
-      stp.out(st, pd, out, raw)
-
-# one byte, stepped by the engine's reader
-def stp(p: Eng.P, +c: U32, raw: Bytes()) -> Stp:
-  stp.of(Eng.step(p, c), Bytes.push(raw, c))
-
-# A request taken: its bytes, and what the reader read.
-type Took is Data:
-  Took{raw: Bytes(), r: Eng.Req}
+  Scan{Eng.p.new(), 0n}
 
 # How a read ends: waiting for more (the scan to go on with), refused,
 # or after a request that asked to upgrade (the connection's last).
@@ -83,42 +42,51 @@ type Tail is Data:
   TUp{}
 
 type Scanned is Data:
-  Scanned{took: List<&2, Took>, tail: Tail}
+  Scanned{took: List<&2, Eng.Req>, tail: Tail}
 
-def done(acc: List<&2, Took>, t: Tail) -> Scanned:
-  Scanned{List.reverse(&2, Took, acc), t}
+def tail.of(st: Eng.St, pd: Eng.Pend, +n: Nat) -> Tail:
+  match st:
+    case Eng.Bad{}:
+      TBad{}
+    case Eng.Rest{bs}:
+      TUp{}
+    case _:
+      TWait{Scan{Eng.P{st, pd, Nil{}}, n}}
 
-# the bytes of a read, a byte at a time; a completed request is taken,
-# and a fresh reader takes the byte after it
-def scan.go(+s: Bytes(), st: Stp, acc: List<&2, Took>) -> Scanned:
-  match s st:
-    case _ SBad{}:
-      done(acc, TBad{})
-    case _ SUp{raw, r}:
-      done(Con{Took{raw, r}, acc}, TUp{})
-    case SNil{} SGo{p, raw}:
-      done(acc, TWait{Scan{p, raw}})
-    case SNil{} SMsg{raw, r}:
-      done(Con{Took{raw, r}, acc}, TWait{scan.new()})
-    case SCon{Chr{c}, t} SGo{p, raw}:
-      scan.go(t, stp(p, c, raw), acc)
-    case SCon{Chr{c}, t} SMsg{raw, r}:
-      scan.go(t, stp(Eng.p.new(), c, ""), Con{Took{raw, r}, acc})
+# the bytes of a head so far: the read's, when it completed a request,
+# else the ones before too
+def head.n(out: List<&2, Eng.Req>, +n: Nat, +k: Nat) -> List<&2, Eng.Req> & Nat:
+  match out:
+    case Nil{}:
+      (Nil{}, Nat.add(n, k))
+    case Con{r, t}:
+      (Con{r, t}, k)
 
-# a read, from where the last one left the scan
+def scan.took(st: Eng.St, pd: Eng.Pend, on: List<&2, Eng.Req> & Nat) -> Scanned:
+  (out, +n) = on
+  Scanned{List.reverse(&2, Eng.Req, out), tail.of(st, pd, n)}
+
+def scan.fed(p: Eng.P, +n: Nat, +k: Nat) -> Scanned:
+  match p:
+    case Eng.P{st, pd, out}:
+      scan.took(st, pd, head.n(out, n, k))
+
+# a read, from where the last one left the reader: the requests it
+# completed, oldest first, and how it ends; the reader goes on holding
+# none of them
 def scan(+s: Bytes(), sc: Scan) -> Scanned:
   match sc:
-    case Scan{p, raw}:
-      scan.go(s, SGo{p, raw}, Nil{})
+    case Scan{p, +n}:
+      scan.fed(Eng.feed_buf(s, p), n, Bytes.len(s))
 
 # Reading a head again
 # ====================
 #
-# The lines of a head, from a request's bytes: the empty lines before
-# its request line skipped (RFC 9112 2.2), then every line up to the
-# empty one that ends the head. The reader took these bytes, so every
-# line ends in CR LF and neither comes anywhere else in the head: a CR
-# ends a line and an LF is passed over.
+# (A response's head, from the bytes the exchange read.) The lines of a
+# head: the empty lines before its first line skipped, then every line
+# up to the empty one that ends the head. The reader took these bytes,
+# so every line ends in CR LF and neither comes anywhere else in the
+# head: a CR ends a line and an LF is passed over.
 type HL is Data:
   HL{started: Bool, cur: List<&2, U32>, lines: List<&2, List<&2, U32>>}
   HDone{lines: List<&2, List<&2, U32>>}
@@ -236,59 +204,31 @@ def ftrim.end(x: List<&2, U32>) -> List<&2, U32>:
 def ftrim(x: List<&2, U32>) -> List<&2, U32>:
   ftrim.end(ftrim.lead(x))
 
-# A field as it was framed: its name lowercased, its value with the
-# whitespace at either end cut (RFC 9110 5.5).
-type Field is Data:
-  Field{name: Bytes(), value: Bytes()}
-
 # a field line split as spec.bend's field.view splits it: a name of
 # token bytes and a colon at once
-def field.at(sp: Spec.Span) -> Maybe<&2, Field>:
+def field.at(sp: Spec.Span) -> Maybe<&2, Wr.Field>:
   match sp:
     case Spec.Span{Con{h, t}, Spec.SAt{Eng.KCo{}, c, v}}:
-      Some{Field{Eng.lows(Bytes.from_list(Con{h, t})), Bytes.from_list(ftrim(v))}}
+      Some{Wr.Field{Eng.lows(Bytes.from_list(Con{h, t})), Bytes.from_list(ftrim(v))}}
     case _:
       None{}
 
-def field.of(line: List<&2, U32>) -> Maybe<&2, Field>:
+def field.of(line: List<&2, U32>) -> Maybe<&2, Wr.Field>:
   field.at(fspan(Spec.TName{}, line))
 
-def fields.put(f: Maybe<&2, Field>, r: Maybe<&2, List<&2, Field>>) -> Maybe<&2, List<&2, Field>>:
+def fields.put(f: Maybe<&2, Wr.Field>, r: Maybe<&2, List<&2, Wr.Field>>) -> Maybe<&2, List<&2, Wr.Field>>:
   match f r:
     case Some{x} Some{xs}:
       Some{Con{x, xs}}
     case _ _:
       None{}
 
-def fields.of(ls: List<&2, List<&2, U32>>) -> Maybe<&2, List<&2, Field>>:
+def fields.of(ls: List<&2, List<&2, U32>>) -> Maybe<&2, List<&2, Wr.Field>>:
   match ls:
     case Nil{}:
       Some{Nil{}}
     case Con{l, t}:
       fields.put(field.of(l), fields.of(t))
-
-# A request's head, as it was framed: its method, its target, whether it
-# was HTTP/1.0, and its fields in order.
-type Head is Data:
-  Head{meth: Bytes(), target: Bytes(), v10: Bool, fields: List<&2, Field>}
-
-def head.at(r: Spec.RLine, fs: Maybe<&2, List<&2, Field>>) -> Maybe<&2, Head>:
-  match r fs:
-    case Spec.RVer{m, t, +v} Some{xs}:
-      Some{Head{Bytes.from_list(m), Bytes.from_list(t), Eng.bytes.eq(Bytes.from_list(v), "HTTP/1.0"), xs}}
-    case _ _:
-      None{}
-
-def head.lines(ls: List<&2, List<&2, U32>>) -> Maybe<&2, Head>:
-  match ls:
-    case Nil{}:
-      None{}
-    case Con{l, t}:
-      head.at(fview(l), fields.of(t))
-
-# the head of a request, read from its bytes
-def head.of(+raw: Bytes()) -> Maybe<&2, Head>:
-  head.lines(lines(raw))
 
 # The fields a hop owns
 # =====================
@@ -349,13 +289,13 @@ def conn.names.at(yes: Bool, v: Bytes(), rest: List<&2, Bytes()>) -> List<&2, By
     case False{}:
       rest
 
-def conn.names(fs: List<&2, Field>) -> List<&2, Bytes()>:
+def conn.names(fs: List<&2, Wr.Field>) -> List<&2, Bytes()>:
   match fs:
     case Nil{}:
       Nil{}
     case Con{f, t}:
       match f:
-        case Field{+n, v}:
+        case Wr.Field{+n, v}:
           conn.names.at(Eng.bytes.eq(n, "connection"), v, conn.names(t))
 
 # The request forwarded
@@ -367,7 +307,7 @@ def conn.names(fs: List<&2, Field>) -> List<&2, Bytes()>:
 # body the reader framed, with a Content-Length counted from it when the
 # request had a body's framing (a length or a coding) or has a body.
 type Msg is Data:
-  Msg{meth: Bytes(), target: Bytes(), host: Bytes(), fields: List<&2, Field>, body: Bytes(), framed: Bool}
+  Msg{meth: Bytes(), target: Bytes(), host: Bytes(), fields: List<&2, Wr.Field>, body: Bytes(), framed: Bool}
 
 def full(s: Bytes()) -> Bool:
   Bool.not(String.is_empty(s))
@@ -396,21 +336,21 @@ def is.other(f: Eng.Fld) -> Bool:
 def keeps(+ns: List<&2, Bytes()>, +n: Bytes()) -> Bool:
   is.other(Eng.fld.of(n)) && Bool.not(hop(ns, n)) && Bool.not(own(n))
 
-def ends.put(k: Bool, f: Field, r: List<&2, Field>) -> List<&2, Field>:
+def ends.put(k: Bool, f: Wr.Field, r: List<&2, Wr.Field>) -> List<&2, Wr.Field>:
   match k:
     case True{}:
       Con{f, r}
     case False{}:
       r
 
-def ends(+ns: List<&2, Bytes()>, fs: List<&2, Field>) -> List<&2, Field>:
+def ends(+ns: List<&2, Bytes()>, fs: List<&2, Wr.Field>) -> List<&2, Wr.Field>:
   match fs:
     case Nil{}:
       Nil{}
     case Con{f, t}:
       match f:
-        case Field{+n, v}:
-          ends.put(keeps(ns, n), Field{n, v}, ends(ns, t))
+        case Wr.Field{+n, v}:
+          ends.put(keeps(ns, n), Wr.Field{n, v}, ends(ns, t))
 
 def values.put(k: Bool, v: Bytes(), r: List<&2, Bytes()>) -> List<&2, Bytes()>:
   match k:
@@ -420,13 +360,13 @@ def values.put(k: Bool, v: Bytes(), r: List<&2, Bytes()>) -> List<&2, Bytes()>:
       r
 
 # the values of every field named n, in order
-def values(+n: Bytes(), fs: List<&2, Field>) -> List<&2, Bytes()>:
+def values(+n: Bytes(), fs: List<&2, Wr.Field>) -> List<&2, Bytes()>:
   match fs:
     case Nil{}:
       Nil{}
     case Con{f, t}:
       match f:
-        case Field{+m, v}:
+        case Wr.Field{+m, v}:
           values.put(Eng.bytes.eq(n, m), v, values(n, t))
 
 def join.more(t: List<&2, Bytes()>, x: Bytes()) -> Bytes():
@@ -461,33 +401,83 @@ def has(xs: List<&2, Bytes()>) -> Bool:
     case Con{x, t}:
       True{}
 
-# a request's framing: whether its head had a length or a coding
-def framed(+fs: List<&2, Field>) -> Bool:
-  has(values("content-length", fs)) || has(values("transfer-encoding", fs))
+# a value's whitespace at either end cut (RFC 9110 5.5: no part of it)
+def ows(+c: U32) -> Bool:
+  U32.is_eq(c, 32) || U32.is_eq(c, 9)
 
-def msg.of(+w: Fwd, h: Head, body: Bytes()) -> Msg:
-  match w h:
-    case Fwd{host, proto, +ip, via} Head{meth, target, v10, +fs}:
+# the value after its leading whitespace: cut says the byte before x
+# (prev) was whitespace
+def trim.lead(x: Bytes(), cut: Bool, +prev: U32) -> Bytes():
+  match x cut:
+    case _ False{}:
+      SCon{Chr{prev}, x}
+    case SNil{} True{}:
+      SNil{}
+    case SCon{Chr{+c}, t} True{}:
+      trim.lead(t, ows(c), c)
+
+# how many bytes to keep of s so that its last is no whitespace: ws
+# says the byte at k is whitespace
+def trim.end(k: Nat, +s: Bytes(), ws: Bool) -> Nat:
+  match k ws:
+    case _ False{}:
+      1n+k
+    case 0n True{}:
+      0n
+    case 1n+(+j) True{}:
+      trim.end(j, s, ows(Bytes.get(s, j)))
+
+def trim.cut(n: Nat, +s: Bytes()) -> Bytes():
+  match n:
+    case 0n:
+      ""
+    case 1n+(+j):
+      String.take(s, trim.end(j, s, ows(Bytes.get(s, j))))
+
+def trim(s: Bytes()) -> Bytes():
+  +t = trim.lead(s, True{}, 0)
+  trim.cut(Bytes.len(t), t)
+
+def trims(fs: List<&2, Wr.Field>) -> List<&2, Wr.Field>:
+  match fs:
+    case Nil{}:
+      Nil{}
+    case Con{f, t}:
+      match f:
+        case Wr.Field{n, v}:
+          Con{Wr.Field{n, trim(v)}, trims(t)}
+
+# a request's framing: whether it carries a body's length whatever its
+# body (every method but GET and HEAD, which go up with none when empty)
+def framed(+meth: Bytes()) -> Bool:
+  Bool.not(Eng.bytes.eq(meth, "GET") || Eng.bytes.eq(meth, "HEAD"))
+
+# what a request's head said, as the reader read it, and its target and
+# body: the request to send
+def msg.of(+w: Fwd, hd: Eng.Hd, target: Bytes(), body: Bytes()) -> Msg:
+  match w hd:
+    case Fwd{host, proto, +ip, via} Eng.Hd{+meth, v10, fs0, +cn}:
+      +fs = trims(fs0)
       +got = first(values("host", fs), "")
       +xff = values("x-forwarded-for", fs)
       Msg{meth, target, host.pick(host, got),
-        List.append(&2, Field, ends(conn.names(fs), fs),
-          [Field{"x-forwarded-for", join(List.append(&2, Bytes(), xff, [ip]))},
-           Field{"x-forwarded-proto", proto},
-           Field{"x-forwarded-host", got},
-           Field{"via", via}]),
-        body, framed(fs)}
+        List.append(&2, Wr.Field, ends(cn, fs),
+          [Wr.Field{"x-forwarded-for", join(List.append(&2, Bytes(), xff, [ip]))},
+           Wr.Field{"x-forwarded-proto", proto},
+           Wr.Field{"x-forwarded-host", got},
+           Wr.Field{"via", via}]),
+        body, framed(meth)}
 
 # Writing it
 # ----------
 
 # a field line, and the lines of a head, each ended by CR LF
-def fl.ser(f: Field) -> Bytes():
+def fl.ser(f: Wr.Field) -> Bytes():
   match f:
-    case Field{n, v}:
+    case Wr.Field{n, v}:
       Bytes.append(n, Bytes.append(": ", v))
 
-def fls.ser(fs: List<&2, Field>) -> Bytes():
+def fls.ser(fs: List<&2, Wr.Field>) -> Bytes():
   match fs:
     case Nil{}:
       ""
@@ -498,16 +488,16 @@ def fls.ser(fs: List<&2, Field>) -> Bytes():
 def clen.on(framed: Bool, body: Bytes()) -> Bool:
   framed || full(body)
 
-def clf.at(on: Bool, +body: Bytes()) -> List<&2, Field>:
+def clf.at(on: Bool, +body: Bytes()) -> List<&2, Wr.Field>:
   match on:
     case True{}:
-      [Field{"content-length", Nat.show(Bytes.len(body))}]
+      [Wr.Field{"content-length", Nat.show(Bytes.len(body))}]
     case False{}:
       Nil{}
 
 # the fields that go upstream: Host, the rest, the length
-def allf(host: Bytes(), fs: List<&2, Field>, +framed: Bool, +body: Bytes()) -> List<&2, Field>:
-  Con{Field{"host", host}, List.append(&2, Field, fs, clf.at(clen.on(framed, body), body))}
+def allf(host: Bytes(), fs: List<&2, Wr.Field>, +framed: Bool, +body: Bytes()) -> List<&2, Wr.Field>:
+  Con{Wr.Field{"host", host}, List.append(&2, Wr.Field, fs, clf.at(clen.on(framed, body), body))}
 
 def rl.ser(meth: Bytes(), target: Bytes()) -> Bytes():
   Bytes.append(meth, Bytes.append(" ", Bytes.append(target, " HTTP/1.1")))
@@ -536,12 +526,12 @@ def ok.all(+t: Spec.Tok, s: Bytes()) -> Bool:
     case SCon{Chr{+c}, r}:
       Spec.allows(t, Eng.cls(c)) && ok.all(t, r)
 
-def ok.field(f: Field) -> Bool:
+def ok.field(f: Wr.Field) -> Bool:
   match f:
-    case Field{+n, +v}:
+    case Wr.Field{+n, +v}:
       full(n) && ok.all(Spec.TName{}, n) && is.other(Eng.fld.of(Eng.lows(n))) && ok.all(Spec.TVal{}, v)
 
-def ok.fields(fs: List<&2, Field>) -> Bool:
+def ok.fields(fs: List<&2, Wr.Field>) -> Bool:
   match fs:
     case Nil{}:
       True{}
@@ -582,24 +572,17 @@ def valid(m: Msg) -> Bool:
       full(meth) && ok.all(Spec.TMeth{}, meth) && full(target) && ok.all(Spec.TTarget{}, target)
         && ok.all(Spec.TVal{}, host) && ok.fields(fs) && ok.len.on(clen.on(framed, body), body)
 
-# What goes upstream for the requests taken: each one's head read again
-# from its bytes and the request rebuilt from it and the framed body; a
-# request whose head does not read again (never, for bytes the reader
-# took) goes nowhere, and neither does any after it.
+# What goes upstream for the requests taken: each one rebuilt from its
+# head, its target and its framed body, and checked; one that fails the
+# check (never, for a request the reader took) goes nowhere, and neither
+# does any after it.
 def checked(+m: Msg) -> Maybe<&2, Msg>:
   Bool.pick(Maybe<&2, Msg>, valid(m), Some{m}, None{})
 
-def fwd.at(+w: Fwd, m: Maybe<&2, Head>, r: Eng.Req) -> Maybe<&2, Msg>:
-  match m r:
-    case Some{h} Eng.Req{meth, path, body, close, ws, key}:
-      checked(msg.of(w, h, body))
-    case None{} _:
-      None{}
-
-def fwd(+w: Fwd, t: Took) -> Maybe<&2, Msg>:
-  match t:
-    case Took{+raw, r}:
-      fwd.at(w, head.of(raw), r)
+def fwd(+w: Fwd, r: Eng.Req) -> Maybe<&2, Msg>:
+  match r:
+    case Eng.Req{meth, path, body, close, ws, key, hd}:
+      checked(msg.of(w, hd, path, body))
 
 def wire.at(m: Maybe<&2, Msg>, rest: Bytes()) -> Bytes():
   match m:
@@ -608,7 +591,7 @@ def wire.at(m: Maybe<&2, Msg>, rest: Bytes()) -> Bytes():
     case None{}:
       ""
 
-def wire(+w: Fwd, ts: List<&2, Took>) -> Bytes():
+def wire(+w: Fwd, ts: List<&2, Eng.Req>) -> Bytes():
   match ts:
     case Nil{}:
       ""
@@ -685,28 +668,28 @@ def status.of(line: List<&2, U32>) -> Maybe<&2, Stat>:
 def rkeeps(+ns: List<&2, Bytes()>, +len: Bool, +n: Bytes()) -> Bool:
   Bool.not(hop(ns, n)) && (len || Bool.not(Eng.bytes.eq(n, "content-length")))
 
-def rends(+ns: List<&2, Bytes()>, +len: Bool, fs: List<&2, Field>) -> List<&2, Field>:
+def rends(+ns: List<&2, Bytes()>, +len: Bool, fs: List<&2, Wr.Field>) -> List<&2, Wr.Field>:
   match fs:
     case Nil{}:
       Nil{}
     case Con{f, t}:
       match f:
-        case Field{+n, v}:
-          ends.put(rkeeps(ns, len, n), Field{n, v}, rends(ns, len, t))
+        case Wr.Field{+n, v}:
+          ends.put(rkeeps(ns, len, n), Wr.Field{n, v}, rends(ns, len, t))
 
 # What the final response's head said: the status's three digits and
 # its reason, the end-to-end fields (the Via added), and the upstream's
 # Content-Length ("" for none), which a response to HEAD carries on.
 type RHead is Data:
-  RHead{code: Bytes(), why: Bytes(), fields: List<&2, Field>, hlen: Bytes()}
+  RHead{code: Bytes(), why: Bytes(), fields: List<&2, Wr.Field>, hlen: Bytes()}
 
-def rhead.mk(+via: Bytes(), cw: Stat, +xs: List<&2, Field>) -> RHead:
+def rhead.mk(+via: Bytes(), cw: Stat, +xs: List<&2, Wr.Field>) -> RHead:
   match cw:
     case Stat{code, why}:
-      RHead{code, why, List.append(&2, Field, rends(conn.names(xs), False{}, xs), [Field{"via", via}]),
+      RHead{code, why, List.append(&2, Wr.Field, rends(conn.names(xs), False{}, xs), [Wr.Field{"via", via}]),
         first(values("content-length", xs), "")}
 
-def rhead.at(+via: Bytes(), st: Maybe<&2, Stat>, fs: Maybe<&2, List<&2, Field>>) -> Maybe<&2, RHead>:
+def rhead.at(+via: Bytes(), st: Maybe<&2, Stat>, fs: Maybe<&2, List<&2, Wr.Field>>) -> Maybe<&2, RHead>:
   match st fs:
     case Some{cw} Some{xs}:
       Some{rhead.mk(via, cw, xs)}
@@ -725,7 +708,7 @@ def rhead.lines(+via: Bytes(), ls: List<&2, List<&2, U32>>) -> Maybe<&2, RHead>:
 # has none by its framing: an answer to HEAD, a 204, a 304 (RFC 9112
 # 6.3; a 1xx is never final here, and a 101 is refused).
 type Rsp is Data:
-  Rsp{code: Bytes(), why: Bytes(), fields: List<&2, Field>, clen: Bytes(), body: Bytes(), bodyless: Bool}
+  Rsp{code: Bytes(), why: Bytes(), fields: List<&2, Wr.Field>, clen: Bytes(), body: Bytes(), bodyless: Bool}
 
 def rbodyless(+head: Bool, +code: U32) -> Bool:
   head || U32.is_eq(code, 204) || U32.is_eq(code, 304)
@@ -770,12 +753,12 @@ def ris.other(f: RS.Fld) -> Bool:
     case _:
       False{}
 
-def rok.field(f: Field) -> Bool:
+def rok.field(f: Wr.Field) -> Bool:
   match f:
-    case Field{+n, +v}:
+    case Wr.Field{+n, +v}:
       full(n) && rok.all(RS.TName{}, n) && ris.other(RS.field(RS.lows(Bytes.to_list(n)))) && rok.all(RS.TVal{}, v)
 
-def rok.fields(fs: List<&2, Field>) -> Bool:
+def rok.fields(fs: List<&2, Wr.Field>) -> Bool:
   match fs:
     case Nil{}:
       True{}
@@ -830,18 +813,18 @@ def rsp.of(+via: Bytes(), +head: Bool, +k: Nat, +code: U32, +got: Bytes(), +body
 # the bytes that go back: the status line rebuilt, a field a line, the
 # length, the connection's fate (conn: a Connection value, or "" for
 # none), the blank line, and the body unless the framing says none
-def rclf(clen: Bytes()) -> List<&2, Field>:
+def rclf(clen: Bytes()) -> List<&2, Wr.Field>:
   match clen:
     case SNil{}:
       Nil{}
     case SCon{c, t}:
-      [Field{"content-length", SCon{c, t}}]
+      [Wr.Field{"content-length", SCon{c, t}}]
 
-def rconf(+conn: Bytes()) -> List<&2, Field>:
-  Bool.pick(List<&2, Field>, String.is_empty(conn), Nil{}, [Field{"connection", conn}])
+def rconf(+conn: Bytes()) -> List<&2, Wr.Field>:
+  Bool.pick(List<&2, Wr.Field>, String.is_empty(conn), Nil{}, [Wr.Field{"connection", conn}])
 
-def rall(fs: List<&2, Field>, clen: Bytes(), +conn: Bytes()) -> List<&2, Field>:
-  List.append(&2, Field, fs, List.append(&2, Field, rclf(clen), rconf(conn)))
+def rall(fs: List<&2, Wr.Field>, clen: Bytes(), +conn: Bytes()) -> List<&2, Wr.Field>:
+  List.append(&2, Wr.Field, fs, List.append(&2, Wr.Field, rclf(clen), rconf(conn)))
 
 def sl.ser(code: Bytes(), why: Bytes()) -> Bytes():
   Bytes.append("HTTP/1.1 ", Bytes.append(code, Bytes.append(" ", why)))

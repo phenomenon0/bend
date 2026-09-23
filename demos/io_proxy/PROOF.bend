@@ -1,15 +1,20 @@
 # The proofs of bend-proxy's laws.
 #
 # scan_is_spec is a simulation between two walks that never meet
-# directly: the proxy steps the engine's reader, the reference steps
-# spec.bend's walk. What joins them is frame_sim, the engine's law that
-# its reader agrees with frame() on every input: after each byte, both
-# sides are compared through frame_sim of the bytes so far -- the same
-# requests, and a refusal on one exactly when the other refuses -- and
-# the relation (Waits) is carried to the next byte by the reader kit's
-# feed_split and the walk's own step. The rest is bookkeeping: the
-# requests taken in order (reversed accumulators, reversed back), and a
-# stream cut into reads is the stream whole.
+# directly: the proxy feeds each read whole to the engine's reader (its
+# block walk, which is the byte walk by feed_buf_is_feed) and takes the
+# requests it completed after; the reference steps spec.bend's walk a
+# byte at a time and restarts after each request. What joins them is
+# frame_sim, the engine's law that its reader agrees with frame() on
+# every input: after each byte, the reader fed from fresh and the walk
+# are compared through frame_sim of the bytes since the last request --
+# the same request, and a refusal on one exactly when the other refuses.
+# The reader never restarts: that it need not is out-independence (a
+# step never looks at the requests done) and that a step completing a
+# request leaves a fresh reader, both proved here over every row of the
+# engine's step. The rest is bookkeeping: the requests taken in order
+# (reversed accumulators, reversed back), and a stream cut into reads
+# is the stream whole.
 import Base
 import ../../wire/reader.bend as Wr
 import ../io_http_engine/main.bend as Eng
@@ -20,6 +25,7 @@ import ../../wire/http1/resp.bend as R
 import ../../wire/http1/spec.bend as RS
 import ./core.bend as X
 import ./LAWS.bend as Laws
+
 
 # Lists
 # =====
@@ -90,33 +96,1279 @@ def rev.con(-A: Data, +h: A, +t: List<&2, A>) ->
   {List.reverse(&2, A, Con{h, t}) == List.append(&2, A, List.reverse(&2, A, t), Con{h, Nil{}}) : List<&2, A>}:
   rev.go(A, t, Con{h, Nil{}})
 
-# The requests taken, as the reference's
-# --------------------------------------
-
-def tooks.rev.go(ts: List<&2, X.Took>, acc: List<&2, X.Took>) ->
-  {Laws.tooks.of(List.reverse.go(&2, X.Took, ts, acc)) ==
-    List.reverse.go(&2, Laws.PTook, Laws.tooks.of(ts), Laws.tooks.of(acc)) : List<&2, Laws.PTook>}:
+def treqs.rev.go(ts: List<&2, Laws.PTook>, acc: List<&2, Laws.PTook>) ->
+  {Laws.took.reqs(List.reverse.go(&2, Laws.PTook, ts, acc)) ==
+    List.reverse.go(&2, Eng.Req, Laws.took.reqs(ts), Laws.took.reqs(acc)) : List<&2, Eng.Req>}:
   match ts:
     case Nil{}:
       {==}
     case Con{h, t}:
-      tooks.rev.go(t, Con{h, acc})
+      match h:
+        case Laws.PTook{raw, q}:
+          treqs.rev.go(t, Con{Laws.PTook{raw, q}, acc})
 
-def tooks.rev(ts: List<&2, X.Took>) ->
-  {Laws.tooks.of(List.reverse(&2, X.Took, ts)) == List.reverse(&2, Laws.PTook, Laws.tooks.of(ts)) :
-    List<&2, Laws.PTook>}:
-  tooks.rev.go(ts, Nil{})
+def treqs.rev(ts: List<&2, Laws.PTook>) ->
+  {Laws.took.reqs(List.reverse(&2, Laws.PTook, ts)) == List.reverse(&2, Eng.Req, Laws.took.reqs(ts)) :
+    List<&2, Eng.Req>}:
+  treqs.rev.go(ts, Nil{})
 
-def tooks.app(ts: List<&2, X.Took>, -us: List<&2, X.Took>) ->
-  {Laws.tooks.of(List.append(&2, X.Took, ts, us)) ==
-    List.append(&2, Laws.PTook, Laws.tooks.of(ts), Laws.tooks.of(us)) : List<&2, Laws.PTook>}:
-  match ts:
+
+# The engine's reader and the requests it has done
+# =================================================
+#
+# The proxy feeds a read whole and takes the requests it completed from
+# the reader's out after; the reference restarts after each. The two are
+# one walk because the reader never looks at the requests it has done
+# (out-independence: a step with done requests o behind its own is the
+# step with none, o put behind), and a step that completes a request
+# completes exactly one and leaves a fresh reader (or what follows an
+# upgrade) -- and a step that completes none never hands over.
+
+# a reader with done requests o put behind its own
+def AO(p: Eng.P, o: List<&2, Eng.Req>) -> Eng.P:
+  match p:
+    case Eng.P{st, pd, x}:
+      Eng.P{st, pd, List.append(&2, Eng.Req, x, o)}
+
+def nh(st: Eng.St) -> Bool:
+  match st:
+    case Eng.Rest{bs}:
+      False{}
+    case _:
+      True{}
+
+# what a step from no done requests leaves: none and not handed over,
+# or one, and a fresh reader
+def ES.out(st: Eng.St, pd: Eng.Pend, out: List<&2, Eng.Req>) -> Type:
+  match out:
     case Nil{}:
+      {nh(st) == True{} : Bool}
+    case Con{q, t}:
+      {t == Nil{} : List<&2, Eng.Req>} & {st == Eng.emit.next(Eng.req.ws(q)) : Eng.St} &
+        {pd == Eng.pend.new() : Eng.Pend}
+
+def ES(p: Eng.P) -> Type:
+  match p:
+    case Eng.P{st, pd, out}:
+      ES.out(st, pd, out)
+
+def BD(b: Bool, tc: Type, fc: Type) -> Type:
+  match b:
+    case True{}:
+      tc
+    case False{}:
+      fc
+
+def no(-g: Type, e: {False{} == True{} : Bool}) -> g:
+  %e : BD(_, g, Unit)
+  Unit{}
+
+def yes.no(-g: Type, e: {True{} == False{} : Bool}) -> g:
+  %e : BD(_, Unit, g)
+  Unit{}
+
+def oi.emit.go(r: Eng.Req, -xo: List<&2, Eng.Req>, -oo: List<&2, Eng.Req>) ->
+  {Eng.emit.go(r, List.append(&2, Eng.Req, xo, oo)) == AO(Eng.emit.go(r, xo), oo) : Eng.P}:
+  match r:
+    case Eng.Req{m0, p0, b0, cl0, ws0, k0, hd0}:
       {==}
-    case Con{h, t}:
-      Equal.cong(List<&2, Laws.PTook>, List<&2, Laws.PTook>, xs => Con{Laws.took.of(h), xs},
-        Laws.tooks.of(List.append(&2, X.Took, t, us)),
-        List.append(&2, Laws.PTook, Laws.tooks.of(t), Laws.tooks.of(us)), tooks.app(t, us))
+
+def es.emit.go(r: Eng.Req) -> ES(Eng.emit.go(r, Nil{})):
+  match r:
+    case Eng.Req{m0, p0, b0, cl0, ws0, k0, hd0}:
+      ({==}, ({==}, {==}))
+
+def oi.emit(+pd: Eng.Pend, +b: Bytes(), -xo: List<&2, Eng.Req>, -oo: List<&2, Eng.Req>) ->
+  {Eng.emit(pd, b, List.append(&2, Eng.Req, xo, oo)) == AO(Eng.emit(pd, b, xo), oo) : Eng.P}:
+  oi.emit.go(Eng.pend.req(pd, b), xo, oo)
+
+def es.emit(+pd: Eng.Pend, +b: Bytes()) -> ES(Eng.emit(pd, b, Nil{})):
+  es.emit.go(Eng.pend.req(pd, b))
+
+def oi.target(p: Bytes(), -pd: Eng.Pend, -xo: List<&2, Eng.Req>, -oo: List<&2, Eng.Req>) ->
+  {Eng.step.target(p, pd, List.append(&2, Eng.Req, xo, oo)) == AO(Eng.step.target(p, pd, xo), oo) : Eng.P}:
+  match p:
+    case SNil{}:
+      {==}
+    case SCon{c, t}:
+      {==}
+
+def es.target(p: Bytes(), -pd: Eng.Pend) ->
+  ES(Eng.step.target(p, pd, Nil{})):
+  match p:
+    case SNil{}:
+      {==}
+    case SCon{c, t}:
+      {==}
+
+def oi.ver(v11: Bool, v10: Bool, -pd: Eng.Pend, -xo: List<&2, Eng.Req>, -oo: List<&2, Eng.Req>) ->
+  {Eng.step.ver(v11, v10, pd, List.append(&2, Eng.Req, xo, oo)) == AO(Eng.step.ver(v11, v10, pd, xo), oo) : Eng.P}:
+  match v11 v10:
+    case True{} _:
+      {==}
+    case False{} True{}:
+      {==}
+    case False{} False{}:
+      {==}
+
+def es.ver(v11: Bool, v10: Bool, -pd: Eng.Pend) ->
+  ES(Eng.step.ver(v11, v10, pd, Nil{})):
+  match v11 v10:
+    case True{} _:
+      {==}
+    case False{} True{}:
+      {==}
+    case False{} False{}:
+      {==}
+
+def oi.name(f: Eng.Fld, -n: Bytes(), -pd: Eng.Pend, -xo: List<&2, Eng.Req>, -oo: List<&2, Eng.Req>) ->
+  {Eng.step.name(f, n, pd, List.append(&2, Eng.Req, xo, oo)) == AO(Eng.step.name(f, n, pd, xo), oo) : Eng.P}:
+  match f:
+    case Eng.FTe{}:
+      {==}
+    case Eng.FCl{}:
+      {==}
+    case Eng.FConn{}:
+      {==}
+    case Eng.FUp{}:
+      {==}
+    case Eng.FKey{}:
+      {==}
+    case Eng.FHost{}:
+      {==}
+    case Eng.FVer{}:
+      {==}
+    case Eng.FOther{}:
+      {==}
+
+def es.name(f: Eng.Fld, -n: Bytes(), -pd: Eng.Pend) ->
+  ES(Eng.step.name(f, n, pd, Nil{})):
+  match f:
+    case Eng.FTe{}:
+      {==}
+    case Eng.FCl{}:
+      {==}
+    case Eng.FConn{}:
+      {==}
+    case Eng.FUp{}:
+      {==}
+    case Eng.FKey{}:
+      {==}
+    case Eng.FHost{}:
+      {==}
+    case Eng.FVer{}:
+      {==}
+    case Eng.FOther{}:
+      {==}
+
+def oi.dgo(-n: U32, -pd: Eng.Pend, big: Bool, -xo: List<&2, Eng.Req>, -oo: List<&2, Eng.Req>) ->
+  {Eng.step.digit.go(n, pd, List.append(&2, Eng.Req, xo, oo), big) == AO(Eng.step.digit.go(n, pd, xo, big), oo) : Eng.P}:
+  match big:
+    case True{}:
+      {==}
+    case False{}:
+      {==}
+
+def es.dgo(-n: U32, -pd: Eng.Pend, big: Bool) -> ES(Eng.step.digit.go(n, pd, Nil{}, big)):
+  match big:
+    case True{}:
+      {==}
+    case False{}:
+      {==}
+
+def oi.digit(+v: U32, +c: U32, -pd: Eng.Pend, -xo: List<&2, Eng.Req>, -oo: List<&2, Eng.Req>) ->
+  {Eng.step.digit(v, c, pd, List.append(&2, Eng.Req, xo, oo)) == AO(Eng.step.digit(v, c, pd, xo), oo) : Eng.P}:
+  oi.dgo((v * 10 + (c - 48) : U32), pd, U32.is_lt(Eng.body.cap(), (v * 10 + (c - 48) : U32)), xo, oo)
+
+def es.digit(+v: U32, +c: U32, -pd: Eng.Pend) -> ES(Eng.step.digit(v, c, pd, Nil{})):
+  es.dgo((v * 10 + (c - 48) : U32), pd, U32.is_lt(Eng.body.cap(), (v * 10 + (c - 48) : U32)))
+
+def oi.clen.dup(-pd: Eng.Pend, agree: Bool, -xo: List<&2, Eng.Req>, -oo: List<&2, Eng.Req>) ->
+  {Eng.step.clen.dup(pd, List.append(&2, Eng.Req, xo, oo), agree) == AO(Eng.step.clen.dup(pd, xo, agree), oo) : Eng.P}:
+  match agree:
+    case True{}:
+      {==}
+    case False{}:
+      {==}
+
+def es.clen.dup(-pd: Eng.Pend, agree: Bool) -> ES(Eng.step.clen.dup(pd, Nil{}, agree)):
+  match agree:
+    case True{}:
+      {==}
+    case False{}:
+      {==}
+
+def oi.clen.go(-meth: Eng.Meth, -path: Bytes(), cl: Eng.Cl, -close: Bool, -host: Eng.Hosts, -ws: Eng.Up, -fx: Eng.Fx, -hx: Eng.Hx, -nx: Maybe<&2, Eng.Pend>, +v: U32, -xo: List<&2, Eng.Req>, -oo: List<&2, Eng.Req>) ->
+  {Eng.step.clen.go(meth, path, cl, close, host, ws, fx, hx, nx, v, List.append(&2, Eng.Req, xo, oo)) ==
+    AO(Eng.step.clen.go(meth, path, cl, close, host, ws, fx, hx, nx, v, xo), oo) : Eng.P}:
+  match cl:
+    case Eng.NoCl{}:
+      {==}
+    case Eng.Has{+w}:
+      oi.clen.dup(Eng.Pend{meth, path, Eng.Has{w}, close, host, ws, fx, hx, nx}, U32.is_eq(v, w), xo, oo)
+
+def es.clen.go(-meth: Eng.Meth, -path: Bytes(), cl: Eng.Cl, -close: Bool, -host: Eng.Hosts, -ws: Eng.Up, -fx: Eng.Fx, -hx: Eng.Hx, -nx: Maybe<&2, Eng.Pend>, +v: U32) ->
+  ES(Eng.step.clen.go(meth, path, cl, close, host, ws, fx, hx, nx, v, Nil{})):
+  match cl:
+    case Eng.NoCl{}:
+      {==}
+    case Eng.Has{+w}:
+      es.clen.dup(Eng.Pend{meth, path, Eng.Has{w}, close, host, ws, fx, hx, nx}, U32.is_eq(v, w))
+
+def oi.clen(+v: U32, pd: Eng.Pend, -xo: List<&2, Eng.Req>, -oo: List<&2, Eng.Req>) ->
+  {Eng.step.clen(v, pd, List.append(&2, Eng.Req, xo, oo)) == AO(Eng.step.clen(v, pd, xo), oo) : Eng.P}:
+  match pd:
+    case Eng.Pend{meth, path, cl, close, host, ws, fx, hx, nx}:
+      oi.clen.go(meth, path, cl, close, host, ws, fx, hx, nx, v, xo, oo)
+
+def es.clen(+v: U32, pd: Eng.Pend) -> ES(Eng.step.clen(v, pd, Nil{})):
+  match pd:
+    case Eng.Pend{meth, path, cl, close, host, ws, fx, hx, nx}:
+      es.clen.go(meth, path, cl, close, host, ws, fx, hx, nx, v)
+
+def oi.te.go(ok: Bool, -meth: Eng.Meth, -path: Bytes(), -cl: Eng.Cl, -close: Bool, -host: Eng.Hosts, -ws: Eng.Up, -v10: Bool, -ka: Bool, -hx: Eng.Hx, -nx: Maybe<&2, Eng.Pend>, -te: Bool, -xo: List<&2, Eng.Req>, -oo: List<&2, Eng.Req>) ->
+  {Eng.step.te.go(ok, meth, path, cl, close, host, ws, v10, ka, hx, nx, List.append(&2, Eng.Req, xo, oo), te) ==
+    AO(Eng.step.te.go(ok, meth, path, cl, close, host, ws, v10, ka, hx, nx, xo, te), oo) : Eng.P}:
+  match ok:
+    case True{}:
+      {==}
+    case False{}:
+      {==}
+
+def es.te.go(ok: Bool, -meth: Eng.Meth, -path: Bytes(), -cl: Eng.Cl, -close: Bool, -host: Eng.Hosts, -ws: Eng.Up, -v10: Bool, -ka: Bool, -hx: Eng.Hx, -nx: Maybe<&2, Eng.Pend>, -te: Bool) ->
+  ES(Eng.step.te.go(ok, meth, path, cl, close, host, ws, v10, ka, hx, nx, Nil{}, te)):
+  match ok:
+    case True{}:
+      {==}
+    case False{}:
+      {==}
+
+def oi.te.at(+ok: Bool, pd: Eng.Pend, -xo: List<&2, Eng.Req>, -oo: List<&2, Eng.Req>) ->
+  {Eng.step.te.at(ok, pd, List.append(&2, Eng.Req, xo, oo)) == AO(Eng.step.te.at(ok, pd, xo), oo) : Eng.P}:
+  match pd:
+    case Eng.Pend{meth, path, cl, close, host, ws, fx, hx, nx}:
+      match fx:
+        case Eng.Fx{v10, ka, +te}:
+          oi.te.go(ok && Bool.not(te), meth, path, cl, close, host, ws, v10, ka, hx, nx, te, xo, oo)
+
+def es.te.at(+ok: Bool, pd: Eng.Pend) -> ES(Eng.step.te.at(ok, pd, Nil{})):
+  match pd:
+    case Eng.Pend{meth, path, cl, close, host, ws, fx, hx, nx}:
+      match fx:
+        case Eng.Fx{v10, ka, +te}:
+          es.te.go(ok && Bool.not(te), meth, path, cl, close, host, ws, v10, ka, hx, nx, te)
+
+def oi.te(+v: Bytes(), +pd: Eng.Pend, -xo: List<&2, Eng.Req>, -oo: List<&2, Eng.Req>) ->
+  {Eng.step.te(v, pd, List.append(&2, Eng.Req, xo, oo)) == AO(Eng.step.te(v, pd, xo), oo) : Eng.P}:
+  oi.te.at(Eng.bytes.eq(Eng.lows(v), Eng.te.lit()), pd, xo, oo)
+
+def es.te(+v: Bytes(), +pd: Eng.Pend) -> ES(Eng.step.te(v, pd, Nil{})):
+  es.te.at(Eng.bytes.eq(Eng.lows(v), Eng.te.lit()), pd)
+
+def oi.head.len(+pd: Eng.Pend, -v: U32, z: Bool, -xo: List<&2, Eng.Req>, -oo: List<&2, Eng.Req>) ->
+  {Eng.step.head.len(pd, v, List.append(&2, Eng.Req, xo, oo), z) == AO(Eng.step.head.len(pd, v, xo, z), oo) : Eng.P}:
+  match z:
+    case True{}:
+      oi.emit(pd, "", xo, oo)
+    case False{}:
+      {==}
+
+def es.head.len(+pd: Eng.Pend, -v: U32, z: Bool) -> ES(Eng.step.head.len(pd, v, Nil{}, z)):
+  match z:
+    case True{}:
+      es.emit(pd, "")
+    case False{}:
+      {==}
+
+def oi.head.at(+pd: Eng.Pend, ok: Bool, bd: Eng.Bd, -xo: List<&2, Eng.Req>, -oo: List<&2, Eng.Req>) ->
+  {Eng.step.head.at(pd, ok, bd, List.append(&2, Eng.Req, xo, oo)) == AO(Eng.step.head.at(pd, ok, bd, xo), oo) : Eng.P}:
+  match ok bd:
+    case False{} _:
+      {==}
+    case True{} Eng.BdBad{}:
+      {==}
+    case True{} Eng.BdNone{}:
+      oi.emit(pd, "", xo, oo)
+    case True{} Eng.BdLen{+v}:
+      oi.head.len(pd, v, U32.is_zero(v), xo, oo)
+    case True{} Eng.BdChunked{}:
+      {==}
+
+def es.head.at(+pd: Eng.Pend, ok: Bool, bd: Eng.Bd) -> ES(Eng.step.head.at(pd, ok, bd, Nil{})):
+  match ok bd:
+    case False{} _:
+      {==}
+    case True{} Eng.BdBad{}:
+      {==}
+    case True{} Eng.BdNone{}:
+      es.emit(pd, "")
+    case True{} Eng.BdLen{+v}:
+      es.head.len(pd, v, U32.is_zero(v))
+    case True{} Eng.BdChunked{}:
+      {==}
+
+def oi.head.fx(+pd: Eng.Pend, +host: Eng.Hosts, +cl: Eng.Cl, fx: Eng.Fx, -xo: List<&2, Eng.Req>, -oo: List<&2, Eng.Req>) ->
+  {Eng.step.head.fx(pd, host, cl, fx, List.append(&2, Eng.Req, xo, oo)) == AO(Eng.step.head.fx(pd, host, cl, fx, xo), oo) : Eng.P}:
+  match fx:
+    case Eng.Fx{+v10, ka, te}:
+      oi.head.at(pd, Eng.hosts.ok(v10, host), Eng.body.kind(te, v10, cl), xo, oo)
+
+def es.head.fx(+pd: Eng.Pend, +host: Eng.Hosts, +cl: Eng.Cl, fx: Eng.Fx) ->
+  ES(Eng.step.head.fx(pd, host, cl, fx, Nil{})):
+  match fx:
+    case Eng.Fx{+v10, ka, te}:
+      es.head.at(pd, Eng.hosts.ok(v10, host), Eng.body.kind(te, v10, cl))
+
+def oi.head(pd: Eng.Pend, -xo: List<&2, Eng.Req>, -oo: List<&2, Eng.Req>) ->
+  {Eng.step.head(pd, List.append(&2, Eng.Req, xo, oo)) == AO(Eng.step.head(pd, xo), oo) : Eng.P}:
+  match pd:
+    case Eng.Pend{meth, path, +cl, close, +host, ws, +fx, hx, nx}:
+      oi.head.fx(Eng.Pend{meth, path, cl, close, host, ws, fx, hx, nx}, host, cl, fx, xo, oo)
+
+def es.head(pd: Eng.Pend) -> ES(Eng.step.head(pd, Nil{})):
+  match pd:
+    case Eng.Pend{meth, path, +cl, close, +host, ws, +fx, hx, nx}:
+      es.head.fx(Eng.Pend{meth, path, cl, close, host, ws, fx, hx, nx}, host, cl, fx)
+
+def oi.body(r: Nat, +b: Bytes(), +c: U32, +pd: Eng.Pend, -xo: List<&2, Eng.Req>, -oo: List<&2, Eng.Req>) ->
+  {Eng.step.body(r, b, c, pd, List.append(&2, Eng.Req, xo, oo)) == AO(Eng.step.body(r, b, c, pd, xo), oo) : Eng.P}:
+  match r:
+    case 0n:
+      oi.emit(pd, Eng.push(b, c), xo, oo)
+    case 1n+q:
+      {==}
+
+def es.body(r: Nat, +b: Bytes(), +c: U32, +pd: Eng.Pend) -> ES(Eng.step.body(r, b, c, pd, Nil{})):
+  match r:
+    case 0n:
+      es.emit(pd, Eng.push(b, c))
+    case 1n+q:
+      {==}
+
+def oi.chd(r: Nat, -b: Bytes(), -c: U32, -left: U32, -pd: Eng.Pend, -xo: List<&2, Eng.Req>, -oo: List<&2, Eng.Req>) ->
+  {Eng.step.chd(r, b, c, left, pd, List.append(&2, Eng.Req, xo, oo)) == AO(Eng.step.chd(r, b, c, left, pd, xo), oo) : Eng.P}:
+  match r:
+    case 0n:
+      {==}
+    case 1n+q:
+      {==}
+
+def es.chd(r: Nat, -b: Bytes(), -c: U32, -left: U32, -pd: Eng.Pend) -> ES(Eng.step.chd(r, b, c, left, pd, Nil{})):
+  match r:
+    case 0n:
+      {==}
+    case 1n+q:
+      {==}
+
+def oi.chk.paid(over: Bool, -pos: Eng.ChPos, -n: U32, -b: Bytes(), -left: U32, -pd: Eng.Pend, -xo: List<&2, Eng.Req>, -oo: List<&2, Eng.Req>) ->
+  {Eng.chk.paid(over, pos, n, b, left, pd, List.append(&2, Eng.Req, xo, oo)) == AO(Eng.chk.paid(over, pos, n, b, left, pd, xo), oo) : Eng.P}:
+  match over:
+    case True{}:
+      {==}
+    case False{}:
+      {==}
+
+def es.chk.paid(over: Bool, -pos: Eng.ChPos, -n: U32, -b: Bytes(), -left: U32, -pd: Eng.Pend) -> ES(Eng.chk.paid(over, pos, n, b, left, pd, Nil{})):
+  match over:
+    case True{}:
+      {==}
+    case False{}:
+      {==}
+
+def oi.chk.to(paid: Bool, -pos: Eng.ChPos, +n: U32, -b: Bytes(), +left: U32, -pd: Eng.Pend, -xo: List<&2, Eng.Req>, -oo: List<&2, Eng.Req>) ->
+  {Eng.chk.to(paid, pos, n, b, left, pd, List.append(&2, Eng.Req, xo, oo)) == AO(Eng.chk.to(paid, pos, n, b, left, pd, xo), oo) : Eng.P}:
+  match paid:
+    case True{}:
+      oi.chk.paid(U32.is_le(left, n), pos, n, b, left, pd, xo, oo)
+    case False{}:
+      {==}
+
+def es.chk.to(paid: Bool, -pos: Eng.ChPos, +n: U32, -b: Bytes(), +left: U32, -pd: Eng.Pend) -> ES(Eng.chk.to(paid, pos, n, b, left, pd, Nil{})):
+  match paid:
+    case True{}:
+      es.chk.paid(U32.is_le(left, n), pos, n, b, left, pd)
+    case False{}:
+      {==}
+
+def oi.chk.line(z: Bool, -n: U32, -b: Bytes(), -left: U32, -pd: Eng.Pend, -xo: List<&2, Eng.Req>, -oo: List<&2, Eng.Req>) ->
+  {Eng.chk.line(z, n, b, left, pd, List.append(&2, Eng.Req, xo, oo)) == AO(Eng.chk.line(z, n, b, left, pd, xo), oo) : Eng.P}:
+  match z:
+    case True{}:
+      {==}
+    case False{}:
+      {==}
+
+def es.chk.line(z: Bool, -n: U32, -b: Bytes(), -left: U32, -pd: Eng.Pend) -> ES(Eng.chk.line(z, n, b, left, pd, Nil{})):
+  match z:
+    case True{}:
+      {==}
+    case False{}:
+      {==}
+
+def oi.chk(mv: Eng.Mv, +n: U32, +b: Bytes(), +left: U32, +pd: Eng.Pend, -xo: List<&2, Eng.Req>, -oo: List<&2, Eng.Req>) ->
+  {Eng.step.chk(mv, n, b, left, pd, List.append(&2, Eng.Req, xo, oo)) == AO(Eng.step.chk(mv, n, b, left, pd, xo), oo) : Eng.P}:
+  match mv:
+    case Eng.MvBad{}:
+      {==}
+    case Eng.MvTo{pos, paid}:
+      oi.chk.to(paid, pos, n, b, left, pd, xo, oo)
+    case Eng.MvDigit{+d}:
+      oi.chk.paid(U32.is_le(left, (n * 16 + d : U32)), Eng.CSize{}, (n * 16 + d : U32), b, left, pd, xo, oo)
+    case Eng.MvLine{}:
+      oi.chk.line(U32.is_zero(n), n, b, left, pd, xo, oo)
+    case Eng.MvDone{}:
+      oi.emit(pd, b, xo, oo)
+
+def es.chk(mv: Eng.Mv, +n: U32, +b: Bytes(), +left: U32, +pd: Eng.Pend) -> ES(Eng.step.chk(mv, n, b, left, pd, Nil{})):
+  match mv:
+    case Eng.MvBad{}:
+      {==}
+    case Eng.MvTo{pos, paid}:
+      es.chk.to(paid, pos, n, b, left, pd)
+    case Eng.MvDigit{+d}:
+      es.chk.paid(U32.is_le(left, (n * 16 + d : U32)), Eng.CSize{}, (n * 16 + d : U32), b, left, pd)
+    case Eng.MvLine{}:
+      es.chk.line(U32.is_zero(n), n, b, left, pd)
+    case Eng.MvDone{}:
+      es.emit(pd, b)
+
+# LEMMA: a step does not look at the requests done ...
+def oi.at(+st: Eng.St, +k: Eng.Cls, +c: U32, +pd: Eng.Pend, -xo: List<&2, Eng.Req>, -oo: List<&2, Eng.Req>) ->
+  {Eng.step.at(st, k, c, pd, List.append(&2, Eng.Req, xo, oo)) == AO(Eng.step.at(st, k, c, pd, xo), oo) : Eng.P}:
+  match st k:
+    case Eng.Pre{} Eng.KCr{}:
+      {==}
+    case Eng.Pre{} Eng.KTk{}:
+      {==}
+    case Eng.Pre{} Eng.KDg{}:
+      {==}
+    case Eng.Pre{} Eng.KSp{}:
+      {==}
+    case Eng.Pre{} Eng.KHt{}:
+      {==}
+    case Eng.Pre{} Eng.KLf{}:
+      {==}
+    case Eng.Pre{} Eng.KCo{}:
+      {==}
+    case Eng.Pre{} Eng.KCm{}:
+      {==}
+    case Eng.Pre{} Eng.KVc{}:
+      {==}
+    case Eng.Pre{} Eng.KCt{}:
+      {==}
+    case Eng.PreLf{} Eng.KLf{}:
+      {==}
+    case Eng.PreLf{} Eng.KSp{}:
+      {==}
+    case Eng.PreLf{} Eng.KHt{}:
+      {==}
+    case Eng.PreLf{} Eng.KCr{}:
+      {==}
+    case Eng.PreLf{} Eng.KCo{}:
+      {==}
+    case Eng.PreLf{} Eng.KCm{}:
+      {==}
+    case Eng.PreLf{} Eng.KDg{}:
+      {==}
+    case Eng.PreLf{} Eng.KTk{}:
+      {==}
+    case Eng.PreLf{} Eng.KVc{}:
+      {==}
+    case Eng.PreLf{} Eng.KCt{}:
+      {==}
+    case Eng.InM{m} Eng.KSp{}:
+      {==}
+    case Eng.InM{m} Eng.KTk{}:
+      {==}
+    case Eng.InM{m} Eng.KDg{}:
+      {==}
+    case Eng.InM{m} Eng.KHt{}:
+      {==}
+    case Eng.InM{m} Eng.KCr{}:
+      {==}
+    case Eng.InM{m} Eng.KLf{}:
+      {==}
+    case Eng.InM{m} Eng.KCo{}:
+      {==}
+    case Eng.InM{m} Eng.KCm{}:
+      {==}
+    case Eng.InM{m} Eng.KVc{}:
+      {==}
+    case Eng.InM{m} Eng.KCt{}:
+      {==}
+    case Eng.InT{p} Eng.KSp{}:
+      oi.target(p, pd, xo, oo)
+    case Eng.InT{p} Eng.KHt{}:
+      {==}
+    case Eng.InT{p} Eng.KCr{}:
+      {==}
+    case Eng.InT{p} Eng.KLf{}:
+      {==}
+    case Eng.InT{p} Eng.KCt{}:
+      {==}
+    case Eng.InT{p} Eng.KCo{}:
+      {==}
+    case Eng.InT{p} Eng.KCm{}:
+      {==}
+    case Eng.InT{p} Eng.KDg{}:
+      {==}
+    case Eng.InT{p} Eng.KTk{}:
+      {==}
+    case Eng.InT{p} Eng.KVc{}:
+      {==}
+    case Eng.InV{+v} Eng.KCr{}:
+      oi.ver(Eng.bytes.eq(v, Eng.ver.lit()), Eng.bytes.eq(v, Eng.ver10.lit()), pd, xo, oo)
+    case Eng.InV{v} Eng.KTk{}:
+      {==}
+    case Eng.InV{v} Eng.KDg{}:
+      {==}
+    case Eng.InV{v} Eng.KVc{}:
+      {==}
+    case Eng.InV{v} Eng.KSp{}:
+      {==}
+    case Eng.InV{v} Eng.KHt{}:
+      {==}
+    case Eng.InV{v} Eng.KLf{}:
+      {==}
+    case Eng.InV{v} Eng.KCo{}:
+      {==}
+    case Eng.InV{v} Eng.KCm{}:
+      {==}
+    case Eng.InV{v} Eng.KCt{}:
+      {==}
+    case Eng.CrM{} Eng.KLf{}:
+      {==}
+    case Eng.CrM{} Eng.KSp{}:
+      {==}
+    case Eng.CrM{} Eng.KHt{}:
+      {==}
+    case Eng.CrM{} Eng.KCr{}:
+      {==}
+    case Eng.CrM{} Eng.KCo{}:
+      {==}
+    case Eng.CrM{} Eng.KCm{}:
+      {==}
+    case Eng.CrM{} Eng.KDg{}:
+      {==}
+    case Eng.CrM{} Eng.KTk{}:
+      {==}
+    case Eng.CrM{} Eng.KVc{}:
+      {==}
+    case Eng.CrM{} Eng.KCt{}:
+      {==}
+    case Eng.Lin{} Eng.KCr{}:
+      {==}
+    case Eng.Lin{} Eng.KTk{}:
+      {==}
+    case Eng.Lin{} Eng.KDg{}:
+      {==}
+    case Eng.Lin{} Eng.KSp{}:
+      {==}
+    case Eng.Lin{} Eng.KHt{}:
+      {==}
+    case Eng.Lin{} Eng.KLf{}:
+      {==}
+    case Eng.Lin{} Eng.KCo{}:
+      {==}
+    case Eng.Lin{} Eng.KCm{}:
+      {==}
+    case Eng.Lin{} Eng.KVc{}:
+      {==}
+    case Eng.Lin{} Eng.KCt{}:
+      {==}
+    case Eng.InN{+n} Eng.KCo{}:
+      oi.name(Eng.fld.name(n), n, pd, xo, oo)
+    case Eng.InN{n} Eng.KTk{}:
+      {==}
+    case Eng.InN{n} Eng.KDg{}:
+      {==}
+    case Eng.InN{n} Eng.KSp{}:
+      {==}
+    case Eng.InN{n} Eng.KHt{}:
+      {==}
+    case Eng.InN{n} Eng.KCr{}:
+      {==}
+    case Eng.InN{n} Eng.KLf{}:
+      {==}
+    case Eng.InN{n} Eng.KCm{}:
+      {==}
+    case Eng.InN{n} Eng.KVc{}:
+      {==}
+    case Eng.InN{n} Eng.KCt{}:
+      {==}
+    case Eng.InL0{} Eng.KSp{}:
+      {==}
+    case Eng.InL0{} Eng.KHt{}:
+      {==}
+    case Eng.InL0{} Eng.KDg{}:
+      oi.digit(0, c, pd, xo, oo)
+    case Eng.InL0{} Eng.KCr{}:
+      {==}
+    case Eng.InL0{} Eng.KLf{}:
+      {==}
+    case Eng.InL0{} Eng.KCo{}:
+      {==}
+    case Eng.InL0{} Eng.KCm{}:
+      {==}
+    case Eng.InL0{} Eng.KTk{}:
+      {==}
+    case Eng.InL0{} Eng.KVc{}:
+      {==}
+    case Eng.InL0{} Eng.KCt{}:
+      {==}
+    case Eng.InL{v} Eng.KDg{}:
+      oi.digit(v, c, pd, xo, oo)
+    case Eng.InL{v} Eng.KSp{}:
+      {==}
+    case Eng.InL{v} Eng.KHt{}:
+      {==}
+    case Eng.InL{v} Eng.KCr{}:
+      oi.clen(v, pd, xo, oo)
+    case Eng.InL{v} Eng.KLf{}:
+      {==}
+    case Eng.InL{v} Eng.KCo{}:
+      {==}
+    case Eng.InL{v} Eng.KCm{}:
+      {==}
+    case Eng.InL{v} Eng.KTk{}:
+      {==}
+    case Eng.InL{v} Eng.KVc{}:
+      {==}
+    case Eng.InL{v} Eng.KCt{}:
+      {==}
+    case Eng.InLt{v} Eng.KSp{}:
+      {==}
+    case Eng.InLt{v} Eng.KHt{}:
+      {==}
+    case Eng.InLt{v} Eng.KCr{}:
+      oi.clen(v, pd, xo, oo)
+    case Eng.InLt{v} Eng.KLf{}:
+      {==}
+    case Eng.InLt{v} Eng.KCo{}:
+      {==}
+    case Eng.InLt{v} Eng.KCm{}:
+      {==}
+    case Eng.InLt{v} Eng.KDg{}:
+      {==}
+    case Eng.InLt{v} Eng.KTk{}:
+      {==}
+    case Eng.InLt{v} Eng.KVc{}:
+      {==}
+    case Eng.InLt{v} Eng.KCt{}:
+      {==}
+    case Eng.InLc{t, a, b, e, ms} Eng.KCr{}:
+      {==}
+    case Eng.InLc{t, a, b, e, ms} Eng.KSp{}:
+      {==}
+    case Eng.InLc{t, a, b, e, ms} Eng.KHt{}:
+      {==}
+    case Eng.InLc{t, a, b, e, ms} Eng.KCm{}:
+      {==}
+    case Eng.InLc{t, a, b, e, ms} Eng.KLf{}:
+      {==}
+    case Eng.InLc{t, a, b, e, ms} Eng.KCt{}:
+      {==}
+    case Eng.InLc{t, a, b, e, ms} Eng.KCo{}:
+      {==}
+    case Eng.InLc{t, a, b, e, ms} Eng.KDg{}:
+      {==}
+    case Eng.InLc{t, a, b, e, ms} Eng.KTk{}:
+      {==}
+    case Eng.InLc{t, a, b, e, ms} Eng.KVc{}:
+      {==}
+    case Eng.InLu{t, w} Eng.KCr{}:
+      {==}
+    case Eng.InLu{t, w} Eng.KSp{}:
+      {==}
+    case Eng.InLu{t, w} Eng.KHt{}:
+      {==}
+    case Eng.InLu{t, w} Eng.KCm{}:
+      {==}
+    case Eng.InLu{t, w} Eng.KLf{}:
+      {==}
+    case Eng.InLu{t, w} Eng.KCt{}:
+      {==}
+    case Eng.InLu{t, w} Eng.KCo{}:
+      {==}
+    case Eng.InLu{t, w} Eng.KDg{}:
+      {==}
+    case Eng.InLu{t, w} Eng.KTk{}:
+      {==}
+    case Eng.InLu{t, w} Eng.KVc{}:
+      {==}
+    case Eng.InLk0{} Eng.KSp{}:
+      {==}
+    case Eng.InLk0{} Eng.KHt{}:
+      {==}
+    case Eng.InLk0{} Eng.KCr{}:
+      {==}
+    case Eng.InLk0{} Eng.KLf{}:
+      {==}
+    case Eng.InLk0{} Eng.KCt{}:
+      {==}
+    case Eng.InLk0{} Eng.KCo{}:
+      {==}
+    case Eng.InLk0{} Eng.KCm{}:
+      {==}
+    case Eng.InLk0{} Eng.KDg{}:
+      {==}
+    case Eng.InLk0{} Eng.KTk{}:
+      {==}
+    case Eng.InLk0{} Eng.KVc{}:
+      {==}
+    case Eng.InLk{k} Eng.KCr{}:
+      {==}
+    case Eng.InLk{k} Eng.KLf{}:
+      {==}
+    case Eng.InLk{k} Eng.KCt{}:
+      {==}
+    case Eng.InLk{k} Eng.KSp{}:
+      {==}
+    case Eng.InLk{k} Eng.KHt{}:
+      {==}
+    case Eng.InLk{k} Eng.KCo{}:
+      {==}
+    case Eng.InLk{k} Eng.KCm{}:
+      {==}
+    case Eng.InLk{k} Eng.KDg{}:
+      {==}
+    case Eng.InLk{k} Eng.KTk{}:
+      {==}
+    case Eng.InLk{k} Eng.KVc{}:
+      {==}
+    case Eng.InLv{v} Eng.KCr{}:
+      {==}
+    case Eng.InLv{v} Eng.KLf{}:
+      {==}
+    case Eng.InLv{v} Eng.KCt{}:
+      {==}
+    case Eng.InLv{v} Eng.KSp{}:
+      {==}
+    case Eng.InLv{v} Eng.KHt{}:
+      {==}
+    case Eng.InLv{v} Eng.KCo{}:
+      {==}
+    case Eng.InLv{v} Eng.KCm{}:
+      {==}
+    case Eng.InLv{v} Eng.KDg{}:
+      {==}
+    case Eng.InLv{v} Eng.KTk{}:
+      {==}
+    case Eng.InLv{v} Eng.KVc{}:
+      {==}
+    case Eng.InLx{v} Eng.KCr{}:
+      {==}
+    case Eng.InLx{v} Eng.KLf{}:
+      {==}
+    case Eng.InLx{v} Eng.KCt{}:
+      {==}
+    case Eng.InLx{v} Eng.KSp{}:
+      {==}
+    case Eng.InLx{v} Eng.KHt{}:
+      {==}
+    case Eng.InLx{v} Eng.KCo{}:
+      {==}
+    case Eng.InLx{v} Eng.KCm{}:
+      {==}
+    case Eng.InLx{v} Eng.KDg{}:
+      {==}
+    case Eng.InLx{v} Eng.KTk{}:
+      {==}
+    case Eng.InLx{v} Eng.KVc{}:
+      {==}
+    case Eng.InLe0{} Eng.KSp{}:
+      {==}
+    case Eng.InLe0{} Eng.KHt{}:
+      {==}
+    case Eng.InLe0{} Eng.KCr{}:
+      {==}
+    case Eng.InLe0{} Eng.KLf{}:
+      {==}
+    case Eng.InLe0{} Eng.KCt{}:
+      {==}
+    case Eng.InLe0{} Eng.KCo{}:
+      {==}
+    case Eng.InLe0{} Eng.KCm{}:
+      {==}
+    case Eng.InLe0{} Eng.KDg{}:
+      {==}
+    case Eng.InLe0{} Eng.KTk{}:
+      {==}
+    case Eng.InLe0{} Eng.KVc{}:
+      {==}
+    case Eng.InLe{v} Eng.KCr{}:
+      oi.te(v, pd, xo, oo)
+    case Eng.InLe{v} Eng.KLf{}:
+      {==}
+    case Eng.InLe{v} Eng.KCt{}:
+      {==}
+    case Eng.InLe{v} Eng.KSp{}:
+      {==}
+    case Eng.InLe{v} Eng.KHt{}:
+      {==}
+    case Eng.InLe{v} Eng.KCo{}:
+      {==}
+    case Eng.InLe{v} Eng.KCm{}:
+      {==}
+    case Eng.InLe{v} Eng.KDg{}:
+      {==}
+    case Eng.InLe{v} Eng.KTk{}:
+      {==}
+    case Eng.InLe{v} Eng.KVc{}:
+      {==}
+    case Eng.CrL{} Eng.KLf{}:
+      oi.head(pd, xo, oo)
+    case Eng.CrL{} Eng.KSp{}:
+      {==}
+    case Eng.CrL{} Eng.KHt{}:
+      {==}
+    case Eng.CrL{} Eng.KCr{}:
+      {==}
+    case Eng.CrL{} Eng.KCo{}:
+      {==}
+    case Eng.CrL{} Eng.KCm{}:
+      {==}
+    case Eng.CrL{} Eng.KDg{}:
+      {==}
+    case Eng.CrL{} Eng.KTk{}:
+      {==}
+    case Eng.CrL{} Eng.KVc{}:
+      {==}
+    case Eng.CrL{} Eng.KCt{}:
+      {==}
+    case Eng.Bod{r, b} _:
+      oi.body(r, b, c, pd, xo, oo)
+    case Eng.Chk{pos, n, b, left} x:
+      oi.chk(Eng.chk.next(pos, Eng.xk.of(x, c)), n, b, left, pd, xo, oo)
+    case Eng.Chd{r, b, left} _:
+      oi.chd(r, b, c, left, pd, xo, oo)
+    case Eng.Rest{bs} _:
+      {==}
+    case Eng.Bad{} _:
+      {==}
+
+# ... and a step from none does at most one, then starts again
+def es.at(+st: Eng.St, +k: Eng.Cls, +c: U32, +pd: Eng.Pend, hn: {nh(st) == True{} : Bool}) ->
+  ES(Eng.step.at(st, k, c, pd, Nil{})):
+  match st k:
+    case Eng.Pre{} Eng.KCr{}:
+      {==}
+    case Eng.Pre{} Eng.KTk{}:
+      {==}
+    case Eng.Pre{} Eng.KDg{}:
+      {==}
+    case Eng.Pre{} Eng.KSp{}:
+      {==}
+    case Eng.Pre{} Eng.KHt{}:
+      {==}
+    case Eng.Pre{} Eng.KLf{}:
+      {==}
+    case Eng.Pre{} Eng.KCo{}:
+      {==}
+    case Eng.Pre{} Eng.KCm{}:
+      {==}
+    case Eng.Pre{} Eng.KVc{}:
+      {==}
+    case Eng.Pre{} Eng.KCt{}:
+      {==}
+    case Eng.PreLf{} Eng.KLf{}:
+      {==}
+    case Eng.PreLf{} Eng.KSp{}:
+      {==}
+    case Eng.PreLf{} Eng.KHt{}:
+      {==}
+    case Eng.PreLf{} Eng.KCr{}:
+      {==}
+    case Eng.PreLf{} Eng.KCo{}:
+      {==}
+    case Eng.PreLf{} Eng.KCm{}:
+      {==}
+    case Eng.PreLf{} Eng.KDg{}:
+      {==}
+    case Eng.PreLf{} Eng.KTk{}:
+      {==}
+    case Eng.PreLf{} Eng.KVc{}:
+      {==}
+    case Eng.PreLf{} Eng.KCt{}:
+      {==}
+    case Eng.InM{m} Eng.KSp{}:
+      {==}
+    case Eng.InM{m} Eng.KTk{}:
+      {==}
+    case Eng.InM{m} Eng.KDg{}:
+      {==}
+    case Eng.InM{m} Eng.KHt{}:
+      {==}
+    case Eng.InM{m} Eng.KCr{}:
+      {==}
+    case Eng.InM{m} Eng.KLf{}:
+      {==}
+    case Eng.InM{m} Eng.KCo{}:
+      {==}
+    case Eng.InM{m} Eng.KCm{}:
+      {==}
+    case Eng.InM{m} Eng.KVc{}:
+      {==}
+    case Eng.InM{m} Eng.KCt{}:
+      {==}
+    case Eng.InT{p} Eng.KSp{}:
+      es.target(p, pd)
+    case Eng.InT{p} Eng.KHt{}:
+      {==}
+    case Eng.InT{p} Eng.KCr{}:
+      {==}
+    case Eng.InT{p} Eng.KLf{}:
+      {==}
+    case Eng.InT{p} Eng.KCt{}:
+      {==}
+    case Eng.InT{p} Eng.KCo{}:
+      {==}
+    case Eng.InT{p} Eng.KCm{}:
+      {==}
+    case Eng.InT{p} Eng.KDg{}:
+      {==}
+    case Eng.InT{p} Eng.KTk{}:
+      {==}
+    case Eng.InT{p} Eng.KVc{}:
+      {==}
+    case Eng.InV{+v} Eng.KCr{}:
+      es.ver(Eng.bytes.eq(v, Eng.ver.lit()), Eng.bytes.eq(v, Eng.ver10.lit()), pd)
+    case Eng.InV{v} Eng.KTk{}:
+      {==}
+    case Eng.InV{v} Eng.KDg{}:
+      {==}
+    case Eng.InV{v} Eng.KVc{}:
+      {==}
+    case Eng.InV{v} Eng.KSp{}:
+      {==}
+    case Eng.InV{v} Eng.KHt{}:
+      {==}
+    case Eng.InV{v} Eng.KLf{}:
+      {==}
+    case Eng.InV{v} Eng.KCo{}:
+      {==}
+    case Eng.InV{v} Eng.KCm{}:
+      {==}
+    case Eng.InV{v} Eng.KCt{}:
+      {==}
+    case Eng.CrM{} Eng.KLf{}:
+      {==}
+    case Eng.CrM{} Eng.KSp{}:
+      {==}
+    case Eng.CrM{} Eng.KHt{}:
+      {==}
+    case Eng.CrM{} Eng.KCr{}:
+      {==}
+    case Eng.CrM{} Eng.KCo{}:
+      {==}
+    case Eng.CrM{} Eng.KCm{}:
+      {==}
+    case Eng.CrM{} Eng.KDg{}:
+      {==}
+    case Eng.CrM{} Eng.KTk{}:
+      {==}
+    case Eng.CrM{} Eng.KVc{}:
+      {==}
+    case Eng.CrM{} Eng.KCt{}:
+      {==}
+    case Eng.Lin{} Eng.KCr{}:
+      {==}
+    case Eng.Lin{} Eng.KTk{}:
+      {==}
+    case Eng.Lin{} Eng.KDg{}:
+      {==}
+    case Eng.Lin{} Eng.KSp{}:
+      {==}
+    case Eng.Lin{} Eng.KHt{}:
+      {==}
+    case Eng.Lin{} Eng.KLf{}:
+      {==}
+    case Eng.Lin{} Eng.KCo{}:
+      {==}
+    case Eng.Lin{} Eng.KCm{}:
+      {==}
+    case Eng.Lin{} Eng.KVc{}:
+      {==}
+    case Eng.Lin{} Eng.KCt{}:
+      {==}
+    case Eng.InN{+n} Eng.KCo{}:
+      es.name(Eng.fld.name(n), n, pd)
+    case Eng.InN{n} Eng.KTk{}:
+      {==}
+    case Eng.InN{n} Eng.KDg{}:
+      {==}
+    case Eng.InN{n} Eng.KSp{}:
+      {==}
+    case Eng.InN{n} Eng.KHt{}:
+      {==}
+    case Eng.InN{n} Eng.KCr{}:
+      {==}
+    case Eng.InN{n} Eng.KLf{}:
+      {==}
+    case Eng.InN{n} Eng.KCm{}:
+      {==}
+    case Eng.InN{n} Eng.KVc{}:
+      {==}
+    case Eng.InN{n} Eng.KCt{}:
+      {==}
+    case Eng.InL0{} Eng.KSp{}:
+      {==}
+    case Eng.InL0{} Eng.KHt{}:
+      {==}
+    case Eng.InL0{} Eng.KDg{}:
+      es.digit(0, c, pd)
+    case Eng.InL0{} Eng.KCr{}:
+      {==}
+    case Eng.InL0{} Eng.KLf{}:
+      {==}
+    case Eng.InL0{} Eng.KCo{}:
+      {==}
+    case Eng.InL0{} Eng.KCm{}:
+      {==}
+    case Eng.InL0{} Eng.KTk{}:
+      {==}
+    case Eng.InL0{} Eng.KVc{}:
+      {==}
+    case Eng.InL0{} Eng.KCt{}:
+      {==}
+    case Eng.InL{v} Eng.KDg{}:
+      es.digit(v, c, pd)
+    case Eng.InL{v} Eng.KSp{}:
+      {==}
+    case Eng.InL{v} Eng.KHt{}:
+      {==}
+    case Eng.InL{v} Eng.KCr{}:
+      es.clen(v, pd)
+    case Eng.InL{v} Eng.KLf{}:
+      {==}
+    case Eng.InL{v} Eng.KCo{}:
+      {==}
+    case Eng.InL{v} Eng.KCm{}:
+      {==}
+    case Eng.InL{v} Eng.KTk{}:
+      {==}
+    case Eng.InL{v} Eng.KVc{}:
+      {==}
+    case Eng.InL{v} Eng.KCt{}:
+      {==}
+    case Eng.InLt{v} Eng.KSp{}:
+      {==}
+    case Eng.InLt{v} Eng.KHt{}:
+      {==}
+    case Eng.InLt{v} Eng.KCr{}:
+      es.clen(v, pd)
+    case Eng.InLt{v} Eng.KLf{}:
+      {==}
+    case Eng.InLt{v} Eng.KCo{}:
+      {==}
+    case Eng.InLt{v} Eng.KCm{}:
+      {==}
+    case Eng.InLt{v} Eng.KDg{}:
+      {==}
+    case Eng.InLt{v} Eng.KTk{}:
+      {==}
+    case Eng.InLt{v} Eng.KVc{}:
+      {==}
+    case Eng.InLt{v} Eng.KCt{}:
+      {==}
+    case Eng.InLc{t, a, b, e, ms} Eng.KCr{}:
+      {==}
+    case Eng.InLc{t, a, b, e, ms} Eng.KSp{}:
+      {==}
+    case Eng.InLc{t, a, b, e, ms} Eng.KHt{}:
+      {==}
+    case Eng.InLc{t, a, b, e, ms} Eng.KCm{}:
+      {==}
+    case Eng.InLc{t, a, b, e, ms} Eng.KLf{}:
+      {==}
+    case Eng.InLc{t, a, b, e, ms} Eng.KCt{}:
+      {==}
+    case Eng.InLc{t, a, b, e, ms} Eng.KCo{}:
+      {==}
+    case Eng.InLc{t, a, b, e, ms} Eng.KDg{}:
+      {==}
+    case Eng.InLc{t, a, b, e, ms} Eng.KTk{}:
+      {==}
+    case Eng.InLc{t, a, b, e, ms} Eng.KVc{}:
+      {==}
+    case Eng.InLu{t, w} Eng.KCr{}:
+      {==}
+    case Eng.InLu{t, w} Eng.KSp{}:
+      {==}
+    case Eng.InLu{t, w} Eng.KHt{}:
+      {==}
+    case Eng.InLu{t, w} Eng.KCm{}:
+      {==}
+    case Eng.InLu{t, w} Eng.KLf{}:
+      {==}
+    case Eng.InLu{t, w} Eng.KCt{}:
+      {==}
+    case Eng.InLu{t, w} Eng.KCo{}:
+      {==}
+    case Eng.InLu{t, w} Eng.KDg{}:
+      {==}
+    case Eng.InLu{t, w} Eng.KTk{}:
+      {==}
+    case Eng.InLu{t, w} Eng.KVc{}:
+      {==}
+    case Eng.InLk0{} Eng.KSp{}:
+      {==}
+    case Eng.InLk0{} Eng.KHt{}:
+      {==}
+    case Eng.InLk0{} Eng.KCr{}:
+      {==}
+    case Eng.InLk0{} Eng.KLf{}:
+      {==}
+    case Eng.InLk0{} Eng.KCt{}:
+      {==}
+    case Eng.InLk0{} Eng.KCo{}:
+      {==}
+    case Eng.InLk0{} Eng.KCm{}:
+      {==}
+    case Eng.InLk0{} Eng.KDg{}:
+      {==}
+    case Eng.InLk0{} Eng.KTk{}:
+      {==}
+    case Eng.InLk0{} Eng.KVc{}:
+      {==}
+    case Eng.InLk{k} Eng.KCr{}:
+      {==}
+    case Eng.InLk{k} Eng.KLf{}:
+      {==}
+    case Eng.InLk{k} Eng.KCt{}:
+      {==}
+    case Eng.InLk{k} Eng.KSp{}:
+      {==}
+    case Eng.InLk{k} Eng.KHt{}:
+      {==}
+    case Eng.InLk{k} Eng.KCo{}:
+      {==}
+    case Eng.InLk{k} Eng.KCm{}:
+      {==}
+    case Eng.InLk{k} Eng.KDg{}:
+      {==}
+    case Eng.InLk{k} Eng.KTk{}:
+      {==}
+    case Eng.InLk{k} Eng.KVc{}:
+      {==}
+    case Eng.InLv{v} Eng.KCr{}:
+      {==}
+    case Eng.InLv{v} Eng.KLf{}:
+      {==}
+    case Eng.InLv{v} Eng.KCt{}:
+      {==}
+    case Eng.InLv{v} Eng.KSp{}:
+      {==}
+    case Eng.InLv{v} Eng.KHt{}:
+      {==}
+    case Eng.InLv{v} Eng.KCo{}:
+      {==}
+    case Eng.InLv{v} Eng.KCm{}:
+      {==}
+    case Eng.InLv{v} Eng.KDg{}:
+      {==}
+    case Eng.InLv{v} Eng.KTk{}:
+      {==}
+    case Eng.InLv{v} Eng.KVc{}:
+      {==}
+    case Eng.InLx{v} Eng.KCr{}:
+      {==}
+    case Eng.InLx{v} Eng.KLf{}:
+      {==}
+    case Eng.InLx{v} Eng.KCt{}:
+      {==}
+    case Eng.InLx{v} Eng.KSp{}:
+      {==}
+    case Eng.InLx{v} Eng.KHt{}:
+      {==}
+    case Eng.InLx{v} Eng.KCo{}:
+      {==}
+    case Eng.InLx{v} Eng.KCm{}:
+      {==}
+    case Eng.InLx{v} Eng.KDg{}:
+      {==}
+    case Eng.InLx{v} Eng.KTk{}:
+      {==}
+    case Eng.InLx{v} Eng.KVc{}:
+      {==}
+    case Eng.InLe0{} Eng.KSp{}:
+      {==}
+    case Eng.InLe0{} Eng.KHt{}:
+      {==}
+    case Eng.InLe0{} Eng.KCr{}:
+      {==}
+    case Eng.InLe0{} Eng.KLf{}:
+      {==}
+    case Eng.InLe0{} Eng.KCt{}:
+      {==}
+    case Eng.InLe0{} Eng.KCo{}:
+      {==}
+    case Eng.InLe0{} Eng.KCm{}:
+      {==}
+    case Eng.InLe0{} Eng.KDg{}:
+      {==}
+    case Eng.InLe0{} Eng.KTk{}:
+      {==}
+    case Eng.InLe0{} Eng.KVc{}:
+      {==}
+    case Eng.InLe{v} Eng.KCr{}:
+      es.te(v, pd)
+    case Eng.InLe{v} Eng.KLf{}:
+      {==}
+    case Eng.InLe{v} Eng.KCt{}:
+      {==}
+    case Eng.InLe{v} Eng.KSp{}:
+      {==}
+    case Eng.InLe{v} Eng.KHt{}:
+      {==}
+    case Eng.InLe{v} Eng.KCo{}:
+      {==}
+    case Eng.InLe{v} Eng.KCm{}:
+      {==}
+    case Eng.InLe{v} Eng.KDg{}:
+      {==}
+    case Eng.InLe{v} Eng.KTk{}:
+      {==}
+    case Eng.InLe{v} Eng.KVc{}:
+      {==}
+    case Eng.CrL{} Eng.KLf{}:
+      es.head(pd)
+    case Eng.CrL{} Eng.KSp{}:
+      {==}
+    case Eng.CrL{} Eng.KHt{}:
+      {==}
+    case Eng.CrL{} Eng.KCr{}:
+      {==}
+    case Eng.CrL{} Eng.KCo{}:
+      {==}
+    case Eng.CrL{} Eng.KCm{}:
+      {==}
+    case Eng.CrL{} Eng.KDg{}:
+      {==}
+    case Eng.CrL{} Eng.KTk{}:
+      {==}
+    case Eng.CrL{} Eng.KVc{}:
+      {==}
+    case Eng.CrL{} Eng.KCt{}:
+      {==}
+    case Eng.Bod{r, b} _:
+      es.body(r, b, c, pd)
+    case Eng.Chk{pos, n, b, left} x:
+      es.chk(Eng.chk.next(pos, Eng.xk.of(x, c)), n, b, left, pd)
+    case Eng.Chd{r, b, left} _:
+      es.chd(r, b, c, left, pd)
+    case Eng.Rest{bs} _:
+      hn
+    case Eng.Bad{} _:
+      {==}
+
+def oi.step(+st: Eng.St, +pd: Eng.Pend, +c: U32, -o: List<&2, Eng.Req>) ->
+  {Eng.step(Eng.P{st, pd, o}, c) == AO(Eng.step(Eng.P{st, pd, Nil{}}, c), o) : Eng.P}:
+  oi.at(st, Eng.cls(c), c, pd, Nil{}, o)
+
+def es.step(+st: Eng.St, +pd: Eng.Pend, +c: U32, hn: {nh(st) == True{} : Bool}) ->
+  ES(Eng.step(Eng.P{st, pd, Nil{}}, c)):
+  es.at(st, Eng.cls(c), c, pd, hn)
 
 # One byte
 # ========
@@ -135,32 +1387,54 @@ def feed.snoc(+xs: List<&2, U32>, +c: U32, +p: Eng.P) ->
   {Eng.feed(Spec.snoc(xs, c), p) == Eng.step(Eng.feed(xs, p), c) : Eng.P}:
   EL.feed_split(xs, Con{c, Nil{}}, p)
 
-# what the proxy's step and the reference's left, related: still
-# reading on the same bytes (Waits), a request with the same bytes and
-# the same reading, or both refused
-def StpRel(a: X.Stp, b: Laws.PStp) -> Type:
+# what a byte leaves the reader fed from fresh: still reading, a
+# request completed (or one that asked to upgrade), or refused
+type OStp is Data:
+  SGo{st: Eng.St, pd: Eng.Pend}
+  SMsg{r: Eng.Req}
+  SUp{r: Eng.Req}
+  SBad{}
+
+def ostp.req(ws: Bool, r: Eng.Req) -> OStp:
+  match ws:
+    case True{}:
+      SUp{r}
+    case False{}:
+      SMsg{r}
+
+def ostp.st(st: Eng.St, pd: Eng.Pend) -> OStp:
+  match st:
+    case Eng.Bad{}:
+      SBad{}
+    case _:
+      SGo{st, pd}
+
+def ostp.out(st: Eng.St, pd: Eng.Pend, out: List<&2, Eng.Req>) -> OStp:
+  match out:
+    case Con{+r, t}:
+      ostp.req(Eng.req.ws(r), r)
+    case Nil{}:
+      ostp.st(st, pd)
+
+def ostp.of(p: Eng.P) -> OStp:
+  match p:
+    case Eng.P{st, pd, out}:
+      ostp.out(st, pd, out)
+
+# what the reader's step and the reference's left, related: still
+# reading on the same bytes, the same request, or both refused
+def StpRel(a: OStp, b: Laws.PStp) -> Type:
   match a b:
-    case X.SGo{p, rb} Laws.PGo{w, r}:
-      Laws.Waits(X.Scan{p, rb}, w, r)
-    case X.SMsg{rb, q} Laws.PMsg{r, q2}:
-      {Bytes.to_list(rb) == r : List<&2, U32>} & {q == q2 : Eng.Req}
-    case X.SUp{rb, q} Laws.PUp{r, q2}:
-      {Bytes.to_list(rb) == r : List<&2, U32>} & {q == q2 : Eng.Req}
-    case X.SBad{} Laws.PBad{}:
+    case SGo{st, pd} Laws.PGo{w, r}:
+      {Eng.P{st, pd, Nil{}} == Eng.feed(r, Eng.p.new()) : Eng.P} & {w == Spec.walk(r, Laws.w0()) : Spec.W}
+    case SMsg{q} Laws.PMsg{r, q2}:
+      {q == q2 : Eng.Req}
+    case SUp{q} Laws.PUp{r, q2}:
+      {q == q2 : Eng.Req}
+    case SBad{} Laws.PBad{}:
       Unit
     case _ _:
       Empty
-
-def BD(b: Bool, tc: Type, fc: Type) -> Type:
-  match b:
-    case True{}:
-      tc
-    case False{}:
-      fc
-
-def no(-g: Type, e: {False{} == True{} : Bool}) -> g:
-  %e : BD(_, g, Unit)
-  Unit{}
 
 def look.eq(l: EL.Look, m: EL.Look) -> Bool:
   match l m:
@@ -210,76 +1484,75 @@ def lk.snd(l: List<&2, Eng.Req> & EL.Look) -> EL.Look:
   Pair.snd(List<&2, Eng.Req>, EL.Look, l)
 
 # a request completed on the byte: both sides take it
-def req.rel(b: Bool, -rb: Bytes(), -r: List<&2, U32>, -q: Eng.Req, er: {Bytes.to_list(rb) == r : List<&2, U32>}) ->
-  StpRel(X.stp.req(b, rb, q), Laws.px.req(b, r, q)):
+def req.rel(b: Bool, -r: List<&2, U32>, -q: Eng.Req) -> StpRel(ostp.req(b, q), Laws.px.req(b, r, q)):
   match b:
     case True{}:
-      (er, {==})
+      {==}
     case False{}:
-      (er, {==})
+      {==}
 
 # none completed, the walk's framing still open: the reader is not
 # refused (it reads), and both go on reading the same bytes
-def nil.open(st: Eng.St, -pd: Eng.Pend, -rb: Bytes(), -r: List<&2, U32>, -mode: Spec.Mode, -since: List<&2, U32>,
-  er: {Bytes.to_list(rb) == r : List<&2, U32>}, hl: {EL.look.st(st) == EL.Reading{} : EL.Look},
+def nil.open(st: Eng.St, -pd: Eng.Pend, -r: List<&2, U32>, -mode: Spec.Mode, -since: List<&2, U32>,
+  hl: {EL.look.st(st) == EL.Reading{} : EL.Look},
   hp: {Eng.P{st, pd, Nil{}} == Eng.feed(r, Eng.p.new()) : Eng.P},
   hw: {Spec.W{mode, Nil{}, since} == Spec.walk(r, Laws.w0()) : Spec.W}) ->
-  StpRel(X.stp.st(st, pd, rb), Laws.PGo{Spec.W{mode, Nil{}, since}, r}):
+  StpRel(ostp.st(st, pd), Laws.PGo{Spec.W{mode, Nil{}, since}, r}):
   match st:
     case Eng.Pre{}:
-      (er, (hp, hw))
+      (hp, hw)
     case Eng.PreLf{}:
-      (er, (hp, hw))
+      (hp, hw)
     case Eng.InM{m0}:
-      (er, (hp, hw))
+      (hp, hw)
     case Eng.InT{p0}:
-      (er, (hp, hw))
+      (hp, hw)
     case Eng.InV{v0}:
-      (er, (hp, hw))
+      (hp, hw)
     case Eng.CrM{}:
-      (er, (hp, hw))
+      (hp, hw)
     case Eng.Lin{}:
-      (er, (hp, hw))
+      (hp, hw)
     case Eng.InN{n0}:
-      (er, (hp, hw))
+      (hp, hw)
     case Eng.InL0{}:
-      (er, (hp, hw))
+      (hp, hw)
     case Eng.InL{v0}:
-      (er, (hp, hw))
+      (hp, hw)
     case Eng.InLt{v0}:
-      (er, (hp, hw))
-    case Eng.InLc{t0, cl0, up0, ka0}:
-      (er, (hp, hw))
+      (hp, hw)
+    case Eng.InLc{t0, cl0, up0, ka0, ms0}:
+      (hp, hw)
     case Eng.InLu{t0, ws0}:
-      (er, (hp, hw))
+      (hp, hw)
     case Eng.InLk0{}:
-      (er, (hp, hw))
+      (hp, hw)
     case Eng.InLk{k0}:
-      (er, (hp, hw))
+      (hp, hw)
     case Eng.InLv{v0}:
-      (er, (hp, hw))
-    case Eng.InLx{}:
-      (er, (hp, hw))
+      (hp, hw)
+    case Eng.InLx{v0}:
+      (hp, hw)
     case Eng.InLe0{}:
-      (er, (hp, hw))
+      (hp, hw)
     case Eng.InLe{v0}:
-      (er, (hp, hw))
+      (hp, hw)
     case Eng.CrL{}:
-      (er, (hp, hw))
+      (hp, hw)
     case Eng.Bod{r0, b0}:
-      (er, (hp, hw))
+      (hp, hw)
     case Eng.Chk{pos0, n0, b0, left0}:
-      (er, (hp, hw))
+      (hp, hw)
     case Eng.Chd{r0, b0, left0}:
-      (er, (hp, hw))
+      (hp, hw)
     case Eng.Rest{bs0}:
-      (er, (hp, hw))
+      (hp, hw)
     case Eng.Bad{}:
       look.no(Empty, EL.Refusing{}, EL.Reading{}, hl)
 
 # none completed, the framing refused: the reader has refused too
-def nil.refused(st: Eng.St, -pd: Eng.Pend, -rb: Bytes(), hl: {EL.look.st(st) == EL.Refusing{} : EL.Look}) ->
-  StpRel(X.stp.st(st, pd, rb), Laws.PBad{}):
+def nil.refused(st: Eng.St, -pd: Eng.Pend, hl: {EL.look.st(st) == EL.Refusing{} : EL.Look}) ->
+  StpRel(ostp.st(st, pd), Laws.PBad{}):
   match st:
     case Eng.Pre{}:
       look.no(Empty, EL.Reading{}, EL.Refusing{}, hl)
@@ -303,7 +1576,7 @@ def nil.refused(st: Eng.St, -pd: Eng.Pend, -rb: Bytes(), hl: {EL.look.st(st) == 
       look.no(Empty, EL.Reading{}, EL.Refusing{}, hl)
     case Eng.InLt{v0}:
       look.no(Empty, EL.Reading{}, EL.Refusing{}, hl)
-    case Eng.InLc{t0, cl0, up0, ka0}:
+    case Eng.InLc{t0, cl0, up0, ka0, ms0}:
       look.no(Empty, EL.Reading{}, EL.Refusing{}, hl)
     case Eng.InLu{t0, ws0}:
       look.no(Empty, EL.Reading{}, EL.Refusing{}, hl)
@@ -313,7 +1586,7 @@ def nil.refused(st: Eng.St, -pd: Eng.Pend, -rb: Bytes(), hl: {EL.look.st(st) == 
       look.no(Empty, EL.Reading{}, EL.Refusing{}, hl)
     case Eng.InLv{v0}:
       look.no(Empty, EL.Reading{}, EL.Refusing{}, hl)
-    case Eng.InLx{}:
+    case Eng.InLx{v0}:
       look.no(Empty, EL.Reading{}, EL.Refusing{}, hl)
     case Eng.InLe0{}:
       look.no(Empty, EL.Reading{}, EL.Refusing{}, hl)
@@ -333,102 +1606,102 @@ def nil.refused(st: Eng.St, -pd: Eng.Pend, -rb: Bytes(), hl: {EL.look.st(st) == 
       Unit{}
 
 # none completed after an upgrade (never, but it would read on)
-def nil.up(st: Eng.St, -pd: Eng.Pend, -rb: Bytes(), -r: List<&2, U32>, -mode: Spec.Mode, -since: List<&2, U32>,
-  -b: Bytes(), er: {Bytes.to_list(rb) == r : List<&2, U32>}, hs: {st == Eng.Rest{b} : Eng.St},
+def nil.up(st: Eng.St, -pd: Eng.Pend, -r: List<&2, U32>, -mode: Spec.Mode, -since: List<&2, U32>,
+  -b: Bytes(), hs: {st == Eng.Rest{b} : Eng.St},
   hp: {Eng.P{st, pd, Nil{}} == Eng.feed(r, Eng.p.new()) : Eng.P},
   hw: {Spec.W{mode, Nil{}, since} == Spec.walk(r, Laws.w0()) : Spec.W}) ->
-  StpRel(X.stp.st(st, pd, rb), Laws.PGo{Spec.W{mode, Nil{}, since}, r}):
+  StpRel(ostp.st(st, pd), Laws.PGo{Spec.W{mode, Nil{}, since}, r}):
   match st:
     case Eng.Pre{}:
-      (er, (hp, hw))
+      (hp, hw)
     case Eng.PreLf{}:
-      (er, (hp, hw))
+      (hp, hw)
     case Eng.InM{m0}:
-      (er, (hp, hw))
+      (hp, hw)
     case Eng.InT{p0}:
-      (er, (hp, hw))
+      (hp, hw)
     case Eng.InV{v0}:
-      (er, (hp, hw))
+      (hp, hw)
     case Eng.CrM{}:
-      (er, (hp, hw))
+      (hp, hw)
     case Eng.Lin{}:
-      (er, (hp, hw))
+      (hp, hw)
     case Eng.InN{n0}:
-      (er, (hp, hw))
+      (hp, hw)
     case Eng.InL0{}:
-      (er, (hp, hw))
+      (hp, hw)
     case Eng.InL{v0}:
-      (er, (hp, hw))
+      (hp, hw)
     case Eng.InLt{v0}:
-      (er, (hp, hw))
-    case Eng.InLc{t0, cl0, up0, ka0}:
-      (er, (hp, hw))
+      (hp, hw)
+    case Eng.InLc{t0, cl0, up0, ka0, ms0}:
+      (hp, hw)
     case Eng.InLu{t0, ws0}:
-      (er, (hp, hw))
+      (hp, hw)
     case Eng.InLk0{}:
-      (er, (hp, hw))
+      (hp, hw)
     case Eng.InLk{k0}:
-      (er, (hp, hw))
+      (hp, hw)
     case Eng.InLv{v0}:
-      (er, (hp, hw))
-    case Eng.InLx{}:
-      (er, (hp, hw))
+      (hp, hw)
+    case Eng.InLx{v0}:
+      (hp, hw)
     case Eng.InLe0{}:
-      (er, (hp, hw))
+      (hp, hw)
     case Eng.InLe{v0}:
-      (er, (hp, hw))
+      (hp, hw)
     case Eng.CrL{}:
-      (er, (hp, hw))
+      (hp, hw)
     case Eng.Bod{r0, b0}:
-      (er, (hp, hw))
+      (hp, hw)
     case Eng.Chk{pos0, n0, b0, left0}:
-      (er, (hp, hw))
+      (hp, hw)
     case Eng.Chd{r0, b0, left0}:
-      (er, (hp, hw))
+      (hp, hw)
     case Eng.Rest{bs0}:
-      (er, (hp, hw))
+      (hp, hw)
     case Eng.Bad{}:
       no(Empty, Equal.cong(Eng.St, Bool, st.bad, Eng.Rest{b}, Eng.Bad{}, Equal.sym(Eng.St, Eng.Bad{}, Eng.Rest{b}, hs)))
 
-def fin.open(out: List<&2, Eng.Req>, st: Eng.St, +pd: Eng.Pend, -rb: Bytes(), -r: List<&2, U32>, +mode: Spec.Mode,
+def fin.open(out: List<&2, Eng.Req>, st: Eng.St, +pd: Eng.Pend, -r: List<&2, U32>, +mode: Spec.Mode,
   +since: List<&2, U32>, -rest: List<&2, U32>, he: {Spec.finish.end(mode, since) == Spec.Open{rest} : Spec.End},
-  er: {Bytes.to_list(rb) == r : List<&2, U32>}, hl: {EL.look.st(st) == EL.Reading{} : EL.Look},
+  hl: {EL.look.st(st) == EL.Reading{} : EL.Look},
   hp: {Eng.P{st, pd, out} == Eng.feed(r, Eng.p.new()) : Eng.P},
   hw: {Spec.W{mode, out, since} == Spec.walk(r, Laws.w0()) : Spec.W}) ->
-  StpRel(X.stp.out(st, pd, out, rb), Laws.px.out(mode, out, since, r)):
+  StpRel(ostp.out(st, pd, out), Laws.px.out(mode, out, since, r)):
   match out:
     case Con{+q, t}:
-      req.rel(Eng.req.ws(q), rb, r, q, er)
+      req.rel(Eng.req.ws(q), r, q)
     case Nil{}:
       %Equal.sym(Spec.End, Spec.finish.end(mode, since), Spec.Open{rest}, he) :
-        StpRel(X.stp.st(st, pd, rb), Laws.px.end(_, Spec.W{mode, Nil{}, since}, r))
-      nil.open(st, pd, rb, r, mode, since, er, hl, hp, hw)
+        StpRel(ostp.st(st, pd), Laws.px.end(_, Spec.W{mode, Nil{}, since}, r))
+      nil.open(st, pd, r, mode, since, hl, hp, hw)
 
-def fin.refused(out: List<&2, Eng.Req>, st: Eng.St, +pd: Eng.Pend, -rb: Bytes(), -r: List<&2, U32>, +mode: Spec.Mode,
+def fin.refused(out: List<&2, Eng.Req>, st: Eng.St, +pd: Eng.Pend, -r: List<&2, U32>, +mode: Spec.Mode,
   +since: List<&2, U32>, he: {Spec.finish.end(mode, since) == Spec.Refused{} : Spec.End},
-  er: {Bytes.to_list(rb) == r : List<&2, U32>}, hl: {EL.look.st(st) == EL.Refusing{} : EL.Look}) ->
-  StpRel(X.stp.out(st, pd, out, rb), Laws.px.out(mode, out, since, r)):
+  hl: {EL.look.st(st) == EL.Refusing{} : EL.Look}) ->
+  StpRel(ostp.out(st, pd, out), Laws.px.out(mode, out, since, r)):
   match out:
     case Con{+q, t}:
-      req.rel(Eng.req.ws(q), rb, r, q, er)
+      req.rel(Eng.req.ws(q), r, q)
     case Nil{}:
       %Equal.sym(Spec.End, Spec.finish.end(mode, since), Spec.Refused{}, he) :
-        StpRel(X.stp.st(st, pd, rb), Laws.px.end(_, Spec.W{mode, Nil{}, since}, r))
-      nil.refused(st, pd, rb, hl)
+        StpRel(ostp.st(st, pd), Laws.px.end(_, Spec.W{mode, Nil{}, since}, r))
+      nil.refused(st, pd, hl)
 
-def fin.up(out: List<&2, Eng.Req>, st: Eng.St, +pd: Eng.Pend, -rb: Bytes(), -r: List<&2, U32>, +mode: Spec.Mode,
+def fin.up(out: List<&2, Eng.Req>, st: Eng.St, +pd: Eng.Pend, -r: List<&2, U32>, +mode: Spec.Mode,
   +since: List<&2, U32>, -b: Bytes(), he: {Spec.finish.end(mode, since) == Spec.Upgraded{b} : Spec.End},
-  er: {Bytes.to_list(rb) == r : List<&2, U32>}, hs: {st == Eng.Rest{b} : Eng.St},
+  hs: {st == Eng.Rest{b} : Eng.St},
   hp: {Eng.P{st, pd, out} == Eng.feed(r, Eng.p.new()) : Eng.P},
   hw: {Spec.W{mode, out, since} == Spec.walk(r, Laws.w0()) : Spec.W}) ->
-  StpRel(X.stp.out(st, pd, out, rb), Laws.px.out(mode, out, since, r)):
+  StpRel(ostp.out(st, pd, out), Laws.px.out(mode, out, since, r)):
   match out:
     case Con{+q, t}:
-      req.rel(Eng.req.ws(q), rb, r, q, er)
+      req.rel(Eng.req.ws(q), r, q)
     case Nil{}:
       %Equal.sym(Spec.End, Spec.finish.end(mode, since), Spec.Upgraded{b}, he) :
-        StpRel(X.stp.st(st, pd, rb), Laws.px.end(_, Spec.W{mode, Nil{}, since}, r))
-      nil.up(st, pd, rb, r, mode, since, b, er, hs, hp, hw)
+        StpRel(ostp.st(st, pd), Laws.px.end(_, Spec.W{mode, Nil{}, since}, r))
+      nil.up(st, pd, r, mode, since, b, hs, hp, hw)
 
 # one equality between pairs is two, and one between readers two more
 def pair.eqs(-a: List<&2, Eng.Req>, -b: EL.Look, -c: List<&2, Eng.Req>, -d: EL.Look,
@@ -444,75 +1717,75 @@ def p.eqs(-st: Eng.St, -pd: Eng.Pend, -out: List<&2, Eng.Req>, -st2: Eng.St, -pd
 
 def e.open(+st: Eng.St, +pd: Eng.Pend, +out: List<&2, Eng.Req>, +mode: Spec.Mode, +o2: List<&2, Eng.Req>,
   +since: List<&2, U32>, -rest: List<&2, U32>, he: {Spec.finish.end(mode, since) == Spec.Open{rest} : Spec.End},
-  -rb: Bytes(), -r: List<&2, U32>, er: {Bytes.to_list(rb) == r : List<&2, U32>},
+  -r: List<&2, U32>,
   l2: {List.reverse(&2, Eng.Req, out) == List.reverse(&2, Eng.Req, o2) : List<&2, Eng.Req>} &
     {EL.look.st(st) == EL.Reading{} : EL.Look},
   hp: {Eng.P{st, pd, out} == Eng.feed(r, Eng.p.new()) : Eng.P},
   hw: {Spec.W{mode, o2, since} == Spec.walk(r, Laws.w0()) : Spec.W}) ->
-  StpRel(X.stp.out(st, pd, out, rb), Laws.px.out(mode, o2, since, r)):
+  StpRel(ostp.out(st, pd, out), Laws.px.out(mode, o2, since, r)):
   (lr, ls) = l2
   +eq = rev.inj(Eng.Req, out, o2, lr)
-  %eq : StpRel(X.stp.out(st, pd, out, rb), Laws.px.out(mode, _, since, r))
-  fin.open(out, st, pd, rb, r, mode, since, rest, he, er, ls, hp,
+  %eq : StpRel(ostp.out(st, pd, out), Laws.px.out(mode, _, since, r))
+  fin.open(out, st, pd, r, mode, since, rest, he, ls, hp,
     Equal.trans(Spec.W, Spec.W{mode, out, since}, Spec.W{mode, o2, since}, Spec.walk(r, Laws.w0()),
       Equal.cong(List<&2, Eng.Req>, Spec.W, x => Spec.W{mode, x, since}, out, o2, eq), hw))
 
 def e.refused(+st: Eng.St, +pd: Eng.Pend, +out: List<&2, Eng.Req>, +mode: Spec.Mode, +o2: List<&2, Eng.Req>,
   +since: List<&2, U32>, he: {Spec.finish.end(mode, since) == Spec.Refused{} : Spec.End},
-  -rb: Bytes(), -r: List<&2, U32>, er: {Bytes.to_list(rb) == r : List<&2, U32>},
+  -r: List<&2, U32>,
   l2: {List.reverse(&2, Eng.Req, out) == List.reverse(&2, Eng.Req, o2) : List<&2, Eng.Req>} &
     {EL.look.st(st) == EL.Refusing{} : EL.Look}) ->
-  StpRel(X.stp.out(st, pd, out, rb), Laws.px.out(mode, o2, since, r)):
+  StpRel(ostp.out(st, pd, out), Laws.px.out(mode, o2, since, r)):
   (lr, ls) = l2
   +eq = rev.inj(Eng.Req, out, o2, lr)
-  %eq : StpRel(X.stp.out(st, pd, out, rb), Laws.px.out(mode, _, since, r))
-  fin.refused(out, st, pd, rb, r, mode, since, he, er, ls)
+  %eq : StpRel(ostp.out(st, pd, out), Laws.px.out(mode, _, since, r))
+  fin.refused(out, st, pd, r, mode, since, he, ls)
 
 def e.up(+st: Eng.St, +pd: Eng.Pend, +out: List<&2, Eng.Req>, +mode: Spec.Mode, +o2: List<&2, Eng.Req>,
   +since: List<&2, U32>, -b: Bytes(), he: {Spec.finish.end(mode, since) == Spec.Upgraded{b} : Spec.End},
-  -rb: Bytes(), -r: List<&2, U32>, er: {Bytes.to_list(rb) == r : List<&2, U32>},
+  -r: List<&2, U32>,
   p2: {st == Eng.Rest{b} : Eng.St} &
     {out == List.reverse(&2, Eng.Req, List.reverse(&2, Eng.Req, o2)) : List<&2, Eng.Req>},
   hp: {Eng.P{st, pd, out} == Eng.feed(r, Eng.p.new()) : Eng.P},
   hw: {Spec.W{mode, o2, since} == Spec.walk(r, Laws.w0()) : Spec.W}) ->
-  StpRel(X.stp.out(st, pd, out, rb), Laws.px.out(mode, o2, since, r)):
+  StpRel(ostp.out(st, pd, out), Laws.px.out(mode, o2, since, r)):
   (es, eo) = p2
   +eq = Equal.trans(List<&2, Eng.Req>, out, List.reverse(&2, Eng.Req, List.reverse(&2, Eng.Req, o2)), o2, eo,
     rev.rev(Eng.Req, o2))
-  %eq : StpRel(X.stp.out(st, pd, out, rb), Laws.px.out(mode, _, since, r))
-  fin.up(out, st, pd, rb, r, mode, since, b, he, er, es, hp,
+  %eq : StpRel(ostp.out(st, pd, out), Laws.px.out(mode, _, since, r))
+  fin.up(out, st, pd, r, mode, since, b, he, es, hp,
     Equal.trans(Spec.W, Spec.W{mode, out, since}, Spec.W{mode, o2, since}, Spec.walk(r, Laws.w0()),
       Equal.cong(List<&2, Eng.Req>, Spec.W, x => Spec.W{mode, x, since}, out, o2, eq), hw))
 
 # the walk's step and the reader's, compared through frame_sim's
 # agreement at the byte, whichever way the framing ends there
 def stp.end(+st: Eng.St, +pd: Eng.Pend, +out: List<&2, Eng.Req>, +mode: Spec.Mode, +o2: List<&2, Eng.Req>,
-  +since: List<&2, U32>, e: Spec.End, he: {Spec.finish.end(mode, since) == e : Spec.End}, -rb: Bytes(),
-  -r: List<&2, U32>, er: {Bytes.to_list(rb) == r : List<&2, U32>},
+  +since: List<&2, U32>, e: Spec.End, he: {Spec.finish.end(mode, since) == e : Spec.End},
+  -r: List<&2, U32>,
   ag: EL.agree.end(Eng.P{st, pd, out}, List.reverse(&2, Eng.Req, o2), e),
   hp: {Eng.P{st, pd, out} == Eng.feed(r, Eng.p.new()) : Eng.P},
   hw: {Spec.W{mode, o2, since} == Spec.walk(r, Laws.w0()) : Spec.W}) ->
-  StpRel(X.stp.out(st, pd, out, rb), Laws.px.out(mode, o2, since, r)):
+  StpRel(ostp.out(st, pd, out), Laws.px.out(mode, o2, since, r)):
   match e:
     case Spec.Open{rest}:
       (l, q) = ag
-      e.open(st, pd, out, mode, o2, since, rest, he, rb, r, er,
+      e.open(st, pd, out, mode, o2, since, rest, he, r,
         pair.eqs(List.reverse(&2, Eng.Req, out), EL.look.st(st), List.reverse(&2, Eng.Req, o2), EL.Reading{}, l), hp, hw)
     case Spec.Refused{}:
-      e.refused(st, pd, out, mode, o2, since, he, rb, r, er,
+      e.refused(st, pd, out, mode, o2, since, he, r,
         pair.eqs(List.reverse(&2, Eng.Req, out), EL.look.st(st), List.reverse(&2, Eng.Req, o2), EL.Refusing{}, ag))
     case Spec.Upgraded{b}:
-      e.up(st, pd, out, mode, o2, since, b, he, rb, r, er,
+      e.up(st, pd, out, mode, o2, since, b, he, r,
         p.eqs(st, pd, out, Eng.Rest{b}, Eng.pend.new(), List.reverse(&2, Eng.Req, List.reverse(&2, Eng.Req, o2)), ag),
         hp, hw)
 
-def stp.at(+pp: Eng.P, +ww: Spec.W, -rb: Bytes(), -r: List<&2, U32>, er: {Bytes.to_list(rb) == r : List<&2, U32>},
+def stp.at(+pp: Eng.P, +ww: Spec.W, -r: List<&2, U32>,
   ag: EL.agree(pp, Spec.finish(ww)), hp: {pp == Eng.feed(r, Eng.p.new()) : Eng.P},
   hw: {ww == Spec.walk(r, Laws.w0()) : Spec.W}) ->
-  StpRel(X.stp.of(pp, rb), Laws.px.of(ww, r)):
+  StpRel(ostp.of(pp), Laws.px.of(ww, r)):
   match pp ww:
     case Eng.P{+st, +pd, +out} Spec.W{+mode, +o2, +since}:
-      stp.end(st, pd, out, mode, o2, since, Spec.finish.end(mode, since), {==}, rb, r, er, ag, hp, hw)
+      stp.end(st, pd, out, mode, o2, since, Spec.finish.end(mode, since), {==}, r, ag, hp, hw)
 
 
 # frame_sim at the bytes so far, one more byte in
@@ -526,12 +1799,12 @@ def ag.at(-p: Eng.P, -w: Spec.W, +r: List<&2, U32>, +c: U32,
     EL.agree(Eng.feed(Spec.snoc(r, c), Eng.p.new()), Spec.finish(_))
   EL.frame_sim(Spec.snoc(r, c))
 
-# LEMMA: one byte. The proxy's step and the reference's, from scans that
-# agree, leave results that agree.
-def stp.is(+p: Eng.P, +rb: Bytes(), +w: Spec.W, +r: List<&2, U32>, +c: U32, rel: Laws.Waits(X.Scan{p, rb}, w, r)) ->
-  StpRel(X.stp(p, c, rb), Laws.px.stp(w, c, r)):
-  (e1, e23) = rel
-  (e2, e3) = e23
+# LEMMA: one byte. The reader's step and the reference's, from a reader
+# fed the bytes the walk walked, leave results that agree.
+def stp.is(+p: Eng.P, +w: Spec.W, +r: List<&2, U32>, +c: U32,
+  rel: {p == Eng.feed(r, Eng.p.new()) : Eng.P} & {w == Spec.walk(r, Laws.w0()) : Spec.W}) ->
+  StpRel(ostp.of(Eng.step(p, c)), Laws.px.stp(w, c, r)):
+  (e2, e3) = rel
   +hp = Equal.trans(Eng.P, Eng.step(p, c), Eng.step(Eng.feed(r, Eng.p.new()), c),
     Eng.feed(Spec.snoc(r, c), Eng.p.new()),
     Equal.cong(Eng.P, Eng.P, x => Eng.step(x, c), p, Eng.feed(r, Eng.p.new()), e2),
@@ -542,112 +1815,534 @@ def stp.is(+p: Eng.P, +rb: Bytes(), +w: Spec.W, +r: List<&2, U32>, +c: U32, rel:
     Equal.cong(Spec.W, Spec.W, x => Spec.next(x, c), w, Spec.walk(r, Laws.w0()), e3),
     Equal.sym(Spec.W, Spec.walk(Spec.snoc(r, c), Laws.w0()), Spec.next(Spec.walk(r, Laws.w0()), c),
       walk.snoc(r, c, Laws.w0())))
-  stp.at(Eng.step(p, c), Spec.next(w, c), Bytes.push(rb, c), Spec.snoc(r, c),
-    Equal.trans(List<&2, U32>, Bytes.to_list(Bytes.push(rb, c)),
-      List.append(&2, U32, Bytes.to_list(rb), Con{c, Nil{}}), Spec.snoc(r, c),
-      Bytes.push_list(rb, c),
-      Equal.cong(List<&2, U32>, List<&2, U32>, x => List.append(&2, U32, x, Con{c, Nil{}}), Bytes.to_list(rb), r, e1)),
-    ag.at(p, w, r, c, hp, hw), hp, hw)
+  stp.at(Eng.step(p, c), Spec.next(w, c), Spec.snoc(r, c), ag.at(p, w, r, c, hp, hw), hp, hw)
 
-# a request taken on both sides, with the same bytes and reading
-def took.cons(-rb: Bytes(), -q: Eng.Req, -r: List<&2, U32>, -q2: Eng.Req, +acc: List<&2, X.Took>,
-  -acc2: List<&2, Laws.PTook>, rel: {Bytes.to_list(rb) == r : List<&2, U32>} & {q == q2 : Eng.Req},
-  ha: {Laws.tooks.of(acc) == acc2 : List<&2, Laws.PTook>}) ->
-  {Laws.tooks.of(Con{X.Took{rb, q}, acc}) == Con{Laws.PTook{r, q2}, acc2} : List<&2, Laws.PTook>}:
-  (e1, e2) = rel
-  %e1 :
-    {Laws.tooks.of(Con{X.Took{rb, q}, acc}) == Con{Laws.PTook{_, q2}, acc2} : List<&2, Laws.PTook>}
-  %e2 :
-    {Laws.tooks.of(Con{X.Took{rb, q}, acc}) == Con{Laws.PTook{Bytes.to_list(rb), _}, acc2} : List<&2, Laws.PTook>}
-  %ha :
-    {Laws.tooks.of(Con{X.Took{rb, q}, acc}) == Con{Laws.PTook{Bytes.to_list(rb), q}, _} : List<&2, Laws.PTook>}
-  {==}
+# A read
+# ======
+#
+# The proxy feeds a read whole (feed_buf, which is feed) and takes the
+# requests out after; the reference walks the read a byte at a time,
+# restarting after each request. GRel relates the reader fed so far,
+# with every request it completed in this read behind it, to the
+# reference's step and the requests it took, newest first.
 
-# and the taken, reversed at the end, agree
-def done.rel(+acc: List<&2, X.Took>, -acc2: List<&2, Laws.PTook>,
-  ha: {Laws.tooks.of(acc) == acc2 : List<&2, Laws.PTook>}) ->
-  {Laws.tooks.of(List.reverse(&2, X.Took, acc)) == List.reverse(&2, Laws.PTook, acc2) : List<&2, Laws.PTook>}:
-  Equal.trans(List<&2, Laws.PTook>, Laws.tooks.of(List.reverse(&2, X.Took, acc)),
-    List.reverse(&2, Laws.PTook, Laws.tooks.of(acc)), List.reverse(&2, Laws.PTook, acc2),
-    tooks.rev(acc),
-    Equal.cong(List<&2, Laws.PTook>, List<&2, Laws.PTook>, xs => List.reverse(&2, Laws.PTook, xs),
-      Laws.tooks.of(acc), acc2, ha))
+# reading: neither refused nor handed over
+def rd(st: Eng.St) -> Bool:
+  match st:
+    case Eng.Bad{}:
+      False{}
+    case Eng.Rest{bs}:
+      False{}
+    case _:
+      True{}
+
+def GRel.go(q: Eng.P, w: Spec.W, r: List<&2, U32>, acc: List<&2, Laws.PTook>) -> Type:
+  match q:
+    case Eng.P{st, pd, o}:
+      {Eng.P{st, pd, Nil{}} == Eng.feed(r, Eng.p.new()) : Eng.P} & {w == Spec.walk(r, Laws.w0()) : Spec.W} &
+        {rd(st) == True{} : Bool} & {o == Laws.took.reqs(acc) : List<&2, Eng.Req>}
+
+def GRel.up(q: Eng.P, r: Eng.Req, acc: List<&2, Laws.PTook>) -> Type:
+  match q:
+    case Eng.P{st, pd, o}:
+      {nh(st) == False{} : Bool} & {o == Con{r, Laws.took.reqs(acc)} : List<&2, Eng.Req>}
+
+def GRel.bad(q: Eng.P, acc: List<&2, Laws.PTook>) -> Type:
+  match q:
+    case Eng.P{st, pd, o}:
+      {st == Eng.Bad{} : Eng.St} & {o == Laws.took.reqs(acc) : List<&2, Eng.Req>}
+
+def GRel(q: Eng.P, b: Laws.PStp, acc: List<&2, Laws.PTook>) -> Type:
+  match b:
+    case Laws.PGo{w, r}:
+      GRel.go(q, w, r, acc)
+    case Laws.PMsg{raw, r}:
+      {q == Eng.P{Eng.Pre{}, Eng.pend.new(), Con{r, Laws.took.reqs(acc)}} : Eng.P}
+    case Laws.PUp{raw, r}:
+      GRel.up(q, r, acc)
+    case Laws.PBad{}:
+      GRel.bad(q, acc)
+
+# the scan waiting after a read, against the walk waiting
+def Waits2(sc: X.Scan, w: Spec.W, raw: List<&2, U32>) -> Type:
+  match sc:
+    case X.Scan{p, n}:
+      GRel(p, Laws.PGo{w, raw}, Nil{})
+
+def Tails2(t: X.Tail, u: Laws.PTail) -> Type:
+  match t u:
+    case X.TWait{sc} Laws.PWait{w, raw}:
+      Waits2(sc, w, raw)
+    case X.TBad{} Laws.PRefused{}:
+      Unit
+    case X.TUp{} Laws.PUpgraded{}:
+      Unit
+    case _ _:
+      Empty
+
+def Scans2(s: X.Scanned, f: Laws.PScanned) -> Type:
+  match s f:
+    case X.Scanned{ts, t} Laws.PScanned{us, u}:
+      {ts == Laws.took.reqs(us) : List<&2, Eng.Req>} & Tails2(t, u)
+
+def rd.nh(st: Eng.St, h: {rd(st) == True{} : Bool}) -> {nh(st) == True{} : Bool}:
+  match st:
+    case Eng.Pre{}:
+      {==}
+    case Eng.PreLf{}:
+      {==}
+    case Eng.InM{m0}:
+      {==}
+    case Eng.InT{p0}:
+      {==}
+    case Eng.InV{v0}:
+      {==}
+    case Eng.CrM{}:
+      {==}
+    case Eng.Lin{}:
+      {==}
+    case Eng.InN{n0}:
+      {==}
+    case Eng.InL0{}:
+      {==}
+    case Eng.InL{v0}:
+      {==}
+    case Eng.InLt{v0}:
+      {==}
+    case Eng.InLc{t0, cl0, up0, ka0, ms0}:
+      {==}
+    case Eng.InLu{t0, ws0}:
+      {==}
+    case Eng.InLk0{}:
+      {==}
+    case Eng.InLk{k0}:
+      {==}
+    case Eng.InLv{v0}:
+      {==}
+    case Eng.InLx{v0}:
+      {==}
+    case Eng.InLe0{}:
+      {==}
+    case Eng.InLe{v0}:
+      {==}
+    case Eng.CrL{}:
+      {==}
+    case Eng.Bod{r0, b0}:
+      {==}
+    case Eng.Chk{pos0, n0, b0, left0}:
+      {==}
+    case Eng.Chd{r0, b0, left0}:
+      {==}
+    case Eng.Rest{bs0}:
+      no({nh(Eng.Rest{bs0}) == True{} : Bool}, h)
+    case Eng.Bad{}:
+      {==}
+
+def rest.of(st: Eng.St) -> Bytes():
+  match st:
+    case Eng.Rest{b}:
+      b
+    case _:
+      ""
+
+def up.st(st: Eng.St, h: {nh(st) == False{} : Bool}) -> {st == Eng.Rest{rest.of(st)} : Eng.St}:
+  match st:
+    case Eng.Pre{}:
+      yes.no({Eng.Pre{} == Eng.Rest{rest.of(Eng.Pre{})} : Eng.St}, h)
+    case Eng.PreLf{}:
+      yes.no({Eng.PreLf{} == Eng.Rest{rest.of(Eng.PreLf{})} : Eng.St}, h)
+    case Eng.InM{m0}:
+      yes.no({Eng.InM{m0} == Eng.Rest{rest.of(Eng.InM{m0})} : Eng.St}, h)
+    case Eng.InT{p0}:
+      yes.no({Eng.InT{p0} == Eng.Rest{rest.of(Eng.InT{p0})} : Eng.St}, h)
+    case Eng.InV{v0}:
+      yes.no({Eng.InV{v0} == Eng.Rest{rest.of(Eng.InV{v0})} : Eng.St}, h)
+    case Eng.CrM{}:
+      yes.no({Eng.CrM{} == Eng.Rest{rest.of(Eng.CrM{})} : Eng.St}, h)
+    case Eng.Lin{}:
+      yes.no({Eng.Lin{} == Eng.Rest{rest.of(Eng.Lin{})} : Eng.St}, h)
+    case Eng.InN{n0}:
+      yes.no({Eng.InN{n0} == Eng.Rest{rest.of(Eng.InN{n0})} : Eng.St}, h)
+    case Eng.InL0{}:
+      yes.no({Eng.InL0{} == Eng.Rest{rest.of(Eng.InL0{})} : Eng.St}, h)
+    case Eng.InL{v0}:
+      yes.no({Eng.InL{v0} == Eng.Rest{rest.of(Eng.InL{v0})} : Eng.St}, h)
+    case Eng.InLt{v0}:
+      yes.no({Eng.InLt{v0} == Eng.Rest{rest.of(Eng.InLt{v0})} : Eng.St}, h)
+    case Eng.InLc{t0, cl0, up0, ka0, ms0}:
+      yes.no({Eng.InLc{t0, cl0, up0, ka0, ms0} == Eng.Rest{rest.of(Eng.InLc{t0, cl0, up0, ka0, ms0})} : Eng.St}, h)
+    case Eng.InLu{t0, ws0}:
+      yes.no({Eng.InLu{t0, ws0} == Eng.Rest{rest.of(Eng.InLu{t0, ws0})} : Eng.St}, h)
+    case Eng.InLk0{}:
+      yes.no({Eng.InLk0{} == Eng.Rest{rest.of(Eng.InLk0{})} : Eng.St}, h)
+    case Eng.InLk{k0}:
+      yes.no({Eng.InLk{k0} == Eng.Rest{rest.of(Eng.InLk{k0})} : Eng.St}, h)
+    case Eng.InLv{v0}:
+      yes.no({Eng.InLv{v0} == Eng.Rest{rest.of(Eng.InLv{v0})} : Eng.St}, h)
+    case Eng.InLx{v0}:
+      yes.no({Eng.InLx{v0} == Eng.Rest{rest.of(Eng.InLx{v0})} : Eng.St}, h)
+    case Eng.InLe0{}:
+      yes.no({Eng.InLe0{} == Eng.Rest{rest.of(Eng.InLe0{})} : Eng.St}, h)
+    case Eng.InLe{v0}:
+      yes.no({Eng.InLe{v0} == Eng.Rest{rest.of(Eng.InLe{v0})} : Eng.St}, h)
+    case Eng.CrL{}:
+      yes.no({Eng.CrL{} == Eng.Rest{rest.of(Eng.CrL{})} : Eng.St}, h)
+    case Eng.Bod{r0, b0}:
+      yes.no({Eng.Bod{r0, b0} == Eng.Rest{rest.of(Eng.Bod{r0, b0})} : Eng.St}, h)
+    case Eng.Chk{pos0, n0, b0, left0}:
+      yes.no({Eng.Chk{pos0, n0, b0, left0} == Eng.Rest{rest.of(Eng.Chk{pos0, n0, b0, left0})} : Eng.St}, h)
+    case Eng.Chd{r0, b0, left0}:
+      yes.no({Eng.Chd{r0, b0, left0} == Eng.Rest{rest.of(Eng.Chd{r0, b0, left0})} : Eng.St}, h)
+    case Eng.Rest{bs0}:
+      {==}
+    case Eng.Bad{}:
+      yes.no({Eng.Bad{} == Eng.Rest{rest.of(Eng.Bad{})} : Eng.St}, h)
+
+# a reader reading waits, on the bytes it was fed
+def tail.wait2(st: Eng.St, -pd: Eng.Pend, -m: Nat, -w: Spec.W, -r: List<&2, U32>, hr: {rd(st) == True{} : Bool},
+  hp: {Eng.P{st, pd, Nil{}} == Eng.feed(r, Eng.p.new()) : Eng.P}, hw: {w == Spec.walk(r, Laws.w0()) : Spec.W}) ->
+  Tails2(X.tail.of(st, pd, m), Laws.PWait{w, r}):
+  match st:
+    case Eng.Pre{}:
+      (hp, (hw, (hr, {==})))
+    case Eng.PreLf{}:
+      (hp, (hw, (hr, {==})))
+    case Eng.InM{m0}:
+      (hp, (hw, (hr, {==})))
+    case Eng.InT{p0}:
+      (hp, (hw, (hr, {==})))
+    case Eng.InV{v0}:
+      (hp, (hw, (hr, {==})))
+    case Eng.CrM{}:
+      (hp, (hw, (hr, {==})))
+    case Eng.Lin{}:
+      (hp, (hw, (hr, {==})))
+    case Eng.InN{n0}:
+      (hp, (hw, (hr, {==})))
+    case Eng.InL0{}:
+      (hp, (hw, (hr, {==})))
+    case Eng.InL{v0}:
+      (hp, (hw, (hr, {==})))
+    case Eng.InLt{v0}:
+      (hp, (hw, (hr, {==})))
+    case Eng.InLc{t0, cl0, up0, ka0, ms0}:
+      (hp, (hw, (hr, {==})))
+    case Eng.InLu{t0, ws0}:
+      (hp, (hw, (hr, {==})))
+    case Eng.InLk0{}:
+      (hp, (hw, (hr, {==})))
+    case Eng.InLk{k0}:
+      (hp, (hw, (hr, {==})))
+    case Eng.InLv{v0}:
+      (hp, (hw, (hr, {==})))
+    case Eng.InLx{v0}:
+      (hp, (hw, (hr, {==})))
+    case Eng.InLe0{}:
+      (hp, (hw, (hr, {==})))
+    case Eng.InLe{v0}:
+      (hp, (hw, (hr, {==})))
+    case Eng.CrL{}:
+      (hp, (hw, (hr, {==})))
+    case Eng.Bod{r0, b0}:
+      (hp, (hw, (hr, {==})))
+    case Eng.Chk{pos0, n0, b0, left0}:
+      (hp, (hw, (hr, {==})))
+    case Eng.Chd{r0, b0, left0}:
+      (hp, (hw, (hr, {==})))
+    case Eng.Rest{bs0}:
+      no(Tails2(X.tail.of(Eng.Rest{bs0}, pd, m), Laws.PWait{w, r}), hr)
+    case Eng.Bad{}:
+      no(Tails2(X.tail.of(Eng.Bad{}, pd, m), Laws.PWait{w, r}), hr)
+
+# the requests the reader completed, oldest first, are the reference's
+def rv(o: List<&2, Eng.Req>, +acc: List<&2, Laws.PTook>, ho: {o == Laws.took.reqs(acc) : List<&2, Eng.Req>}) ->
+  {List.reverse(&2, Eng.Req, o) == Laws.took.reqs(List.reverse(&2, Laws.PTook, acc)) : List<&2, Eng.Req>}:
+  Equal.trans(List<&2, Eng.Req>, List.reverse(&2, Eng.Req, o), List.reverse(&2, Eng.Req, Laws.took.reqs(acc)),
+    Laws.took.reqs(List.reverse(&2, Laws.PTook, acc)),
+    Equal.cong(List<&2, Eng.Req>, List<&2, Eng.Req>, xs => List.reverse(&2, Eng.Req, xs), o, Laws.took.reqs(acc), ho),
+    Equal.sym(List<&2, Eng.Req>, Laws.took.reqs(List.reverse(&2, Laws.PTook, acc)),
+      List.reverse(&2, Eng.Req, Laws.took.reqs(acc)), treqs.rev(acc)))
+
+# after an upgrade, the reader holds what follows
+def restb(bs: List<&2, U32>, b: Bytes()) -> Bytes():
+  match bs:
+    case Nil{}:
+      b
+    case Con{c, t}:
+      restb(t, Eng.push(b, c))
+
+def rest.feed(bs: List<&2, U32>, +b: Bytes(), -pd: Eng.Pend, -o: List<&2, Eng.Req>) ->
+  {Eng.feed(bs, Eng.P{Eng.Rest{b}, pd, o}) == Eng.P{Eng.Rest{restb(bs, b)}, pd, o} : Eng.P}:
+  match bs:
+    case Nil{}:
+      {==}
+    case Con{+c, t}:
+      rest.feed(t, Eng.push(b, c), pd, o)
+
+# The end of a read
+# -----------------
+
+def fed.bad(o: List<&2, Eng.Req>, -pd: Eng.Pend, -n: Nat, -k: Nat, +acc: List<&2, Laws.PTook>,
+  ho: {o == Laws.took.reqs(acc) : List<&2, Eng.Req>}) ->
+  Scans2(X.scan.took(Eng.Bad{}, pd, X.head.n(o, n, k)), Laws.PScanned{List.reverse(&2, Laws.PTook, acc), Laws.PRefused{}}):
+  match o:
+    case Nil{}:
+      (rv(Nil{}, acc, ho), Unit{})
+    case Con{h, t}:
+      (rv(Con{h, t}, acc, ho), Unit{})
+
+def end.bad(bs: List<&2, U32>, q: Eng.P, +acc: List<&2, Laws.PTook>, -n: Nat, -k: Nat, g: GRel(q, Laws.PBad{}, acc)) ->
+  Scans2(X.scan.fed(Eng.feed(bs, q), n, k), Laws.px.done(acc, Laws.PRefused{})):
+  match q:
+    case Eng.P{st, +pd, +o}:
+      (hs, ho) = g
+      %Equal.sym(Eng.St, st, Eng.Bad{}, hs) :
+        Scans2(X.scan.fed(Eng.feed(bs, Eng.P{_, pd, o}), n, k), Laws.px.done(acc, Laws.PRefused{}))
+      %Equal.sym(Eng.P, Eng.feed(bs, Eng.P{Eng.Bad{}, pd, o}), Eng.P{Eng.Bad{}, pd, o}, EL.bad_feeds(bs, pd, o)) :
+        Scans2(X.scan.fed(_, n, k), Laws.px.done(acc, Laws.PRefused{}))
+      fed.bad(o, pd, n, k, acc, ho)
+
+def end.up(bs: List<&2, U32>, q: Eng.P, +acc: List<&2, Laws.PTook>, +raw: List<&2, U32>, +r: Eng.Req, -n: Nat, -k: Nat,
+  g: GRel(q, Laws.PUp{raw, r}, acc)) ->
+  Scans2(X.scan.fed(Eng.feed(bs, q), n, k), Laws.px.done(Con{Laws.PTook{raw, r}, acc}, Laws.PUpgraded{})):
+  match q:
+    case Eng.P{+st, +pd, +o}:
+      (hn, ho) = g
+      %Equal.sym(Eng.St, st, Eng.Rest{rest.of(st)}, up.st(st, hn)) :
+        Scans2(X.scan.fed(Eng.feed(bs, Eng.P{_, pd, o}), n, k),
+          Laws.px.done(Con{Laws.PTook{raw, r}, acc}, Laws.PUpgraded{}))
+      %Equal.sym(Eng.P, Eng.feed(bs, Eng.P{Eng.Rest{rest.of(st)}, pd, o}),
+        Eng.P{Eng.Rest{restb(bs, rest.of(st))}, pd, o}, rest.feed(bs, rest.of(st), pd, o)) :
+        Scans2(X.scan.fed(_, n, k), Laws.px.done(Con{Laws.PTook{raw, r}, acc}, Laws.PUpgraded{}))
+      %Equal.sym(List<&2, Eng.Req>, o, Con{r, Laws.took.reqs(acc)}, ho) :
+        Scans2(X.scan.fed(Eng.P{Eng.Rest{restb(bs, rest.of(st))}, pd, _}, n, k),
+          Laws.px.done(Con{Laws.PTook{raw, r}, acc}, Laws.PUpgraded{}))
+      (Equal.sym(List<&2, Eng.Req>, Laws.took.reqs(List.reverse(&2, Laws.PTook, Con{Laws.PTook{raw, r}, acc})),
+        List.reverse(&2, Eng.Req, Con{r, Laws.took.reqs(acc)}), treqs.rev(Con{Laws.PTook{raw, r}, acc})), Unit{})
+
+def fed.wait(o: List<&2, Eng.Req>, +st: Eng.St, +pd: Eng.Pend, -n: Nat, -k: Nat, +acc: List<&2, Laws.PTook>,
+  -w: Spec.W, -r: List<&2, U32>, ho: {o == Laws.took.reqs(acc) : List<&2, Eng.Req>}, hr: {rd(st) == True{} : Bool},
+  hp: {Eng.P{st, pd, Nil{}} == Eng.feed(r, Eng.p.new()) : Eng.P}, hw: {w == Spec.walk(r, Laws.w0()) : Spec.W}) ->
+  Scans2(X.scan.took(st, pd, X.head.n(o, n, k)), Laws.PScanned{List.reverse(&2, Laws.PTook, acc), Laws.PWait{w, r}}):
+  match o:
+    case Nil{}:
+      (rv(Nil{}, acc, ho), tail.wait2(st, pd, Nat.add(n, k), w, r, hr, hp, hw))
+    case Con{h, t}:
+      (rv(Con{h, t}, acc, ho), tail.wait2(st, pd, k, w, r, hr, hp, hw))
+
+def end.wait(q: Eng.P, -w: Spec.W, -r: List<&2, U32>, +acc: List<&2, Laws.PTook>, -n: Nat, -k: Nat,
+  g: GRel(q, Laws.PGo{w, r}, acc)) ->
+  Scans2(X.scan.fed(Eng.feed(Nil{}, q), n, k), Laws.px.done(acc, Laws.PWait{w, r})):
+  match q:
+    case Eng.P{+st, +pd, o}:
+      (hp, g2) = g
+      (hw, g3) = g2
+      (hr, ho) = g3
+      fed.wait(o, st, pd, n, k, acc, w, r, ho, hr, hp, hw)
+
+def end.msg(-q: Eng.P, +raw: List<&2, U32>, +r: Eng.Req, +acc: List<&2, Laws.PTook>, -n: Nat, -k: Nat,
+  g: GRel(q, Laws.PMsg{raw, r}, acc)) ->
+  Scans2(X.scan.fed(Eng.feed(Nil{}, q), n, k), Laws.px.done(Con{Laws.PTook{raw, r}, acc}, Laws.PWait{Laws.w0(), Nil{}})):
+  %Equal.sym(Eng.P, q, Eng.P{Eng.Pre{}, Eng.pend.new(), Con{r, Laws.took.reqs(acc)}}, g) :
+    Scans2(X.scan.fed(Eng.feed(Nil{}, _), n, k), Laws.px.done(Con{Laws.PTook{raw, r}, acc}, Laws.PWait{Laws.w0(), Nil{}}))
+  (Equal.sym(List<&2, Eng.Req>, Laws.took.reqs(List.reverse(&2, Laws.PTook, Con{Laws.PTook{raw, r}, acc})),
+    List.reverse(&2, Eng.Req, Con{r, Laws.took.reqs(acc)}), treqs.rev(Con{Laws.PTook{raw, r}, acc})),
+    ({==}, ({==}, ({==}, {==}))))
+
+# One byte, on both
+# -----------------
+
+def go.sgo(-st: Eng.St, -pd: Eng.Pend, b: Laws.PStp, -o: List<&2, Eng.Req>, -acc: List<&2, Laws.PTook>,
+  hr: {rd(st) == True{} : Bool}, ho: {o == Laws.took.reqs(acc) : List<&2, Eng.Req>}, rel: StpRel(SGo{st, pd}, b)) ->
+  GRel(Eng.P{st, pd, o}, b, acc):
+  match b:
+    case Laws.PGo{w, r}:
+      (hp, hw) = rel
+      (hp, (hw, (hr, ho)))
+    case Laws.PMsg{raw, r}:
+      match rel:
+    case Laws.PUp{raw, r}:
+      match rel:
+    case Laws.PBad{}:
+      match rel:
+
+def go.bad(-pd: Eng.Pend, b: Laws.PStp, -o: List<&2, Eng.Req>, -acc: List<&2, Laws.PTook>,
+  ho: {o == Laws.took.reqs(acc) : List<&2, Eng.Req>}, rel: StpRel(SBad{}, b)) ->
+  GRel(Eng.P{Eng.Bad{}, pd, o}, b, acc):
+  match b:
+    case Laws.PBad{}:
+      ({==}, ho)
+    case Laws.PGo{w, r}:
+      match rel:
+    case Laws.PMsg{raw, r}:
+      match rel:
+    case Laws.PUp{raw, r}:
+      match rel:
+
+# none completed on the byte
+def go.nil(st: Eng.St, -pd: Eng.Pend, b: Laws.PStp, -o: List<&2, Eng.Req>, -acc: List<&2, Laws.PTook>,
+  ho: {o == Laws.took.reqs(acc) : List<&2, Eng.Req>}, rel: StpRel(ostp.st(st, pd), b),
+  sh: {nh(st) == True{} : Bool}) ->
+  GRel(Eng.P{st, pd, o}, b, acc):
+  match st:
+    case Eng.Pre{}:
+      go.sgo(Eng.Pre{}, pd, b, o, acc, {==}, ho, rel)
+    case Eng.PreLf{}:
+      go.sgo(Eng.PreLf{}, pd, b, o, acc, {==}, ho, rel)
+    case Eng.InM{m0}:
+      go.sgo(Eng.InM{m0}, pd, b, o, acc, {==}, ho, rel)
+    case Eng.InT{p0}:
+      go.sgo(Eng.InT{p0}, pd, b, o, acc, {==}, ho, rel)
+    case Eng.InV{v0}:
+      go.sgo(Eng.InV{v0}, pd, b, o, acc, {==}, ho, rel)
+    case Eng.CrM{}:
+      go.sgo(Eng.CrM{}, pd, b, o, acc, {==}, ho, rel)
+    case Eng.Lin{}:
+      go.sgo(Eng.Lin{}, pd, b, o, acc, {==}, ho, rel)
+    case Eng.InN{n0}:
+      go.sgo(Eng.InN{n0}, pd, b, o, acc, {==}, ho, rel)
+    case Eng.InL0{}:
+      go.sgo(Eng.InL0{}, pd, b, o, acc, {==}, ho, rel)
+    case Eng.InL{v0}:
+      go.sgo(Eng.InL{v0}, pd, b, o, acc, {==}, ho, rel)
+    case Eng.InLt{v0}:
+      go.sgo(Eng.InLt{v0}, pd, b, o, acc, {==}, ho, rel)
+    case Eng.InLc{t0, cl0, up0, ka0, ms0}:
+      go.sgo(Eng.InLc{t0, cl0, up0, ka0, ms0}, pd, b, o, acc, {==}, ho, rel)
+    case Eng.InLu{t0, ws0}:
+      go.sgo(Eng.InLu{t0, ws0}, pd, b, o, acc, {==}, ho, rel)
+    case Eng.InLk0{}:
+      go.sgo(Eng.InLk0{}, pd, b, o, acc, {==}, ho, rel)
+    case Eng.InLk{k0}:
+      go.sgo(Eng.InLk{k0}, pd, b, o, acc, {==}, ho, rel)
+    case Eng.InLv{v0}:
+      go.sgo(Eng.InLv{v0}, pd, b, o, acc, {==}, ho, rel)
+    case Eng.InLx{v0}:
+      go.sgo(Eng.InLx{v0}, pd, b, o, acc, {==}, ho, rel)
+    case Eng.InLe0{}:
+      go.sgo(Eng.InLe0{}, pd, b, o, acc, {==}, ho, rel)
+    case Eng.InLe{v0}:
+      go.sgo(Eng.InLe{v0}, pd, b, o, acc, {==}, ho, rel)
+    case Eng.CrL{}:
+      go.sgo(Eng.CrL{}, pd, b, o, acc, {==}, ho, rel)
+    case Eng.Bod{r0, b0}:
+      go.sgo(Eng.Bod{r0, b0}, pd, b, o, acc, {==}, ho, rel)
+    case Eng.Chk{pos0, n0, b0, left0}:
+      go.sgo(Eng.Chk{pos0, n0, b0, left0}, pd, b, o, acc, {==}, ho, rel)
+    case Eng.Chd{r0, b0, left0}:
+      go.sgo(Eng.Chd{r0, b0, left0}, pd, b, o, acc, {==}, ho, rel)
+    case Eng.Rest{bs0}:
+      no(GRel(Eng.P{Eng.Rest{bs0}, pd, o}, b, acc), sh)
+    case Eng.Bad{}:
+      go.bad(pd, b, o, acc, ho, rel)
+
+# one completed on the byte: the reference took it too
+def go.req(ws: Bool, -q: Eng.Req, b: Laws.PStp, -o: List<&2, Eng.Req>, -acc: List<&2, Laws.PTook>,
+  ho: {o == Laws.took.reqs(acc) : List<&2, Eng.Req>}, rel: StpRel(ostp.req(ws, q), b)) ->
+  GRel(Eng.P{Eng.emit.next(ws), Eng.pend.new(), Con{q, o}}, b, acc):
+  match ws b:
+    case True{} Laws.PUp{raw, q2}:
+      %Equal.sym(Eng.Req, q, q2, rel) : GRel(Eng.P{Eng.Rest{""}, Eng.pend.new(), Con{_, o}}, Laws.PUp{raw, q2}, acc)
+      ({==}, Equal.cong(List<&2, Eng.Req>, List<&2, Eng.Req>, xs => Con{q2, xs}, o, Laws.took.reqs(acc), ho))
+    case True{} Laws.PGo{w, r}:
+      match rel:
+    case True{} Laws.PMsg{raw, q2}:
+      match rel:
+    case True{} Laws.PBad{}:
+      match rel:
+    case False{} Laws.PMsg{raw, q2}:
+      %Equal.sym(Eng.Req, q, q2, rel) : GRel(Eng.P{Eng.Pre{}, Eng.pend.new(), Con{_, o}}, Laws.PMsg{raw, q2}, acc)
+      Equal.cong(List<&2, Eng.Req>, Eng.P, xs => Eng.P{Eng.Pre{}, Eng.pend.new(), Con{q2, xs}}, o, Laws.took.reqs(acc), ho)
+    case False{} Laws.PGo{w, r}:
+      match rel:
+    case False{} Laws.PUp{raw, q2}:
+      match rel:
+    case False{} Laws.PBad{}:
+      match rel:
+
+def go.con(-st: Eng.St, -pd: Eng.Pend, +q: Eng.Req, -t: List<&2, Eng.Req>, b: Laws.PStp, -o: List<&2, Eng.Req>,
+  -acc: List<&2, Laws.PTook>, ho: {o == Laws.took.reqs(acc) : List<&2, Eng.Req>},
+  rel: StpRel(ostp.req(Eng.req.ws(q), q), b), sh: ES.out(st, pd, Con{q, t})) ->
+  GRel(Eng.P{st, pd, Con{q, List.append(&2, Eng.Req, t, o)}}, b, acc):
+  (ht, sh2) = sh
+  (hs, hpd) = sh2
+  %Equal.sym(List<&2, Eng.Req>, t, Nil{}, ht) :
+    GRel(Eng.P{st, pd, Con{q, List.append(&2, Eng.Req, _, o)}}, b, acc)
+  %Equal.sym(Eng.St, st, Eng.emit.next(Eng.req.ws(q)), hs) :
+    GRel(Eng.P{_, pd, Con{q, o}}, b, acc)
+  %Equal.sym(Eng.Pend, pd, Eng.pend.new(), hpd) :
+    GRel(Eng.P{Eng.emit.next(Eng.req.ws(q)), _, Con{q, o}}, b, acc)
+  go.req(Eng.req.ws(q), q, b, o, acc, ho, rel)
+
+def go.at2(q0: Eng.P, b: Laws.PStp, -o: List<&2, Eng.Req>, -acc: List<&2, Laws.PTook>,
+  ho: {o == Laws.took.reqs(acc) : List<&2, Eng.Req>}, rel: StpRel(ostp.of(q0), b), sh: ES(q0)) ->
+  GRel(AO(q0, o), b, acc):
+  match q0:
+    case Eng.P{st, pd, x}:
+      match x:
+        case Nil{}:
+          go.nil(st, pd, b, o, acc, ho, rel, sh)
+        case Con{q, t}:
+          go.con(st, pd, q, t, b, o, acc, ho, rel, sh)
+
+# LEMMA: one byte. The reader's step with the requests of this read
+# behind it, and the reference's, from states related, leave states
+# related.
+def go.at(q: Eng.P, +w: Spec.W, +r: List<&2, U32>, +c: U32, -acc: List<&2, Laws.PTook>,
+  g: GRel(q, Laws.PGo{w, r}, acc)) ->
+  GRel(Eng.step(q, c), Laws.px.stp(w, c, r), acc):
+  match q:
+    case Eng.P{+st, +pd, o}:
+      (hp, g2) = g
+      (hw, g3) = g2
+      (hr, ho) = g3
+      %Equal.sym(Eng.P, Eng.step(Eng.P{st, pd, o}, c), AO(Eng.step(Eng.P{st, pd, Nil{}}, c), o), oi.step(st, pd, c, o)) :
+        GRel(_, Laws.px.stp(w, c, r), acc)
+      go.at2(Eng.step(Eng.P{st, pd, Nil{}}, c), Laws.px.stp(w, c, r), o, acc, ho,
+        stp.is(Eng.P{st, pd, Nil{}}, w, r, c, (hp, hw)), es.step(st, pd, c, rd.nh(st, hr)))
+
+# just after a request, a fresh reader: the reference's fresh walk
+def go.msg(-q: Eng.P, -raw: List<&2, U32>, +r: Eng.Req, +c: U32, +acc: List<&2, Laws.PTook>,
+  g: GRel(q, Laws.PMsg{raw, r}, acc)) ->
+  GRel(Eng.step(q, c), Laws.px.stp(Laws.w0(), c, Nil{}), Con{Laws.PTook{raw, r}, acc}):
+  %Equal.sym(Eng.P, q, Eng.P{Eng.Pre{}, Eng.pend.new(), Con{r, Laws.took.reqs(acc)}}, g) :
+    GRel(Eng.step(_, c), Laws.px.stp(Laws.w0(), c, Nil{}), Con{Laws.PTook{raw, r}, acc})
+  go.at(Eng.P{Eng.Pre{}, Eng.pend.new(), Con{r, Laws.took.reqs(acc)}}, Laws.w0(), Nil{}, c,
+    Con{Laws.PTook{raw, r}, acc}, ({==}, ({==}, ({==}, {==}))))
+
+# LEMMA: a read, a byte at a time on both sides
+def go.is(bs: List<&2, U32>, +q: Eng.P, b: Laws.PStp, +acc: List<&2, Laws.PTook>, -n: Nat, -k: Nat,
+  g: GRel(q, b, acc)) ->
+  Scans2(X.scan.fed(Eng.feed(bs, q), n, k), Laws.px.go(bs, b, acc)):
+  match bs b:
+    case Nil{} Laws.PBad{}:
+      end.bad(Nil{}, q, acc, n, k, g)
+    case Con{c, t} Laws.PBad{}:
+      end.bad(Con{c, t}, q, acc, n, k, g)
+    case Nil{} Laws.PUp{raw, r}:
+      end.up(Nil{}, q, acc, raw, r, n, k, g)
+    case Con{c, t} Laws.PUp{raw, r}:
+      end.up(Con{c, t}, q, acc, raw, r, n, k, g)
+    case Nil{} Laws.PGo{w, r}:
+      end.wait(q, w, r, acc, n, k, g)
+    case Nil{} Laws.PMsg{raw, r}:
+      end.msg(q, raw, r, acc, n, k, g)
+    case Con{+c, t} Laws.PGo{+w, +r}:
+      go.is(t, Eng.step(q, c), Laws.px.stp(w, c, r), acc, n, k, go.at(q, w, r, c, acc, g))
+    case Con{+c, t} Laws.PMsg{raw, +r}:
+      go.is(t, Eng.step(q, c), Laws.px.stp(Laws.w0(), c, Nil{}), Con{Laws.PTook{raw, r}, acc}, n, k,
+        go.msg(q, raw, r, c, acc, g))
 
 # LEMMA: a read. The proxy's scan of a read and the reference's walk of
-# its bytes, from steps that agree, take the same requests and end the
-# same way.
-def go.is(s: Bytes(), a: X.Stp, b: Laws.PStp, +acc: List<&2, X.Took>, -acc2: List<&2, Laws.PTook>,
-  ha: {Laws.tooks.of(acc) == acc2 : List<&2, Laws.PTook>}, rel: StpRel(a, b)) ->
-  Laws.Scans(X.scan.go(s, a, acc), Laws.px.go(Bytes.to_list(s), b, acc2)):
-  match s:
-    case SNil{}:
-      match a b:
-        case X.SGo{+p, +rb} Laws.PGo{+w, +r}:
-          (done.rel(acc, acc2, ha), rel)
-        case X.SGo{p, rb} Laws.PMsg{r, q2}:
-          match rel:
-        case X.SGo{p, rb} Laws.PUp{r, q2}:
-          match rel:
-        case X.SGo{p, rb} Laws.PBad{}:
-          match rel:
-        case X.SMsg{rb, q} Laws.PGo{w, r}:
-          match rel:
-        case X.SMsg{rb, q} Laws.PMsg{r, q2}:
-          (done.rel(Con{X.Took{rb, q}, acc}, Con{Laws.PTook{r, q2}, acc2}, took.cons(rb, q, r, q2, acc, acc2, rel, ha)), ({==}, ({==}, {==})))
-        case X.SMsg{rb, q} Laws.PUp{r, q2}:
-          match rel:
-        case X.SMsg{rb, q} Laws.PBad{}:
-          match rel:
-        case X.SUp{rb, q} Laws.PGo{w, r}:
-          match rel:
-        case X.SUp{rb, q} Laws.PMsg{r, q2}:
-          match rel:
-        case X.SUp{rb, q} Laws.PUp{r, q2}:
-          (done.rel(Con{X.Took{rb, q}, acc}, Con{Laws.PTook{r, q2}, acc2}, took.cons(rb, q, r, q2, acc, acc2, rel, ha)), Unit{})
-        case X.SUp{rb, q} Laws.PBad{}:
-          match rel:
-        case X.SBad{} Laws.PGo{w, r}:
-          match rel:
-        case X.SBad{} Laws.PMsg{r, q2}:
-          match rel:
-        case X.SBad{} Laws.PUp{r, q2}:
-          match rel:
-        case X.SBad{} Laws.PBad{}:
-          (done.rel(acc, acc2, ha), Unit{})
-    case SCon{Chr{+c}, t}:
-      match a b:
-        case X.SGo{+p, +rb} Laws.PGo{+w, +r}:
-          go.is(t, X.stp(p, c, rb), Laws.px.stp(w, c, r), acc, acc2, ha, stp.is(p, rb, w, r, c, rel))
-        case X.SGo{p, rb} Laws.PMsg{r, q2}:
-          match rel:
-        case X.SGo{p, rb} Laws.PUp{r, q2}:
-          match rel:
-        case X.SGo{p, rb} Laws.PBad{}:
-          match rel:
-        case X.SMsg{rb, q} Laws.PGo{w, r}:
-          match rel:
-        case X.SMsg{rb, q} Laws.PMsg{r, q2}:
-          go.is(t, X.stp(Eng.p.new(), c, ""), Laws.px.stp(Laws.w0(), c, Nil{}), Con{X.Took{rb, q}, acc}, Con{Laws.PTook{r, q2}, acc2}, took.cons(rb, q, r, q2, acc, acc2, rel, ha), stp.is(Eng.p.new(), "", Laws.w0(), Nil{}, c, ({==}, ({==}, {==}))))
-        case X.SMsg{rb, q} Laws.PUp{r, q2}:
-          match rel:
-        case X.SMsg{rb, q} Laws.PBad{}:
-          match rel:
-        case X.SUp{rb, q} Laws.PGo{w, r}:
-          match rel:
-        case X.SUp{rb, q} Laws.PMsg{r, q2}:
-          match rel:
-        case X.SUp{rb, q} Laws.PUp{r, q2}:
-          (done.rel(Con{X.Took{rb, q}, acc}, Con{Laws.PTook{r, q2}, acc2}, took.cons(rb, q, r, q2, acc, acc2, rel, ha)), Unit{})
-        case X.SUp{rb, q} Laws.PBad{}:
-          match rel:
-        case X.SBad{} Laws.PGo{w, r}:
-          match rel:
-        case X.SBad{} Laws.PMsg{r, q2}:
-          match rel:
-        case X.SBad{} Laws.PUp{r, q2}:
-          match rel:
-        case X.SBad{} Laws.PBad{}:
-          (done.rel(acc, acc2, ha), Unit{})
+# its bytes, from a scan that waits as the walk does, take the same
+# requests and end the same way.
+def read.is(+s: Bytes(), sc: X.Scan, +w: Spec.W, +raw: List<&2, U32>, wt: Waits2(sc, w, raw)) ->
+  Scans2(X.scan(s, sc), Laws.px.go(Bytes.to_list(s), Laws.PGo{w, raw}, Nil{})):
+  match sc:
+    case X.Scan{+p, n}:
+      %Equal.sym(Eng.P, Eng.feed_buf(s, p), Eng.feed(Bytes.to_list(s), p), EL.feed_buf_is_feed(s, p)) :
+        Scans2(X.scan.fed(_, n, Bytes.len(s)), Laws.px.go(Bytes.to_list(s), Laws.PGo{w, raw}, Nil{}))
+      go.is(Bytes.to_list(s), p, Laws.PGo{w, raw}, Nil{}, n, Bytes.len(s), wt)
 
 # A stream cut in two
 # ===================
@@ -783,43 +2478,49 @@ def go.app(xs: List<&2, U32>, +ys: List<&2, U32>, st: Laws.PStp, +acc: List<&2, 
 # The reads of a connection
 # =========================
 
+def treqs.app(xs: List<&2, Laws.PTook>, -ys: List<&2, Laws.PTook>) ->
+  {Laws.took.reqs(List.append(&2, Laws.PTook, xs, ys)) == List.append(&2, Eng.Req, Laws.took.reqs(xs), Laws.took.reqs(ys)) : List<&2, Eng.Req>}:
+  match xs:
+    case Nil{}:
+      {==}
+    case Con{h, t}:
+      match h:
+        case Laws.PTook{raw, +q}:
+          Equal.cong(List<&2, Eng.Req>, List<&2, Eng.Req>, zs => Con{q, zs}, Laws.took.reqs(List.append(&2, Laws.PTook, t, ys)), List.append(&2, Eng.Req, Laws.took.reqs(t), Laws.took.reqs(ys)), treqs.app(t, ys))
+
 # the proxy's connection so far against the reference's walk: the
 # requests the reference took before (pre) and then the connection's
 def RA(pre: List<&2, Laws.PTook>, c: Laws.Conn, f: Laws.PScanned) -> Type:
   match c f:
     case Laws.Conn{ts, t} Laws.PScanned{us, u}:
-      {List.append(&2, Laws.PTook, pre, Laws.tooks.of(ts)) == us : List<&2, Laws.PTook>} & Laws.Tails(t, u)
+      {List.append(&2, Eng.Req, Laws.took.reqs(pre), ts) == Laws.took.reqs(us) : List<&2, Eng.Req>} & Tails2(t, u)
 
 def ra.rw(-ra1: List<&2, Laws.PTook>, -ra2: List<&2, Laws.PTook>, -c: Laws.Conn, -f: Laws.PScanned,
   e: {ra1 == ra2 : List<&2, Laws.PTook>}, h: RA(ra1, c, f)) -> RA(ra2, c, f):
   %e : RA(_, c, f)
   h
 
-def more.ra(+ts: List<&2, X.Took>, c: Laws.Conn, f: Laws.PScanned, +ra: List<&2, Laws.PTook>,
-  +us: List<&2, Laws.PTook>, hts: {Laws.tooks.of(ts) == us : List<&2, Laws.PTook>},
+def more.ra(+ts: List<&2, Eng.Req>, c: Laws.Conn, f: Laws.PScanned, +ra: List<&2, Laws.PTook>,
+  +us: List<&2, Laws.PTook>, hts: {ts == Laws.took.reqs(us) : List<&2, Eng.Req>},
   h: RA(List.append(&2, Laws.PTook, ra, us), c, f)) -> RA(ra, Laws.conn.more(ts, c), f):
   match c f:
     case Laws.Conn{+ts2, t2} Laws.PScanned{us2, u2}:
       (h1, h2) = h
-      (Equal.trans(List<&2, Laws.PTook>, List.append(&2, Laws.PTook, ra, Laws.tooks.of(List.append(&2, X.Took, ts, ts2))),
-        List.append(&2, Laws.PTook, List.append(&2, Laws.PTook, ra, us), Laws.tooks.of(ts2)), us2,
-        Equal.trans(List<&2, Laws.PTook>, List.append(&2, Laws.PTook, ra, Laws.tooks.of(List.append(&2, X.Took, ts, ts2))),
-          List.append(&2, Laws.PTook, ra, List.append(&2, Laws.PTook, us, Laws.tooks.of(ts2))),
-          List.append(&2, Laws.PTook, List.append(&2, Laws.PTook, ra, us), Laws.tooks.of(ts2)),
-          %hts : {List.append(&2, Laws.PTook, ra, Laws.tooks.of(List.append(&2, X.Took, ts, ts2))) ==
-            List.append(&2, Laws.PTook, ra, List.append(&2, Laws.PTook, _, Laws.tooks.of(ts2))) : List<&2, Laws.PTook>}
-          Equal.cong(List<&2, Laws.PTook>, List<&2, Laws.PTook>, x => List.append(&2, Laws.PTook, ra, x),
-            Laws.tooks.of(List.append(&2, X.Took, ts, ts2)),
-            List.append(&2, Laws.PTook, Laws.tooks.of(ts), Laws.tooks.of(ts2)), tooks.app(ts, ts2)),
-          Equal.sym(List<&2, Laws.PTook>, List.append(&2, Laws.PTook, List.append(&2, Laws.PTook, ra, us), Laws.tooks.of(ts2)),
-            List.append(&2, Laws.PTook, ra, List.append(&2, Laws.PTook, us, Laws.tooks.of(ts2))),
-            app.assoc(Laws.PTook, ra, us, Laws.tooks.of(ts2)))),
+      (Equal.trans(List<&2, Eng.Req>, List.append(&2, Eng.Req, Laws.took.reqs(ra), List.append(&2, Eng.Req, ts, ts2)), List.append(&2, Eng.Req, Laws.took.reqs(List.append(&2, Laws.PTook, ra, us)), ts2), Laws.took.reqs(us2),
+        Equal.trans(List<&2, Eng.Req>, List.append(&2, Eng.Req, Laws.took.reqs(ra), List.append(&2, Eng.Req, ts, ts2)), List.append(&2, Eng.Req, Laws.took.reqs(ra), List.append(&2, Eng.Req, Laws.took.reqs(us), ts2)), List.append(&2, Eng.Req, Laws.took.reqs(List.append(&2, Laws.PTook, ra, us)), ts2),
+          Equal.cong(List<&2, Eng.Req>, List<&2, Eng.Req>, x => List.append(&2, Eng.Req, Laws.took.reqs(ra), List.append(&2, Eng.Req, x, ts2)), ts, Laws.took.reqs(us), hts),
+          Equal.trans(List<&2, Eng.Req>, List.append(&2, Eng.Req, Laws.took.reqs(ra), List.append(&2, Eng.Req, Laws.took.reqs(us), ts2)), List.append(&2, Eng.Req, List.append(&2, Eng.Req, Laws.took.reqs(ra), Laws.took.reqs(us)), ts2), List.append(&2, Eng.Req, Laws.took.reqs(List.append(&2, Laws.PTook, ra, us)), ts2),
+            Equal.sym(List<&2, Eng.Req>, List.append(&2, Eng.Req, List.append(&2, Eng.Req, Laws.took.reqs(ra), Laws.took.reqs(us)), ts2), List.append(&2, Eng.Req, Laws.took.reqs(ra), List.append(&2, Eng.Req, Laws.took.reqs(us), ts2)),
+              app.assoc(Eng.Req, Laws.took.reqs(ra), Laws.took.reqs(us), ts2)),
+            Equal.cong(List<&2, Eng.Req>, List<&2, Eng.Req>, x => List.append(&2, Eng.Req, x, ts2),
+              List.append(&2, Eng.Req, Laws.took.reqs(ra), Laws.took.reqs(us)), Laws.took.reqs(List.append(&2, Laws.PTook, ra, us)),
+              Equal.sym(List<&2, Eng.Req>, Laws.took.reqs(List.append(&2, Laws.PTook, ra, us)), List.append(&2, Eng.Req, Laws.took.reqs(ra), Laws.took.reqs(us)), treqs.app(ra, us))))),
         h1), h2)
 
-def tail.wait(+ts: List<&2, X.Took>, +sc2: X.Scan, +w2: Spec.W, +raw2: List<&2, U32>, +us: List<&2, Laws.PTook>,
-  hts: {Laws.tooks.of(ts) == us : List<&2, Laws.PTook>}, wt: Laws.Waits(sc2, w2, raw2), +t: List<&2, Bytes()>,
+def tail.wait(+ts: List<&2, Eng.Req>, +sc2: X.Scan, +w2: Spec.W, +raw2: List<&2, U32>, +us: List<&2, Laws.PTook>,
+  hts: {ts == Laws.took.reqs(us) : List<&2, Eng.Req>}, wt: Waits2(sc2, w2, raw2), +t: List<&2, Bytes()>,
   +ra: List<&2, Laws.PTook>,
-  ih: @+sc: X.Scan -> @+w: Spec.W -> @+raw: List<&2, U32> -> @+pr: List<&2, Laws.PTook> -> Laws.Waits(sc, w, raw) ->
+  ih: @+sc: X.Scan -> @+w: Spec.W -> @+raw: List<&2, U32> -> @+pr: List<&2, Laws.PTook> -> Waits2(sc, w, raw) ->
     RA(List.reverse(&2, Laws.PTook, pr), Laws.reads.go(t, sc), Laws.px.go(Bytes.to_list(Bytes.concat(t)), Laws.PGo{w, raw}, pr))) ->
   RA(ra, Laws.conn.more(ts, Laws.reads.go(t, sc2)), Laws.px.go(Bytes.to_list(Bytes.concat(t)), Laws.PGo{w2, raw2},
     List.reverse(&2, Laws.PTook, List.append(&2, Laws.PTook, ra, us)))):
@@ -832,10 +2533,20 @@ def tail.wait(+ts: List<&2, X.Took>, +sc2: X.Scan, +w2: Spec.W, +raw2: List<&2, 
       rev.rev(Laws.PTook, List.append(&2, Laws.PTook, ra, us)),
       ih(sc2, w2, raw2, List.reverse(&2, Laws.PTook, List.append(&2, Laws.PTook, ra, us)), wt)))
 
-def reads.tail(+ts: List<&2, X.Took>, tl: X.Tail, +us: List<&2, Laws.PTook>, u: Laws.PTail,
-  hts: {Laws.tooks.of(ts) == us : List<&2, Laws.PTook>}, ht: Laws.Tails(tl, u), +t: List<&2, Bytes()>,
+# a read that ends refused or upgraded ends the connection on both
+def ra.end(+ts: List<&2, Eng.Req>, +ra: List<&2, Laws.PTook>, +us: List<&2, Laws.PTook>,
+  hts: {ts == Laws.took.reqs(us) : List<&2, Eng.Req>}) ->
+  {List.append(&2, Eng.Req, Laws.took.reqs(ra), ts) == Laws.took.reqs(List.append(&2, Laws.PTook, ra, us)) :
+    List<&2, Eng.Req>}:
+  Equal.trans(List<&2, Eng.Req>, List.append(&2, Eng.Req, Laws.took.reqs(ra), ts), List.append(&2, Eng.Req, Laws.took.reqs(ra), Laws.took.reqs(us)), Laws.took.reqs(List.append(&2, Laws.PTook, ra, us)),
+    Equal.cong(List<&2, Eng.Req>, List<&2, Eng.Req>, x => List.append(&2, Eng.Req, Laws.took.reqs(ra), x), ts,
+      Laws.took.reqs(us), hts),
+    Equal.sym(List<&2, Eng.Req>, Laws.took.reqs(List.append(&2, Laws.PTook, ra, us)), List.append(&2, Eng.Req, Laws.took.reqs(ra), Laws.took.reqs(us)), treqs.app(ra, us)))
+
+def reads.tail(+ts: List<&2, Eng.Req>, tl: X.Tail, +us: List<&2, Laws.PTook>, u: Laws.PTail,
+  hts: {ts == Laws.took.reqs(us) : List<&2, Eng.Req>}, ht: Tails2(tl, u), +t: List<&2, Bytes()>,
   +ra: List<&2, Laws.PTook>,
-  ih: @+sc: X.Scan -> @+w: Spec.W -> @+raw: List<&2, U32> -> @+pr: List<&2, Laws.PTook> -> Laws.Waits(sc, w, raw) ->
+  ih: @+sc: X.Scan -> @+w: Spec.W -> @+raw: List<&2, U32> -> @+pr: List<&2, Laws.PTook> -> Waits2(sc, w, raw) ->
     RA(List.reverse(&2, Laws.PTook, pr), Laws.reads.go(t, sc), Laws.px.go(Bytes.to_list(Bytes.concat(t)), Laws.PGo{w, raw}, pr))) ->
   RA(ra, Laws.reads.at(X.Scanned{ts, tl}, s2 => Laws.reads.go(t, s2)),
     then(pre(ra, Laws.PScanned{us, u}), Bytes.to_list(Bytes.concat(t)))):
@@ -849,8 +2560,7 @@ def reads.tail(+ts: List<&2, X.Took>, tl: X.Tail, +us: List<&2, Laws.PTook>, u: 
     case X.TBad{} Laws.PWait{w2, raw2}:
       match ht:
     case X.TBad{} Laws.PRefused{}:
-      (Equal.cong(List<&2, Laws.PTook>, List<&2, Laws.PTook>, x => List.append(&2, Laws.PTook, ra, x),
-        Laws.tooks.of(ts), us, hts), Unit{})
+      (ra.end(ts, ra, us, hts), Unit{})
     case X.TBad{} Laws.PUpgraded{}:
       match ht:
     case X.TUp{} Laws.PWait{w2, raw2}:
@@ -858,12 +2568,11 @@ def reads.tail(+ts: List<&2, X.Took>, tl: X.Tail, +us: List<&2, Laws.PTook>, u: 
     case X.TUp{} Laws.PRefused{}:
       match ht:
     case X.TUp{} Laws.PUpgraded{}:
-      (Equal.cong(List<&2, Laws.PTook>, List<&2, Laws.PTook>, x => List.append(&2, Laws.PTook, ra, x),
-        Laws.tooks.of(ts), us, hts), Unit{})
+      (ra.end(ts, ra, us, hts), Unit{})
 
-def reads.step(sd: X.Scanned, f: Laws.PScanned, hs: Laws.Scans(sd, f), +t: List<&2, Bytes()>,
+def reads.step(sd: X.Scanned, f: Laws.PScanned, hs: Scans2(sd, f), +t: List<&2, Bytes()>,
   +ra: List<&2, Laws.PTook>,
-  ih: @+sc: X.Scan -> @+w: Spec.W -> @+raw: List<&2, U32> -> @+pr: List<&2, Laws.PTook> -> Laws.Waits(sc, w, raw) ->
+  ih: @+sc: X.Scan -> @+w: Spec.W -> @+raw: List<&2, U32> -> @+pr: List<&2, Laws.PTook> -> Waits2(sc, w, raw) ->
     RA(List.reverse(&2, Laws.PTook, pr), Laws.reads.go(t, sc), Laws.px.go(Bytes.to_list(Bytes.concat(t)), Laws.PGo{w, raw}, pr))) ->
   RA(ra, Laws.reads.at(sd, s2 => Laws.reads.go(t, s2)), then(pre(ra, f), Bytes.to_list(Bytes.concat(t)))):
   match sd f:
@@ -872,27 +2581,25 @@ def reads.step(sd: X.Scanned, f: Laws.PScanned, hs: Laws.Scans(sd, f), +t: List<
       reads.tail(ts, tl, us, u, hts, ht, t, ra, ih)
 
 def reads.con(+r: Bytes(), +t: List<&2, Bytes()>, +sc: X.Scan, +w: Spec.W, +raw: List<&2, U32>,
-  +pr: List<&2, Laws.PTook>, wt: Laws.Waits(sc, w, raw),
-  ih: @+sc: X.Scan -> @+w: Spec.W -> @+raw: List<&2, U32> -> @+pr: List<&2, Laws.PTook> -> Laws.Waits(sc, w, raw) ->
+  +pr: List<&2, Laws.PTook>, wt: Waits2(sc, w, raw),
+  ih: @+sc: X.Scan -> @+w: Spec.W -> @+raw: List<&2, U32> -> @+pr: List<&2, Laws.PTook> -> Waits2(sc, w, raw) ->
     RA(List.reverse(&2, Laws.PTook, pr), Laws.reads.go(t, sc), Laws.px.go(Bytes.to_list(Bytes.concat(t)), Laws.PGo{w, raw}, pr))) ->
   RA(List.reverse(&2, Laws.PTook, pr), Laws.reads.go(Con{r, t}, sc),
     then(pre(List.reverse(&2, Laws.PTook, pr), Laws.px.go(Bytes.to_list(r), Laws.PGo{w, raw}, Nil{})),
       Bytes.to_list(Bytes.concat(t)))):
-  match sc:
-    case X.Scan{+p, +rb}:
-      reads.step(X.scan(r, X.Scan{p, rb}), Laws.px.go(Bytes.to_list(r), Laws.PGo{w, raw}, Nil{}),
-        go.is(r, X.SGo{p, rb}, Laws.PGo{w, raw}, Nil{}, Nil{}, {==}, wt), t, List.reverse(&2, Laws.PTook, pr), ih)
+  reads.step(X.scan(r, sc), Laws.px.go(Bytes.to_list(r), Laws.PGo{w, raw}, Nil{}),
+    read.is(r, sc, w, raw, wt), t, List.reverse(&2, Laws.PTook, pr), ih)
 
 # LEMMA: a connection's reads. Whatever the reads, from a scan that
 # agrees with a walk, the connection agrees with the walk over the reads
 # joined, the requests the walk took before in front.
 def reads.is(rs: List<&2, Bytes()>, +sc: X.Scan, +w: Spec.W, +raw: List<&2, U32>, +pr: List<&2, Laws.PTook>,
-  wt: Laws.Waits(sc, w, raw)) ->
+  wt: Waits2(sc, w, raw)) ->
   RA(List.reverse(&2, Laws.PTook, pr), Laws.reads.go(rs, sc),
     Laws.px.go(Bytes.to_list(Bytes.concat(rs)), Laws.PGo{w, raw}, pr)):
   match rs:
     case Nil{}:
-      (app.nil(Laws.PTook, List.reverse(&2, Laws.PTook, pr)), wt)
+      (app.nil(Eng.Req, Laws.took.reqs(List.reverse(&2, Laws.PTook, pr))), wt)
     case Con{+r, +t}:
       %Equal.sym(List<&2, U32>, Bytes.to_list(Bytes.append(r, Bytes.concat(t))),
         List.append(&2, U32, Bytes.to_list(r), Bytes.to_list(Bytes.concat(t))),
@@ -910,14 +2617,49 @@ def reads.is(rs: List<&2, Bytes()>, +sc: X.Scan, +w: Spec.W, +raw: List<&2, U32>
       reads.con(r, t, sc, w, raw, pr, wt,
         sc2 => w2 => raw2 => pr2 => wt2 => reads.is(t, sc2, w2, raw2, pr2, wt2))
 
+# the scan the proxy waits with, as the laws state it
+def waits.of(sc: X.Scan, -w: Spec.W, -raw: List<&2, U32>, h: Waits2(sc, w, raw)) -> Laws.Waits(sc, w, raw):
+  match sc:
+    case X.Scan{p, n}:
+      match p:
+        case Eng.P{st, pd, o}:
+          (hp, h2) = h
+          (hw, h3) = h2
+          (hr, ho) = h3
+          %Equal.sym(List<&2, Eng.Req>, o, Nil{}, ho) :
+            {Eng.P{st, pd, _} == Eng.feed(raw, Eng.p.new()) : Eng.P} & {w == Spec.walk(raw, Laws.w0()) : Spec.W}
+          (hp, hw)
+
+def tails.of(t: X.Tail, u: Laws.PTail, h: Tails2(t, u)) -> Laws.Tails(t, u):
+  match t u:
+    case X.TWait{sc} Laws.PWait{w, raw}:
+      waits.of(sc, w, raw, h)
+    case X.TBad{} Laws.PRefused{}:
+      Unit{}
+    case X.TUp{} Laws.PUpgraded{}:
+      Unit{}
+    case X.TWait{sc} Laws.PRefused{}:
+      match h:
+    case X.TWait{sc} Laws.PUpgraded{}:
+      match h:
+    case X.TBad{} Laws.PWait{w, raw}:
+      match h:
+    case X.TBad{} Laws.PUpgraded{}:
+      match h:
+    case X.TUp{} Laws.PWait{w, raw}:
+      match h:
+    case X.TUp{} Laws.PRefused{}:
+      match h:
+
 def ra.conns(c: Laws.Conn, f: Laws.PScanned, h: RA(Nil{}, c, f)) -> Laws.Conns(c, f):
   match c f:
     case Laws.Conn{ts, t} Laws.PScanned{us, u}:
-      h
+      (h1, h2) = h
+      (h1, tails.of(t, u, h2))
 
 def Laws.scan_is_spec(rs):
   ra.conns(Laws.reads(rs), Laws.frame(Bytes.to_list(Bytes.concat(rs))),
-    reads.is(rs, X.scan.new(), Laws.w0(), Nil{}, Nil{}, ({==}, ({==}, {==}))))
+    reads.is(rs, X.scan.new(), Laws.w0(), Nil{}, Nil{}, ({==}, ({==}, ({==}, {==})))))
 
 # spec.bend's walk and the requests it has done
 # ==============================================
@@ -937,7 +2679,7 @@ def shift(w: Spec.W, o: List<&2, Eng.Req>) -> Spec.W:
 def emit.go.par(r: Eng.Req, -o: List<&2, Eng.Req>) ->
   {Spec.emit.go(r, o) == shift(Spec.emit.go(r, Nil{}), o) : Spec.W}:
   match r:
-    case Eng.Req{m, p, b, cl, ws, k}:
+    case Eng.Req{m, p, b, cl, ws, k, d}:
       {==}
 
 def emit.par(+h: Spec.Head, +body: List<&2, U32>, -o: List<&2, Eng.Req>) ->
@@ -969,11 +2711,11 @@ def head.at.par(ok: Bool, b: Spec.Body, +h: Spec.Head, -o: List<&2, Eng.Req>, -s
 def head.done.par(h: Spec.Head, -o: List<&2, Eng.Req>, -s: List<&2, U32>) ->
   {Spec.head.done(h, o, s) == shift(Spec.head.done(h, Nil{}, s), o) : Spec.W}:
   match h:
-    case Spec.Head{m, t, +l, cl, +hs, k, u, c, v, f}:
+    case Spec.Head{m, t, +l, cl, +hs, k, u, c, v, f, hx}:
       match f:
         case Eng.Fx{+v10, ka, +te}:
           head.at.par(Spec.hosts.ok(v10, hs), Spec.body.of(te, v10, l),
-            Spec.Head{m, t, l, cl, hs, k, u, c, v, Eng.Fx{v10, ka, te}}, o, s)
+            Spec.Head{m, t, l, cl, hs, k, u, c, v, Eng.Fx{v10, ka, te}, hx}, o, s)
 
 def chunk.paid.par(over: Bool, +h: Spec.Head, +at: Spec.At, +n: U32, +got: List<&2, U32>, +left: U32,
   -o: List<&2, Eng.Req>, -s: List<&2, U32>) ->
@@ -1244,7 +2986,7 @@ def Shape(w: Spec.W) -> Type:
 def emit.go.shape(r: Eng.Req) ->
   Shape(Spec.emit.go(r, Nil{})):
   match r:
-    case Eng.Req{m, p, b, cl, ws, k}:
+    case Eng.Req{m, p, b, cl, ws, k, d}:
       ({==}, ({==}, {==}))
 
 def emit.shape(+h: Spec.Head, +body: List<&2, U32>) ->
@@ -1276,11 +3018,11 @@ def head.at.shape(ok: Bool, b: Spec.Body, +h: Spec.Head, -s: List<&2, U32>) ->
 def head.done.shape(h: Spec.Head, -s: List<&2, U32>) ->
   Shape(Spec.head.done(h, Nil{}, s)):
   match h:
-    case Spec.Head{m, t, +l, cl, +hs, k, u, c, v, f}:
+    case Spec.Head{m, t, +l, cl, +hs, k, u, c, v, f, hx}:
       match f:
         case Eng.Fx{+v10, ka, +te}:
           head.at.shape(Spec.hosts.ok(v10, hs), Spec.body.of(te, v10, l),
-            Spec.Head{m, t, l, cl, hs, k, u, c, v, Eng.Fx{v10, ka, te}}, s)
+            Spec.Head{m, t, l, cl, hs, k, u, c, v, Eng.Fx{v10, ka, te}, hx}, s)
 
 def chunk.paid.shape(over: Bool, +h: Spec.Head, +at: Spec.At, +n: U32, +got: List<&2, U32>, +left: U32,
   -s: List<&2, U32>) ->
@@ -1548,22 +3290,6 @@ def walk.app(xs: List<&2, U32>, -ys: List<&2, U32>, +w: Spec.W) ->
     case Con{x, t}:
       walk.app(t, ys, Spec.next(w, x))
 
-def treqs.rev.go(ts: List<&2, Laws.PTook>, acc: List<&2, Laws.PTook>) ->
-  {Laws.took.reqs(List.reverse.go(&2, Laws.PTook, ts, acc)) ==
-    List.reverse.go(&2, Eng.Req, Laws.took.reqs(ts), Laws.took.reqs(acc)) : List<&2, Eng.Req>}:
-  match ts:
-    case Nil{}:
-      {==}
-    case Con{h, t}:
-      match h:
-        case Laws.PTook{raw, q}:
-          treqs.rev.go(t, Con{Laws.PTook{raw, q}, acc})
-
-def treqs.rev(ts: List<&2, Laws.PTook>) ->
-  {Laws.took.reqs(List.reverse(&2, Laws.PTook, ts)) == List.reverse(&2, Eng.Req, Laws.took.reqs(ts)) :
-    List<&2, Eng.Req>}:
-  treqs.rev.go(ts, Nil{})
-
 # after an upgrade, what follows is not HTTP: the walk does no more
 def up.agrees(bs: List<&2, U32>, +g: List<&2, U32>, +o: List<&2, Eng.Req>, +s: List<&2, U32>,
   -us: List<&2, Laws.PTook>, hu: {Laws.took.reqs(us) == List.reverse(&2, Eng.Req, o) : List<&2, Eng.Req>}) ->
@@ -1607,8 +3333,8 @@ def st.is.bad(st: Eng.St, h: {EL.look.st(st) == EL.Refusing{} : EL.Look}) -> {st
       look.no({Eng.InL{v0} == Eng.Bad{} : Eng.St}, EL.Reading{}, EL.Refusing{}, h)
     case Eng.InLt{v0}:
       look.no({Eng.InLt{v0} == Eng.Bad{} : Eng.St}, EL.Reading{}, EL.Refusing{}, h)
-    case Eng.InLc{t0, cl0, up0, ka0}:
-      look.no({Eng.InLc{t0, cl0, up0, ka0} == Eng.Bad{} : Eng.St}, EL.Reading{}, EL.Refusing{}, h)
+    case Eng.InLc{t0, cl0, up0, ka0, ms0}:
+      look.no({Eng.InLc{t0, cl0, up0, ka0, ms0} == Eng.Bad{} : Eng.St}, EL.Reading{}, EL.Refusing{}, h)
     case Eng.InLu{t0, ws0}:
       look.no({Eng.InLu{t0, ws0} == Eng.Bad{} : Eng.St}, EL.Reading{}, EL.Refusing{}, h)
     case Eng.InLk0{}:
@@ -1617,8 +3343,8 @@ def st.is.bad(st: Eng.St, h: {EL.look.st(st) == EL.Refusing{} : EL.Look}) -> {st
       look.no({Eng.InLk{k0} == Eng.Bad{} : Eng.St}, EL.Reading{}, EL.Refusing{}, h)
     case Eng.InLv{v0}:
       look.no({Eng.InLv{v0} == Eng.Bad{} : Eng.St}, EL.Reading{}, EL.Refusing{}, h)
-    case Eng.InLx{}:
-      look.no({Eng.InLx{} == Eng.Bad{} : Eng.St}, EL.Reading{}, EL.Refusing{}, h)
+    case Eng.InLx{v0}:
+      look.no({Eng.InLx{v0} == Eng.Bad{} : Eng.St}, EL.Reading{}, EL.Refusing{}, h)
     case Eng.InLe0{}:
       look.no({Eng.InLe0{} == Eng.Bad{} : Eng.St}, EL.Reading{}, EL.Refusing{}, h)
     case Eng.InLe{v0}:
@@ -1886,88 +3612,35 @@ def bytes.rt(b: Bytes()) -> {Bytes.from_list(Bytes.to_list(b)) == b : Bytes()}:
     case SCon{Chr{c}, t}:
       Equal.cong(Bytes(), Bytes(), x => SCon{Chr{c}, x}, Bytes.from_list(Bytes.to_list(t)), t, bytes.rt(t))
 
-def wire.ref(+w: X.Fwd, ts: List<&2, X.Took>) -> {X.wire(w, ts) == Laws.ref.wire(w, Laws.tooks.of(ts)) : Bytes()}:
-  match ts:
-    case Nil{}:
-      {==}
-    case Con{t, r}:
-      match t:
-        case X.Took{+raw, q}:
-          %Equal.sym(Bytes(), Bytes.from_list(Bytes.to_list(raw)), raw, bytes.rt(raw)) :
-            {X.wire(w, Con{X.Took{raw, q}, r}) ==
-              X.wire.at(X.fwd.at(w, X.head.of(_), q), Laws.ref.wire(w, Laws.tooks.of(r))) : Bytes()}
-          %wire.ref(w, r) :
-            {X.wire(w, Con{X.Took{raw, q}, r}) == X.wire.at(X.fwd.at(w, X.head.of(raw), q), _) : Bytes()}
-          {==}
-
 def conns.took(c: Laws.Conn, f: Laws.PScanned, h: Laws.Conns(c, f)) ->
-  {Laws.tooks.of(Laws.conn.took(c)) == Laws.scanned.took(f) : List<&2, Laws.PTook>}:
+  {Laws.conn.took(c) == Laws.took.reqs(Laws.scanned.took(f)) : List<&2, Eng.Req>}:
   match c f:
     case Laws.Conn{ts, t} Laws.PScanned{us, u}:
       (h1, h2) = h
       h1
 
 def Laws.forward_canonical(w, rs):
-  Equal.trans(Bytes(), X.wire(w, Laws.conn.took(Laws.reads(rs))),
-    Laws.ref.wire(w, Laws.tooks.of(Laws.conn.took(Laws.reads(rs)))),
-    Laws.ref.wire(w, Laws.scanned.took(Laws.frame(Bytes.to_list(Bytes.concat(rs))))),
-    wire.ref(w, Laws.conn.took(Laws.reads(rs))),
-    Equal.cong(List<&2, Laws.PTook>, Bytes(), us => Laws.ref.wire(w, us), Laws.tooks.of(Laws.conn.took(Laws.reads(rs))),
-      Laws.scanned.took(Laws.frame(Bytes.to_list(Bytes.concat(rs)))),
-      conns.took(Laws.reads(rs), Laws.frame(Bytes.to_list(Bytes.concat(rs))), Laws.scan_is_spec(rs))))
+  Equal.cong(List<&2, Eng.Req>, Bytes(), ts => X.wire(w, ts), Laws.conn.took(Laws.reads(rs)),
+    Laws.took.reqs(Laws.scanned.took(Laws.frame(Bytes.to_list(Bytes.concat(rs))))),
+    conns.took(Laws.reads(rs), Laws.frame(Bytes.to_list(Bytes.concat(rs))), Laws.scan_is_spec(rs)))
 
 # A refusal forwards nothing
 # --------------------------
 
-def is.nil.q(xs: List<&2, Eng.Req>) -> Bool:
-  match xs:
-    case Nil{}:
-      True{}
-    case Con{h, t}:
-      False{}
-
-def treqs.nil(us: List<&2, Laws.PTook>, h: {Laws.took.reqs(us) == Nil{} : List<&2, Eng.Req>}) ->
-  {us == Nil{} : List<&2, Laws.PTook>}:
-  match us:
-    case Nil{}:
-      {==}
-    case Con{t, r}:
-      match t:
-        case Laws.PTook{raw, q}:
-          no({Con{Laws.PTook{raw, q}, r} == Nil{} : List<&2, Laws.PTook>},
-            Equal.cong(List<&2, Eng.Req>, Bool, is.nil.q, Con{q, Laws.took.reqs(r)}, Nil{}, h))
-
-def is.nil.p(xs: List<&2, Laws.PTook>) -> Bool:
-  match xs:
-    case Nil{}:
-      True{}
-    case Con{h, t}:
-      False{}
-
-def tooks.nil(ts: List<&2, X.Took>, h: {Laws.tooks.of(ts) == Nil{} : List<&2, Laws.PTook>}) ->
-  {ts == Nil{} : List<&2, X.Took>}:
-  match ts:
-    case Nil{}:
-      {==}
-    case Con{t, r}:
-      no({Con{t, r} == Nil{} : List<&2, X.Took>},
-        Equal.cong(List<&2, Laws.PTook>, Bool, is.nil.p, Con{Laws.took.of(t), Laws.tooks.of(r)}, Nil{}, h))
-
 def agrees.nil(f: Laws.PScanned, ag: Laws.Agrees(f, Spec.Frames{Nil{}, Spec.Refused{}})) ->
-  {Laws.scanned.took(f) == Nil{} : List<&2, Laws.PTook>}:
+  {Laws.took.reqs(Laws.scanned.took(f)) == Nil{} : List<&2, Eng.Req>}:
   match f:
     case Laws.PScanned{us, u}:
       (h1, h2) = ag
-      treqs.nil(us, h1)
+      h1
 
 def Laws.refused_not_forwarded(rs, r):
-  tooks.nil(Laws.conn.took(Laws.reads(rs)),
-    Equal.trans(List<&2, Laws.PTook>, Laws.tooks.of(Laws.conn.took(Laws.reads(rs))),
-      Laws.scanned.took(Laws.frame(Bytes.to_list(Bytes.concat(rs)))), Nil{},
-      conns.took(Laws.reads(rs), Laws.frame(Bytes.to_list(Bytes.concat(rs))), Laws.scan_is_spec(rs)),
-      agrees.nil(Laws.frame(Bytes.to_list(Bytes.concat(rs))),
-        %r : Laws.Agrees(Laws.frame(Bytes.to_list(Bytes.concat(rs))), _)
-        Laws.frames_agree(Bytes.to_list(Bytes.concat(rs))))))
+  Equal.trans(List<&2, Eng.Req>, Laws.conn.took(Laws.reads(rs)),
+    Laws.took.reqs(Laws.scanned.took(Laws.frame(Bytes.to_list(Bytes.concat(rs))))), Nil{},
+    conns.took(Laws.reads(rs), Laws.frame(Bytes.to_list(Bytes.concat(rs))), Laws.scan_is_spec(rs)),
+    agrees.nil(Laws.frame(Bytes.to_list(Bytes.concat(rs))),
+      %r : Laws.Agrees(Laws.frame(Bytes.to_list(Bytes.concat(rs))), _)
+      Laws.frames_agree(Bytes.to_list(Bytes.concat(rs)))))
 
 # The hop's fields
 # ----------------
@@ -1980,16 +3653,16 @@ def clean.app.at(x: Bool, -c1: Bool, -c2: Bool, -c12: Bool, e: {c12 == (c1 && c2
     case False{}:
       {==}
 
-def clean.app(~m: @+n: Bytes() -> Bool, +ns: List<&2, Bytes()>, a: List<&2, X.Field>, -b: List<&2, X.Field>) ->
-  {Laws.clean(~m, ns, List.append(&2, X.Field, a, b)) == (Laws.clean(~m, ns, a) && Laws.clean(~m, ns, b)) : Bool}:
+def clean.app(~m: @+n: Bytes() -> Bool, +ns: List<&2, Bytes()>, a: List<&2, Wr.Field>, -b: List<&2, Wr.Field>) ->
+  {Laws.clean(~m, ns, List.append(&2, Wr.Field, a, b)) == (Laws.clean(~m, ns, a) && Laws.clean(~m, ns, b)) : Bool}:
   match a:
     case Nil{}:
       {==}
     case Con{f, t}:
       match f:
-        case X.Field{+n, v}:
+        case Wr.Field{+n, v}:
           clean.app.at(m(n) || Bool.not(Laws.hop(ns, n)), Laws.clean(~m, ns, t), Laws.clean(~m, ns, b),
-            Laws.clean(~m, ns, List.append(&2, X.Field, t, b)), clean.app(~m, ns, t, b))
+            Laws.clean(~m, ns, List.append(&2, Wr.Field, t, b)), clean.app(~m, ns, t, b))
 
 # a field kept is not a hop's
 def and3.mid(a: Bool, b: Bool, -c: Bool, h: {(a && Bool.not(b) && c) == True{} : Bool}) -> {b == False{} : Bool}:
@@ -2030,7 +3703,7 @@ def hop.eq(+ns: List<&2, Bytes()>, +n: Bytes()) -> {Laws.hop(ns, n) == X.hop(ns,
 
 # a field kept, then the rest clean
 def kept.clean(~m: @+n: Bytes() -> Bool, +ns: List<&2, Bytes()>, +n: Bytes(), hb: {X.hop(ns, n) == False{} : Bool},
-  -rest: List<&2, X.Field>, ih: {Laws.clean(~m, ns, rest) == True{} : Bool}) ->
+  -rest: List<&2, Wr.Field>, ih: {Laws.clean(~m, ns, rest) == True{} : Bool}) ->
   {((m(n) || Bool.not(Laws.hop(ns, n))) && Laws.clean(~m, ns, rest)) == True{} : Bool}:
   %Equal.sym(Bool, Laws.hop(ns, n), X.hop(ns, n), hop.eq(ns, n)) :
     {((m(n) || Bool.not(_)) && Laws.clean(~m, ns, rest)) == True{} : Bool}
@@ -2040,9 +3713,9 @@ def kept.clean(~m: @+n: Bytes() -> Bool, +ns: List<&2, Bytes()>, +n: Bytes(), hb
     {(_ && Laws.clean(~m, ns, rest)) == True{} : Bool}
   ih
 
-def ends.at(~m: @+n: Bytes() -> Bool, +ns: List<&2, Bytes()>, k: Bool, +n: Bytes(), v: Bytes(), -t: List<&2, X.Field>,
+def ends.at(~m: @+n: Bytes() -> Bool, +ns: List<&2, Bytes()>, k: Bool, +n: Bytes(), v: Bytes(), -t: List<&2, Wr.Field>,
   hk: {X.keeps(ns, n) == k : Bool}, ih: {Laws.clean(~m, ns, X.ends(ns, t)) == True{} : Bool}) ->
-  {Laws.clean(~m, ns, X.ends.put(k, X.Field{n, v}, X.ends(ns, t))) == True{} : Bool}:
+  {Laws.clean(~m, ns, X.ends.put(k, Wr.Field{n, v}, X.ends(ns, t))) == True{} : Bool}:
   match k:
     case True{}:
       kept.clean(~m, ns, n,
@@ -2051,20 +3724,20 @@ def ends.at(~m: @+n: Bytes() -> Bool, +ns: List<&2, Bytes()>, k: Bool, +n: Bytes
       ih
 
 # LEMMA: what ends keeps is clean
-def ends.clean(~m: @+n: Bytes() -> Bool, +ns: List<&2, Bytes()>, fs: List<&2, X.Field>) ->
+def ends.clean(~m: @+n: Bytes() -> Bool, +ns: List<&2, Bytes()>, fs: List<&2, Wr.Field>) ->
   {Laws.clean(~m, ns, X.ends(ns, fs)) == True{} : Bool}:
   match fs:
     case Nil{}:
       {==}
     case Con{f, t}:
       match f:
-        case X.Field{+n, v}:
+        case Wr.Field{+n, v}:
           ends.at(~m, ns, X.keeps(ns, n), n, v, t, {==}, ends.clean(~m, ns, t))
 
 def rends.at(~m: @+n: Bytes() -> Bool, +ns: List<&2, Bytes()>, +len: Bool, k: Bool, +n: Bytes(), v: Bytes(),
-  -t: List<&2, X.Field>, hk: {X.rkeeps(ns, len, n) == k : Bool},
+  -t: List<&2, Wr.Field>, hk: {X.rkeeps(ns, len, n) == k : Bool},
   ih: {Laws.clean(~m, ns, X.rends(ns, len, t)) == True{} : Bool}) ->
-  {Laws.clean(~m, ns, X.ends.put(k, X.Field{n, v}, X.rends(ns, len, t))) == True{} : Bool}:
+  {Laws.clean(~m, ns, X.ends.put(k, Wr.Field{n, v}, X.rends(ns, len, t))) == True{} : Bool}:
   match k:
     case True{}:
       kept.clean(~m, ns, n,
@@ -2072,38 +3745,39 @@ def rends.at(~m: @+n: Bytes() -> Bool, +ns: List<&2, Bytes()>, +len: Bool, k: Bo
     case False{}:
       ih
 
-def rends.clean(~m: @+n: Bytes() -> Bool, +ns: List<&2, Bytes()>, +len: Bool, fs: List<&2, X.Field>) ->
+def rends.clean(~m: @+n: Bytes() -> Bool, +ns: List<&2, Bytes()>, +len: Bool, fs: List<&2, Wr.Field>) ->
   {Laws.clean(~m, ns, X.rends(ns, len, fs)) == True{} : Bool}:
   match fs:
     case Nil{}:
       {==}
     case Con{f, t}:
       match f:
-        case X.Field{+n, v}:
+        case Wr.Field{+n, v}:
           rends.at(~m, ns, len, X.rkeeps(ns, len, n), n, v, t, {==}, rends.clean(~m, ns, len, t))
 
 def and.true(a: Bool, -b: Bool, ha: {a == True{} : Bool}, hb: {b == True{} : Bool}) -> {(a && b) == True{} : Bool}:
   %Equal.sym(Bool, a, True{}, ha) : {(_ && b) == True{} : Bool}
   hb
 
-def Laws.hop_by_hop_removed(w, h, body):
-  match w h:
-    case X.Fwd{host, proto, +ip, via} X.Head{meth, target, v10, +fs}:
-      +t4 : List<&2, X.Field> = [X.Field{"x-forwarded-for", X.join(List.append(&2, Bytes(), X.values("x-forwarded-for", fs), [ip]))},
-        X.Field{"x-forwarded-proto", proto}, X.Field{"x-forwarded-host", X.first(X.values("host", fs), "")},
-        X.Field{"via", via}]
-      %Equal.sym(Bool, Laws.clean(~Laws.own5, X.conn.names(fs), List.append(&2, X.Field, X.ends(X.conn.names(fs), fs), t4)),
-        (Laws.clean(~Laws.own5, X.conn.names(fs), X.ends(X.conn.names(fs), fs)) && Laws.clean(~Laws.own5, X.conn.names(fs), t4)),
-        clean.app(~Laws.own5, X.conn.names(fs), X.ends(X.conn.names(fs), fs), t4)) :
+def Laws.hop_by_hop_removed(w, hd, target, body):
+  match w hd:
+    case X.Fwd{host, proto, +ip, via} Eng.Hd{meth, v10, fs0, +cn}:
+      +fs = X.trims(fs0)
+      +t4 : List<&2, Wr.Field> = [Wr.Field{"x-forwarded-for", X.join(List.append(&2, Bytes(), X.values("x-forwarded-for", fs), [ip]))},
+        Wr.Field{"x-forwarded-proto", proto}, Wr.Field{"x-forwarded-host", X.first(X.values("host", fs), "")},
+        Wr.Field{"via", via}]
+      %Equal.sym(Bool, Laws.clean(~Laws.own5, cn, List.append(&2, Wr.Field, X.ends(cn, fs), t4)),
+        (Laws.clean(~Laws.own5, cn, X.ends(cn, fs)) && Laws.clean(~Laws.own5, cn, t4)),
+        clean.app(~Laws.own5, cn, X.ends(cn, fs), t4)) :
         {_ == True{} : Bool}
-      and.true(Laws.clean(~Laws.own5, X.conn.names(fs), X.ends(X.conn.names(fs), fs)),
-        Laws.clean(~Laws.own5, X.conn.names(fs), t4), ends.clean(~Laws.own5, X.conn.names(fs), fs), {==})
+      and.true(Laws.clean(~Laws.own5, cn, X.ends(cn, fs)),
+        Laws.clean(~Laws.own5, cn, t4), ends.clean(~Laws.own5, cn, fs), {==})
 
 def Laws.hop_by_hop_removed_rsp(via, ns, len, fs):
-  %Equal.sym(Bool, Laws.clean(~Laws.is.via, ns, List.append(&2, X.Field, X.rends(ns, len, fs), [X.Field{"via", via}])),
-    (Laws.clean(~Laws.is.via, ns, X.rends(ns, len, fs)) && Laws.clean(~Laws.is.via, ns, [X.Field{"via", via}])),
-    clean.app(~Laws.is.via, ns, X.rends(ns, len, fs), [X.Field{"via", via}])) : {_ == True{} : Bool}
-  and.true(Laws.clean(~Laws.is.via, ns, X.rends(ns, len, fs)), Laws.clean(~Laws.is.via, ns, [X.Field{"via", via}]),
+  %Equal.sym(Bool, Laws.clean(~Laws.is.via, ns, List.append(&2, Wr.Field, X.rends(ns, len, fs), [Wr.Field{"via", via}])),
+    (Laws.clean(~Laws.is.via, ns, X.rends(ns, len, fs)) && Laws.clean(~Laws.is.via, ns, [Wr.Field{"via", via}])),
+    clean.app(~Laws.is.via, ns, X.rends(ns, len, fs), [Wr.Field{"via", via}])) : {_ == True{} : Bool}
+  and.true(Laws.clean(~Laws.is.via, ns, X.rends(ns, len, fs)), Laws.clean(~Laws.is.via, ns, [Wr.Field{"via", via}]),
     rends.clean(~Laws.is.via, ns, len, fs), {==})
 
 # Reading it back
@@ -2472,12 +4146,12 @@ def tl.app(+a: Bytes(), +b: Bytes()) ->
 def RLl(+meth: Bytes(), +target: Bytes()) -> List<&2, U32>:
   List.append(&2, U32, Bytes.to_list(meth), Con{32, List.append(&2, U32, Bytes.to_list(target), Bytes.to_list(" HTTP/1.1"))})
 
-def FLl(f: X.Field) -> List<&2, U32>:
+def FLl(f: Wr.Field) -> List<&2, U32>:
   match f:
-    case X.Field{n, v}:
+    case Wr.Field{n, v}:
       List.append(&2, U32, Bytes.to_list(n), Con{58, Con{32, Bytes.to_list(v)}})
 
-def FLSl(fs: List<&2, X.Field>) -> List<&2, U32>:
+def FLSl(fs: List<&2, Wr.Field>) -> List<&2, U32>:
   match fs:
     case Nil{}:
       Nil{}
@@ -2494,15 +4168,15 @@ def rl.list(+meth: Bytes(), +target: Bytes()) -> {Bytes.to_list(X.rl.ser(meth, t
     {List.append(&2, U32, Bytes.to_list(meth), Con{32, _}) == RLl(meth, target) : List<&2, U32>}
   {==}
 
-def fl.list(f: X.Field) -> {Bytes.to_list(X.fl.ser(f)) == FLl(f) : List<&2, U32>}:
+def fl.list(f: Wr.Field) -> {Bytes.to_list(X.fl.ser(f)) == FLl(f) : List<&2, U32>}:
   match f:
-    case X.Field{+n, +v}:
+    case Wr.Field{+n, +v}:
       %Equal.sym(List<&2, U32>, Bytes.to_list(Bytes.append(n, Bytes.append(": ", v))),
         List.append(&2, U32, Bytes.to_list(n), Bytes.to_list(Bytes.append(": ", v))), tl.app(n, Bytes.append(": ", v))) :
-        {_ == FLl(X.Field{n, v}) : List<&2, U32>}
+        {_ == FLl(Wr.Field{n, v}) : List<&2, U32>}
       {==}
 
-def fls.list(fs: List<&2, X.Field>) -> {Bytes.to_list(X.fls.ser(fs)) == FLSl(fs) : List<&2, U32>}:
+def fls.list(fs: List<&2, Wr.Field>) -> {Bytes.to_list(X.fls.ser(fs)) == FLSl(fs) : List<&2, U32>}:
   match fs:
     case Nil{}:
       {==}
@@ -2517,13 +4191,13 @@ def fls.list(fs: List<&2, X.Field>) -> {Bytes.to_list(X.fls.ser(fs)) == FLSl(fs)
         {List.append(&2, U32, FLl(f), Con{13, Con{10, _}}) == FLSl(Con{f, t}) : List<&2, U32>}
       {==}
 
-def fls.app(a: List<&2, X.Field>, +b: List<&2, X.Field>) ->
-  {FLSl(List.append(&2, X.Field, a, b)) == List.append(&2, U32, FLSl(a), FLSl(b)) : List<&2, U32>}:
+def fls.app(a: List<&2, Wr.Field>, +b: List<&2, Wr.Field>) ->
+  {FLSl(List.append(&2, Wr.Field, a, b)) == List.append(&2, U32, FLSl(a), FLSl(b)) : List<&2, U32>}:
   match a:
     case Nil{}:
       {==}
     case Con{+f, +t}:
-      %Equal.sym(List<&2, U32>, FLSl(List.append(&2, X.Field, t, b)), List.append(&2, U32, FLSl(t), FLSl(b)),
+      %Equal.sym(List<&2, U32>, FLSl(List.append(&2, Wr.Field, t, b)), List.append(&2, U32, FLSl(t), FLSl(b)),
         fls.app(t, b)) :
         {List.append(&2, U32, FLl(f), Con{13, Con{10, _}}) ==
           List.append(&2, U32, List.append(&2, U32, FLl(f), Con{13, Con{10, FLSl(t)}}), FLSl(b)) : List<&2, U32>}
@@ -2622,7 +4296,7 @@ def line.req(+meth: Bytes(), +target: Bytes(), +rest: List<&2, U32>, +o: List<&2
   {==}
 
 # LEMMA: a field line is read, what it says taken into the head
-def line.field(+f: X.Field, +rest: List<&2, U32>, +h: Spec.Head, +h2: Spec.Head, +o: List<&2, Eng.Req>,
+def line.field(+f: Wr.Field, +rest: List<&2, U32>, +h: Spec.Head, +h2: Spec.Head, +o: List<&2, Eng.Req>,
   +s: List<&2, U32>, +val: Spec.Val, pl: PL(FLl(f)), hv: {Spec.field.view(FLl(f)) == Spec.FVal{val} : Spec.FLine},
   hd: {Spec.field.done(h, val) == Some{h2} : Maybe<&2, Spec.Head>}) ->
   {Spec.walk(List.append(&2, U32, FLl(f), Con{13, Con{10, rest}}), Spec.W{Spec.MField{h, Nil{}}, o, s}) ==
@@ -2675,57 +4349,59 @@ def name.other(+n: Bytes(), hc: {X.is.other(Eng.fld.of(Eng.lows(n))) == True{} :
 def view.other.at(n: Bytes(), +v: Bytes(), hn: {X.full(n) == True{} : Bool}, an: AA(Spec.TName{}, Bytes.to_list(n)),
   fo: {Spec.field(Spec.lows(Bytes.from_list(Bytes.to_list(n)))) == Eng.FOther{} : Eng.Fld},
   av: AA(Spec.TVal{}, Bytes.to_list(v))) ->
-  {Spec.field.view(FLl(X.Field{n, v})) == Spec.FVal{Spec.VSkip{}} : Spec.FLine}:
+  {Spec.field.view(FLl(Wr.Field{n, v})) == Spec.FVal{Spec.VSkip{Spec.lows(Bytes.from_list(Bytes.to_list(n))), Con{32, Bytes.to_list(v)}}} : Spec.FLine}:
   match n:
     case SNil{}:
-      no({Spec.field.view(FLl(X.Field{SNil{}, v})) == Spec.FVal{Spec.VSkip{}} : Spec.FLine}, hn)
+      no({Spec.field.view(FLl(Wr.Field{SNil{}, v})) ==
+        Spec.FVal{Spec.VSkip{Spec.lows(Bytes.from_list(Bytes.to_list(SNil{}))), Con{32, Bytes.to_list(v)}}} : Spec.FLine}, hn)
     case SCon{Chr{+n0}, +nr}:
+      +k = Spec.lows(Bytes.from_list(Con{n0, Bytes.to_list(nr)}))
       %Equal.sym(Spec.Span, Spec.span(Spec.TName{}, List.append(&2, U32, Con{n0, Bytes.to_list(nr)}, Con{58, Con{32, Bytes.to_list(v)}})),
         Spec.Span{Con{n0, Bytes.to_list(nr)}, Spec.SAt{Spec.cls(58), 58, Con{32, Bytes.to_list(v)}}},
         span.to(Spec.TName{}, Con{n0, Bytes.to_list(nr)}, 58, Con{32, Bytes.to_list(v)}, an, {==})) :
-        {Spec.field.name(_) == Spec.FVal{Spec.VSkip{}} : Spec.FLine}
-      %Equal.sym(Eng.Fld, Spec.field(Spec.lows(Bytes.from_list(Con{n0, Bytes.to_list(nr)}))), Eng.FOther{}, fo) :
-        {Spec.field.of(_, Con{32, Bytes.to_list(v)}) == Spec.FVal{Spec.VSkip{}} : Spec.FLine}
+        {Spec.field.name(_) == Spec.FVal{Spec.VSkip{k, Con{32, Bytes.to_list(v)}}} : Spec.FLine}
+      %Equal.sym(Eng.Fld, Spec.field(k), Eng.FOther{}, fo) :
+        {Spec.field.of(_, k, Con{32, Bytes.to_list(v)}) == Spec.FVal{Spec.VSkip{k, Con{32, Bytes.to_list(v)}}} : Spec.FLine}
       %Equal.sym(Spec.Span, Spec.span(Spec.TVal{}, Bytes.to_list(v)), Spec.Span{Bytes.to_list(v), Spec.SEnd{}},
         span.all(Spec.TVal{}, Bytes.to_list(v), av)) :
-        {Spec.skip.view(Spec.VSkip{}, Spec.span.push(32, _)) == Spec.FVal{Spec.VSkip{}} : Spec.FLine}
+        {Spec.skip.view(k, Spec.span.push(32, _)) == Spec.FVal{Spec.VSkip{k, Con{32, Bytes.to_list(v)}}} : Spec.FLine}
       {==}
 
 def view.other(+n: Bytes(), +v: Bytes(), hn: {X.full(n) == True{} : Bool}, +ht: {X.ok.all(Spec.TName{}, n) == True{} : Bool},
   hc: {X.is.other(Eng.fld.of(Eng.lows(n))) == True{} : Bool}, +hv: {X.ok.all(Spec.TVal{}, v) == True{} : Bool}) ->
-  {Spec.field.view(FLl(X.Field{n, v})) == Spec.FVal{Spec.VSkip{}} : Spec.FLine}:
+  {Spec.field.view(FLl(Wr.Field{n, v})) == Spec.FVal{Spec.VSkip{Spec.lows(Bytes.from_list(Bytes.to_list(n))), Con{32, Bytes.to_list(v)}}} : Spec.FLine}:
   view.other.at(n, v, hn, aa.of(Spec.TName{}, n, ht), name.other(n, hc), aa.of(Spec.TVal{}, v, hv))
 
 def pl.other(+n: Bytes(), +v: Bytes(), +ht: {X.ok.all(Spec.TName{}, n) == True{} : Bool},
-  +hv: {X.ok.all(Spec.TVal{}, v) == True{} : Bool}) -> PL(FLl(X.Field{n, v})):
+  +hv: {X.ok.all(Spec.TVal{}, v) == True{} : Bool}) -> PL(FLl(Wr.Field{n, v})):
   pl.app(Bytes.to_list(n), Con{58, Con{32, Bytes.to_list(v)}}, aa.pl(Spec.TName{}, Bytes.to_list(n), aa.of(Spec.TName{}, n, ht)),
     ({==}, ({==}, aa.pl(Spec.TVal{}, Bytes.to_list(v), aa.of(Spec.TVal{}, v, hv)))))
 
 # the Host line
 def view.host(+hv: Bytes(), +hh: {X.ok.all(Spec.TVal{}, hv) == True{} : Bool}) ->
-  {Spec.field.view(FLl(X.Field{"host", hv})) == Spec.FVal{Spec.VHost{}} : Spec.FLine}:
+  {Spec.field.view(FLl(Wr.Field{"host", hv})) == Spec.FVal{Spec.VHost{"host", Con{32, Bytes.to_list(hv)}}} : Spec.FLine}:
   %Equal.sym(Spec.Span, Spec.span(Spec.TVal{}, Bytes.to_list(hv)), Spec.Span{Bytes.to_list(hv), Spec.SEnd{}},
     span.all(Spec.TVal{}, Bytes.to_list(hv), aa.of(Spec.TVal{}, hv, hh))) :
-    {Spec.skip.view(Spec.VHost{}, Spec.span.push(32, _)) == Spec.FVal{Spec.VHost{}} : Spec.FLine}
+    {Spec.host.view("host", Spec.span.push(32, _)) == Spec.FVal{Spec.VHost{"host", Con{32, Bytes.to_list(hv)}}} : Spec.FLine}
   {==}
 
-def pl.host(+hv: Bytes(), +hh: {X.ok.all(Spec.TVal{}, hv) == True{} : Bool}) -> PL(FLl(X.Field{"host", hv})):
+def pl.host(+hv: Bytes(), +hh: {X.ok.all(Spec.TVal{}, hv) == True{} : Bool}) -> PL(FLl(Wr.Field{"host", hv})):
   ({==}, ({==}, ({==}, ({==}, ({==}, ({==}, aa.pl(Spec.TVal{}, Bytes.to_list(hv), aa.of(Spec.TVal{}, hv, hh))))))))
 
 # the Content-Length line: read as its value is
 def view.cl(+d: Bytes()) ->
-  {Spec.field.view(FLl(X.Field{"content-length", d})) == Spec.len.view(Spec.span(Spec.TOws{}, Con{32, Bytes.to_list(d)})) :
+  {Spec.field.view(FLl(Wr.Field{"content-length", d})) == Spec.len.view(Spec.span(Spec.TOws{}, Con{32, Bytes.to_list(d)})) :
     Spec.FLine}:
   {==}
 
-def pl.cl(+d: Bytes(), +hd: {X.ok.all(Spec.TVal{}, d) == True{} : Bool}) -> PL(FLl(X.Field{"content-length", d})):
+def pl.cl(+d: Bytes(), +hd: {X.ok.all(Spec.TVal{}, d) == True{} : Bool}) -> PL(FLl(Wr.Field{"content-length", d})):
   ({==}, ({==}, ({==}, ({==}, ({==}, ({==}, ({==}, ({==}, ({==}, ({==}, ({==}, ({==}, ({==}, ({==}, ({==}, ({==}, 
     aa.pl(Spec.TVal{}, Bytes.to_list(d), aa.of(Spec.TVal{}, d, hd))))))))))))))))))
 
 # The fields in the middle
 # ------------------------
 
-def SF(fs: List<&2, X.Field>, s: List<&2, U32>) -> List<&2, U32>:
+def SF(fs: List<&2, Wr.Field>, s: List<&2, U32>) -> List<&2, U32>:
   match fs:
     case Nil{}:
       s
@@ -2744,7 +4420,7 @@ def split4(a: Bool, b: Bool, c: Bool, -d: Bool, h: {(a && b && c && d) == True{}
     case True{} True{} False{}:
       no({True{} == True{} : Bool} & {True{} == True{} : Bool} & {False{} == True{} : Bool} & {d == True{} : Bool}, h)
 
-def ok.field.split(+n: Bytes(), +v: Bytes(), h: {X.ok.field(X.Field{n, v}) == True{} : Bool}) ->
+def ok.field.split(+n: Bytes(), +v: Bytes(), h: {X.ok.field(Wr.Field{n, v}) == True{} : Bool}) ->
   {X.full(n) == True{} : Bool} & {X.ok.all(Spec.TName{}, n) == True{} : Bool} &
     {X.is.other(Eng.fld.of(Eng.lows(n))) == True{} : Bool} & {X.ok.all(Spec.TVal{}, v) == True{} : Bool}:
   split4(X.full(n), X.ok.all(Spec.TName{}, n), X.is.other(Eng.fld.of(Eng.lows(n))), X.ok.all(Spec.TVal{}, v), h)
@@ -2752,60 +4428,73 @@ def ok.field.split(+n: Bytes(), +v: Bytes(), h: {X.ok.field(X.Field{n, v}) == Tr
 def line.other(+n: Bytes(), +v: Bytes(), +rest: List<&2, U32>, +h: Spec.Head, +o: List<&2, Eng.Req>, +s: List<&2, U32>,
   hn: {X.full(n) == True{} : Bool}, +ht: {X.ok.all(Spec.TName{}, n) == True{} : Bool},
   hc: {X.is.other(Eng.fld.of(Eng.lows(n))) == True{} : Bool}, +hv: {X.ok.all(Spec.TVal{}, v) == True{} : Bool}) ->
-  {Spec.walk(List.append(&2, U32, FLl(X.Field{n, v}), Con{13, Con{10, rest}}), Spec.W{Spec.MField{h, Nil{}}, o, s}) ==
-    Spec.walk(rest, Spec.W{Spec.MField{h, Nil{}}, o, Spec.snoc(Spec.snoc(List.append(&2, U32, s, FLl(X.Field{n, v})), 13), 10)}) :
-    Spec.W}:
-  line.field(X.Field{n, v}, rest, h, h, o, s, Spec.VSkip{}, pl.other(n, v, ht, hv), view.other(n, v, hn, ht, hc, hv), {==})
+  {Spec.walk(List.append(&2, U32, FLl(Wr.Field{n, v}), Con{13, Con{10, rest}}), Spec.W{Spec.MField{h, Nil{}}, o, s}) ==
+    Spec.walk(rest, Spec.W{Spec.MField{Spec.head.fld(h, Spec.lows(Bytes.from_list(Bytes.to_list(n))), Con{32, Bytes.to_list(v)}), Nil{}}, o,
+      Spec.snoc(Spec.snoc(List.append(&2, U32, s, FLl(Wr.Field{n, v})), 13), 10)}) : Spec.W}:
+  line.field(Wr.Field{n, v}, rest, h, Spec.head.fld(h, Spec.lows(Bytes.from_list(Bytes.to_list(n))), Con{32, Bytes.to_list(v)}), o, s,
+    Spec.VSkip{Spec.lows(Bytes.from_list(Bytes.to_list(n))), Con{32, Bytes.to_list(v)}}, pl.other(n, v, ht, hv), view.other(n, v, hn, ht, hc, hv), {==})
 
 def line.other4(+n: Bytes(), +v: Bytes(), +rest: List<&2, U32>, +h: Spec.Head, +o: List<&2, Eng.Req>, +s: List<&2, U32>,
   fk: {X.full(n) == True{} : Bool} & {X.ok.all(Spec.TName{}, n) == True{} : Bool} &
     {X.is.other(Eng.fld.of(Eng.lows(n))) == True{} : Bool} & {X.ok.all(Spec.TVal{}, v) == True{} : Bool}) ->
-  {Spec.walk(List.append(&2, U32, FLl(X.Field{n, v}), Con{13, Con{10, rest}}), Spec.W{Spec.MField{h, Nil{}}, o, s}) ==
-    Spec.walk(rest, Spec.W{Spec.MField{h, Nil{}}, o, Spec.snoc(Spec.snoc(List.append(&2, U32, s, FLl(X.Field{n, v})), 13), 10)}) :
-    Spec.W}:
+  {Spec.walk(List.append(&2, U32, FLl(Wr.Field{n, v}), Con{13, Con{10, rest}}), Spec.W{Spec.MField{h, Nil{}}, o, s}) ==
+    Spec.walk(rest, Spec.W{Spec.MField{Spec.head.fld(h, Spec.lows(Bytes.from_list(Bytes.to_list(n))), Con{32, Bytes.to_list(v)}), Nil{}}, o,
+      Spec.snoc(Spec.snoc(List.append(&2, U32, s, FLl(Wr.Field{n, v})), 13), 10)}) : Spec.W}:
   (hn, r1) = fk
   (ht, r2) = r1
   (hc, hv) = r2
   line.other(n, v, rest, h, o, s, hn, ht, hc, hv)
 
-# LEMMA: the end-to-end fields are read and leave the head as it was
-def fields.con(+n: Bytes(), +v: Bytes(), +t: List<&2, X.Field>, +rest: List<&2, U32>, +h: Spec.Head, +o: List<&2, Eng.Req>,
-  +s: List<&2, U32>, hh: {X.ok.field(X.Field{n, v}) == True{} : Bool} & {X.ok.fields(t) == True{} : Bool},
-  ih: @+s2: List<&2, U32> -> {X.ok.fields(t) == True{} : Bool} ->
-    {Spec.walk(List.append(&2, U32, FLSl(t), rest), Spec.W{Spec.MField{h, Nil{}}, o, s2}) ==
-      Spec.walk(rest, Spec.W{Spec.MField{h, Nil{}}, o, SF(t, s2)}) : Spec.W}) ->
-  {Spec.walk(List.append(&2, U32, FLSl(Con{X.Field{n, v}, t}), rest), Spec.W{Spec.MField{h, Nil{}}, o, s}) ==
-    Spec.walk(rest, Spec.W{Spec.MField{h, Nil{}}, o, SF(Con{X.Field{n, v}, t}, s)}) : Spec.W}:
+# the head after the end-to-end fields: each passed on, as spec.bend's
+# view reads its line (the name lowercased, the value after the colon)
+def HF(fs: List<&2, Wr.Field>, h: Spec.Head) -> Spec.Head:
+  match fs:
+    case Nil{}:
+      h
+    case Con{f, t}:
+      match f:
+        case Wr.Field{+n, v}:
+          HF(t, Spec.head.fld(h, Spec.lows(Bytes.from_list(Bytes.to_list(n))), Con{32, Bytes.to_list(v)}))
+
+# LEMMA: the end-to-end fields are read, and passed on
+def fields.con(+n: Bytes(), +v: Bytes(), +t: List<&2, Wr.Field>, +rest: List<&2, U32>, +h: Spec.Head, +o: List<&2, Eng.Req>,
+  +s: List<&2, U32>, hh: {X.ok.field(Wr.Field{n, v}) == True{} : Bool} & {X.ok.fields(t) == True{} : Bool},
+  ih: @+h2: Spec.Head -> @+s2: List<&2, U32> -> {X.ok.fields(t) == True{} : Bool} ->
+    {Spec.walk(List.append(&2, U32, FLSl(t), rest), Spec.W{Spec.MField{h2, Nil{}}, o, s2}) ==
+      Spec.walk(rest, Spec.W{Spec.MField{HF(t, h2), Nil{}}, o, SF(t, s2)}) : Spec.W}) ->
+  {Spec.walk(List.append(&2, U32, FLSl(Con{Wr.Field{n, v}, t}), rest), Spec.W{Spec.MField{h, Nil{}}, o, s}) ==
+    Spec.walk(rest, Spec.W{Spec.MField{HF(Con{Wr.Field{n, v}, t}, h), Nil{}}, o, SF(Con{Wr.Field{n, v}, t}, s)}) : Spec.W}:
   (h1, h2) = hh
-  +s1 = Spec.snoc(Spec.snoc(List.append(&2, U32, s, FLl(X.Field{n, v})), 13), 10)
+  +s1 = Spec.snoc(Spec.snoc(List.append(&2, U32, s, FLl(Wr.Field{n, v})), 13), 10)
+  +hn = Spec.head.fld(h, Spec.lows(Bytes.from_list(Bytes.to_list(n))), Con{32, Bytes.to_list(v)})
   %Equal.sym(List<&2, U32>,
-    List.append(&2, U32, List.append(&2, U32, FLl(X.Field{n, v}), Con{13, Con{10, FLSl(t)}}), rest),
-    List.append(&2, U32, FLl(X.Field{n, v}), Con{13, Con{10, List.append(&2, U32, FLSl(t), rest)}}),
-    app.assoc(U32, FLl(X.Field{n, v}), Con{13, Con{10, FLSl(t)}}, rest)) :
-    {Spec.walk(_, Spec.W{Spec.MField{h, Nil{}}, o, s}) == Spec.walk(rest, Spec.W{Spec.MField{h, Nil{}}, o, SF(t, s1)}) : Spec.W}
+    List.append(&2, U32, List.append(&2, U32, FLl(Wr.Field{n, v}), Con{13, Con{10, FLSl(t)}}), rest),
+    List.append(&2, U32, FLl(Wr.Field{n, v}), Con{13, Con{10, List.append(&2, U32, FLSl(t), rest)}}),
+    app.assoc(U32, FLl(Wr.Field{n, v}), Con{13, Con{10, FLSl(t)}}, rest)) :
+    {Spec.walk(_, Spec.W{Spec.MField{h, Nil{}}, o, s}) == Spec.walk(rest, Spec.W{Spec.MField{HF(t, hn), Nil{}}, o, SF(t, s1)}) : Spec.W}
   Equal.trans(Spec.W,
-    Spec.walk(List.append(&2, U32, FLl(X.Field{n, v}), Con{13, Con{10, List.append(&2, U32, FLSl(t), rest)}}),
+    Spec.walk(List.append(&2, U32, FLl(Wr.Field{n, v}), Con{13, Con{10, List.append(&2, U32, FLSl(t), rest)}}),
       Spec.W{Spec.MField{h, Nil{}}, o, s}),
-    Spec.walk(List.append(&2, U32, FLSl(t), rest), Spec.W{Spec.MField{h, Nil{}}, o, s1}),
-    Spec.walk(rest, Spec.W{Spec.MField{h, Nil{}}, o, SF(t, s1)}),
+    Spec.walk(List.append(&2, U32, FLSl(t), rest), Spec.W{Spec.MField{hn, Nil{}}, o, s1}),
+    Spec.walk(rest, Spec.W{Spec.MField{HF(t, hn), Nil{}}, o, SF(t, s1)}),
     line.other4(n, v, List.append(&2, U32, FLSl(t), rest), h, o, s, ok.field.split(n, v, h1)),
-    ih(s1, h2))
+    ih(hn, s1, h2))
 
-# The body
-# --------
-
-def fields.walk(fs: List<&2, X.Field>, +rest: List<&2, U32>, +h: Spec.Head, +o: List<&2, Eng.Req>, +s: List<&2, U32>,
+def fields.walk(fs: List<&2, Wr.Field>, +rest: List<&2, U32>, +h: Spec.Head, +o: List<&2, Eng.Req>, +s: List<&2, U32>,
   hok: {X.ok.fields(fs) == True{} : Bool}) ->
   {Spec.walk(List.append(&2, U32, FLSl(fs), rest), Spec.W{Spec.MField{h, Nil{}}, o, s}) ==
-    Spec.walk(rest, Spec.W{Spec.MField{h, Nil{}}, o, SF(fs, s)}) : Spec.W}:
+    Spec.walk(rest, Spec.W{Spec.MField{HF(fs, h), Nil{}}, o, SF(fs, s)}) : Spec.W}:
   match fs:
     case Nil{}:
       {==}
     case Con{f, +t}:
       match f:
-        case X.Field{+n, +v}:
-          fields.con(n, v, t, rest, h, o, s, and.split(X.ok.field(X.Field{n, v}), X.ok.fields(t), hok),
-            s2 => h2 => fields.walk(t, rest, h, o, s2, h2))
+        case Wr.Field{+n, +v}:
+          fields.con(n, v, t, rest, h, o, s, and.split(X.ok.field(Wr.Field{n, v}), X.ok.fields(t), hok),
+            h2 => s2 => e2 => fields.walk(t, rest, h2, o, s2, e2))
+
+# The body
+# --------
 
 # LEMMA: a body of known length is counted off to its last byte, and the
 # request goes out with it
@@ -2839,42 +4528,43 @@ def nat.eq(a: Nat, b: Nat, h: {Nat.is_eq(a, b) == True{} : Bool}) -> {a == b : N
       Equal.cong(Nat, Nat, x => 1n+x, p, q, nat.eq(p, q, h))
 
 # the request spec.bend reads, from the bytes the proxy sent
-def RQ(+meth: Bytes(), +target: Bytes(), +body: Bytes()) -> Eng.Req:
-  Eng.Req{Spec.method(meth), target, body, False{}, False{}, ""}
+def RQ(+meth: Bytes(), +target: Bytes(), +x: Eng.Hx, +body: Bytes()) -> Eng.Req:
+  Eng.Req{Spec.method(meth), target, body, False{}, False{}, "", Spec.hd(x, False{})}
 
-def rq.rt(+meth: Bytes(), +target: Bytes(), +body: Bytes()) ->
+def rq.rt(+meth: Bytes(), +target: Bytes(), +x: Eng.Hx, +body: Bytes()) ->
   {Eng.Req{Spec.method(Bytes.from_list(Bytes.to_list(meth))), Bytes.from_list(Bytes.to_list(target)),
-    Bytes.from_list(Bytes.to_list(body)), False{}, False{}, ""} == RQ(meth, target, body) : Eng.Req}:
+    Bytes.from_list(Bytes.to_list(body)), False{}, False{}, "", Spec.hd(x, False{})} == RQ(meth, target, x, body) : Eng.Req}:
   %Equal.sym(Bytes(), Bytes.from_list(Bytes.to_list(meth)), meth, bytes.rt(meth)) : {Eng.Req{Spec.method(_), Bytes.from_list(Bytes.to_list(target)),
-    Bytes.from_list(Bytes.to_list(body)), False{}, False{}, ""} == RQ(meth, target, body) : Eng.Req}
-  %Equal.sym(Bytes(), Bytes.from_list(Bytes.to_list(target)), target, bytes.rt(target)) : {Eng.Req{Spec.method(meth), _, Bytes.from_list(Bytes.to_list(body)), False{}, False{}, ""} ==
-    RQ(meth, target, body) : Eng.Req}
-  %Equal.sym(Bytes(), Bytes.from_list(Bytes.to_list(body)), body, bytes.rt(body)) : {Eng.Req{Spec.method(meth), target, _, False{}, False{}, ""} == RQ(meth, target, body) : Eng.Req}
+    Bytes.from_list(Bytes.to_list(body)), False{}, False{}, "", Spec.hd(x, False{})} == RQ(meth, target, x, body) : Eng.Req}
+  %Equal.sym(Bytes(), Bytes.from_list(Bytes.to_list(target)), target, bytes.rt(target)) : {Eng.Req{Spec.method(meth), _, Bytes.from_list(Bytes.to_list(body)), False{}, False{}, "", Spec.hd(x, False{})} ==
+    RQ(meth, target, x, body) : Eng.Req}
+  %Equal.sym(Bytes(), Bytes.from_list(Bytes.to_list(body)), body, bytes.rt(body)) : {Eng.Req{Spec.method(meth), target, _, False{}, False{}, "", Spec.hd(x, False{})} == RQ(meth, target, x, body) : Eng.Req}
   {==}
 
-def H1(+meth: Bytes(), +target: Bytes()) -> Spec.Head:
-  Spec.head.host(Spec.head.new(Bytes.to_list(meth), Bytes.to_list(target), False{}))
+def H1(+meth: Bytes(), +target: Bytes(), +x: Eng.Hx) -> Spec.Head:
+  Spec.Head{Spec.method(Bytes.from_list(Bytes.to_list(meth))), Bytes.to_list(target), None{}, False{}, 1n, Nil{}, False{},
+    False{}, False{}, Eng.Fx{False{}, False{}, False{}}, x}
 
-def H2(+meth: Bytes(), +target: Bytes(), +n: U32) -> Spec.Head:
+def H2(+meth: Bytes(), +target: Bytes(), +x: Eng.Hx, +n: U32) -> Spec.Head:
   Spec.Head{Spec.method(Bytes.from_list(Bytes.to_list(meth))), Bytes.to_list(target), Some{n}, False{}, 1n, Nil{}, False{},
-    False{}, False{}, Eng.Fx{False{}, False{}, False{}}}
+    False{}, False{}, Eng.Fx{False{}, False{}, False{}}, x}
 
-def W.done(+meth: Bytes(), +target: Bytes(), +body: Bytes(), o: List<&2, Eng.Req>) -> Spec.W:
-  Spec.W{Spec.MReq{Nil{}}, Con{RQ(meth, target, body), o}, Nil{}}
+def W.done(+meth: Bytes(), +target: Bytes(), +x: Eng.Hx, +body: Bytes(), o: List<&2, Eng.Req>) -> Spec.W:
+  Spec.W{Spec.MReq{Nil{}}, Con{RQ(meth, target, x, body), o}, Nil{}}
 
 # no length: the head ends the request, whose body is empty
-def tail.none(+meth: Bytes(), +target: Bytes(), body: Bytes(), +o: List<&2, Eng.Req>, +s: List<&2, U32>,
+def tail.none(+meth: Bytes(), +target: Bytes(), +x: Eng.Hx, body: Bytes(), +o: List<&2, Eng.Req>, +s: List<&2, U32>,
   hb: {String.is_empty(body) == True{} : Bool}) ->
-  {Spec.walk(Con{13, Con{10, Bytes.to_list(body)}}, Spec.W{Spec.MField{H1(meth, target), Nil{}}, o, s}) ==
-    W.done(meth, target, body, o) : Spec.W}:
+  {Spec.walk(Con{13, Con{10, Bytes.to_list(body)}}, Spec.W{Spec.MField{H1(meth, target, x), Nil{}}, o, s}) ==
+    W.done(meth, target, x, body, o) : Spec.W}:
   match body:
     case SNil{}:
       Equal.cong(Eng.Req, Spec.W, r => Spec.W{Spec.MReq{Nil{}}, Con{r, o}, Nil{}},
         Eng.Req{Spec.method(Bytes.from_list(Bytes.to_list(meth))), Bytes.from_list(Bytes.to_list(target)),
-          Bytes.from_list(Bytes.to_list("")), False{}, False{}, ""}, RQ(meth, target, ""), rq.rt(meth, target, ""))
+          Bytes.from_list(Bytes.to_list("")), False{}, False{}, "", Spec.hd(x, False{})}, RQ(meth, target, x, ""), rq.rt(meth, target, x, ""))
     case SCon{c, t}:
-      no({Spec.walk(Con{13, Con{10, Bytes.to_list(SCon{c, t})}}, Spec.W{Spec.MField{H1(meth, target), Nil{}}, o, s}) ==
-        W.done(meth, target, SCon{c, t}, o) : Spec.W}, hb)
+      no({Spec.walk(Con{13, Con{10, Bytes.to_list(SCon{c, t})}}, Spec.W{Spec.MField{H1(meth, target, x), Nil{}}, o, s}) ==
+        W.done(meth, target, x, SCon{c, t}, o) : Spec.W}, hb)
 
 def sub0(x: Nat) -> {Nat.sub(x, 0n) == x : Nat}:
   match x:
@@ -2883,44 +4573,44 @@ def sub0(x: Nat) -> {Nat.sub(x, 0n) == x : Nat}:
     case 1n+p:
       {==}
 
-def tail.z(z: Bool, +meth: Bytes(), +target: Bytes(), body: Bytes(), +n: U32, +o: List<&2, Eng.Req>, +s: List<&2, U32>,
+def tail.z(z: Bool, +meth: Bytes(), +target: Bytes(), +x: Eng.Hx, body: Bytes(), +n: U32, +o: List<&2, Eng.Req>, +s: List<&2, U32>,
   hz: {X.same(z, String.is_empty(body)) == True{} : Bool}, hn: {Nat.is_eq(U32.to_nat(n), Bytes.len(body)) == True{} : Bool}) ->
-  {Spec.walk(Bytes.to_list(body), Spec.head.body(z, n, H2(meth, target, n), o, s)) == W.done(meth, target, body, o) : Spec.W}:
+  {Spec.walk(Bytes.to_list(body), Spec.head.body(z, n, H2(meth, target, x, n), o, s)) == W.done(meth, target, x, body, o) : Spec.W}:
   match z body:
     case True{} SNil{}:
       Equal.cong(Eng.Req, Spec.W, r => Spec.W{Spec.MReq{Nil{}}, Con{r, o}, Nil{}},
         Eng.Req{Spec.method(Bytes.from_list(Bytes.to_list(meth))), Bytes.from_list(Bytes.to_list(target)),
-          Bytes.from_list(Bytes.to_list("")), False{}, False{}, ""}, RQ(meth, target, ""), rq.rt(meth, target, ""))
+          Bytes.from_list(Bytes.to_list("")), False{}, False{}, "", Spec.hd(x, False{})}, RQ(meth, target, x, ""), rq.rt(meth, target, x, ""))
     case True{} SCon{c, t}:
-      no({Spec.walk(Bytes.to_list(SCon{c, t}), Spec.head.body(True{}, n, H2(meth, target, n), o, s)) ==
-        W.done(meth, target, SCon{c, t}, o) : Spec.W}, hz)
+      no({Spec.walk(Bytes.to_list(SCon{c, t}), Spec.head.body(True{}, n, H2(meth, target, x, n), o, s)) ==
+        W.done(meth, target, x, SCon{c, t}, o) : Spec.W}, hz)
     case False{} SNil{}:
-      no({Spec.walk(Nil{}, Spec.head.body(False{}, n, H2(meth, target, n), o, s)) == W.done(meth, target, SNil{}, o) : Spec.W}, hz)
+      no({Spec.walk(Nil{}, Spec.head.body(False{}, n, H2(meth, target, x, n), o, s)) == W.done(meth, target, x, SNil{}, o) : Spec.W}, hz)
     case False{} SCon{Chr{+c}, +t}:
       %Equal.sym(Nat, U32.to_nat(n), Bytes.len(SCon{Chr{c}, t}), nat.eq(U32.to_nat(n), Bytes.len(SCon{Chr{c}, t}), hn)) :
-        {Spec.walk(Con{c, Bytes.to_list(t)}, Spec.W{Spec.MBody{H2(meth, target, n), Nat.sub(_, 1n), Nil{}}, o, s}) ==
-          W.done(meth, target, SCon{Chr{c}, t}, o) : Spec.W}
+        {Spec.walk(Con{c, Bytes.to_list(t)}, Spec.W{Spec.MBody{H2(meth, target, x, n), Nat.sub(_, 1n), Nil{}}, o, s}) ==
+          W.done(meth, target, x, SCon{Chr{c}, t}, o) : Spec.W}
       %Equal.sym(Nat, Bytes.len(SCon{Chr{c}, t}), 1n+Bytes.len(t), Bytes.len.shift(t, 0n)) :
-        {Spec.walk(Con{c, Bytes.to_list(t)}, Spec.W{Spec.MBody{H2(meth, target, n), Nat.sub(_, 1n), Nil{}}, o, s}) ==
-          W.done(meth, target, SCon{Chr{c}, t}, o) : Spec.W}
+        {Spec.walk(Con{c, Bytes.to_list(t)}, Spec.W{Spec.MBody{H2(meth, target, x, n), Nat.sub(_, 1n), Nil{}}, o, s}) ==
+          W.done(meth, target, x, SCon{Chr{c}, t}, o) : Spec.W}
       %Equal.sym(Nat, Nat.sub(Bytes.len(t), 0n), Bytes.len(t), sub0(Bytes.len(t))) :
-        {Spec.walk(Con{c, Bytes.to_list(t)}, Spec.W{Spec.MBody{H2(meth, target, n), _, Nil{}}, o, s}) ==
-          W.done(meth, target, SCon{Chr{c}, t}, o) : Spec.W}
-      Equal.trans(Spec.W, Spec.walk(Con{c, Bytes.to_list(t)}, Spec.W{Spec.MBody{H2(meth, target, n), Bytes.len(t), Nil{}}, o, s}),
-        Spec.emit(H2(meth, target, n), Con{c, Bytes.to_list(t)}, o), W.done(meth, target, SCon{Chr{c}, t}, o),
-        body.walk(t, c, H2(meth, target, n), Nil{}, o, s),
+        {Spec.walk(Con{c, Bytes.to_list(t)}, Spec.W{Spec.MBody{H2(meth, target, x, n), _, Nil{}}, o, s}) ==
+          W.done(meth, target, x, SCon{Chr{c}, t}, o) : Spec.W}
+      Equal.trans(Spec.W, Spec.walk(Con{c, Bytes.to_list(t)}, Spec.W{Spec.MBody{H2(meth, target, x, n), Bytes.len(t), Nil{}}, o, s}),
+        Spec.emit(H2(meth, target, x, n), Con{c, Bytes.to_list(t)}, o), W.done(meth, target, x, SCon{Chr{c}, t}, o),
+        body.walk(t, c, H2(meth, target, x, n), Nil{}, o, s),
         Equal.cong(Eng.Req, Spec.W, r => Spec.W{Spec.MReq{Nil{}}, Con{r, o}, Nil{}},
           Eng.Req{Spec.method(Bytes.from_list(Bytes.to_list(meth))), Bytes.from_list(Bytes.to_list(target)),
-            Bytes.from_list(Bytes.to_list(SCon{Chr{c}, t})), False{}, False{}, ""},
-          RQ(meth, target, SCon{Chr{c}, t}), rq.rt(meth, target, SCon{Chr{c}, t})))
+            Bytes.from_list(Bytes.to_list(SCon{Chr{c}, t})), False{}, False{}, "", Spec.hd(x, False{})},
+          RQ(meth, target, x, SCon{Chr{c}, t}), rq.rt(meth, target, x, SCon{Chr{c}, t})))
 
 # a length: the body counted off by it
-def tail.len(+meth: Bytes(), +target: Bytes(), +body: Bytes(), +n: U32, +o: List<&2, Eng.Req>, +s: List<&2, U32>,
+def tail.len(+meth: Bytes(), +target: Bytes(), +x: Eng.Hx, +body: Bytes(), +n: U32, +o: List<&2, Eng.Req>, +s: List<&2, U32>,
   hz: {X.same(U32.is_zero(n), String.is_empty(body)) == True{} : Bool},
   hn: {Nat.is_eq(U32.to_nat(n), Bytes.len(body)) == True{} : Bool}) ->
-  {Spec.walk(Con{13, Con{10, Bytes.to_list(body)}}, Spec.W{Spec.MField{H2(meth, target, n), Nil{}}, o, s}) ==
-    W.done(meth, target, body, o) : Spec.W}:
-  tail.z(U32.is_zero(n), meth, target, body, n, o, Spec.snoc(Spec.snoc(s, 13), 10), hz, hn)
+  {Spec.walk(Con{13, Con{10, Bytes.to_list(body)}}, Spec.W{Spec.MField{H2(meth, target, x, n), Nil{}}, o, s}) ==
+    W.done(meth, target, x, body, o) : Spec.W}:
+  tail.z(U32.is_zero(n), meth, target, x, body, n, o, Spec.snoc(Spec.snoc(s, 13), 10), hz, hn)
 
 # A request, read back whole
 # --------------------------
@@ -2960,150 +4650,223 @@ def split7(a: Bool, b: Bool, c: Bool, d: Bool, e: Bool, f: Bool, -g: Bool,
 def E.tail(body: Bytes()) -> List<&2, U32>:
   Con{13, Con{10, Bytes.to_list(body)}}
 
-def mw.cl.len(+meth: Bytes(), +target: Bytes(), +body: Bytes(), +d: Bytes(), +n: U32, +ws: Bool, +o: List<&2, Eng.Req>,
+def mw.cl.len(+meth: Bytes(), +target: Bytes(), +x: Eng.Hx, +body: Bytes(), +d: Bytes(), +n: U32, +ws: Bool, +o: List<&2, Eng.Req>,
   +s: List<&2, U32>, +ad: {X.ok.all(Spec.TVal{}, d) == True{} : Bool},
   hlv: {Spec.len.view(Spec.span(Spec.TOws{}, Con{32, Bytes.to_list(d)})) == Spec.FVal{Spec.VLen{n, ws}} : Spec.FLine},
   hk: {X.same(U32.is_zero(n), String.is_empty(body)) == True{} : Bool} &
     {Nat.is_eq(U32.to_nat(n), Bytes.len(body)) == True{} : Bool}) ->
-  {Spec.walk(List.append(&2, U32, FLl(X.Field{"content-length", d}), Con{13, Con{10, E.tail(body)}}),
-    Spec.W{Spec.MField{H1(meth, target), Nil{}}, o, s}) == W.done(meth, target, body, o) : Spec.W}:
+  {Spec.walk(List.append(&2, U32, FLl(Wr.Field{"content-length", d}), Con{13, Con{10, E.tail(body)}}),
+    Spec.W{Spec.MField{H1(meth, target, x), Nil{}}, o, s}) == W.done(meth, target, x, body, o) : Spec.W}:
   (hz, hn) = hk
   Equal.trans(Spec.W,
-    Spec.walk(List.append(&2, U32, FLl(X.Field{"content-length", d}), Con{13, Con{10, E.tail(body)}}),
-      Spec.W{Spec.MField{H1(meth, target), Nil{}}, o, s}),
-    Spec.walk(E.tail(body), Spec.W{Spec.MField{H2(meth, target, n), Nil{}}, o,
-      Spec.snoc(Spec.snoc(List.append(&2, U32, s, FLl(X.Field{"content-length", d})), 13), 10)}),
-    W.done(meth, target, body, o),
-    line.field(X.Field{"content-length", d}, E.tail(body), H1(meth, target), H2(meth, target, n), o, s, Spec.VLen{n, ws},
+    Spec.walk(List.append(&2, U32, FLl(Wr.Field{"content-length", d}), Con{13, Con{10, E.tail(body)}}),
+      Spec.W{Spec.MField{H1(meth, target, x), Nil{}}, o, s}),
+    Spec.walk(E.tail(body), Spec.W{Spec.MField{H2(meth, target, x, n), Nil{}}, o,
+      Spec.snoc(Spec.snoc(List.append(&2, U32, s, FLl(Wr.Field{"content-length", d})), 13), 10)}),
+    W.done(meth, target, x, body, o),
+    line.field(Wr.Field{"content-length", d}, E.tail(body), H1(meth, target, x), H2(meth, target, x, n), o, s, Spec.VLen{n, ws},
       pl.cl(d, ad),
-      Equal.trans(Spec.FLine, Spec.field.view(FLl(X.Field{"content-length", d})),
+      Equal.trans(Spec.FLine, Spec.field.view(FLl(Wr.Field{"content-length", d})),
         Spec.len.view(Spec.span(Spec.TOws{}, Con{32, Bytes.to_list(d)})), Spec.FVal{Spec.VLen{n, ws}}, view.cl(d), hlv),
       {==}),
-    tail.len(meth, target, body, n, o, Spec.snoc(Spec.snoc(List.append(&2, U32, s, FLl(X.Field{"content-length", d})), 13), 10),
+    tail.len(meth, target, x, body, n, o, Spec.snoc(Spec.snoc(List.append(&2, U32, s, FLl(Wr.Field{"content-length", d})), 13), 10),
       hz, hn))
 
-def mw.cl.val(val: Spec.Val, +meth: Bytes(), +target: Bytes(), +body: Bytes(), +d: Bytes(), +o: List<&2, Eng.Req>,
+def mw.cl.val(val: Spec.Val, +meth: Bytes(), +target: Bytes(), +x: Eng.Hx, +body: Bytes(), +d: Bytes(), +o: List<&2, Eng.Req>,
   +s: List<&2, U32>, +ad: {X.ok.all(Spec.TVal{}, d) == True{} : Bool},
   hlv: {Spec.len.view(Spec.span(Spec.TOws{}, Con{32, Bytes.to_list(d)})) == Spec.FVal{val} : Spec.FLine},
   ak: {X.ok.len.at(Spec.FVal{val}, body) == True{} : Bool}) ->
-  {Spec.walk(List.append(&2, U32, FLl(X.Field{"content-length", d}), Con{13, Con{10, E.tail(body)}}),
-    Spec.W{Spec.MField{H1(meth, target), Nil{}}, o, s}) == W.done(meth, target, body, o) : Spec.W}:
+  {Spec.walk(List.append(&2, U32, FLl(Wr.Field{"content-length", d}), Con{13, Con{10, E.tail(body)}}),
+    Spec.W{Spec.MField{H1(meth, target, x), Nil{}}, o, s}) == W.done(meth, target, x, body, o) : Spec.W}:
   match val:
     case Spec.VLen{+n, +ws}:
-      mw.cl.len(meth, target, body, d, n, ws, o, s, ad, hlv,
+      mw.cl.len(meth, target, x, body, d, n, ws, o, s, ad, hlv,
         and.split(X.same(U32.is_zero(n), String.is_empty(body)), Nat.is_eq(U32.to_nat(n), Bytes.len(body)), ak))
     case Spec.VLen0{}:
-      no({Spec.walk(List.append(&2, U32, FLl(X.Field{"content-length", d}), Con{13, Con{10, E.tail(body)}}),
-        Spec.W{Spec.MField{H1(meth, target), Nil{}}, o, s}) == W.done(meth, target, body, o) : Spec.W}, ak)
+      no({Spec.walk(List.append(&2, U32, FLl(Wr.Field{"content-length", d}), Con{13, Con{10, E.tail(body)}}),
+        Spec.W{Spec.MField{H1(meth, target, x), Nil{}}, o, s}) == W.done(meth, target, x, body, o) : Spec.W}, ak)
     case Spec.VConn{dn, cu}:
-      no({Spec.walk(List.append(&2, U32, FLl(X.Field{"content-length", d}), Con{13, Con{10, E.tail(body)}}),
-        Spec.W{Spec.MField{H1(meth, target), Nil{}}, o, s}) == W.done(meth, target, body, o) : Spec.W}, ak)
+      no({Spec.walk(List.append(&2, U32, FLl(Wr.Field{"content-length", d}), Con{13, Con{10, E.tail(body)}}),
+        Spec.W{Spec.MField{H1(meth, target, x), Nil{}}, o, s}) == W.done(meth, target, x, body, o) : Spec.W}, ak)
     case Spec.VUp{dn, cu}:
-      no({Spec.walk(List.append(&2, U32, FLl(X.Field{"content-length", d}), Con{13, Con{10, E.tail(body)}}),
-        Spec.W{Spec.MField{H1(meth, target), Nil{}}, o, s}) == W.done(meth, target, body, o) : Spec.W}, ak)
+      no({Spec.walk(List.append(&2, U32, FLl(Wr.Field{"content-length", d}), Con{13, Con{10, E.tail(body)}}),
+        Spec.W{Spec.MField{H1(meth, target, x), Nil{}}, o, s}) == W.done(meth, target, x, body, o) : Spec.W}, ak)
     case Spec.VKey0{}:
-      no({Spec.walk(List.append(&2, U32, FLl(X.Field{"content-length", d}), Con{13, Con{10, E.tail(body)}}),
-        Spec.W{Spec.MField{H1(meth, target), Nil{}}, o, s}) == W.done(meth, target, body, o) : Spec.W}, ak)
+      no({Spec.walk(List.append(&2, U32, FLl(Wr.Field{"content-length", d}), Con{13, Con{10, E.tail(body)}}),
+        Spec.W{Spec.MField{H1(meth, target, x), Nil{}}, o, s}) == W.done(meth, target, x, body, o) : Spec.W}, ak)
     case Spec.VKey{k}:
-      no({Spec.walk(List.append(&2, U32, FLl(X.Field{"content-length", d}), Con{13, Con{10, E.tail(body)}}),
-        Spec.W{Spec.MField{H1(meth, target), Nil{}}, o, s}) == W.done(meth, target, body, o) : Spec.W}, ak)
+      no({Spec.walk(List.append(&2, U32, FLl(Wr.Field{"content-length", d}), Con{13, Con{10, E.tail(body)}}),
+        Spec.W{Spec.MField{H1(meth, target, x), Nil{}}, o, s}) == W.done(meth, target, x, body, o) : Spec.W}, ak)
     case Spec.VVer{v}:
-      no({Spec.walk(List.append(&2, U32, FLl(X.Field{"content-length", d}), Con{13, Con{10, E.tail(body)}}),
-        Spec.W{Spec.MField{H1(meth, target), Nil{}}, o, s}) == W.done(meth, target, body, o) : Spec.W}, ak)
+      no({Spec.walk(List.append(&2, U32, FLl(Wr.Field{"content-length", d}), Con{13, Con{10, E.tail(body)}}),
+        Spec.W{Spec.MField{H1(meth, target, x), Nil{}}, o, s}) == W.done(meth, target, x, body, o) : Spec.W}, ak)
     case Spec.VTe0{}:
-      no({Spec.walk(List.append(&2, U32, FLl(X.Field{"content-length", d}), Con{13, Con{10, E.tail(body)}}),
-        Spec.W{Spec.MField{H1(meth, target), Nil{}}, o, s}) == W.done(meth, target, body, o) : Spec.W}, ak)
+      no({Spec.walk(List.append(&2, U32, FLl(Wr.Field{"content-length", d}), Con{13, Con{10, E.tail(body)}}),
+        Spec.W{Spec.MField{H1(meth, target, x), Nil{}}, o, s}) == W.done(meth, target, x, body, o) : Spec.W}, ak)
     case Spec.VTe{t}:
-      no({Spec.walk(List.append(&2, U32, FLl(X.Field{"content-length", d}), Con{13, Con{10, E.tail(body)}}),
-        Spec.W{Spec.MField{H1(meth, target), Nil{}}, o, s}) == W.done(meth, target, body, o) : Spec.W}, ak)
-    case Spec.VHost{}:
-      no({Spec.walk(List.append(&2, U32, FLl(X.Field{"content-length", d}), Con{13, Con{10, E.tail(body)}}),
-        Spec.W{Spec.MField{H1(meth, target), Nil{}}, o, s}) == W.done(meth, target, body, o) : Spec.W}, ak)
-    case Spec.VSkip{}:
-      no({Spec.walk(List.append(&2, U32, FLl(X.Field{"content-length", d}), Con{13, Con{10, E.tail(body)}}),
-        Spec.W{Spec.MField{H1(meth, target), Nil{}}, o, s}) == W.done(meth, target, body, o) : Spec.W}, ak)
+      no({Spec.walk(List.append(&2, U32, FLl(Wr.Field{"content-length", d}), Con{13, Con{10, E.tail(body)}}),
+        Spec.W{Spec.MField{H1(meth, target, x), Nil{}}, o, s}) == W.done(meth, target, x, body, o) : Spec.W}, ak)
+    case Spec.VHost{hn0, hv0}:
+      no({Spec.walk(List.append(&2, U32, FLl(Wr.Field{"content-length", d}), Con{13, Con{10, E.tail(body)}}),
+        Spec.W{Spec.MField{H1(meth, target, x), Nil{}}, o, s}) == W.done(meth, target, x, body, o) : Spec.W}, ak)
+    case Spec.VSkip{sn0, sv0}:
+      no({Spec.walk(List.append(&2, U32, FLl(Wr.Field{"content-length", d}), Con{13, Con{10, E.tail(body)}}),
+        Spec.W{Spec.MField{H1(meth, target, x), Nil{}}, o, s}) == W.done(meth, target, x, body, o) : Spec.W}, ak)
 
-def mw.cl.view(lv: Spec.FLine, +meth: Bytes(), +target: Bytes(), +body: Bytes(), +d: Bytes(), +o: List<&2, Eng.Req>,
+def mw.cl.view(lv: Spec.FLine, +meth: Bytes(), +target: Bytes(), +x: Eng.Hx, +body: Bytes(), +d: Bytes(), +o: List<&2, Eng.Req>,
   +s: List<&2, U32>, +ad: {X.ok.all(Spec.TVal{}, d) == True{} : Bool},
   hlv: {Spec.len.view(Spec.span(Spec.TOws{}, Con{32, Bytes.to_list(d)})) == lv : Spec.FLine},
   ak: {X.ok.len.at(lv, body) == True{} : Bool}) ->
-  {Spec.walk(List.append(&2, U32, FLl(X.Field{"content-length", d}), Con{13, Con{10, E.tail(body)}}),
-    Spec.W{Spec.MField{H1(meth, target), Nil{}}, o, s}) == W.done(meth, target, body, o) : Spec.W}:
+  {Spec.walk(List.append(&2, U32, FLl(Wr.Field{"content-length", d}), Con{13, Con{10, E.tail(body)}}),
+    Spec.W{Spec.MField{H1(meth, target, x), Nil{}}, o, s}) == W.done(meth, target, x, body, o) : Spec.W}:
   match lv:
     case Spec.FVal{val}:
-      mw.cl.val(val, meth, target, body, d, o, s, ad, hlv, ak)
+      mw.cl.val(val, meth, target, x, body, d, o, s, ad, hlv, ak)
     case Spec.FEmpty{}:
-      no({Spec.walk(List.append(&2, U32, FLl(X.Field{"content-length", d}), Con{13, Con{10, E.tail(body)}}),
-        Spec.W{Spec.MField{H1(meth, target), Nil{}}, o, s}) == W.done(meth, target, body, o) : Spec.W}, ak)
+      no({Spec.walk(List.append(&2, U32, FLl(Wr.Field{"content-length", d}), Con{13, Con{10, E.tail(body)}}),
+        Spec.W{Spec.MField{H1(meth, target, x), Nil{}}, o, s}) == W.done(meth, target, x, body, o) : Spec.W}, ak)
     case Spec.FName{nm}:
-      no({Spec.walk(List.append(&2, U32, FLl(X.Field{"content-length", d}), Con{13, Con{10, E.tail(body)}}),
-        Spec.W{Spec.MField{H1(meth, target), Nil{}}, o, s}) == W.done(meth, target, body, o) : Spec.W}, ak)
+      no({Spec.walk(List.append(&2, U32, FLl(Wr.Field{"content-length", d}), Con{13, Con{10, E.tail(body)}}),
+        Spec.W{Spec.MField{H1(meth, target, x), Nil{}}, o, s}) == W.done(meth, target, x, body, o) : Spec.W}, ak)
     case Spec.FBad{}:
-      no({Spec.walk(List.append(&2, U32, FLl(X.Field{"content-length", d}), Con{13, Con{10, E.tail(body)}}),
-        Spec.W{Spec.MField{H1(meth, target), Nil{}}, o, s}) == W.done(meth, target, body, o) : Spec.W}, ak)
+      no({Spec.walk(List.append(&2, U32, FLl(Wr.Field{"content-length", d}), Con{13, Con{10, E.tail(body)}}),
+        Spec.W{Spec.MField{H1(meth, target, x), Nil{}}, o, s}) == W.done(meth, target, x, body, o) : Spec.W}, ak)
 
-def mw.cl(+meth: Bytes(), +target: Bytes(), +body: Bytes(), +o: List<&2, Eng.Req>, +s: List<&2, U32>,
+def mw.cl(+meth: Bytes(), +target: Bytes(), +x: Eng.Hx, +body: Bytes(), +o: List<&2, Eng.Req>, +s: List<&2, U32>,
   al: {X.ok.all(Spec.TVal{}, Nat.show(Bytes.len(body))) == True{} : Bool} &
     {X.ok.len.at(Spec.len.view(Spec.span(Spec.TOws{}, Con{32, Bytes.to_list(Nat.show(Bytes.len(body)))})), body) == True{} :
       Bool}) ->
-  {Spec.walk(List.append(&2, U32, FLl(X.Field{"content-length", Nat.show(Bytes.len(body))}), Con{13, Con{10, E.tail(body)}}),
-    Spec.W{Spec.MField{H1(meth, target), Nil{}}, o, s}) == W.done(meth, target, body, o) : Spec.W}:
+  {Spec.walk(List.append(&2, U32, FLl(Wr.Field{"content-length", Nat.show(Bytes.len(body))}), Con{13, Con{10, E.tail(body)}}),
+    Spec.W{Spec.MField{H1(meth, target, x), Nil{}}, o, s}) == W.done(meth, target, x, body, o) : Spec.W}:
   (ad, ak) = al
-  mw.cl.view(Spec.len.view(Spec.span(Spec.TOws{}, Con{32, Bytes.to_list(Nat.show(Bytes.len(body)))})), meth, target, body,
+  mw.cl.view(Spec.len.view(Spec.span(Spec.TOws{}, Con{32, Bytes.to_list(Nat.show(Bytes.len(body)))})), meth, target, x, body,
     Nat.show(Bytes.len(body)), o, s, ad, {==}, ak)
 
 # the length, or none
-def mw.len(b: Bool, +meth: Bytes(), +target: Bytes(), +body: Bytes(), +o: List<&2, Eng.Req>, +s: List<&2, U32>,
+def mw.len(b: Bool, +meth: Bytes(), +target: Bytes(), +x: Eng.Hx, +body: Bytes(), +o: List<&2, Eng.Req>, +s: List<&2, U32>,
   al: {X.ok.len.on(b, body) == True{} : Bool}) ->
-  {Spec.walk(List.append(&2, U32, FLSl(X.clf.at(b, body)), E.tail(body)), Spec.W{Spec.MField{H1(meth, target), Nil{}}, o, s}) ==
-    W.done(meth, target, body, o) : Spec.W}:
+  {Spec.walk(List.append(&2, U32, FLSl(X.clf.at(b, body)), E.tail(body)), Spec.W{Spec.MField{H1(meth, target, x), Nil{}}, o, s}) ==
+    W.done(meth, target, x, body, o) : Spec.W}:
   match b:
     case False{}:
-      tail.none(meth, target, body, o, s, al)
+      tail.none(meth, target, x, body, o, s, al)
     case True{}:
       %Equal.sym(List<&2, U32>,
-        List.append(&2, U32, List.append(&2, U32, FLl(X.Field{"content-length", Nat.show(Bytes.len(body))}), Con{13, Con{10, Nil{}}}),
+        List.append(&2, U32, List.append(&2, U32, FLl(Wr.Field{"content-length", Nat.show(Bytes.len(body))}), Con{13, Con{10, Nil{}}}),
           E.tail(body)),
-        List.append(&2, U32, FLl(X.Field{"content-length", Nat.show(Bytes.len(body))}), Con{13, Con{10, E.tail(body)}}),
-        app.assoc(U32, FLl(X.Field{"content-length", Nat.show(Bytes.len(body))}), Con{13, Con{10, Nil{}}}, E.tail(body))) :
-        {Spec.walk(_, Spec.W{Spec.MField{H1(meth, target), Nil{}}, o, s}) == W.done(meth, target, body, o) : Spec.W}
-      mw.cl(meth, target, body, o, s,
+        List.append(&2, U32, FLl(Wr.Field{"content-length", Nat.show(Bytes.len(body))}), Con{13, Con{10, E.tail(body)}}),
+        app.assoc(U32, FLl(Wr.Field{"content-length", Nat.show(Bytes.len(body))}), Con{13, Con{10, Nil{}}}, E.tail(body))) :
+        {Spec.walk(_, Spec.W{Spec.MField{H1(meth, target, x), Nil{}}, o, s}) == W.done(meth, target, x, body, o) : Spec.W}
+      mw.cl(meth, target, x, body, o, s,
         and.split(X.ok.all(Spec.TVal{}, Nat.show(Bytes.len(body))),
           X.ok.len.at(Spec.len.view(Spec.span(Spec.TOws{}, Con{32, Bytes.to_list(Nat.show(Bytes.len(body)))})), body), al))
 
 def WF(+h: Spec.Head, +o: List<&2, Eng.Req>, +s: List<&2, U32>) -> Spec.W:
   Spec.W{Spec.MField{h, Nil{}}, o, s}
 
+# the fields passed on, as the head holds them
+def convs(fs: List<&2, Wr.Field>) -> List<&2, Wr.Field>:
+  match fs:
+    case Nil{}:
+      Nil{}
+    case Con{f, t}:
+      match f:
+        case Wr.Field{+n, v}:
+          Con{Wr.Field{Spec.lows(Bytes.from_list(Bytes.to_list(n))), Bytes.from_list(Con{32, Bytes.to_list(v)})}, convs(t)}
+
+def NM(fs: List<&2, Wr.Field>, nm: Bytes()) -> Bytes():
+  match fs:
+    case Nil{}:
+      nm
+    case Con{f, t}:
+      match f:
+        case Wr.Field{+n, v}:
+          NM(t, Spec.lows(Bytes.from_list(Bytes.to_list(n))))
+
+def hf.h1(fs: List<&2, Wr.Field>, +meth: Bytes(), +target: Bytes(), +mb: Bytes(), +nm: Bytes(), +acc: List<&2, Wr.Field>,
+  +cn: List<&2, Bytes()>) ->
+  {HF(fs, H1(meth, target, Eng.Hx{mb, nm, acc, cn})) ==
+    H1(meth, target, Eng.Hx{mb, NM(fs, nm), List.reverse.go(&2, Wr.Field, convs(fs), acc), cn}) : Spec.Head}:
+  match fs:
+    case Nil{}:
+      {==}
+    case Con{f, t}:
+      match f:
+        case Wr.Field{+n, +v}:
+          hf.h1(t, meth, target, mb, Spec.lows(Bytes.from_list(Bytes.to_list(n))),
+            Con{Wr.Field{Spec.lows(Bytes.from_list(Bytes.to_list(n))), Bytes.from_list(Con{32, Bytes.to_list(v)})}, acc}, cn)
+
+# the fields as the head holds them are the fields the proxy sent
+def convs.sent(fs: List<&2, Wr.Field>) -> {convs(fs) == Laws.sent(fs) : List<&2, Wr.Field>}:
+  match fs:
+    case Nil{}:
+      {==}
+    case Con{f, t}:
+      match f:
+        case Wr.Field{+n, +v}:
+          %Equal.sym(Bytes(), Bytes.from_list(Bytes.to_list(n)), n, bytes.rt(n)) :
+            {Con{Wr.Field{Spec.lows(_), Bytes.from_list(Con{32, Bytes.to_list(v)})}, convs(t)} ==
+              Laws.sent(Con{Wr.Field{n, v}, t}) : List<&2, Wr.Field>}
+          %Equal.sym(Bytes(), Bytes.from_list(Bytes.to_list(v)), v, bytes.rt(v)) :
+            {Con{Wr.Field{Spec.lows(n), SCon{Chr{32}, _}}, convs(t)} ==
+              Laws.sent(Con{Wr.Field{n, v}, t}) : List<&2, Wr.Field>}
+          %Equal.sym(List<&2, Wr.Field>, convs(t), Laws.sent(t), convs.sent(t)) :
+            {Con{Wr.Field{Spec.lows(n), SCon{Chr{32}, v}}, _} == Laws.sent(Con{Wr.Field{n, v}, t}) : List<&2, Wr.Field>}
+          {==}
+
+# the head handed on is the one the proxy sent: its method, the Host,
+# then the fields in order
+def hd.sent(+meth: Bytes(), +host: Bytes(), +fs: List<&2, Wr.Field>, +nm: Bytes()) ->
+  {Spec.hd(Eng.Hx{Bytes.from_list(Bytes.to_list(meth)), nm, List.reverse.go(&2, Wr.Field, convs(fs), Con{Wr.Field{"host", Bytes.from_list(Con{32, Bytes.to_list(host)})}, Nil{}}), Nil{}}, False{}) ==
+    Eng.Hd{meth, False{}, Con{Wr.Field{"host", Bytes.append(" ", host)}, Laws.sent(fs)}, Nil{}} : Eng.Hd}:
+  %Equal.sym(Bytes(), Bytes.from_list(Bytes.to_list(meth)), meth, bytes.rt(meth)) :
+    {Eng.Hd{_, False{}, List.reverse(&2, Wr.Field, List.reverse(&2, Wr.Field, Con{Wr.Field{"host", Bytes.from_list(Con{32, Bytes.to_list(host)})}, convs(fs)})), Nil{}} ==
+      Eng.Hd{meth, False{}, Con{Wr.Field{"host", Bytes.append(" ", host)}, Laws.sent(fs)}, Nil{}} : Eng.Hd}
+  %Equal.sym(List<&2, Wr.Field>, List.reverse(&2, Wr.Field, List.reverse(&2, Wr.Field, Con{Wr.Field{"host", Bytes.from_list(Con{32, Bytes.to_list(host)})}, convs(fs)})),
+    Con{Wr.Field{"host", Bytes.from_list(Con{32, Bytes.to_list(host)})}, convs(fs)}, rev.rev(Wr.Field, Con{Wr.Field{"host", Bytes.from_list(Con{32, Bytes.to_list(host)})}, convs(fs)})) :
+    {Eng.Hd{meth, False{}, _, Nil{}} ==
+      Eng.Hd{meth, False{}, Con{Wr.Field{"host", Bytes.append(" ", host)}, Laws.sent(fs)}, Nil{}} : Eng.Hd}
+  %Equal.sym(Bytes(), Bytes.from_list(Bytes.to_list(host)), host, bytes.rt(host)) :
+    {Eng.Hd{meth, False{}, Con{Wr.Field{"host", SCon{Chr{32}, _}}, convs(fs)}, Nil{}} ==
+      Eng.Hd{meth, False{}, Con{Wr.Field{"host", Bytes.append(" ", host)}, Laws.sent(fs)}, Nil{}} : Eng.Hd}
+  %Equal.sym(List<&2, Wr.Field>, convs(fs), Laws.sent(fs), convs.sent(fs)) :
+    {Eng.Hd{meth, False{}, Con{Wr.Field{"host", SCon{Chr{32}, host}}, _}, Nil{}} ==
+      Eng.Hd{meth, False{}, Con{Wr.Field{"host", Bytes.append(" ", host)}, Laws.sent(fs)}, Nil{}} : Eng.Hd}
+  {==}
+
 # LEMMA: a request the proxy checked, sent, is read back as itself: its
-# line, its Host, the end-to-end fields that change nothing, its length
-# and its body, and the walk is back where a request begins
-def mw.at(+meth: Bytes(), +target: Bytes(), +host: Bytes(), +fs: List<&2, X.Field>, +body: Bytes(), +framed: Bool,
+# line, its Host, the end-to-end fields passed on, its length and its
+# body, and the walk is back where a request begins
+def mw.at(+meth: Bytes(), +target: Bytes(), +host: Bytes(), +fs: List<&2, Wr.Field>, +body: Bytes(), +framed: Bool,
   +o: List<&2, Eng.Req>, +s: List<&2, U32>,
   v: T7(X.full(meth), X.ok.all(Spec.TMeth{}, meth), X.full(target), X.ok.all(Spec.TTarget{}, target),
     X.ok.all(Spec.TVal{}, host), X.ok.fields(fs), X.ok.len.on(X.clen.on(framed, body), body))) ->
   {Spec.walk(SERl(X.Msg{meth, target, host, fs, body, framed}), Spec.W{Spec.MReq{Nil{}}, o, s}) ==
-    W.done(meth, target, body, o) : Spec.W}:
+    W.done(meth, target, Eng.Hx{Bytes.from_list(Bytes.to_list(meth)), NM(fs, "host"), List.reverse.go(&2, Wr.Field, convs(fs), Con{Wr.Field{"host", Bytes.from_list(Con{32, Bytes.to_list(host)})}, Nil{}}), Nil{}},
+      body, o) : Spec.W}:
   (nm, v1) = v
   (hm, v2) = v1
   (nt, v3) = v2
   (ht, v4) = v3
   (+hh, v5) = v4
   (hfs, hl) = v5
-  +hf : X.Field = X.Field{"host", host}
+  +hf : Wr.Field = Wr.Field{"host", host}
   +clf = X.clf.at(X.clen.on(framed, body), body)
   +tl = E.tail(body)
+  +x0 : Eng.Hx = Eng.Hx{Bytes.from_list(Bytes.to_list(meth)), "host", Con{Wr.Field{"host", Bytes.from_list(Con{32, Bytes.to_list(host)})}, Nil{}}, Nil{}}
+  +xf : Eng.Hx = Eng.Hx{Bytes.from_list(Bytes.to_list(meth)), NM(fs, "host"), List.reverse.go(&2, Wr.Field, convs(fs), Con{Wr.Field{"host", Bytes.from_list(Con{32, Bytes.to_list(host)})}, Nil{}}), Nil{}}
   +h0 = Spec.head.new(Bytes.to_list(meth), Bytes.to_list(target), False{})
-  +h1 = H1(meth, target)
+  +h1 = H1(meth, target, x0)
   +s1 = Spec.snoc(Spec.snoc(List.append(&2, U32, s, RLl(meth, target)), 13), 10)
   +s2 = Spec.snoc(Spec.snoc(List.append(&2, U32, s1, FLl(hf)), 13), 10)
-  +r = List.append(&2, X.Field, fs, clf)
+  +r = List.append(&2, Wr.Field, fs, clf)
   Equal.trans(Spec.W, Spec.walk(SERl(X.Msg{meth, target, host, fs, body, framed}), Spec.W{Spec.MReq{Nil{}}, o, s}),
     Spec.walk(List.append(&2, U32, FLSl(Con{hf, r}), tl), WF(h0, o, s1)),
-    W.done(meth, target, body, o),
+    W.done(meth, target, xf, body, o),
     line.req(meth, target, List.append(&2, U32, FLSl(Con{hf, r}), tl), o, s, hm, ht, nm, nt),
     Equal.trans(Spec.W, Spec.walk(List.append(&2, U32, FLSl(Con{hf, r}), tl), WF(h0, o, s1)),
       Spec.walk(List.append(&2, U32, FLl(hf), Con{13, Con{10, List.append(&2, U32, FLSl(r), tl)}}), WF(h0, o, s1)),
-      W.done(meth, target, body, o),
+      W.done(meth, target, xf, body, o),
       Equal.cong(List<&2, U32>, Spec.W, xs => Spec.walk(xs, WF(h0, o, s1)),
         List.append(&2, U32, List.append(&2, U32, FLl(hf), Con{13, Con{10, FLSl(r)}}), tl),
         List.append(&2, U32, FLl(hf), Con{13, Con{10, List.append(&2, U32, FLSl(r), tl)}}),
@@ -3111,12 +4874,12 @@ def mw.at(+meth: Bytes(), +target: Bytes(), +host: Bytes(), +fs: List<&2, X.Fiel
       Equal.trans(Spec.W,
         Spec.walk(List.append(&2, U32, FLl(hf), Con{13, Con{10, List.append(&2, U32, FLSl(r), tl)}}), WF(h0, o, s1)),
         Spec.walk(List.append(&2, U32, FLSl(r), tl), WF(h1, o, s2)),
-        W.done(meth, target, body, o),
-        line.field(hf, List.append(&2, U32, FLSl(r), tl), h0, h1, o, s1, Spec.VHost{}, pl.host(host, hh),
-          view.host(host, hh), {==}),
+        W.done(meth, target, xf, body, o),
+        line.field(hf, List.append(&2, U32, FLSl(r), tl), h0, h1, o, s1, Spec.VHost{"host", Con{32, Bytes.to_list(host)}},
+          pl.host(host, hh), view.host(host, hh), {==}),
         Equal.trans(Spec.W, Spec.walk(List.append(&2, U32, FLSl(r), tl), WF(h1, o, s2)),
           Spec.walk(List.append(&2, U32, FLSl(fs), List.append(&2, U32, FLSl(clf), tl)), WF(h1, o, s2)),
-          W.done(meth, target, body, o),
+          W.done(meth, target, xf, body, o),
           Equal.cong(List<&2, U32>, Spec.W, xs => Spec.walk(xs, WF(h1, o, s2)),
             List.append(&2, U32, FLSl(r), tl), List.append(&2, U32, FLSl(fs), List.append(&2, U32, FLSl(clf), tl)),
             Equal.trans(List<&2, U32>, List.append(&2, U32, FLSl(r), tl),
@@ -3126,18 +4889,29 @@ def mw.at(+meth: Bytes(), +target: Bytes(), +host: Bytes(), +fs: List<&2, X.Fiel
                 List.append(&2, U32, FLSl(fs), FLSl(clf)), fls.app(fs, clf)),
               app.assoc(U32, FLSl(fs), FLSl(clf), tl))),
           Equal.trans(Spec.W, Spec.walk(List.append(&2, U32, FLSl(fs), List.append(&2, U32, FLSl(clf), tl)), WF(h1, o, s2)),
-            Spec.walk(List.append(&2, U32, FLSl(clf), tl), WF(h1, o, SF(fs, s2))),
-            W.done(meth, target, body, o),
+            Spec.walk(List.append(&2, U32, FLSl(clf), tl), WF(HF(fs, h1), o, SF(fs, s2))),
+            W.done(meth, target, xf, body, o),
             fields.walk(fs, List.append(&2, U32, FLSl(clf), tl), h1, o, s2, hfs),
-            mw.len(X.clen.on(framed, body), meth, target, body, o, SF(fs, s2), hl))))))
+            %Equal.sym(Spec.Head, HF(fs, h1), H1(meth, target, xf),
+              hf.h1(fs, meth, target, Bytes.from_list(Bytes.to_list(meth)), "host", Con{Wr.Field{"host", Bytes.from_list(Con{32, Bytes.to_list(host)})}, Nil{}}, Nil{})) :
+              {Spec.walk(List.append(&2, U32, FLSl(clf), tl), WF(_, o, SF(fs, s2))) == W.done(meth, target, xf, body, o) : Spec.W}
+            mw.len(X.clen.on(framed, body), meth, target, xf, body, o, SF(fs, s2), hl))))))
 
 def msg.walk(m: X.Msg, v: {X.valid(m) == True{} : Bool}, +o: List<&2, Eng.Req>, +s: List<&2, U32>) ->
   {Spec.walk(SERl(m), Spec.W{Spec.MReq{Nil{}}, o, s}) == Spec.W{Spec.MReq{Nil{}}, Con{Laws.spec.req(m), o}, Nil{}} : Spec.W}:
   match m:
     case X.Msg{+meth, +target, +host, +fs, +body, +framed}:
-      mw.at(meth, target, host, fs, body, framed, o, s,
-        split7(X.full(meth), X.ok.all(Spec.TMeth{}, meth), X.full(target), X.ok.all(Spec.TTarget{}, target),
-          X.ok.all(Spec.TVal{}, host), X.ok.fields(fs), X.ok.len.on(X.clen.on(framed, body), body), v))
+      +xf : Eng.Hx = Eng.Hx{Bytes.from_list(Bytes.to_list(meth)), NM(fs, "host"), List.reverse.go(&2, Wr.Field, convs(fs), Con{Wr.Field{"host", Bytes.from_list(Con{32, Bytes.to_list(host)})}, Nil{}}), Nil{}}
+      Equal.trans(Spec.W, Spec.walk(SERl(X.Msg{meth, target, host, fs, body, framed}), Spec.W{Spec.MReq{Nil{}}, o, s}),
+        W.done(meth, target, xf, body, o),
+        Spec.W{Spec.MReq{Nil{}}, Con{Laws.spec.req(X.Msg{meth, target, host, fs, body, framed}), o}, Nil{}},
+        mw.at(meth, target, host, fs, body, framed, o, s,
+          split7(X.full(meth), X.ok.all(Spec.TMeth{}, meth), X.full(target), X.ok.all(Spec.TTarget{}, target),
+            X.ok.all(Spec.TVal{}, host), X.ok.fields(fs), X.ok.len.on(X.clen.on(framed, body), body), v)),
+        Equal.cong(Eng.Hd, Spec.W,
+          d => Spec.W{Spec.MReq{Nil{}}, Con{Eng.Req{Spec.method(meth), target, body, False{}, False{}, "", d}, o}, Nil{}},
+          Spec.hd(xf, False{}), Eng.Hd{meth, False{}, Con{Wr.Field{"host", Bytes.append(" ", host)}, Laws.sent(fs)}, Nil{}},
+          hd.sent(meth, host, fs, NM(fs, "host"))))
 
 # What goes upstream passed the check
 # -----------------------------------
@@ -3156,17 +4930,10 @@ def pick.ok(b: Bool, +m: X.Msg, e: {X.valid(m) == b : Bool}) -> OK(Bool.pick(May
     case False{}:
       Unit{}
 
-def fwd.at.ok(+w: X.Fwd, mh: Maybe<&2, X.Head>, r: Eng.Req) -> OK(X.fwd.at(w, mh, r)):
-  match mh r:
-    case Some{+h} Eng.Req{meth, path, +body, close, ws, key}:
-      pick.ok(X.valid(X.msg.of(w, h, body)), X.msg.of(w, h, body), {==})
-    case None{} _:
-      Unit{}
-
-def fwd.ok(+w: X.Fwd, t: X.Took) -> OK(X.fwd(w, t)):
+def fwd.ok(+w: X.Fwd, t: Eng.Req) -> OK(X.fwd(w, t)):
   match t:
-    case X.Took{+raw, r}:
-      fwd.at.ok(w, X.head.of(raw), r)
+    case Eng.Req{meth, +path, +body, close, ws, key, +hd}:
+      pick.ok(X.valid(X.msg.of(w, hd, path, body)), X.msg.of(w, hd, path, body), {==})
 
 # The whole stream upstream, read back
 # ------------------------------------
@@ -3205,7 +4972,7 @@ def ns.at(mm: Maybe<&2, X.Msg>, ok: OK(mm), +rest: Bytes(), +rq: List<&2, X.Msg>
               WR(Con{Laws.spec.req(x), o}), msg.walk(x, ok, o, Nil{})),
             ih(Con{Laws.spec.req(x), o}))))
 
-def ns.go(+w: X.Fwd, ts: List<&2, X.Took>, +o: List<&2, Eng.Req>) ->
+def ns.go(+w: X.Fwd, ts: List<&2, Eng.Req>, +o: List<&2, Eng.Req>) ->
   {Spec.walk(Bytes.to_list(X.wire(w, ts)), WR(o)) ==
     WR(List.reverse.go(&2, Eng.Req, Laws.spec.reqs(Laws.fwd.msgs(w, ts)), o)) : Spec.W}:
   match ts:
@@ -3564,10 +5331,10 @@ def rother(f: RS.Fld, h: {X.ris.other(f) == True{} : Bool}) -> {f == RS.FOther{}
 # LEMMA: a field the check passed reads as one that changes nothing
 def rview.other(+e: R.Ask, n: Bytes(), +v: Bytes(), hn: {X.full(n) == True{} : Bool}, +ht: {X.rok.all(RS.TName{}, n) == True{} : Bool},
   hc: {X.ris.other(RS.field(RS.lows(Bytes.to_list(n)))) == True{} : Bool}, +hv: {X.rok.all(RS.TVal{}, v) == True{} : Bool}) ->
-  {RS.field.view(e, FLl(X.Field{n, v})) == RS.FVal{RS.VSkip{}} : RS.FLine}:
+  {RS.field.view(e, FLl(Wr.Field{n, v})) == RS.FVal{RS.VSkip{}} : RS.FLine}:
   match n:
     case SNil{}:
-      no({RS.field.view(e, FLl(X.Field{SNil{}, v})) == RS.FVal{RS.VSkip{}} : RS.FLine}, hn)
+      no({RS.field.view(e, FLl(Wr.Field{SNil{}, v})) == RS.FVal{RS.VSkip{}} : RS.FLine}, hn)
     case SCon{Chr{+c}, +r}:
       %Equal.sym(RS.Span, RS.span(RS.TName{}, List.append(&2, U32, Con{c, Bytes.to_list(r)}, Con{58, Con{32, Bytes.to_list(v)}})),
         RS.Span{Con{c, Bytes.to_list(r)}, RS.SAt{R.cls(58), 58, Con{32, Bytes.to_list(v)}}},
@@ -3582,12 +5349,12 @@ def rview.other(+e: R.Ask, n: Bytes(), +v: Bytes(), hn: {X.full(n) == True{} : B
       {==}
 
 def rpl.fl(+n: Bytes(), +v: Bytes(), +ht: {X.rok.all(RS.TName{}, n) == True{} : Bool}, +hv: {X.rok.all(RS.TVal{}, v) == True{} : Bool}) ->
-  RPL(FLl(X.Field{n, v})):
+  RPL(FLl(Wr.Field{n, v})):
   rpl.app(Bytes.to_list(n), Con{58, Con{32, Bytes.to_list(v)}}, raa.pl(RS.TName{}, Bytes.to_list(n), raa.of(RS.TName{}, n, ht)),
     ({==}, ({==}, raa.pl(RS.TVal{}, Bytes.to_list(v), raa.of(RS.TVal{}, v, hv)))))
 
 # LEMMA: a field line is read, what it says taken into the head
-def rline.fl(f: X.Field, +rest: List<&2, U32>, +h: R.Head, h2: R.Head, +e: R.Ask, +o: List<&2, U32>, val: RS.Val,
+def rline.fl(f: Wr.Field, +rest: List<&2, U32>, +h: R.Head, h2: R.Head, +e: R.Ask, +o: List<&2, U32>, val: RS.Val,
   pl: RPL(FLl(f)), hv: {RS.field.view(e, FLl(f)) == RS.FVal{val} : RS.FLine},
   hd: {RS.field.done(e, h, val) == Some{h2} : Maybe<&2, R.Head>}) ->
   {RS.walk(e, List.append(&2, U32, FLl(f), Con{13, Con{10, rest}}), RS.W{RS.MField{h, Nil{}}, o}) ==
@@ -3604,13 +5371,13 @@ def rline.fl(f: X.Field, +rest: List<&2, U32>, +h: R.Head, h2: R.Head, +e: R.Ask
       Equal.cong(Maybe<&2, R.Head>, RS.W, m => RS.walk(e, rest, RS.next(e, RS.W{RS.field.next(m), o}, 10)),
         RS.field.done(e, h, val), Some{h2}, hd)))
 
-def rok.field.split(+n: Bytes(), +v: Bytes(), h: {X.rok.field(X.Field{n, v}) == True{} : Bool}) ->
+def rok.field.split(+n: Bytes(), +v: Bytes(), h: {X.rok.field(Wr.Field{n, v}) == True{} : Bool}) ->
   {X.full(n) == True{} : Bool} & {X.rok.all(RS.TName{}, n) == True{} : Bool} &
     {X.ris.other(RS.field(RS.lows(Bytes.to_list(n)))) == True{} : Bool} & {X.rok.all(RS.TVal{}, v) == True{} : Bool}:
   split4(X.full(n), X.rok.all(RS.TName{}, n), X.ris.other(RS.field(RS.lows(Bytes.to_list(n)))), X.rok.all(RS.TVal{}, v), h)
 
 def rpl.fl.at(+n: Bytes(), +v: Bytes(), fk: {X.full(n) == True{} : Bool} & {X.rok.all(RS.TName{}, n) == True{} : Bool} &
-    {X.ris.other(RS.field(RS.lows(Bytes.to_list(n)))) == True{} : Bool} & {X.rok.all(RS.TVal{}, v) == True{} : Bool}) -> RPL(FLl(X.Field{n, v})):
+    {X.ris.other(RS.field(RS.lows(Bytes.to_list(n)))) == True{} : Bool} & {X.rok.all(RS.TVal{}, v) == True{} : Bool}) -> RPL(FLl(Wr.Field{n, v})):
   (hn, r1) = fk
   (ht, r2) = r1
   (hc, hv) = r2
@@ -3618,37 +5385,37 @@ def rpl.fl.at(+n: Bytes(), +v: Bytes(), fk: {X.full(n) == True{} : Bool} & {X.ro
 
 def rview.other.at(+e: R.Ask, +n: Bytes(), +v: Bytes(), fk: {X.full(n) == True{} : Bool} & {X.rok.all(RS.TName{}, n) == True{} : Bool} &
     {X.ris.other(RS.field(RS.lows(Bytes.to_list(n)))) == True{} : Bool} & {X.rok.all(RS.TVal{}, v) == True{} : Bool}) ->
-  {RS.field.view(e, FLl(X.Field{n, v})) == RS.FVal{RS.VSkip{}} : RS.FLine}:
+  {RS.field.view(e, FLl(Wr.Field{n, v})) == RS.FVal{RS.VSkip{}} : RS.FLine}:
   (hn, r1) = fk
   (ht, r2) = r1
   (hc, hv) = r2
   rview.other(e, n, v, hn, ht, hc, hv)
 
 def rline.other4(+n: Bytes(), +v: Bytes(), +rest: List<&2, U32>, +h: R.Head, +e: R.Ask, +o: List<&2, U32>,
-  +hk: {X.rok.field(X.Field{n, v}) == True{} : Bool}) ->
-  {RS.walk(e, List.append(&2, U32, FLl(X.Field{n, v}), Con{13, Con{10, rest}}), RS.W{RS.MField{h, Nil{}}, o}) ==
+  +hk: {X.rok.field(Wr.Field{n, v}) == True{} : Bool}) ->
+  {RS.walk(e, List.append(&2, U32, FLl(Wr.Field{n, v}), Con{13, Con{10, rest}}), RS.W{RS.MField{h, Nil{}}, o}) ==
     RS.walk(e, rest, RS.W{RS.MField{h, Nil{}}, o}) : RS.W}:
-  rline.fl(X.Field{n, v}, rest, h, h, e, o, RS.VSkip{}, rpl.fl.at(n, v, rok.field.split(n, v, hk)),
+  rline.fl(Wr.Field{n, v}, rest, h, h, e, o, RS.VSkip{}, rpl.fl.at(n, v, rok.field.split(n, v, hk)),
     rview.other.at(e, n, v, rok.field.split(n, v, hk)), {==})
 
-def rfields.con(+n: Bytes(), +v: Bytes(), +t: List<&2, X.Field>, +rest: List<&2, U32>, +h: R.Head, +e: R.Ask,
-  +o: List<&2, U32>, hh: {X.rok.field(X.Field{n, v}) == True{} : Bool} & {X.rok.fields(t) == True{} : Bool},
+def rfields.con(+n: Bytes(), +v: Bytes(), +t: List<&2, Wr.Field>, +rest: List<&2, U32>, +h: R.Head, +e: R.Ask,
+  +o: List<&2, U32>, hh: {X.rok.field(Wr.Field{n, v}) == True{} : Bool} & {X.rok.fields(t) == True{} : Bool},
   ih: {X.rok.fields(t) == True{} : Bool} ->
     {RS.walk(e, List.append(&2, U32, FLSl(t), rest), RS.W{RS.MField{h, Nil{}}, o}) ==
       RS.walk(e, rest, RS.W{RS.MField{h, Nil{}}, o}) : RS.W}) ->
-  {RS.walk(e, List.append(&2, U32, FLSl(Con{X.Field{n, v}, t}), rest), RS.W{RS.MField{h, Nil{}}, o}) ==
+  {RS.walk(e, List.append(&2, U32, FLSl(Con{Wr.Field{n, v}, t}), rest), RS.W{RS.MField{h, Nil{}}, o}) ==
     RS.walk(e, rest, RS.W{RS.MField{h, Nil{}}, o}) : RS.W}:
   (h1, h2) = hh
-  Equal.trans(RS.W, RS.walk(e, List.append(&2, U32, FLSl(Con{X.Field{n, v}, t}), rest), RS.W{RS.MField{h, Nil{}}, o}),
-    RS.walk(e, List.append(&2, U32, FLl(X.Field{n, v}), Con{13, Con{10, List.append(&2, U32, FLSl(t), rest)}}),
+  Equal.trans(RS.W, RS.walk(e, List.append(&2, U32, FLSl(Con{Wr.Field{n, v}, t}), rest), RS.W{RS.MField{h, Nil{}}, o}),
+    RS.walk(e, List.append(&2, U32, FLl(Wr.Field{n, v}), Con{13, Con{10, List.append(&2, U32, FLSl(t), rest)}}),
       RS.W{RS.MField{h, Nil{}}, o}),
     RS.walk(e, rest, RS.W{RS.MField{h, Nil{}}, o}),
     Equal.cong(List<&2, U32>, RS.W, l => RS.walk(e, l, RS.W{RS.MField{h, Nil{}}, o}),
-      List.append(&2, U32, List.append(&2, U32, FLl(X.Field{n, v}), Con{13, Con{10, FLSl(t)}}), rest),
-      List.append(&2, U32, FLl(X.Field{n, v}), Con{13, Con{10, List.append(&2, U32, FLSl(t), rest)}}),
-      app.assoc(U32, FLl(X.Field{n, v}), Con{13, Con{10, FLSl(t)}}, rest)),
+      List.append(&2, U32, List.append(&2, U32, FLl(Wr.Field{n, v}), Con{13, Con{10, FLSl(t)}}), rest),
+      List.append(&2, U32, FLl(Wr.Field{n, v}), Con{13, Con{10, List.append(&2, U32, FLSl(t), rest)}}),
+      app.assoc(U32, FLl(Wr.Field{n, v}), Con{13, Con{10, FLSl(t)}}, rest)),
     Equal.trans(RS.W,
-      RS.walk(e, List.append(&2, U32, FLl(X.Field{n, v}), Con{13, Con{10, List.append(&2, U32, FLSl(t), rest)}}),
+      RS.walk(e, List.append(&2, U32, FLl(Wr.Field{n, v}), Con{13, Con{10, List.append(&2, U32, FLSl(t), rest)}}),
         RS.W{RS.MField{h, Nil{}}, o}),
       RS.walk(e, List.append(&2, U32, FLSl(t), rest), RS.W{RS.MField{h, Nil{}}, o}),
       RS.walk(e, rest, RS.W{RS.MField{h, Nil{}}, o}),
@@ -3656,7 +5423,7 @@ def rfields.con(+n: Bytes(), +v: Bytes(), +t: List<&2, X.Field>, +rest: List<&2,
       ih(h2)))
 
 # LEMMA: the fields the proxy carries on leave the head as it was
-def rfields.walk(fs: List<&2, X.Field>, +rest: List<&2, U32>, +h: R.Head, +e: R.Ask, +o: List<&2, U32>,
+def rfields.walk(fs: List<&2, Wr.Field>, +rest: List<&2, U32>, +h: R.Head, +e: R.Ask, +o: List<&2, U32>,
   hok: {X.rok.fields(fs) == True{} : Bool}) ->
   {RS.walk(e, List.append(&2, U32, FLSl(fs), rest), RS.W{RS.MField{h, Nil{}}, o}) ==
     RS.walk(e, rest, RS.W{RS.MField{h, Nil{}}, o}) : RS.W}:
@@ -3665,8 +5432,8 @@ def rfields.walk(fs: List<&2, X.Field>, +rest: List<&2, U32>, +h: R.Head, +e: R.
       {==}
     case Con{f, +t}:
       match f:
-        case X.Field{+n, +v}:
-          rfields.con(n, v, t, rest, h, e, o, and.split(X.rok.field(X.Field{n, v}), X.rok.fields(t), hok),
+        case Wr.Field{+n, +v}:
+          rfields.con(n, v, t, rest, h, e, o, and.split(X.rok.field(Wr.Field{n, v}), X.rok.fields(t), hok),
             h2 => rfields.walk(t, rest, h, e, o, h2))
 
 # The body
@@ -3876,7 +5643,7 @@ def rconn.to(+code: U32, +l: Maybe<&2, U32>, +closing: Bool, +v10: Bool, +rest: 
 # -----------------------------------
 
 def TAIL(clen: Bytes(), +conn: Bytes(), +b: Bytes()) -> List<&2, U32>:
-  List.append(&2, U32, FLSl(List.append(&2, X.Field, X.rclf(clen), X.rconf(conn))), Con{13, Con{10, Bytes.to_list(b)}})
+  List.append(&2, U32, FLSl(List.append(&2, Wr.Field, X.rclf(clen), X.rconf(conn))), Con{13, Con{10, Bytes.to_list(b)}})
 
 # no length: a response with no body by its framing
 def rtail.nil(bl: Bool, +head: Bool, +code: U32, +closing: Bool, +v10: Bool, +body: Bytes(),
@@ -3922,7 +5689,7 @@ def rtail.fin(bl: Bool, +head: Bool, +code: U32, +n: U32, +closing: Bool, +v10: 
       rafter.len.pr(head, code, n, closing, v10, body, hlt, h101, hbl,
         and.split(X.same(U32.is_zero(n), String.is_empty(body)), Nat.is_eq(U32.to_nat(n), Bytes.len(body)), hrest))
 
-def rpl.cl(+d: Bytes(), +ad: {X.rok.all(RS.TVal{}, d) == True{} : Bool}) -> RPL(FLl(X.Field{"content-length", d})):
+def rpl.cl(+d: Bytes(), +ad: {X.rok.all(RS.TVal{}, d) == True{} : Bool}) -> RPL(FLl(Wr.Field{"content-length", d})):
   rpl.app(Bytes.to_list("content-length"), Con{58, Con{32, Bytes.to_list(d)}},
     ({==}, ({==}, ({==}, ({==}, ({==}, ({==}, ({==}, ({==}, ({==}, ({==}, ({==}, ({==}, ({==}, ({==}, Unit{})))))))))))))),
     ({==}, ({==}, raa.pl(RS.TVal{}, Bytes.to_list(d), raa.of(RS.TVal{}, d, ad)))))
@@ -3934,7 +5701,7 @@ def rtail.n(+n: U32, +ws: Bool, +head: Bool, +code: U32, +d: Bytes(), +closing: 
   hlv: {RS.len.view(X.rask(head), RS.span(RS.TOws{}, Con{32, Bytes.to_list(d)})) == RS.FVal{RS.VLen{n, ws}} : RS.FLine},
   al: {Bool.not(U32.is_lt(268435455, n)) == True{} : Bool} & {(bl || (X.same(U32.is_zero(n), String.is_empty(body)) &&
     Nat.is_eq(U32.to_nat(n), Bytes.len(body)))) == True{} : Bool}) ->
-  {RS.walk(X.rask(head), List.append(&2, U32, FLl(X.Field{"content-length", d}),
+  {RS.walk(X.rask(head), List.append(&2, U32, FLl(Wr.Field{"content-length", d}),
       Con{13, Con{10, List.append(&2, U32, FLSl(X.rconf(X.conn.val(closing, v10))),
         Con{13, Con{10, Bytes.to_list(Bool.pick(Bytes(), bl, "", body))}})}}),
     RS.W{RS.MField{R.head.new(False{}, code), Nil{}}, Nil{}}) ==
@@ -3943,12 +5710,12 @@ def rtail.n(+n: U32, +ws: Bool, +head: Bool, +code: U32, +d: Bytes(), +closing: 
   +e2 : List<&2, U32> = Con{13, Con{10, Bytes.to_list(Bool.pick(Bytes(), bl, "", body))}}
   +h1 : R.Head = R.Head{False{}, code, Some{n}, False{}, False{}, False{}}
   Equal.trans(RS.W,
-    RS.walk(X.rask(head), List.append(&2, U32, FLl(X.Field{"content-length", d}),
+    RS.walk(X.rask(head), List.append(&2, U32, FLl(Wr.Field{"content-length", d}),
       Con{13, Con{10, List.append(&2, U32, FLSl(X.rconf(X.conn.val(closing, v10))), e2)}}),
       RS.W{RS.MField{R.head.new(False{}, code), Nil{}}, Nil{}}),
     RS.walk(X.rask(head), List.append(&2, U32, FLSl(X.rconf(X.conn.val(closing, v10))), e2), RS.W{RS.MField{h1, Nil{}}, Nil{}}),
     RS.W{RS.MDone{R.Resp{code, False{}, closing, Bool.pick(Bytes(), bl, "", body)}, Nil{}}, Nil{}},
-    rline.fl(X.Field{"content-length", d}, List.append(&2, U32, FLSl(X.rconf(X.conn.val(closing, v10))), e2),
+    rline.fl(Wr.Field{"content-length", d}, List.append(&2, U32, FLSl(X.rconf(X.conn.val(closing, v10))), e2),
       R.head.new(False{}, code), h1, X.rask(head), Nil{}, RS.VLen{n, ws}, rpl.cl(d, ad), hlv,
       Equal.cong(Bool, Maybe<&2, R.Head>, b => RS.head.big(b, R.head.new(False{}, code), n), U32.is_lt(268435455, n), False{},
         not.true(U32.is_lt(268435455, n), hcap))),
@@ -3964,7 +5731,7 @@ def rtail.val(val: RS.Val, +head: Bool, +code: U32, +d: Bytes(), +closing: Bool,
   h101: {U32.is_eq(code, 101) == False{} : Bool}, +ad: {X.rok.all(RS.TVal{}, d) == True{} : Bool},
   hlv: {RS.len.view(X.rask(head), RS.span(RS.TOws{}, Con{32, Bytes.to_list(d)})) == RS.FVal{val} : RS.FLine},
   al: {X.rok.len.at(RS.FVal{val}, bl, body) == True{} : Bool}) ->
-  {RS.walk(X.rask(head), List.append(&2, U32, FLl(X.Field{"content-length", d}),
+  {RS.walk(X.rask(head), List.append(&2, U32, FLl(Wr.Field{"content-length", d}),
       Con{13, Con{10, List.append(&2, U32, FLSl(X.rconf(X.conn.val(closing, v10))),
         Con{13, Con{10, Bytes.to_list(Bool.pick(Bytes(), bl, "", body))}})}}),
     RS.W{RS.MField{R.head.new(False{}, code), Nil{}}, Nil{}}) ==
@@ -3975,31 +5742,31 @@ def rtail.val(val: RS.Val, +head: Bool, +code: U32, +d: Bytes(), +closing: Bool,
         and.split(Bool.not(U32.is_lt(268435455, n)), bl || (X.same(U32.is_zero(n), String.is_empty(body)) &&
           Nat.is_eq(U32.to_nat(n), Bytes.len(body))), al))
     case RS.VLen0{}:
-      no({RS.walk(X.rask(head), List.append(&2, U32, FLl(X.Field{"content-length", d}),
+      no({RS.walk(X.rask(head), List.append(&2, U32, FLl(Wr.Field{"content-length", d}),
       Con{13, Con{10, List.append(&2, U32, FLSl(X.rconf(X.conn.val(closing, v10))),
         Con{13, Con{10, Bytes.to_list(Bool.pick(Bytes(), bl, "", body))}})}}),
     RS.W{RS.MField{R.head.new(False{}, code), Nil{}}, Nil{}}) ==
     RS.W{RS.MDone{R.Resp{code, False{}, closing, Bool.pick(Bytes(), bl, "", body)}, Nil{}}, Nil{}} : RS.W}, al)
     case RS.VTe0{}:
-      no({RS.walk(X.rask(head), List.append(&2, U32, FLl(X.Field{"content-length", d}),
+      no({RS.walk(X.rask(head), List.append(&2, U32, FLl(Wr.Field{"content-length", d}),
       Con{13, Con{10, List.append(&2, U32, FLSl(X.rconf(X.conn.val(closing, v10))),
         Con{13, Con{10, Bytes.to_list(Bool.pick(Bytes(), bl, "", body))}})}}),
     RS.W{RS.MField{R.head.new(False{}, code), Nil{}}, Nil{}}) ==
     RS.W{RS.MDone{R.Resp{code, False{}, closing, Bool.pick(Bytes(), bl, "", body)}, Nil{}}, Nil{}} : RS.W}, al)
     case RS.VTe{t}:
-      no({RS.walk(X.rask(head), List.append(&2, U32, FLl(X.Field{"content-length", d}),
+      no({RS.walk(X.rask(head), List.append(&2, U32, FLl(Wr.Field{"content-length", d}),
       Con{13, Con{10, List.append(&2, U32, FLSl(X.rconf(X.conn.val(closing, v10))),
         Con{13, Con{10, Bytes.to_list(Bool.pick(Bytes(), bl, "", body))}})}}),
     RS.W{RS.MField{R.head.new(False{}, code), Nil{}}, Nil{}}) ==
     RS.W{RS.MDone{R.Resp{code, False{}, closing, Bool.pick(Bytes(), bl, "", body)}, Nil{}}, Nil{}} : RS.W}, al)
     case RS.VConn{dn, cu}:
-      no({RS.walk(X.rask(head), List.append(&2, U32, FLl(X.Field{"content-length", d}),
+      no({RS.walk(X.rask(head), List.append(&2, U32, FLl(Wr.Field{"content-length", d}),
       Con{13, Con{10, List.append(&2, U32, FLSl(X.rconf(X.conn.val(closing, v10))),
         Con{13, Con{10, Bytes.to_list(Bool.pick(Bytes(), bl, "", body))}})}}),
     RS.W{RS.MField{R.head.new(False{}, code), Nil{}}, Nil{}}) ==
     RS.W{RS.MDone{R.Resp{code, False{}, closing, Bool.pick(Bytes(), bl, "", body)}, Nil{}}, Nil{}} : RS.W}, al)
     case RS.VSkip{}:
-      no({RS.walk(X.rask(head), List.append(&2, U32, FLl(X.Field{"content-length", d}),
+      no({RS.walk(X.rask(head), List.append(&2, U32, FLl(Wr.Field{"content-length", d}),
       Con{13, Con{10, List.append(&2, U32, FLSl(X.rconf(X.conn.val(closing, v10))),
         Con{13, Con{10, Bytes.to_list(Bool.pick(Bytes(), bl, "", body))}})}}),
     RS.W{RS.MField{R.head.new(False{}, code), Nil{}}, Nil{}}) ==
@@ -4010,7 +5777,7 @@ def rtail.lv(lv: RS.FLine, +head: Bool, +code: U32, +d: Bytes(), +closing: Bool,
   h101: {U32.is_eq(code, 101) == False{} : Bool}, +ad: {X.rok.all(RS.TVal{}, d) == True{} : Bool},
   hlv: {RS.len.view(X.rask(head), RS.span(RS.TOws{}, Con{32, Bytes.to_list(d)})) == lv : RS.FLine},
   al: {X.rok.len.at(lv, bl, body) == True{} : Bool}) ->
-  {RS.walk(X.rask(head), List.append(&2, U32, FLl(X.Field{"content-length", d}),
+  {RS.walk(X.rask(head), List.append(&2, U32, FLl(Wr.Field{"content-length", d}),
       Con{13, Con{10, List.append(&2, U32, FLSl(X.rconf(X.conn.val(closing, v10))),
         Con{13, Con{10, Bytes.to_list(Bool.pick(Bytes(), bl, "", body))}})}}),
     RS.W{RS.MField{R.head.new(False{}, code), Nil{}}, Nil{}}) ==
@@ -4019,19 +5786,19 @@ def rtail.lv(lv: RS.FLine, +head: Bool, +code: U32, +d: Bytes(), +closing: Bool,
     case RS.FVal{val}:
       rtail.val(val, head, code, d, closing, v10, bl, body, hbl, hlt, h101, ad, hlv, al)
     case RS.FEmpty{}:
-      no({RS.walk(X.rask(head), List.append(&2, U32, FLl(X.Field{"content-length", d}),
+      no({RS.walk(X.rask(head), List.append(&2, U32, FLl(Wr.Field{"content-length", d}),
       Con{13, Con{10, List.append(&2, U32, FLSl(X.rconf(X.conn.val(closing, v10))),
         Con{13, Con{10, Bytes.to_list(Bool.pick(Bytes(), bl, "", body))}})}}),
     RS.W{RS.MField{R.head.new(False{}, code), Nil{}}, Nil{}}) ==
     RS.W{RS.MDone{R.Resp{code, False{}, closing, Bool.pick(Bytes(), bl, "", body)}, Nil{}}, Nil{}} : RS.W}, al)
     case RS.FName{nm}:
-      no({RS.walk(X.rask(head), List.append(&2, U32, FLl(X.Field{"content-length", d}),
+      no({RS.walk(X.rask(head), List.append(&2, U32, FLl(Wr.Field{"content-length", d}),
       Con{13, Con{10, List.append(&2, U32, FLSl(X.rconf(X.conn.val(closing, v10))),
         Con{13, Con{10, Bytes.to_list(Bool.pick(Bytes(), bl, "", body))}})}}),
     RS.W{RS.MField{R.head.new(False{}, code), Nil{}}, Nil{}}) ==
     RS.W{RS.MDone{R.Resp{code, False{}, closing, Bool.pick(Bytes(), bl, "", body)}, Nil{}}, Nil{}} : RS.W}, al)
     case RS.FBad{}:
-      no({RS.walk(X.rask(head), List.append(&2, U32, FLl(X.Field{"content-length", d}),
+      no({RS.walk(X.rask(head), List.append(&2, U32, FLl(Wr.Field{"content-length", d}),
       Con{13, Con{10, List.append(&2, U32, FLSl(X.rconf(X.conn.val(closing, v10))),
         Con{13, Con{10, Bytes.to_list(Bool.pick(Bytes(), bl, "", body))}})}}),
     RS.W{RS.MField{R.head.new(False{}, code), Nil{}}, Nil{}}) ==
@@ -4051,13 +5818,13 @@ def rtail.cl2(+c: Char, +t: Bytes(), +head: Bool, +code: U32, +closing: Bool, +v
   +cf : List<&2, U32> = FLSl(X.rconf(X.conn.val(closing, v10)))
   Equal.trans(RS.W, RS.walk(X.rask(head), TAIL(d, X.conn.val(closing, v10), Bool.pick(Bytes(), bl, "", body)),
       RS.W{RS.MField{R.head.new(False{}, code), Nil{}}, Nil{}}),
-    RS.walk(X.rask(head), List.append(&2, U32, FLl(X.Field{"content-length", d}), Con{13, Con{10, List.append(&2, U32, cf, e2)}}),
+    RS.walk(X.rask(head), List.append(&2, U32, FLl(Wr.Field{"content-length", d}), Con{13, Con{10, List.append(&2, U32, cf, e2)}}),
       RS.W{RS.MField{R.head.new(False{}, code), Nil{}}, Nil{}}),
     RS.W{RS.MDone{R.Resp{code, False{}, closing, Bool.pick(Bytes(), bl, "", body)}, Nil{}}, Nil{}},
     Equal.cong(List<&2, U32>, RS.W, l => RS.walk(X.rask(head), l, RS.W{RS.MField{R.head.new(False{}, code), Nil{}}, Nil{}}),
-      List.append(&2, U32, List.append(&2, U32, FLl(X.Field{"content-length", d}), Con{13, Con{10, cf}}), e2),
-      List.append(&2, U32, FLl(X.Field{"content-length", d}), Con{13, Con{10, List.append(&2, U32, cf, e2)}}),
-      app.assoc(U32, FLl(X.Field{"content-length", d}), Con{13, Con{10, cf}}, e2)),
+      List.append(&2, U32, List.append(&2, U32, FLl(Wr.Field{"content-length", d}), Con{13, Con{10, cf}}), e2),
+      List.append(&2, U32, FLl(Wr.Field{"content-length", d}), Con{13, Con{10, List.append(&2, U32, cf, e2)}}),
+      app.assoc(U32, FLl(Wr.Field{"content-length", d}), Con{13, Con{10, cf}}, e2)),
     rtail.lv(RS.len.view(X.rask(head), RS.span(RS.TOws{}, Con{32, Bytes.to_list(d)})), head, code, d, closing, v10, bl, body, hbl, hlt, h101, ad, {==}, al))
 
 def rtail.cl(+c: Char, +t: Bytes(), +head: Bool, +code: U32, +closing: Bool, +v10: Bool, +bl: Bool, +body: Bytes(),
@@ -4085,11 +5852,11 @@ def rtail(clen: Bytes(), +head: Bool, +code: U32, +closing: Bool, +v10: Bool, +b
 # The whole response
 # ------------------
 
-def RSERl(+cd: Bytes(), +why: Bytes(), fs: List<&2, X.Field>, clen: Bytes(), +conn: Bytes(), +b: Bytes()) -> List<&2, U32>:
+def RSERl(+cd: Bytes(), +why: Bytes(), fs: List<&2, Wr.Field>, clen: Bytes(), +conn: Bytes(), +b: Bytes()) -> List<&2, U32>:
   List.append(&2, U32, SLl(cd, why),
     Con{13, Con{10, List.append(&2, U32, FLSl(X.rall(fs, clen, conn)), Con{13, Con{10, Bytes.to_list(b)}})}})
 
-def rser.list(+cd: Bytes(), +why: Bytes(), +fs: List<&2, X.Field>, +clen: Bytes(), +conn: Bytes(), +body: Bytes(), +bl: Bool) ->
+def rser.list(+cd: Bytes(), +why: Bytes(), +fs: List<&2, Wr.Field>, +clen: Bytes(), +conn: Bytes(), +body: Bytes(), +bl: Bool) ->
   {Bytes.to_list(X.rser(X.Rsp{cd, why, fs, clen, body, bl}, conn)) ==
     RSERl(cd, why, fs, clen, conn, Bool.pick(Bytes(), bl, "", body)) : List<&2, U32>}:
   +f = X.fls.ser(X.rall(fs, clen, conn))
@@ -4133,7 +5900,7 @@ def split5(a: Bool, b: Bool, c: Bool, d: Bool, -e: Bool, h: {(a && b && c && d &
 
 # LEMMA: a response the check passed, sent, is read back as the one that
 # came, to its end
-def rmain.at(+cd: Bytes(), +why: Bytes(), +fs: List<&2, X.Field>, +clen: Bytes(), +head: Bool, +code: U32, +body: Bytes(),
+def rmain.at(+cd: Bytes(), +why: Bytes(), +fs: List<&2, Wr.Field>, +clen: Bytes(), +head: Bool, +code: U32, +body: Bytes(),
   +closing: Bool, +v10: Bool,
   hc: T5(X.rok.all(RS.TDig{}, cd), RS.code.whole(Bytes.to_list(cd)), U32.is_eq(RS.num(Bytes.to_list(cd)), code),
     Bool.not(U32.is_lt(code, 200)), Bool.not(U32.is_eq(code, 101))),
@@ -4151,7 +5918,7 @@ def rmain.at(+cd: Bytes(), +why: Bytes(), +fs: List<&2, X.Field>, +clen: Bytes()
   +bl = X.rbodyless(head, code)
   +b = Bool.pick(Bytes(), bl, "", body)
   +e2 : List<&2, U32> = Con{13, Con{10, Bytes.to_list(b)}}
-  +cf : List<&2, X.Field> = List.append(&2, X.Field, X.rclf(clen), X.rconf(conn))
+  +cf : List<&2, Wr.Field> = List.append(&2, Wr.Field, X.rclf(clen), X.rconf(conn))
   Equal.trans(RS.W, RS.walk(e, Bytes.to_list(X.rser(X.Rsp{cd, why, fs, clen, body, bl}, conn)), RS.W{RS.MStatus{Nil{}}, Nil{}}),
     RS.walk(e, RSERl(cd, why, fs, clen, conn, b), RS.W{RS.MStatus{Nil{}}, Nil{}}),
     RS.W{RS.MDone{R.Resp{code, False{}, closing, b}, Nil{}}, Nil{}},
@@ -4193,7 +5960,7 @@ def rmain.at(+cd: Bytes(), +why: Bytes(), +fs: List<&2, X.Field>, +clen: Bytes()
             rtail(clen, head, code, closing, v10, bl, body, {==}, not.true(U32.is_lt(code, 200), hlt0),
               not.true(U32.is_eq(code, 101), h1010), hl))))))
 
-def rmain.split(+cd: Bytes(), +why: Bytes(), +fs: List<&2, X.Field>, +clen: Bytes(), +head: Bool, +code: U32, +body: Bytes(),
+def rmain.split(+cd: Bytes(), +why: Bytes(), +fs: List<&2, Wr.Field>, +clen: Bytes(), +head: Bool, +code: U32, +body: Bytes(),
   +closing: Bool, +v10: Bool,
   hh: {X.rok.code(cd, code) == True{} : Bool} & {X.rok.all(RS.TVal{}, why) == True{} : Bool} &
     {X.rok.fields(fs) == True{} : Bool} & {X.rok.len(head, X.rbodyless(head, code), clen, body) == True{} : Bool}) ->
@@ -4207,7 +5974,7 @@ def rmain.split(+cd: Bytes(), +why: Bytes(), +fs: List<&2, X.Field>, +clen: Byte
     split5(X.rok.all(RS.TDig{}, cd), RS.code.whole(Bytes.to_list(cd)), U32.is_eq(RS.num(Bytes.to_list(cd)), code),
       Bool.not(U32.is_lt(code, 200)), Bool.not(U32.is_eq(code, 101)), hk), aw, hfs, hl)
 
-def rmain(+cd: Bytes(), +why: Bytes(), +fs: List<&2, X.Field>, +clen: Bytes(), +head: Bool, +code: U32, +body: Bytes(),
+def rmain(+cd: Bytes(), +why: Bytes(), +fs: List<&2, Wr.Field>, +clen: Bytes(), +head: Bool, +code: U32, +body: Bytes(),
   +closing: Bool, +v10: Bool,
   hv: {X.rvalid(head, code, X.Rsp{cd, why, fs, clen, body, X.rbodyless(head, code)}) == True{} : Bool}) ->
   {RS.walk(X.rask(head), Bytes.to_list(X.rser(X.Rsp{cd, why, fs, clen, body, X.rbodyless(head, code)}, X.conn.val(closing, v10))),
@@ -4219,7 +5986,7 @@ def rmain(+cd: Bytes(), +why: Bytes(), +fs: List<&2, X.Field>, +clen: Bytes(), +
 # The law
 # -------
 
-def rr.valid(+cd: Bytes(), +why: Bytes(), +fs: List<&2, X.Field>, +hlen: Bytes(), +head: Bool, +code: U32, +body: Bytes(),
+def rr.valid(+cd: Bytes(), +why: Bytes(), +fs: List<&2, Wr.Field>, +hlen: Bytes(), +head: Bool, +code: U32, +body: Bytes(),
   +closing: Bool, +v10: Bool,
   hv: {X.rvalid(head, code, X.rsp.fin(head, code, X.RHead{cd, why, fs, hlen}, body)) == True{} : Bool}) ->
   {RS.response(X.rask(head), Bytes.to_list(X.reply(Some{X.rsp.fin(head, code, X.RHead{cd, why, fs, hlen}, body)}, head, closing, v10))) ==

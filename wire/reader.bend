@@ -45,6 +45,13 @@ def bytes(s: String) -> List<&2, U32>:
     case SCon{Chr{c}, t}:
       Con{c, bytes(t)}
 
+# A field line as a reader framed it: its name, lowercased, and its
+# value as it came between the colon and the line's end (the whitespace
+# at either end is still on it: RFC 9110 5.5 says it is no part of the
+# value, and a reader that passes the field on may cut it or keep it).
+type Field is Data:
+  Field{name: Bytes(), value: Bytes()}
+
 def cat(a: List<&2, U32>, b: List<&2, U32>) -> List<&2, U32>:
   List.append(&2, U32, a, b)
 
