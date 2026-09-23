@@ -80,6 +80,7 @@ allow(/^tests\/(regex|parser|lint|translate|translator|power|kernels|decode)\/[A
 allow("power/csv_proof.bend", 96000);
 allow(/^power\/[a-z0-9_]+\.bend$/, 64000);
 allow(/^wire\/[A-Za-z0-9_]+\.(bend|c|md|py)$/, 400000);
+allow(/^wire\/http1\/[A-Za-z0-9_]+\.(bend|py)$/, 400000);
 allow(/^demos\/io_http2\/[A-Za-z0-9_]+\.(bend|md|py)$/, 64000);
 allow(/^\.github\/workflows\/[a-z0-9_]+\.yml$/, 8000);
 allow(/^docs\/omen\/[A-Za-z0-9_\/.-]+$/, 16000);

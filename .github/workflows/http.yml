@@ -33,7 +33,7 @@ jobs:
       - name: the laws hold
         run: |
           for f in demos/io_http_engine/PROOF.bend demos/io_resp/PROOF.bend power/csv_proof.bend \
-            demos/io_http2/PROOF.bend; do
+            demos/io_http2/PROOF.bend wire/http1/PROOF.bend; do
             out=$(bun bend2/main.ts "$f"); echo "$out"
             [ "$out" = "All terms check." ] || { echo "$f: not a clean proof"; exit 1; }
           done
@@ -45,7 +45,7 @@ jobs:
           cargo build --release --manifest-path kernel/Cargo.toml
           bash kernel/tests/run.sh
           for f in demos/io_http_engine/PROOF.bend demos/io_resp/PROOF.bend power/csv_proof.bend \
-            demos/io_http2/PROOF.bend; do
+            demos/io_http2/PROOF.bend wire/http1/PROOF.bend; do
             bun bend2/main.ts "$f" --export proof.core
             kernel/target/release/bend-kernel -q proof.core || { echo "$f: the kernel refuses it"; exit 1; }
           done
@@ -60,6 +60,11 @@ jobs:
       # proof must refuse every one
       - name: bend-h2's laws are not vacuous
         run: python3 demos/io_http2/mutants.py
+      # each of the response reader's mutants (wire/http1) breaks its
+      # framing as a response-splitting or smuggling bug would, and
+      # resp_sim alone must refuse every one
+      - name: the response reader's laws are not vacuous
+        run: python3 wire/http1/mutants.py
       - name: the server builds
         run: |
           bun bend2/main.ts demos/io_http_engine/main.bend -o httpd
