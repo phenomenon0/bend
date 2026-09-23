@@ -2,8 +2,9 @@
 // ===
 
 // The loop parked the request until the socket was readable; a recv that
-// still finds nothing (the socket is non-blocking) parks again.
-function tcp_recv(socket, max, k) {
+// still finds nothing (the socket is non-blocking) parks again. pack makes
+// the answer of what arrived.
+function tcp_recv_with(socket, max, k, pack) {
   const sys = io_sys();
   const fd = socket;
   const b = new Uint8Array(Math.max(Number(max), 1));
@@ -18,11 +19,32 @@ function tcp_recv(socket, max, k) {
       }
       return io_tup(socket, io_fail(code));
     }
-    return io_tup(socket, io_done(io_text(b, n)));
+    return io_tup(socket, io_done(pack(b, n)));
   };
   return go();
 }
 
+// The bytes as they are (0..255), one List cell each.
+function tcp_recv_list(b, n) {
+  let xs = { $: "Nil" };
+  for (let i = n; i > 0; i -= 1) {
+    xs = { $: "Con", head: b[i - 1], tail: xs };
+  }
+  return xs;
+}
+
+function tcp_recv(socket, max, k) {
+  return tcp_recv_with(socket, max, k, io_text);
+}
+
+function tcp_recv_bytes(socket, max, k) {
+  return tcp_recv_with(socket, max, k, tcp_recv_list);
+}
+
 function tcp_recv_need() {
+  return { read: true };
+}
+
+function tcp_recv_bytes_need() {
   return { read: true };
 }

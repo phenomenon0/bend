@@ -3,6 +3,14 @@
 Each release names what changed for a user. `bend update` installs the
 latest one; the GitHub release carries the same notes.
 
+## Unreleased
+
+- **TCP carries bytes**: `TCP.send_bytes`, `TCP.recv_bytes` and
+  `TCP.poll_bytes` take and give a `List<&2, U32>`, one byte per cell, as
+  `File.read_bytes` does. `TCP.recv` decodes what arrives as UTF-8, so a
+  byte past 0x7F that is not UTF-8 (or a character a recv splits) came back
+  as U+FFFD, and a length-framed reply no longer matched its length.
+
 ## 2.0.27 (2026-09-23)
 
 - **`bend` reads no `bunfig.toml` or `.env` from the directory it runs in**
