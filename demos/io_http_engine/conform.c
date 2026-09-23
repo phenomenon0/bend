@@ -109,6 +109,10 @@ static void reset(int fd) {
 
 static void files(const char* root) {
   char p[4096], q[4096];
+  snprintf(p, sizeof(p), "%s", root);
+  for (char* c = p + 1; *c; c++) {
+    if (*c == '/') { *c = 0; mkdir(p, 0755); *c = '/'; }
+  }
   mkdir(root, 0755);
   snprintf(p, sizeof(p), "%s/a.txt", root);
   FILE* f = fopen(p, "w"); fputs("alpha\n", f); fclose(f);
