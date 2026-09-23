@@ -1545,8 +1545,32 @@ def run.cut(+sel: Run, acc: Bytes(), s: Bytes(), pd: Pend, out: List<&2, Req>, k
     case 1n+j:
       run.took(sel, acc, pd, out, String.cut(s, 1n+j))
 
+# run.len, with the visible ASCII bytes it begins with (33 up to 127: a
+# token, a digit or a separator, which a target and a key stay on) found
+# by Bytes.span in one borrowed pass over the read before the byte walk
+# goes on from the first one past them. PROOF.bend's lem.fast: the same
+# count as run.len.
+def run.vis(+s: Bytes(), +sel: Run) -> Nat:
+  +n = Bytes.span(s, 0n, 33, 127)
+  Nat.add(n, run.len(String.drop(s, n), True{}, sel, 0n))
+
+def run.fast(+s: Bytes(), +sel: Run) -> Nat:
+  match sel:
+    case RT{}:
+      run.vis(s, RT{})
+    case RK{}:
+      run.vis(s, RK{})
+    case RM{}:
+      run.len(s, True{}, RM{}, 0n)
+    case RV{}:
+      run.len(s, True{}, RV{}, 0n)
+    case RN{}:
+      run.len(s, True{}, RN{}, 0n)
+    case RX{}:
+      run.len(s, True{}, RX{}, 0n)
+
 def run.go(+sel: Run, acc: Bytes(), +s: Bytes(), pd: Pend, out: List<&2, Req>) -> P & Bytes():
-  run.cut(sel, acc, s, pd, out, run.len(s, True{}, sel, 0n))
+  run.cut(sel, acc, s, pd, out, run.fast(s, sel))
 
 # A method starts at the first byte of a request line and a name at the
 # first byte of a field line, and each is a run from that byte: the

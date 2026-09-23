@@ -396,10 +396,175 @@ def lem.cut(+sel: Eng.Run, +acc: Bytes(), +s: Bytes(), +pd: Eng.Pend, +out: List
           String.drop(s, 1n+j)),
         lem.cut.took(sel, acc, s, pd, out, j, e))
 
+# Visible ASCII in a run
+# ----------------------
+
+# The runs run.fast starts with a span of visible ASCII (33 up to 127):
+# a target's and a key's. Every such byte is a token, a digit, a colon, a
+# comma or vchar, which both stay on; lem.fast is run.fast counting what
+# run.len does.
+type Vis is Data:
+  VT{}
+  VK{}
+
+def vis.sel(v: Vis) -> Eng.Run:
+  match v:
+    case VT{}:
+      Eng.RT{}
+    case VK{}:
+      Eng.RK{}
+
+# what a Bool that is False rules out
+def BT(b: Bool, g: Type) -> Type:
+  match b:
+    case False{}:
+      Unit
+    case True{}:
+      g
+
+def lem.vis.sym(v: Vis, co: Bool, cm: Bool, tk: Bool) ->
+  {Eng.run.stay(vis.sel(v), Eng.cls.sym(co, cm, tk)) == True{} : Bool}:
+  match v co cm tk:
+    case VT{} True{} True{} True{}:
+      {==}
+    case VT{} True{} True{} False{}:
+      {==}
+    case VT{} True{} False{} True{}:
+      {==}
+    case VT{} True{} False{} False{}:
+      {==}
+    case VT{} False{} True{} True{}:
+      {==}
+    case VT{} False{} True{} False{}:
+      {==}
+    case VT{} False{} False{} True{}:
+      {==}
+    case VT{} False{} False{} False{}:
+      {==}
+    case VK{} True{} True{} True{}:
+      {==}
+    case VK{} True{} True{} False{}:
+      {==}
+    case VK{} True{} False{} True{}:
+      {==}
+    case VK{} True{} False{} False{}:
+      {==}
+    case VK{} False{} True{} True{}:
+      {==}
+    case VK{} False{} True{} False{}:
+      {==}
+    case VK{} False{} False{} True{}:
+      {==}
+    case VK{} False{} False{} False{}:
+      {==}
+
+def lem.vis.vis(v: Vis, +c: U32, al: Bool, dg: Bool) ->
+  {Eng.run.stay(vis.sel(v), Eng.cls.vis(c, al, dg)) == True{} : Bool}:
+  match v al dg:
+    case VT{} True{} True{}:
+      {==}
+    case VT{} True{} False{}:
+      {==}
+    case VT{} False{} True{}:
+      {==}
+    case VT{} False{} False{}:
+      lem.vis.sym(VT{}, U32.is_eq(c, 58), U32.is_eq(c, 44), Eng.tsym(c))
+    case VK{} True{} True{}:
+      {==}
+    case VK{} True{} False{}:
+      {==}
+    case VK{} False{} True{}:
+      {==}
+    case VK{} False{} False{}:
+      lem.vis.sym(VK{}, U32.is_eq(c, 58), U32.is_eq(c, 44), Eng.tsym(c))
+
+def lem.vis.go(v: Vis, +c: U32, x: Bool, y: Bool) ->
+  {Bool.and(Bool.not(x), Bool.not(y)) == True{} : Bool} ->
+  {Eng.run.stay(vis.sel(v), Eng.cls.go(c, x, y)) == True{} : Bool}:
+  match x y:
+    case True{} True{}:
+      e =>
+        %e : BT(_, {Eng.run.stay(vis.sel(v), Eng.cls.go(c, True{}, True{})) == True{} : Bool})
+        Unit{}
+    case True{} False{}:
+      e =>
+        %e : BT(_, {Eng.run.stay(vis.sel(v), Eng.cls.go(c, True{}, False{})) == True{} : Bool})
+        Unit{}
+    case False{} True{}:
+      e =>
+        %e : BT(_, {Eng.run.stay(vis.sel(v), Eng.cls.go(c, False{}, True{})) == True{} : Bool})
+        Unit{}
+    case False{} False{}:
+      e => lem.vis.vis(v, c, Eng.alpha(c), Eng.digit(c))
+
+# a byte in [33, 127) is one the run stays on
+def lem.vis.in(v: Vis, +c: U32) ->
+  {Bytes.span.in(c, 33, 127) == True{} : Bool} ->
+  {Eng.run.stay(vis.sel(v), Eng.cls(c)) == True{} : Bool}:
+  e => lem.vis.go(v, c, U32.is_lt(c, 33), U32.is_le(127, c))(e)
+
+# the run after the span, counted on from it
+def VR(-sel: Eng.Run, -s: Bytes()) -> Type:
+  {Eng.run.len(s, True{}, sel, 0n) ==
+    Nat.add(Bytes.span.go(s, 33, 127),
+      Eng.run.len(String.drop(s, Bytes.span.go(s, 33, 127)), True{}, sel, 0n)) : Nat}
+
+def lem.vis.at(+v: Vis, +c: U32, +t: Bytes(), b: Bool, ih: VR(vis.sel(v), t)) ->
+  {Bytes.span.in(c, 33, 127) == b : Bool} ->
+  {Eng.run.len(SCon{Chr{c}, t}, True{}, vis.sel(v), 0n) ==
+    Nat.add(Bytes.span.at(b, t, 33, 127),
+      Eng.run.len(String.drop(SCon{Chr{c}, t}, Bytes.span.at(b, t, 33, 127)), True{},
+        vis.sel(v), 0n)) : Nat}:
+  match b:
+    case False{}:
+      e => {==}
+    case True{}:
+      e =>
+        %Equal.sym(Bool, Eng.run.stay(vis.sel(v), Eng.cls(c)), True{}, lem.vis.in(v, c)(e)) :
+          {Eng.run.len(t, _, vis.sel(v), Eng.run.inc(_, 0n)) ==
+            1n+Nat.add(Bytes.span.go(t, 33, 127),
+              Eng.run.len(String.drop(t, Bytes.span.go(t, 33, 127)), True{}, vis.sel(v), 0n)) : Nat}
+        Equal.trans(Nat, Eng.run.len(t, True{}, vis.sel(v), 1n),
+          1n+Eng.run.len(t, True{}, vis.sel(v), 0n),
+          1n+Nat.add(Bytes.span.go(t, 33, 127),
+            Eng.run.len(String.drop(t, Bytes.span.go(t, 33, 127)), True{}, vis.sel(v), 0n)),
+          lem.shift(t, True{}, vis.sel(v), 0n),
+          Equal.cong(Nat, Nat, y => 1n+y, Eng.run.len(t, True{}, vis.sel(v), 0n),
+            Nat.add(Bytes.span.go(t, 33, 127),
+              Eng.run.len(String.drop(t, Bytes.span.go(t, 33, 127)), True{}, vis.sel(v), 0n)), ih))
+
+def lem.vis.run(+s: Bytes(), +v: Vis) -> VR(vis.sel(v), s):
+  match s:
+    case SNil{}:
+      {==}
+    case SCon{Chr{+c}, t}:
+      lem.vis.at(v, c, t, Bytes.span.in(c, 33, 127), lem.vis.run(t, v))({==})
+
+# run.fast counts what run.len does
+def lem.fast(+s: Bytes(), +sel: Eng.Run) ->
+  {Eng.run.len(s, True{}, sel, 0n) == Eng.run.fast(s, sel) : Nat}:
+  match s sel:
+    case SNil{} Eng.RT{}:
+      {==}
+    case SNil{} Eng.RK{}:
+      {==}
+    case SCon{h, t} Eng.RT{}:
+      lem.vis.run(SCon{h, t}, VT{})
+    case SCon{h, t} Eng.RK{}:
+      lem.vis.run(SCon{h, t}, VK{})
+    case _ Eng.RM{}:
+      {==}
+    case _ Eng.RV{}:
+      {==}
+    case _ Eng.RN{}:
+      {==}
+    case _ Eng.RX{}:
+      {==}
+
 def lem.go.run(+sel: Eng.Run, +acc: Bytes(), +s: Bytes(), +pd: Eng.Pend, +out: List<&2, Eng.Req>) ->
   {Eng.feed_buf.last(Eng.run.go(sel, acc, s, pd, out)) ==
     Eng.feed_buf.slow(s, Eng.P{Eng.st.put(sel, acc), pd, out}) : Eng.P}:
-  lem.cut(sel, acc, s, pd, out, Eng.run.len(s, True{}, sel, 0n))({==})
+  lem.cut(sel, acc, s, pd, out, Eng.run.fast(s, sel))(lem.fast(s, sel))
 
 # A value skipped: what the walk is to answer, by whether the byte
 # before s was part of the value
