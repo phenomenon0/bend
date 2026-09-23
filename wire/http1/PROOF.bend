@@ -1438,13 +1438,38 @@ def line.field.name(+e: R.Ask, +c: U32, +t: List<&2, U32>, +h: R.Head, +out: Lis
   %RS(e, t, SlName{h}, [c], out) : {_ == R.P{Rf(h, S.field.name(e, S.span.push(c, S.span(S.TName{}, t)))), out} : R.P}
   K.name(e, h, c, S.span(S.TName{}, t), out)(span.sw(S.TName{}, t)(pt))
 
+# the reader builds a literal's candidate only when the name's first
+# byte starts it: the same candidate as the literal stepped
+def lit1(b: Bool, +s: String) -> {R.lit.first(b, s) == R.cand.pick(b, Wr.bytes(s)) : Maybe<&2, List<&2, U32>>}:
+  match b:
+    case True{}:
+      {==}
+    case False{}:
+      {==}
+
+def line.field.name1(+e: R.Ask, +c: U32, +t: List<&2, U32>, +h: R.Head, +out: List<&2, U32>, pt: Plain(t)) ->
+  {R.feed(e, t, R.P{R.Nam{h, R.cl1(R.lower(c)), R.te1(R.lower(c)), R.co1(R.lower(c))}, out}) == R.P{Rf(h, S.field.name(e, S.span.push(c, S.span(S.TName{}, t)))), out} : R.P}:
+  +l = R.lower(c)
+  %Equal.sym(Maybe<&2, List<&2, U32>>, R.lit.first(U32.is_eq(l, 99), "ontent-length"),
+    R.cand.pick(U32.is_eq(l, 99), Wr.bytes("ontent-length")), lit1(U32.is_eq(l, 99), "ontent-length")) :
+    {R.feed(e, t, R.P{R.Nam{h, _, R.te1(l), R.co1(l)}, out}) == R.P{Rf(h, S.field.name(e, S.span.push(c, S.span(S.TName{}, t)))), out} : R.P}
+  %Equal.sym(Maybe<&2, List<&2, U32>>, R.lit.first(U32.is_eq(l, 116), "ransfer-encoding"),
+    R.cand.pick(U32.is_eq(l, 116), Wr.bytes("ransfer-encoding")), lit1(U32.is_eq(l, 116), "ransfer-encoding")) :
+    {R.feed(e, t, R.P{R.Nam{h, R.cand.pick(U32.is_eq(l, 99), Wr.bytes("ontent-length")), _, R.co1(l)}, out}) ==
+      R.P{Rf(h, S.field.name(e, S.span.push(c, S.span(S.TName{}, t)))), out} : R.P}
+  %Equal.sym(Maybe<&2, List<&2, U32>>, R.lit.first(U32.is_eq(l, 99), "onnection"),
+    R.cand.pick(U32.is_eq(l, 99), Wr.bytes("onnection")), lit1(U32.is_eq(l, 99), "onnection")) :
+    {R.feed(e, t, R.P{R.Nam{h, R.cand.pick(U32.is_eq(l, 99), Wr.bytes("ontent-length")),
+      R.cand.pick(U32.is_eq(l, 116), Wr.bytes("ransfer-encoding")), _}, out}) == R.P{Rf(h, S.field.name(e, S.span.push(c, S.span(S.TName{}, t)))), out} : R.P}
+  line.field.name(e, c, t, h, out, pt)
+
 def line.field.k(+e: R.Ask, k: R.Cls, +c: U32, +t: List<&2, U32>, +h: R.Head, +out: List<&2, U32>,
   nc: {notcrlf(k) == True{} : Bool}, pt: Plain(t)) -> G.line(e, k, c, t, h, out):
   match k:
     case R.KTk{}:
-      line.field.name(e, c, t, h, out, pt)
+      line.field.name1(e, c, t, h, out, pt)
     case R.KDg{}:
-      line.field.name(e, c, t, h, out, pt)
+      line.field.name1(e, c, t, h, out, pt)
     case R.KCr{}:
       no(G.line(e, R.KCr{}, c, t, h, out), nc)
     case R.KLf{}:

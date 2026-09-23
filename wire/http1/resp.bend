@@ -165,6 +165,24 @@ def done(m: Maybe<&2, List<&2, U32>>) -> Bool:
         case Con{w, t}:
           False{}
 
+# a literal's candidate after its first byte, the rest of it built only
+# when that byte matches (cstep of the whole literal, lazily)
+def lit.first(ok: Bool, +t: String) -> Maybe<&2, List<&2, U32>>:
+  match ok:
+    case True{}:
+      Some{Wr.bytes(t)}
+    case False{}:
+      None{}
+
+def cl1(+c: U32) -> Maybe<&2, List<&2, U32>>:
+  lit.first(U32.is_eq(c, 99), "ontent-length")
+
+def te1(+c: U32) -> Maybe<&2, List<&2, U32>>:
+  lit.first(U32.is_eq(c, 116), "ransfer-encoding")
+
+def co1(+c: U32) -> Maybe<&2, List<&2, U32>>:
+  lit.first(U32.is_eq(c, 99), "onnection")
+
 def lit.v11() -> List<&2, U32>:
   Wr.bytes("HTTP/1.1")
 
@@ -839,10 +857,10 @@ def step.at(+e: Ask, st: St, k: Cls, +c: U32, out: List<&2, U32>) -> P:
       P{Eoh{h}, out}
     case Lin{h} KTk{}:
       +l = lower(c)
-      P{Nam{h, cstep(Some{lit.cl()}, l), cstep(Some{lit.te()}, l), cstep(Some{lit.co()}, l)}, out}
+      P{Nam{h, cl1(l), te1(l), co1(l)}, out}
     case Lin{h} KDg{}:
       +l = lower(c)
-      P{Nam{h, cstep(Some{lit.cl()}, l), cstep(Some{lit.te()}, l), cstep(Some{lit.co()}, l)}, out}
+      P{Nam{h, cl1(l), te1(l), co1(l)}, out}
     case Lin{h} _:
       P{Bad{}, out}
     case Nam{h, a, b, d} KCo{}:
