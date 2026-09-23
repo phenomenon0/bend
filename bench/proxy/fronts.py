@@ -5,7 +5,7 @@ Each knows how to write its config and how to be started and stopped.
   nginx     one worker, proxy_pass to the upstream, upstream keep-alive on
   haproxy   one thread, a keep-alive (http-reuse always) backend
   bend_httpd  the Bend engine as a server, no upstream (direct-parse rival)
-  proxyd    the Bend reverse proxy -- documented, launched when it lands
+  proxyd    the Bend reverse proxy (demos/io_proxy), a keep-alive pool upstream
 
 Ports live in 20400-20499. Configs and logs go to a caller-supplied work dir.
 """
@@ -225,6 +225,35 @@ class BendHttpd:
 
     def start(self):
         cmd = [self.binary, "--port", str(self.front_port), "--idle-ms", "3000"]
+        if self.pin_core is not None:
+            cmd = ["taskset", "-c", str(self.pin_core)] + cmd
+        self.proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL,
+                                     stderr=subprocess.DEVNULL)
+        return wait_port("127.0.0.1", self.front_port)
+
+    def stop(self):
+        _kill(self.proc)
+        self.proc = None
+
+
+class Proxyd:
+    """The Bend reverse proxy (demos/io_proxy): one process, a keep-alive
+    pool to the upstream, the same 3 s response deadline as nginx."""
+    name = "proxyd"
+    is_proxy = True
+
+    def __init__(self, work, front_port, upstream_port, binary, pin_core=None):
+        self.work = work
+        self.front_port = front_port
+        self.upstream_port = upstream_port
+        self.binary = binary
+        self.pin_core = pin_core
+        self.proc = None
+
+    def start(self):
+        cmd = [self.binary, "--port", str(self.front_port),
+               "--upstream", "127.0.0.1:%d" % self.upstream_port,
+               "--upstream-ms", "3000", "--connect-ms", "2000", "--idle-ms", "3000"]
         if self.pin_core is not None:
             cmd = ["taskset", "-c", str(self.pin_core)] + cmd
         self.proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL,

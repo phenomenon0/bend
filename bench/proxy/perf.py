@@ -89,6 +89,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--httpd", required=True)
     ap.add_argument("--fronts", default="nginx,haproxy,bend_httpd")
+    ap.add_argument("--proxyd", default=None)
     ap.add_argument("--out", default=os.path.join(HERE, "results"))
     ap.add_argument("--work", default="/tmp/claude-0/proxyperf")
     ap.add_argument("--dur", type=int, default=8)
@@ -114,6 +115,9 @@ def main():
                 port = FRONT_PORT
             elif w == "haproxy":
                 fr = fronts.HAProxy(args.work, FRONT_PORT, UP_PORT, pin_core=0)
+                port = FRONT_PORT
+            elif w == "proxyd" and args.proxyd:
+                fr = fronts.Proxyd(args.work, FRONT_PORT, UP_PORT, args.proxyd, pin_core=0)
                 port = FRONT_PORT
             elif w == "bend_httpd":
                 # the httpd as a direct server IS the fast upstream on core 1

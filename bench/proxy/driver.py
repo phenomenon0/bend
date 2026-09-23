@@ -275,6 +275,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--fronts", default="nginx,haproxy,bend_httpd")
     ap.add_argument("--httpd", default=None)
+    ap.add_argument("--proxyd", default=None)
     ap.add_argument("--out", default=os.path.join(HERE, "results"))
     ap.add_argument("--work", default="/tmp/claude-0/proxybench")
     ap.add_argument("--render", action="store_true",
@@ -310,7 +311,7 @@ def main():
     up_log = os.path.join(args.work, "upstream.jsonl")
     open(up_log, "w").close()
     up_proc = None
-    if any(w in ("nginx", "haproxy") for w in want):
+    if any(w in ("nginx", "haproxy", "proxyd") for w in want):
         up_proc = subprocess.Popen(
             ["taskset", "-c", "1", sys.executable,
              os.path.join(HERE, "upstream.py"),
@@ -331,6 +332,11 @@ def main():
                     print("skip bend_httpd: no --httpd binary", file=sys.stderr)
                     continue
                 fr = fronts.BendHttpd(args.work, FRONT_PORT, args.httpd, pin_core=0)
+            elif w == "proxyd":
+                if not args.proxyd:
+                    print("skip proxyd: no --proxyd binary", file=sys.stderr)
+                    continue
+                fr = fronts.Proxyd(args.work, FRONT_PORT, UP_PORT, args.proxyd, pin_core=0)
             else:
                 print("unknown front", w, file=sys.stderr)
                 continue

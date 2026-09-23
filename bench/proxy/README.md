@@ -89,19 +89,10 @@ Results land in `results/`: `matrix.md` / `matrix.json` and `detail_<front>.json
 for the HTTP/1 differential, `matrix_h2.md` for the h2 vectors, and `perf.md` /
 `perf.json` for the load runs.
 
-## Adding the Bend reverse proxy (`proxyd`, demos/io_proxy)
-
-The Bend reverse proxy is being built in `demos/io_proxy` and is not yet merged.
-When it lands, build it and add it as a proxy front:
+## The Bend reverse proxy (`proxyd`, demos/io_proxy)
 
     bun bend2/main.ts demos/io_proxy/main.bend -o /tmp/proxyd
-    # /tmp/proxyd --port 20420 --upstream 127.0.0.1:20410   (its own flags)
+    python3 bench/proxy/driver.py --fronts proxyd --proxyd /tmp/proxyd --out /tmp/res
+    python3 bench/proxy/perf.py --fronts proxyd --proxyd /tmp/proxyd --httpd /tmp/httpd --out /tmp/res
 
-Add a `Proxyd` front class to `fronts.py` mirroring `Nginx` (a subprocess on
-`front_port` pointed at the upstream, `is_proxy = True`), register it in
-`driver.py`'s front switch, then:
-
-    python3 bench/proxy/driver.py --fronts proxyd --httpd /tmp/httpd \
-        --out bench/proxy/results
-
-and it is scored on the same corpus, by the same reference, as nginx and HAProxy.
+scores it on the same corpus, by the same reference, as nginx and HAProxy.
