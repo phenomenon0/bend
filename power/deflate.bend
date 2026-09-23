@@ -9,7 +9,7 @@
 # grows in St's buffer, whose last 32 KiB are the window a back
 # reference reads; take hands out what is past the window.
 #
-# Budgets. Every output byte is counted against Cfg's cap before it is
+# Budgets. Every output byte is counted against O's cap before it is
 # written: a stream that would produce more is refused (TooBig) with
 # the cap's worth written and nothing past it, so a decompression bomb
 # costs its cap and no more. Refusals are terminal: Bad{why} is kept
@@ -42,7 +42,9 @@
 # stored, fixed and dynamic Huffman; level 0 writes stored blocks only.
 # Every match is compared byte by byte in the input before it is taken,
 # so what the chains hold decides only how good a match is, never
-# whether it is right.
+# whether it is right. deflate_fixed writes the pass's tokens as one
+# block with the fixed code, each checked against the input as it is
+# written (fixtoks), which deflate_proof.bend proves reads back as x.
 import Base
 import ../wire/reader.bend as Wr
 
@@ -2169,8 +2171,9 @@ def iter.at(full: Bool, +x: Bytes(), +n: Nat, +lv: Lv, +t: EC, +i: Nat, h: H,
 
 def iter(z: Z) -> Z:
   match z:
-    case Z{x, n, lv, t, i, h, toks, +nt, tpos, bs, w, plen, pdist, avail, go}:
-      iter.at(Nat.is_le(U32.to_nat(16383), nt), x, n, lv, t, i, h, toks, nt, tpos, bs, w, plen, pdist, avail)
+    case Z{x, n, lv, +t, i, h, toks, +nt, tpos, bs, w, plen, pdist, avail, go}:
+      iter.at(Nat.is_le(16383n, nt) && Bool.not(ec_fx(t)), x, n, lv, t, i, h, toks, nt, tpos, bs, w, plen,
+        pdist, avail)
 
 def lz(k: Nat, z: Z) -> Z:
   match k:
@@ -2202,18 +2205,39 @@ def lz_end(z: Z) -> W:
 
 # The raw deflate stream of x at a level: 0 stores, 1..9 as zlib's;
 # fx, every block with the fixed code
-def deflate.at(lz_level: Bool, +x: Bytes(), +lvl: Nat, fx: Bool) -> Bytes():
+# the pass over x at a level, from its start
+def lz_all(+x: Bytes(), +lvl: Nat, fx: Bool) -> Z:
+  +n = Bytes.len(x)
+  lz(1n+n, Z{x, n, level(lvl), ec_fixed(fx), 0n, h_new(), Nil{}, 0n, 0n, 0n, w_new(), 0n, 0n, False{},
+    Nat.is_lt(0n, n)})
+
+def deflate.at(lz_level: Bool, +x: Bytes(), +lvl: Nat) -> Bytes():
   match lz_level:
     case False{}:
       w_out(stored.go(x, True{}, SS{"", z16(), w_new()}))
     case True{}:
-      +n = Bytes.len(x)
-      w_out(lz_end(lz(1n+n, Z{x, n, level(lvl), ec_fixed(fx), 0n, h_new(), Nil{}, 0n, 0n, 0n,
-        w_new(), 0n, 0n, False{}, Nat.is_lt(0n, n)})))
+      w_out(lz_end(lz_all(x, lvl, False{})))
 
 def deflate(+x: Bytes(), +lvl: Nat) -> Bytes():
-  deflate.at(Nat.is_lt(0n, lvl), x, lvl, False{})
+  deflate.at(Nat.is_lt(0n, lvl), x, lvl)
 
-# the same matches, every block written with the fixed code
+# the tokens of a fixed pass (which never cuts a block): the byte held
+# at the end, if one, after them
+def lz_toks.at(avail: Bool, +x: Bytes(), +n: Nat, toks: List<&2, Tok>) -> List<&2, Tok>:
+  match avail:
+    case True{}:
+      List.reverse(&2, Tok, Con{Lit{Bytes.get(x, Nat.sub(n, 1n))}, toks})
+    case False{}:
+      List.reverse(&2, Tok, toks)
+
+def lz_toks(z: Z) -> List<&2, Tok>:
+  match z:
+    case Z{x, n, lv, t, i, h, toks, nt, tpos, bs, w, plen, pdist, avail, go}:
+      lz_toks.at(avail, x, n, toks)
+
+# the same matches, as one block with the fixed code: the tokens are
+# checked against x as the block is written (fixtoks), so what is
+# written is x whatever the pass found
 def deflate_fixed(+x: Bytes(), +lvl: Nat) -> Bytes():
-  deflate.at(True{}, x, Nat.max(1n, lvl), True{})
+  w_out(align(fixed_block(fixtoks(lz_toks(lz_all(x, Nat.max(1n, lvl), True{})), x, 0n, Bytes.len(x)),
+    w_new(), True{}, ec_fixed(True{}))))

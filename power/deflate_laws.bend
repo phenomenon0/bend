@@ -295,6 +295,19 @@ law fixed_tables:
   {ref.decodes(ref.fll(D.tabs()), ref.fixed(288n, 0n), 0n) == True{} : Bool} &
   {ref.decodes(ref.fd(D.tabs()), ref.fdist(32n, 0n), 0n) == True{} : Bool}
 
+# LAW: the fixed path reads back. Any bytes, at any level, written by
+# deflate_fixed -- whatever matches the pass finds, each checked against
+# the input before it is written -- inflate to themselves under any cap
+# they fit: every literal, length, distance and extra bit through the
+# fixed code's tables, every copy within the window.
+law fixed_round_trip:
+  for +x: Bytes()
+  for +lvl: Nat
+  for +cap: Nat
+  for +vx: {D.valid(x) == True{} : Bool}
+  for fits: {Nat.is_le(Bytes.len(x), cap) == True{} : Bool}
+  {D.inflate(cap, D.deflate_fixed(x, lvl)) == Done{x} : Result<&2, &2, D.Why, Bytes()>}
+
 # The cap
 # =======
 

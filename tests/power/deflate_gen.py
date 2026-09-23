@@ -376,7 +376,7 @@ def twin(x, lvl, fixed=False):
     plen = pdist = 0
     avail = False
     while i < n:
-        if len(toks) >= 16383:
+        if len(toks) >= 16383 and not fixed:
             block(w, toks, x, bs, tpos - bs, 0, fixed)
             toks = []
             bs = tpos
@@ -631,7 +631,7 @@ def main():
             assert zlib.decompress(t, -15) == x, (name, lvl)
             row('IO.print("deflate %s L%d " ++ enc(%s, %dn))' % (name, lvl, bstr(z9.hex()), lvl),
                 "deflate %s L%d %d %d back ok %d %d" % (name, lvl, len(t), zlib.crc32(t), len(x), zlib.crc32(x)))
-    # deflate_fixed: the same matches, every block with the fixed code
+    # deflate_fixed: the same matches, one block with the fixed code
     for name, x in INPUTS:
         z9 = raw(x, 9)
         for lvl in (1, 4, 9):

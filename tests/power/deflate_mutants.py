@@ -54,6 +54,18 @@ MUTANTS = [
   ('a stored byte is read high bit first', 'deflate.bend', [(
     '      stored_byte(last, left, U32.from_nat(hval(acc, 0n)), o, bp)',
     '      stored_byte(last, left, U32.from_nat(val(acc)), o, bp)')]),
+  ('the written-out length table has one extra bit too few', 'deflate.bend', [(
+    '\\u{4}\\u{5}\\u{5}\\u{5}\\u{5}\\u{0}"',
+    '\\u{4}\\u{5}\\u{5}\\u{5}\\u{4}\\u{0}"')]),
+  ('a code is walked with its 1 bits taken as 0', 'deflate.bend', [(
+    'Nat.add(Nat.double(node), Nat.bit(b, 0n))',
+    'Nat.add(Nat.double(node), Nat.bit(Bool.not(b), 0n))')]),
+  ('the fixed path writes a copy it has not checked', 'deflate.bend', [(
+    'ref_ok(x, pos, end, len, dist) && ck(r, x, Nat.add(pos, len), end)',
+    'ck(r, x, Nat.add(pos, len), end)')]),
+  ('a copy is checked without its first byte', 'deflate.bend', [(
+    'U32.is_eq(Bytes.get(x, pos), Bytes.get(x, Nat.sub(pos, dist))) && same(p, x, 1n+pos, dist)',
+    'same(p, x, 1n+pos, dist)')]),
   ('the fixed code gives one literal too few 8 bits', 'deflate.bend', [(
     'reps(144n, 8n, reps(112n, 9n,',
     'reps(143n, 8n, reps(113n, 9n,')]),
