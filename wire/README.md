@@ -84,7 +84,7 @@ upgrade, no stream, no files, no log. A `Plan` is `Go{out, p2}` (write,
 read again), `Wait{p2}` (read again), `End{out}` (write, close),
 `Feed{out, n}` (write, stream n events), `Sock{out, u}`/`Hold{u}`
 (upgrade), or `Stop{}`. The replies are `Seg`s: `Raw{bytes}`, `Page{...}`
-(a file, streamed), `Note{...}` (a log line), `Shut{}`.
+(a file, by sendfile), `Note{...}` (a log line), `Shut{}`.
 
 The budgets are the loop's: a read takes at most `chunk()` bytes; a head
 in progress at most `head.cap()` bytes past the read it began in, and
@@ -106,9 +106,22 @@ byte, in order), `hold_fine`, `raw_fine`, `page_fine`, `batch_under`
 `hw_rest`, `hw_keeps` (the head's budget and deadline), `stall_ends` (a
 stopped peer is let go within three turns, from any state),
 `accept_calm` and `accept_ends` (the accept loop stays up, and ends
-only as it may); and of the model against the effects' contracts,
-`rx_model`, `tx_stalled`, `tx_served`, `fread_model`. `conform.bend`
-checks the real effects keep the same contracts.
+only as it may), `page_wire` (a file's reply puts on the wire what
+waited, its head, and then the file's own bytes, every one and nothing
+else), `page_fail` and `page_head_fail` (a sendfile or a head that did
+not all go out ends the writer); and of the model against the effects'
+contracts, `rx_model`, `tx_stalled`, `tx_served`, `fread_model`,
+`fsend_model` (a sendfile to a reading peer puts the file's bytes from
+its offset on the wire and is Done only when the file had them all),
+`fsend_stalled`. `conform.bend` checks the real effects keep the same
+contracts.
+
+**Files.** A `Page`'s body goes out by `File.sendfile(sock, file, off,
+len, ms)`: on a plain socket the kernel copies it from the page cache
+to the socket (Linux and macOS sendfile), under TLS the effect writes it
+through the session a 64 KiB block at a time; either way the
+connection holds none of the file itself, and a body that comes up
+short (the file shrank) fails, ending the connection.
 
 ## A protocol on the kit: RESP
 

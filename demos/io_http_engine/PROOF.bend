@@ -2084,6 +2084,16 @@ def Laws.raw_fine(ms, may, bs, st):
 def Laws.page_fine(ms, root, path, ct, head, may, sh, st):
   WW.page_fine(~Eng.h.shut, ~Eng.h.fhead, ~Eng.miss, ~Eng.h.lnote, ~Eng.h.lsize, ms, root, path, ct, head, may, sh, st)
 
+def Laws.page_wire(ms, root, path, ct, may, sh, rd, now, fs, out, acc, body, ef, en):
+  WW.page_wire(~Eng.h.shut, ~Eng.h.fhead, ~Eng.miss, ~Eng.h.lnote, ~Eng.h.lsize, ms, root, path,
+    ct, may, sh, rd, now, fs, out, acc, body, ef, en)
+
+def Laws.page_fail(s, f, e):
+  WW.page_fail(s, f, e)
+
+def Laws.page_head_fail(ms, f, n, s, e):
+  WW.page_head_fail(ms, f, n, s, e)
+
 def Laws.accept_calm(k, evs, served, e):
   WW.accept_calm(k, evs, served, e)
 
@@ -2213,6 +2223,12 @@ def Laws.tx_served(rd, now, fs, out, a, ms):
 
 def Laws.fread_model(f, n):
   WW.fread_model(f, n)
+
+def Laws.fsend_model(rd, now, fs, out, f, off, len, ms):
+  WW.fsend_model(rd, now, fs, out, f, off, len, ms)
+
+def Laws.fsend_stalled(rd, now, fs, out, f, off, len, ms, h, t, e):
+  WW.fsend_stalled(rd, now, fs, out, f, off, len, ms, h, t, e)
 
 # Bytes, bridged
 # --------------
