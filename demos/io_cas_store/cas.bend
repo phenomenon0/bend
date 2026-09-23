@@ -48,17 +48,17 @@ def new() -> Store:
 # does not survive a round trip through String. The daemon refuses a body that
 # is not ASCII (Base's String.is_ascii) rather than storing a mangled one; the
 # report says what that costs.
-def to_bytes(s: String, b: Bytes.Bytes) -> Bytes.Bytes:
+def to_bytes(s: String, b: Bytes()) -> Bytes():
   match s:
     case SNil{}:
       b
     case SCon{h, t}:
       to_bytes(t, Bytes.push(b, Char.to_u32(h)))
 
-def bytes_of(s: String) -> Bytes.Bytes:
+def bytes_of(s: String) -> Bytes():
   to_bytes(s, Bytes.new())
 
-def hash.out(r: Bytes.Bytes & B3.Cv) -> B3.Cv:
+def hash.out(r: Bytes() & B3.Cv) -> B3.Cv:
   (b, c) = r
   c
 
