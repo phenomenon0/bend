@@ -66,7 +66,9 @@ Term file_open_under_run(Env e, Term* f, IoWork* w) {
     w->code = EILSEQ;
     return file_open_under_pack(e, w);
   }
-  return io_work(w, file_open_under_call, file_open_under_pack);
+  // on the loop: a walk of openat and one fstat, which the dentry cache
+  // answers, costs less than a helper's round trip
+  return io_now(e, w, file_open_under_call, file_open_under_pack);
 }
 
 static void __attribute__((constructor)) file_open_under_use(void) {

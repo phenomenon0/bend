@@ -7688,6 +7688,15 @@ static Term io_work(IoWork* w, IoCall call, IoPack pack) {
   return IO_PARK;
 }
 
+// Run call on the loop itself and resume at once: for work that does not
+// block on a warm system (an open, an fstat, a read the page cache holds),
+// where a helper's round trip -- two wakes and the eventfd -- costs more
+// than the call.
+static Term io_now(Env e, IoWork* w, IoCall call, IoPack pack) {
+  call(w);
+  return pack(e, w);
+}
+
 // Consume cont's request node; the effect returns a value or IO_PARK.
 static Term io_exec(Env e, IoWork* w) {
   IoAct* a = (IoAct*)w;
