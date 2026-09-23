@@ -1,10 +1,14 @@
 # A WebSocket client (RFC 6455), over TCP or TLS.
 #
-#   c : Ws.Conn <- IO.try? no: Ws.connect answers a Result with why
-#   r <- Ws.connect("wss://echo.example/chat", Ws.opts())
-#   (c, s) <- Ws.send_text(c, "hello")
-#   (c, m) <- Ws.recv(c)             # Text{..} | Binary{..} | Closed{code, reason}
-#   r <- Ws.close(c, 1000, "bye")    # the closing handshake, under a deadline
+#   Ws.connect("wss://host/chat", Ws.opts())   # IO(Result<Err, Conn>)
+#   Ws.send_text(c, "hello")                   # IO(Conn & Result<Err, Unit>)
+#   Ws.send_bytes(c, bytes)                    # the same, binary
+#   Ws.recv(c)                                 # IO(Conn & Result<Err, Msg>):
+#                                              #   Text{s} | Binary{b} | Closed{code, reason}
+#   Ws.close(c, 1000, "bye")                   # IO(Result<Err, U32>): the closing
+#                                              #   handshake; the server's code
+#
+# net/ws_cli.bend is a whole program on it.
 #
 # connect resolves the host (DNS.resolve), dials under a deadline
 # (TCP.connect_poll, or TLS.connect with SNI, ALPN http/1.1 and the
