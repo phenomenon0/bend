@@ -16,6 +16,7 @@ static Term tcp_accept_more(Env e, IoWork* w) {
     return io_wait_on(w, fd, POLLIN, 0, tcp_accept_more);
   }
   if (got >= 0) {
+    io_fd_fresh(got);
     io_wire_join(fd, got);
   }
   Term r = w->code != 0 ? io_fail(e, w->code, NULL) : io_done(e, io_hand(got));
