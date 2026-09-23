@@ -2641,7 +2641,7 @@ def Laws.tx_stalled(rd, now, fs, out, h, t, ms):
 def Laws.tx_served(rd, now, fs, out, a, ms):
   %Equal.sym(Eng.Put(W.World), W.w.tx(W.eager(rd, now, fs, out), a, ms),
     W.sent(rd, now, fs, Bytes.append(out, a)), wl.tx_eager(rd, now, fs, out, a, ms)) :
-    {W.tx.seen(ms, False{}, now, _) == True{} : Bool}
+    {W.tx.seen(ms, W.Reads{}, now, _) == True{} : Bool}
   {==}
 
 def Laws.fread_model(f, n):

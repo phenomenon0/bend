@@ -460,11 +460,16 @@ def rx.ok(
         case Some{+bs}:
           U32.is_le(U32.from_nat(Bytes.len(bs)), max) && Nat.is_le(took, U32.to_nat(ms))
 
-# TCP.send_buf_poll(s, bytes, ms): Done once every byte has gone to the
-# peer however long that takes, as long as it never waits ms without
-# progress; a peer that leaves it waiting ms without progress fails it
-# with ETIMEDOUT (110 on Linux, 60 on macOS) after at least ms. stalled
-# is whether the peer did; took is how long the send took.
+# TCP.send_buf_poll(s, bytes, ms), to a peer that reads (each piece of
+# progress within ms of the last), that stops reading, or that resets:
+# the first is served however long the whole takes; the second fails
+# the send with ETIMEDOUT (110 on Linux, 60 on macOS) after at least
+# ms; the third fails it. took is how long the send took.
+type Peer is Data:
+  Reads{}
+  Stops{}
+  Resets{}
+
 def etimedout(+code: U32) -> Bool:
   U32.is_eq(code, 110) || U32.is_eq(code, 60)
 
@@ -472,16 +477,18 @@ def tx.timed(e: U32 & String, +took: Nat, +ms: U32) -> Bool:
   (code, msg) = e
   etimedout(code) && Nat.is_le(U32.to_nat(ms), took)
 
-def tx.ok(+ms: U32, stalled: Bool, +took: Nat, r: Result<&1, &1, U32 & String, Unit>) -> Bool:
-  match stalled:
-    case False{}:
+def tx.ok(+ms: U32, peer: Peer, +took: Nat, r: Result<&1, &1, U32 & String, Unit>) -> Bool:
+  match peer:
+    case Reads{}:
       Result.is_done(&1, &1, U32 & String, Unit, r)
-    case True{}:
+    case Stops{}:
       match r:
         case Done{u}:
           False{}
         case Fail{e}:
           tx.timed(e, took, ms)
+    case Resets{}:
+      Result.is_fail(&1, &1, U32 & String, Unit, r)
 
 # TCP.accept_poll(l, ms): a connection, nothing (once ms have passed, or
 # after it shed one arrival it had no descriptor for), or a failure --
@@ -704,6 +711,6 @@ def rx.seen(max: U32, +ms: U32, +t0: Nat, m: Eng.Got(World)) -> Bool:
   (s, r) = m
   rx.ok(max, ms, Nat.sub(w.now(s), t0), r)
 
-def tx.seen(+ms: U32, stalled: Bool, +t0: Nat, m: Eng.Put(World)) -> Bool:
+def tx.seen(+ms: U32, peer: Peer, +t0: Nat, m: Eng.Put(World)) -> Bool:
   (s, r) = m
-  tx.ok(ms, stalled, Nat.sub(w.now(s), t0), r)
+  tx.ok(ms, peer, Nat.sub(w.now(s), t0), r)

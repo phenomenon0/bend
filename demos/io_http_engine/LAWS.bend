@@ -1192,7 +1192,7 @@ law tx_stalled:
   for +h: Char
   for +t: Bytes()
   for +ms: U32
-  {W.tx.seen(ms, True{}, now, W.w.tx(W.World{rd, Nil{}, False{}, now, fs, out}, SCon{h, t}, ms)) ==
+  {W.tx.seen(ms, W.Stops{}, now, W.w.tx(W.World{rd, Nil{}, False{}, now, fs, out}, SCon{h, t}, ms)) ==
     True{} : Bool}
 
 law tx_served:
@@ -1202,7 +1202,7 @@ law tx_served:
   for +out: Bytes()
   for +a: Bytes()
   for +ms: U32
-  {W.tx.seen(ms, False{}, now, W.w.tx(W.eager(rd, now, fs, out), a, ms)) == True{} : Bool}
+  {W.tx.seen(ms, W.Reads{}, now, W.w.tx(W.eager(rd, now, fs, out), a, ms)) == True{} : Bool}
 
 law fread_model:
   for +f: Bytes()
