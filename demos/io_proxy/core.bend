@@ -79,157 +79,6 @@ def scan(+s: Bytes(), sc: Scan) -> Scanned:
     case Scan{p, +n}:
       scan.fed(Eng.feed_buf(s, p), n, Bytes.len(s))
 
-# Reading a head again
-# ====================
-#
-# (A response's head, from the bytes the exchange read.) The lines of a
-# head: the empty lines before its first line skipped, then every line
-# up to the empty one that ends the head. The reader took these bytes,
-# so every line ends in CR LF and neither comes anywhere else in the
-# head: a CR ends a line and an LF is passed over.
-type HL is Data:
-  HL{started: Bool, cur: List<&2, U32>, lines: List<&2, List<&2, U32>>}
-  HDone{lines: List<&2, List<&2, U32>>}
-
-def hl.cr(started: Bool, cur: List<&2, U32>, lines: List<&2, List<&2, U32>>) -> HL:
-  match started cur:
-    case True{} Nil{}:
-      HDone{lines}
-    case False{} Nil{}:
-      HL{False{}, Nil{}, lines}
-    case _ Con{h, t}:
-      HL{True{}, Nil{}, Con{List.reverse(&2, U32, Con{h, t}), lines}}
-
-def hl.at(cr: Bool, lf: Bool, started: Bool, cur: List<&2, U32>, lines: List<&2, List<&2, U32>>,
-  c: U32) -> HL:
-  match cr lf:
-    case True{} _:
-      hl.cr(started, cur, lines)
-    case False{} True{}:
-      HL{started, cur, lines}
-    case False{} False{}:
-      HL{started, Con{c, cur}, lines}
-
-def hl.step(h: HL, +c: U32) -> HL:
-  match h:
-    case HL{started, cur, lines}:
-      hl.at(U32.is_eq(c, 13), U32.is_eq(c, 10), started, cur, lines, c)
-    case HDone{lines}:
-      HDone{lines}
-
-def hl.walk(+s: Bytes(), h: HL) -> List<&2, List<&2, U32>>:
-  match s h:
-    case _ HDone{lines}:
-      List.reverse(&2, List<&2, U32>, lines)
-    case SNil{} HL{started, cur, lines}:
-      List.reverse(&2, List<&2, U32>, lines)
-    case SCon{Chr{c}, t} HL{started, cur, lines}:
-      hl.walk(t, hl.step(HL{started, cur, lines}, c))
-
-def lines(+s: Bytes()) -> List<&2, List<&2, U32>>:
-  hl.walk(s, HL{False{}, Nil{}, Nil{}})
-
-# The views, fast
-# ---------------
-#
-# spec.bend's own views of a line -- span, the request line, trim --
-# with the engine's classes in place of the reference's (cls_every
-# says they agree on every U32, and LAWS.bend that these are those).
-
-def fspan(+t: Spec.Tok, bs: List<&2, U32>) -> Spec.Span:
-  match bs:
-    case Nil{}:
-      Spec.Span{Nil{}, Spec.SEnd{}}
-    case Con{+c, +rest}:
-      +k = Eng.cls(c)
-      Spec.span.pick(Spec.allows(t, k), k, c, rest, fspan(t, rest))
-
-def fver(m: List<&2, U32>, t: List<&2, U32>, sp: Spec.Span) -> Spec.RLine:
-  match sp:
-    case Spec.Span{v, Spec.SEnd{}}:
-      Spec.RVer{m, t, v}
-    case Spec.Span{v, Spec.SAt{k, c, rest}}:
-      Spec.RBad{}
-
-def ftarget.sp(m: List<&2, U32>, t: List<&2, U32>, rest: List<&2, U32>) -> Spec.RLine:
-  match t:
-    case Nil{}:
-      Spec.RBad{}
-    case Con{h, r}:
-      fver(m, Con{h, r}, fspan(Spec.TVer{}, rest))
-
-def ftarget(m: List<&2, U32>, sp: Spec.Span) -> Spec.RLine:
-  match sp:
-    case Spec.Span{t, Spec.SEnd{}}:
-      Spec.RTarget{m, t}
-    case Spec.Span{t, Spec.SAt{Eng.KSp{}, c, rest}}:
-      ftarget.sp(m, t, rest)
-    case Spec.Span{t, Spec.SAt{k, c, rest}}:
-      Spec.RBad{}
-
-def fmeth(sp: Spec.Span) -> Spec.RLine:
-  match sp:
-    case Spec.Span{Nil{}, s}:
-      Spec.RBad{}
-    case Spec.Span{Con{h, r}, Spec.SEnd{}}:
-      Spec.RMeth{Con{h, r}}
-    case Spec.Span{Con{h, r}, Spec.SAt{Eng.KSp{}, c, rest}}:
-      ftarget(Con{h, r}, fspan(Spec.TTarget{}, rest))
-    case Spec.Span{m, Spec.SAt{k, c, rest}}:
-      Spec.RBad{}
-
-# spec.bend's req.view: a request line split at its spaces
-def fview(x: List<&2, U32>) -> Spec.RLine:
-  match x:
-    case Nil{}:
-      Spec.RNone{}
-    case Con{c, t}:
-      fmeth(fspan(Spec.TMeth{}, Con{c, t}))
-
-def ftrim.lead(x: List<&2, U32>) -> List<&2, U32>:
-  match x:
-    case Nil{}:
-      Nil{}
-    case Con{+c, +t}:
-      Spec.trim.lead.pick(Spec.ows(Eng.cls(c)), c, t, ftrim.lead(t))
-
-def ftrim.end(x: List<&2, U32>) -> List<&2, U32>:
-  match x:
-    case Nil{}:
-      Nil{}
-    case Con{+c, t}:
-      Spec.trim.end.pick(Spec.ows(Eng.cls(c)), c, ftrim.end(t))
-
-# spec.bend's trim: whitespace at either end of a value cut
-def ftrim(x: List<&2, U32>) -> List<&2, U32>:
-  ftrim.end(ftrim.lead(x))
-
-# a field line split as spec.bend's field.view splits it: a name of
-# token bytes and a colon at once
-def field.at(sp: Spec.Span) -> Maybe<&2, Wr.Field>:
-  match sp:
-    case Spec.Span{Con{h, t}, Spec.SAt{Eng.KCo{}, c, v}}:
-      Some{Wr.Field{Eng.lows(Bytes.from_list(Con{h, t})), Bytes.from_list(ftrim(v))}}
-    case _:
-      None{}
-
-def field.of(line: List<&2, U32>) -> Maybe<&2, Wr.Field>:
-  field.at(fspan(Spec.TName{}, line))
-
-def fields.put(f: Maybe<&2, Wr.Field>, r: Maybe<&2, List<&2, Wr.Field>>) -> Maybe<&2, List<&2, Wr.Field>>:
-  match f r:
-    case Some{x} Some{xs}:
-      Some{Con{x, xs}}
-    case _ _:
-      None{}
-
-def fields.of(ls: List<&2, List<&2, U32>>) -> Maybe<&2, List<&2, Wr.Field>>:
-  match ls:
-    case Nil{}:
-      Some{Nil{}}
-    case Con{l, t}:
-      fields.put(field.of(l), fields.of(t))
-
 # The fields a hop owns
 # =====================
 #
@@ -251,52 +100,6 @@ def in.names(+n: Bytes(), ns: List<&2, Bytes()>) -> Bool:
 
 def hop(+ns: List<&2, Bytes()>, +n: Bytes()) -> Bool:
   hop.fixed(n) || in.names(n, ns)
-
-# a list's members (RFC 9110 5.6.1): split at commas, each trimmed and
-# lowercased, the empty ones dropped
-def mem.put(m: List<&2, U32>, ms: List<&2, Bytes()>) -> List<&2, Bytes()>:
-  match m:
-    case Nil{}:
-      ms
-    case Con{h, t}:
-      Con{Eng.lows(Bytes.from_list(Con{h, t})), ms}
-
-def mem.at(comma: Bool, c: U32, cur: List<&2, U32>, ms: List<&2, Bytes()>) ->
-  List<&2, U32> & List<&2, Bytes()>:
-  match comma:
-    case True{}:
-      (Nil{}, mem.put(ftrim(List.reverse(&2, U32, cur)), ms))
-    case False{}:
-      (Con{c, cur}, ms)
-
-def mem.go(v: List<&2, U32>, cm: List<&2, U32> & List<&2, Bytes()>) -> List<&2, Bytes()>:
-  match v:
-    case Nil{}:
-      (cur, ms) = cm
-      mem.put(ftrim(List.reverse(&2, U32, cur)), ms)
-    case Con{+c, t}:
-      (cur, ms) = cm
-      mem.go(t, mem.at(U32.is_eq(c, 44), c, cur, ms))
-
-def members(v: Bytes()) -> List<&2, Bytes()>:
-  mem.go(Bytes.to_list(v), (Nil{}, Nil{}))
-
-# every name a Connection field names
-def conn.names.at(yes: Bool, v: Bytes(), rest: List<&2, Bytes()>) -> List<&2, Bytes()>:
-  match yes:
-    case True{}:
-      List.append(&2, Bytes(), members(v), rest)
-    case False{}:
-      rest
-
-def conn.names(fs: List<&2, Wr.Field>) -> List<&2, Bytes()>:
-  match fs:
-    case Nil{}:
-      Nil{}
-    case Con{f, t}:
-      match f:
-        case Wr.Field{+n, v}:
-          conn.names.at(Eng.bytes.eq(n, "connection"), v, conn.names(t))
 
 # The request forwarded
 # =====================
@@ -601,65 +404,100 @@ def wire(+w: Fwd, ts: List<&2, Eng.Req>) -> Bytes():
 # The response sent back
 # ======================
 #
-# What came back is read from the bytes the exchange read: the interim
-# responses' heads skipped (the reader counted them), the final one's
-# lines taken as a request's are. The status line is HTTP/1.x, a space,
-# three digits, and the reason after a space if there is one.
+# What came back is read from the bytes the exchange read, which the
+# response reader framed (so every line ends in CR LF, the status line
+# is HTTP/1.x, three digits and a reason, and every field line is a name
+# of token bytes, a colon and a value): the interim responses' heads
+# skipped (the reader counted them), the final one's lines cut at their
+# CR LFs with the buffer's own scans, never a byte at a time.
 
-# the lines of the head after k heads
-type RL is Data:
-  RL{k: Nat, h: HL}
-  RDone{lines: List<&2, List<&2, U32>>}
+# where the first blank line (CR LF CR LF) begins, or the end
+def blank(+s: Bytes()) -> Nat:
+  Maybe.default(&2, Nat, String.find(s, "\r\n\r\n"), Bytes.len(s))
 
-def rl.next(h: HL, k: Nat) -> RL:
-  match h k:
-    case HDone{lines} 0n:
-      RDone{List.reverse(&2, List<&2, U32>, lines)}
-    case HDone{lines} 1n+j:
-      RL{j, HL{False{}, Nil{}, Nil{}}}
-    case HL{s, c, l} _:
-      RL{k, HL{s, c, l}}
-
-def rl.walk(+s: Bytes(), r: RL) -> List<&2, List<&2, U32>>:
-  match s r:
-    case _ RDone{lines}:
-      lines
-    case SNil{} RL{k, h}:
-      Nil{}
-    case SCon{Chr{c}, t} RL{k, h}:
-      rl.walk(t, rl.next(hl.step(h, c), k))
-
-def rlines(k: Nat, +s: Bytes()) -> List<&2, List<&2, U32>>:
-  rl.walk(s, RL{k, HL{False{}, Nil{}, Nil{}}})
+# the final head after k interim ones, up to its blank line
+def rfinal(k: Nat, +s: Bytes()) -> Bytes():
+  match k:
+    case 0n:
+      String.take(s, blank(s))
+    case 1n+j:
+      rfinal(j, String.drop(s, Nat.add(blank(s), 4n)))
 
 # a status line's code and reason
 type Stat is Data:
   Stat{code: Bytes(), why: Bytes()}
 
 # after "HTTP/1.x ": three digits, and the reason after a space
-def status.why(r: List<&2, U32>) -> Maybe<&2, Bytes()>:
-  match r:
+def status.of(+line: Bytes()) -> Maybe<&2, Stat>:
+  +n = Bytes.len(line)
+  Bool.pick(Maybe<&2, Stat>, Nat.is_lt(n, 12n), None{},
+    Bool.pick(Maybe<&2, Stat>, Nat.is_eq(n, 12n) || U32.is_eq(Bytes.get(line, 12n), 32),
+      Some{Stat{String.slice(line, 9n, 12n), String.drop(line, 13n)}}, None{}))
+
+# a field line: its name, lowercased, and its value, trimmed
+def field.cut(+line: Bytes(), +i: Nat) -> Maybe<&2, Wr.Field>:
+  Bool.pick(Maybe<&2, Wr.Field>, Nat.is_lt(i, Bytes.len(line)),
+    Some{Wr.Field{String.to_lower(String.take(line, i)), trim(String.drop(line, 1n+i))}}, None{})
+
+def field.of(+line: Bytes()) -> Maybe<&2, Wr.Field>:
+  field.cut(line, Bytes.find_byte(line, 0n, 58))
+
+def fields.put(f: Maybe<&2, Wr.Field>, r: Maybe<&2, List<&2, Wr.Field>>) -> Maybe<&2, List<&2, Wr.Field>>:
+  match f r:
+    case Some{x} Some{xs}:
+      Some{Con{x, xs}}
+    case _ _:
+      None{}
+
+def fields.of(ls: List<&2, Bytes()>) -> Maybe<&2, List<&2, Wr.Field>>:
+  match ls:
     case Nil{}:
-      Some{""}
-    case Con{+sp, w}:
-      Bool.pick(Maybe<&2, Bytes()>, U32.is_eq(sp, 32), Some{Bytes.from_list(w)}, None{})
+      Some{Nil{}}
+    case Con{+l, t}:
+      fields.put(field.of(l), fields.of(t))
 
-def status.pair(code: Bytes(), w: Maybe<&2, Bytes()>) -> Maybe<&2, Stat>:
-  match w:
-    case Some{x}:
-      Some{Stat{code, x}}
-    case None{}:
-      None{}
+# the field lines after the status line (none when it is alone)
+def rlines(+rest: Bytes()) -> List<&2, Bytes()>:
+  Bool.pick(List<&2, Bytes()>, String.is_empty(rest), Nil{}, String.split_on(rest, "\r\n"))
 
-def status.code(d: List<&2, U32>) -> Maybe<&2, Stat>:
-  match d:
-    case Con{a, Con{b, Con{c, r}}}:
-      status.pair(Bytes.from_list([a, b, c]), status.why(r))
-    case _:
-      None{}
+# a list's members (RFC 9110 5.6.1): split at commas, each trimmed and
+# lowercased, the empty ones dropped
+def mem.keep.at(e: Bool, +m: Bytes(), ms: List<&2, Bytes()>) -> List<&2, Bytes()>:
+  match e:
+    case True{}:
+      ms
+    case False{}:
+      Con{String.to_lower(m), ms}
 
-def status.of(line: List<&2, U32>) -> Maybe<&2, Stat>:
-  status.code(List.drop(&2, U32, line, 9n))
+def mem.keep(+m: Bytes(), ms: List<&2, Bytes()>) -> List<&2, Bytes()>:
+  mem.keep.at(String.is_empty(m), m, ms)
+
+def mem.go(xs: List<&2, Bytes()>) -> List<&2, Bytes()>:
+  match xs:
+    case Nil{}:
+      Nil{}
+    case Con{x, t}:
+      mem.keep(trim(x), mem.go(t))
+
+def members(+v: Bytes()) -> List<&2, Bytes()>:
+  mem.go(String.split_on(v, ","))
+
+# every name a Connection field names
+def conn.names.at(yes: Bool, +v: Bytes(), rest: List<&2, Bytes()>) -> List<&2, Bytes()>:
+  match yes:
+    case True{}:
+      List.append(&2, Bytes(), members(v), rest)
+    case False{}:
+      rest
+
+def conn.names(fs: List<&2, Wr.Field>) -> List<&2, Bytes()>:
+  match fs:
+    case Nil{}:
+      Nil{}
+    case Con{f, t}:
+      match f:
+        case Wr.Field{+n, +v}:
+          conn.names.at(Eng.bytes.eq(n, "connection"), v, conn.names(t))
 
 # the fields a response carries on: not a hop's, not its framing (the
 # proxy frames it again), not Content-Length unless len (the laws of
@@ -696,12 +534,10 @@ def rhead.at(+via: Bytes(), st: Maybe<&2, Stat>, fs: Maybe<&2, List<&2, Wr.Field
     case _ _:
       None{}
 
-def rhead.lines(+via: Bytes(), ls: List<&2, List<&2, U32>>) -> Maybe<&2, RHead>:
-  match ls:
-    case Nil{}:
-      None{}
-    case Con{l, t}:
-      rhead.at(via, status.of(l), fields.of(t))
+# the final head's status line and field lines, read
+def rhead.of(+via: Bytes(), +h: Bytes()) -> Maybe<&2, RHead>:
+  +e = Bytes.find_byte(h, 0n, 13)
+  rhead.at(via, status.of(String.take(h, e)), fields.of(rlines(String.drop(h, Nat.add(e, 2n)))))
 
 # A response, as the proxy sends it: the code and reason, the fields,
 # the Content-Length it sends ("" for none), the body, and whether it
@@ -808,7 +644,7 @@ def rsp.at(+head: Bool, +code: U32, mh: Maybe<&2, RHead>, +body: Bytes()) -> May
 # k interim heads and the final one's (got), the status and body the
 # reader read; head says the request was HEAD
 def rsp.of(+via: Bytes(), +head: Bool, +k: Nat, +code: U32, +got: Bytes(), +body: Bytes()) -> Maybe<&2, Rsp>:
-  rsp.at(head, code, rhead.lines(via, rlines(k, got)), body)
+  rsp.at(head, code, rhead.of(via, rfinal(k, got)), body)
 
 # the bytes that go back: the status line rebuilt, a field a line, the
 # length, the connection's fate (conn: a Connection value, or "" for

@@ -6027,4 +6027,4 @@ def rr.at(+head: Bool, +code: U32, mh: Maybe<&2, X.RHead>, +body: Bytes(), +clos
       r502(head, closing, v10, code, body)
 
 def Laws.rsp_reframed(via, head, k, code, got, body, closing, v10):
-  rr.at(head, code, X.rhead.lines(via, X.rlines(k, got)), body, closing, v10)
+  rr.at(head, code, X.rhead.of(via, X.rfinal(k, got)), body, closing, v10)
