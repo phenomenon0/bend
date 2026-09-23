@@ -128,6 +128,7 @@ type Call = {
 type Intr = {
   C?: Gen | string[];
   call?: boolean;
+  peek?: number[];
   JS: Gen;
 };
 
@@ -413,6 +414,15 @@ const OPERATIONS: Record<string, Intr> = Object.setPrototypeOf({
   // Map.bit borrows the key and returns it: the tree order and the 33-bit key
   // protocol of the reference definition, O(1) on C, an endpoint scan on JS.
   map_bit: { C: ["$0", "str_bit_peek(e, $0, $1)"], JS: "map_bit($0, $1)" },
+  // Bytes: get, span and find_byte borrow the buffer (peek): the call site
+  // neither shares nor drops it, so a scan loop over one buffer touches no
+  // count; push appends in place into an unshared buffer's spare room.
+  bytes_get: { C: "str_byte_peek(e, $0, $1)", peek: [0], JS: "bytes_get($0, $1)" },
+  bytes_push: { C: "str_push_take(e, $0, $1)", JS: "bytes_push($0, $1)" },
+  bytes_span: { C: "str_span_peek(e, $0, $1, $2, $3)", peek: [0],
+    JS: "bytes_span($0, $1, $2, $3)" },
+  bytes_find_byte: { C: "str_find_byte_peek(e, $0, $1, $2)", peek: [0],
+    JS: "bytes_find_byte($0, $1, $2)" },
   array_new: {
     call: true,
     JS:   "array_new($0, $1)",
@@ -874,6 +884,33 @@ function str_offset(s, n) {
   let i = 0;
   while (n > 0n && i < s.length) { i += s.codePointAt(i) > 0xffff ? 2 : 1; n--; }
   return i;
+}
+function bytes_get(s, i) {
+  const j = str_offset(s, i);
+  return j < s.length ? s.codePointAt(j) : 256;
+}
+function bytes_push(s, c) { return s + str_prepend(char_new(c), ""); }
+function bytes_span(s, i, lo, hi) {
+  let j = str_offset(s, i), n = 0;
+  while (j < s.length) {
+    const c = s.codePointAt(j);
+    if (c < lo || c >= hi) { break; }
+    j += c > 0xffff ? 2 : 1; n++;
+  }
+  return BigInt(n);
+}
+function bytes_find_byte(s, i, x) {
+  let j = str_offset(s, i), n = 0;
+  if (str_flat(s) && x < 0xd800) {
+    const k = s.indexOf(String.fromCharCode(x), j);
+    return i + BigInt((k < 0 ? s.length : k) - j);
+  }
+  while (j < s.length) {
+    const c = s.codePointAt(j);
+    if (c === x) { break; }
+    j += c > 0xffff ? 2 : 1; n++;
+  }
+  return i + BigInt(n);
 }
 function str_slice(s, lo, hi) {
   if (hi <= lo) { return ""; }
@@ -2802,7 +2839,9 @@ function emit_intr(fl: File, it: Intr, x: HTerm,
   const k = (m.t as Of<"Ref">).k;
   // A full word a polymorphic call handed back boxed is read out of its box.
   const lays = sig_def(fl, k).lays;
-  const args = emit_each(fl, m.args, null).map((v, i) =>
+  const peek = it.peek ?? [];
+  const sinks: Val[] = [];
+  const args = emit_peek(fl, m.args, peek, sinks).map((v, i) =>
     lays[i] === X64 && lay_box(v.lay) ? val_to(fl, v, X64) : v);
   const op = eff_name(k);
   // Native aggregate builders publish sealed fields. Teach field extraction and
@@ -2823,7 +2862,7 @@ function emit_intr(fl: File, it: Intr, x: HTerm,
     return arr_op(fl, op, lay_el(fl.book, m.all[0]), args);
   }
   const ws = op.startsWith("regex_") ? args.flatMap((v) => val_own(fl, v))
-    : args.map((v) => (val_own(fl, v), val_word(v)));
+    : args.map((v, i) => (peek.includes(i) || val_own(fl, v), val_word(v)));
   if (Array.isArray(it.C)) {
     const as = ws.map((z) => emit_alias(fl, z, "a"));
     const vs: string[] = [];
@@ -2834,11 +2873,50 @@ function emit_intr(fl: File, it: Intr, x: HTerm,
       (fl.book.tlds[k] as Bend.Def).T).ret));
   }
   const dup = typeof it.C === "string" && /\$(\d)[^]*\$\1/.test(it.C);
-  const out = tpl(it.C as Gen, dup ? ws.map((a) => emit_alias(fl, a, "a")) : ws);
+  let out = tpl(it.C as Gen, dup ? ws.map((a) => emit_alias(fl, a, "a")) : ws);
+  // A peek reads now: a later argument or statement may take what it lent.
+  if (peek.length > 0) {
+    out = emit_hold(fl, [out], "a", [lay_of(fl.book, ty ?? tele_unbind(fl.book,
+      (fl.book.tlds[k] as Bend.Def).T).ret).ks[0] ?? "w64"])[0];
+    sinks.forEach((v) => val_sink(fl, v));
+  }
   const lay = lay_of(fl.book, ty);
   // a full word is raw, whatever the site knows of its type
   return val_new([out], sig_def(fl, k).ret === X64 ? X64
     : lay.ks.length === 1 ? lay : BOX);
+}
+
+// A native's arguments in order, each seeing the later ones as its rest. A
+// peeked one is only read: a variable's use is counted but not taken (no
+// share, no ownership asked of a borrowed root), and one that dies here, or
+// a computed one, is sunk after the call (sinks).
+function emit_peek(fl: File, xs: HTerm[], peek: number[], sinks: Val[]): Val[] {
+  const rest = fl.rest;
+  const vs = xs.map((x, i) => {
+    fl.rest = [...xs.slice(i + 1), ...rest];
+    const s = term_strip(x);
+    if (!peek.includes(i)) {
+      return emit_expr(fl, x, null, null);
+    }
+    const later = s.$ === "Var" && xs.slice(i + 1).some((y) =>
+      term_use(term_uses(fl, y), probe_of(s)) > 0);
+    if (s.$ !== "Var" || later) {
+      const v = emit_expr(fl, x, null, null);
+      sinks.push(v);
+      return v;
+    }
+    const p = probe_of(s);
+    const b = bind_of(fl, p);
+    if (b.n <= 1) {
+      fl.uses.delete(p);
+      sinks.push(b.val);
+    } else {
+      fl.uses.set(p, { ...b, n: b.n - 1 });
+    }
+    return b.val;
+  });
+  fl.rest = rest;
+  return vs;
 }
 
 // A closure: its captures move into a node (a capture is one use of the
@@ -5252,6 +5330,60 @@ INLINE void str_uncons(Env e, Term s, THR Term* out) {
   out[0] = str_at_peek(e, p, 0);
   p.off++; p.len--;
   out[1] = str_view_owned(e, p);
+}
+
+// Bytes.push: one cell on the end, in place when the string is its
+// payload's one owner with room (append's doubling amortizes the rest).
+INLINE Term str_push_take(Env e, Term s, u32 c) {
+  StrParts p = str_reserve(e, str_take(e, s), 1, false, str_fit(c));
+  if (!err_seen(e.mem) && p.data) {
+    str_put(e, p, p.len, c);
+    p.len++;
+  }
+  return str_view_owned(e, p);
+}
+
+// Bytes.get, Bytes.span and Bytes.find_byte borrow the string (the call
+// site neither shares nor drops it): no view, no count, no Maybe.
+INLINE u32 str_byte_peek(Env e, Term s, Nat i) {
+  StrParts p = str_peek(e, s);
+  return i < p.len ? str_at_peek(e, p, (u32)i) : 256;
+}
+
+// how many cells from i are in [lo, hi)
+INLINE Nat str_span_peek(Env e, Term s, Nat i, u32 lo, u32 hi) {
+  StrParts p = str_peek(e, s);
+  if (i >= p.len || hi <= lo) { return 0; }
+  Loc l = term_peek(e, p.data);
+  u32 nar = str_nar(p), w = hi - lo, j = p.off + (u32)i, end = p.off + p.len;
+  if (nar == 2) {
+    DEV u8* b = (DEV u8*)(e.mem + l);
+    while (j < end && (u32)b[j] - lo < w) { j++; }
+  } else {
+    while (j < end && str_cell(e.mem, l, nar, j) - lo < w) { j++; }
+  }
+  return j - p.off - (u32)i;
+}
+
+// i plus how many cells from i come before the first x
+INLINE Nat str_find_byte_peek(Env e, Term s, Nat i, u32 x) {
+  StrParts p = str_peek(e, s);
+  if (i >= p.len) { return i; }
+  Loc l = term_peek(e, p.data);
+  u32 nar = str_nar(p), j = p.off + (u32)i, end = p.off + p.len;
+  if (nar == 2) {
+    if (x > 255) { return p.len; }
+    DEV u8* b = (DEV u8*)(e.mem + l);
+#if DEVICE
+    while (j < end && b[j] != x) { j++; }
+#else
+    const u8* at = (const u8*)memchr((const u8*)b + j, (int)x, end - j);
+    j = at ? (u32)(at - (const u8*)b) : end;
+#endif
+  } else {
+    while (j < end && str_cell(e.mem, l, nar, j) != x) { j++; }
+  }
+  return j - p.off;
 }
 
 INLINE Nat str_length_take(Env e, Term s) {

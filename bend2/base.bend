@@ -3419,6 +3419,129 @@ def Bytes.get_slice(b, i, k, m):
       String.get(String.drop(b, i), k), String.get(b, Nat.add(i, k)),
       Bytes.get.take(String.drop(b, i), k, m), Bytes.get.drop(b, i, k)))
 
+# The scanner's four. Natively get, span and find_byte borrow the buffer:
+# the call reads the packed cells where they lie, and neither shares nor
+# drops the buffer, builds a view or a Maybe; push writes into an unshared
+# buffer's spare room. The bodies below are what the laws are about.
+
+# b with the byte x on its end
+def Bytes.push(b: Bytes(), x: U32) -> Bytes():
+  String.append(b, SCon{Chr{x}, SNil{}})
+
+law Bytes.push_list:
+  for +b: Bytes()
+  for +x: U32
+  {Bytes.to_list(Bytes.push(b, x)) == List.append(&2, U32, Bytes.to_list(b), x <> Nil{})
+    : List<&2, U32>}
+
+def Bytes.push_list(b, x):
+  Bytes.to_list_append(b, SCon{Chr{x}, SNil{}})
+
+# lo <= c < hi, the two tests a byte class is written with
+def Bytes.span.in(+c: U32, lo: U32, hi: U32) -> Bool:
+  Bool.and(Bool.not(U32.is_lt(c, lo)), Bool.not(U32.is_le(hi, c)))
+
+law Bytes.span.go:
+  for s: String
+  for +lo: U32
+  for +hi: U32
+  Nat
+
+def Bytes.span.at(ok: Bool, t: String, +lo: U32, +hi: U32) -> Nat:
+  match ok:
+    case False{}:
+      0n
+    case True{}:
+      1n+Bytes.span.go(t, lo, hi)
+
+def Bytes.span.go(s, lo, hi):
+  match s:
+    case SNil{}:
+      0n
+    case SCon{Chr{c}, t}:
+      Bytes.span.at(Bytes.span.in(c, lo, hi), t, lo, hi)
+
+# how many bytes from i are in [lo, hi): a run of digits, of a token, of
+# anything but a delimiter. It reads one byte past the run and no further.
+def Bytes.span(b: Bytes(), i: Nat, lo: U32, hi: U32) -> Nat:
+  Bytes.span.go(String.drop(b, i), lo, hi)
+
+law Bytes.span.go_le:
+  for +s: String
+  for +lo: U32
+  for +hi: U32
+  {Nat.is_le(Bytes.span.go(s, lo, hi), String.length.go(s, 0n)) == True{} : Bool}
+
+law Bytes.span.at_le.go:
+  for ok: Bool
+  for +t: String
+  for +lo: U32
+  for +hi: U32
+  {Nat.is_le(Bytes.span.at(ok, t, lo, hi), 1n+String.length.go(t, 0n)) == True{} : Bool}
+
+def Bytes.span.at_le.go(ok, t, lo, hi):
+  match ok:
+    case False{}:
+      {==}
+    case True{}:
+      Bytes.span.go_le(t, lo, hi)
+
+law Bytes.span.at_le:
+  for ok: Bool
+  for +t: String
+  for +lo: U32
+  for +hi: U32
+  {Nat.is_le(Bytes.span.at(ok, t, lo, hi), String.length.go(t, 1n)) == True{} : Bool}
+
+def Bytes.span.at_le(ok, t, lo, hi):
+  Equal.trans(Bool, Nat.is_le(Bytes.span.at(ok, t, lo, hi), String.length.go(t, 1n)),
+    Nat.is_le(Bytes.span.at(ok, t, lo, hi), 1n+String.length.go(t, 0n)), True{},
+    Equal.cong(Nat, Bool, y => Nat.is_le(Bytes.span.at(ok, t, lo, hi), y),
+      String.length.go(t, 1n), 1n+String.length.go(t, 0n), Bytes.len.shift(t, 0n)),
+    Bytes.span.at_le.go(ok, t, lo, hi))
+
+def Bytes.span.go_le(s, lo, hi):
+  match s:
+    case SNil{}:
+      {==}
+    case SCon{Chr{c}, t}:
+      Bytes.span.at_le(Bytes.span.in(c, lo, hi), t, lo, hi)
+
+# the run never passes the end: span <= len - i
+law Bytes.span_le:
+  for +b: Bytes()
+  for +i: Nat
+  for +lo: U32
+  for +hi: U32
+  {Nat.is_le(Bytes.span(b, i, lo, hi), Bytes.len(Bytes.drop(b, i))) == True{} : Bool}
+
+def Bytes.span_le(b, i, lo, hi):
+  Bytes.span.go_le(String.drop(b, i), lo, hi)
+
+law Bytes.find_byte.go:
+  for s: String
+  for +x: U32
+  Nat
+
+def Bytes.find_byte.at(hit: Bool, t: String, +x: U32) -> Nat:
+  match hit:
+    case True{}:
+      0n
+    case False{}:
+      1n+Bytes.find_byte.go(t, x)
+
+def Bytes.find_byte.go(s, x):
+  match s:
+    case SNil{}:
+      0n
+    case SCon{Chr{c}, t}:
+      Bytes.find_byte.at(U32.is_eq(c, x), t, x)
+
+# the first offset of the byte x at or after i; absent, the end
+# (Bytes.len(b), from any i up to it)
+def Bytes.find_byte(b: Bytes(), +i: Nat, x: U32) -> Nat:
+  Nat.add(i, Bytes.find_byte.go(String.drop(b, i), x))
+
 # Regex
 # -----
 
