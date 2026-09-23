@@ -454,6 +454,13 @@ def f.data(+sid: U32, end: Bool, +bs: Bytes()) -> Bytes():
 def f.headers(+sid: U32, end: Bool, +blk: Bytes()) -> Bytes():
   Fm.frame(1, U32.or(4, Bool.to_u32(end)), sid, blk)
 
+# the same frames written at the end of w
+def f.data.on(w: Bytes(), +sid: U32, end: Bool, +bs: Bytes()) -> Bytes():
+  Fm.put(w, 0, Bool.to_u32(end), sid, bs)
+
+def f.headers.on(w: Bytes(), +sid: U32, end: Bool, +blk: Bytes()) -> Bytes():
+  Fm.put(w, 1, U32.or(4, Bool.to_u32(end)), sid, blk)
+
 def f.rst(+sid: U32, +code: U32) -> Bytes():
   Fm.frame(3, 0, sid, put32(code))
 
@@ -1929,11 +1936,11 @@ def pump.cut(+fmax: Nat, +n: Nat, +csw: Sw, w: Bytes(), +id: U32, ss: Ss, meth: 
     case True{}:
       +csw2 = sw.take(csw, n)
       +s2 = {St{id, ss, meth, path, cl, body, got, rw, sw.take(sw, n), "", fin} : St}
-      Pn{avail(s2, csw2, fmax), s2, csw2, Bytes.append(w, f.data(id, fin, out))}
+      Pn{avail(s2, csw2, fmax), s2, csw2, f.data.on(w, id, fin, out)}
     case False{}:
       +csw2 = sw.take(csw, n)
       +s2 = {St{id, ss, meth, path, cl, body, got, rw, sw.take(sw, n), Bytes.drop(out, n), fin} : St}
-      Pn{avail(s2, csw2, fmax), s2, csw2, Bytes.append(w, f.data(id, False{}, Bytes.slice(out, 0n, n)))}
+      Pn{avail(s2, csw2, fmax), s2, csw2, f.data.on(w, id, False{}, Bytes.slice(out, 0n, n))}
 
 def pump.step(+fmax: Nat, +n: Nat, +csw: Sw, w: Bytes(), s: St) -> Pn:
   match s:
@@ -2023,7 +2030,7 @@ def resp.enc(rd: Fm.Rd, hd: K.Dec, +hup: Bool, sts: Tb, gone: Ids, last: U32, bl
   match e:
     case K.Enc{+he, hb}:
       resp.put(Cn{rd, hd, he, False{}, sts, gone, last, blk, csw, crw, init, fmax, bud, said},
-        Bytes.append(w, f.headers(st.id(s), empty, resp.block(hup, K.tbl.max(he), hb))), s, body, empty)
+        f.headers.on(w, st.id(s), empty, resp.block(hup, K.tbl.max(he), hb)), s, body, empty)
 
 def answer.enc(c: Cn, w: Bytes(), +s: St, +status: Bytes(), +ct: Bytes(), +body: Bytes(), +empty: Bool) -> CW:
   match c:

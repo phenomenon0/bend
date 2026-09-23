@@ -170,9 +170,17 @@ def byte.at(+n: U32, +k: Nat) -> U32:
 def push32(b: Bytes(), +n: U32) -> Bytes():
   Bytes.push(Bytes.push(Bytes.push(Bytes.push(b, byte.at(n, 24n)), byte.at(n, 16n)), byte.at(n, 8n)), byte.at(n, 0n))
 
-def head(+len: U32, ty: U32, fl: U32, +sid: U32) -> Bytes():
-  push32(Bytes.push(Bytes.push(Bytes.push(Bytes.push(Bytes.push("", byte.at(len, 16n)), byte.at(len, 8n)),
+# a frame's head pushed onto b
+def head.on(b: Bytes(), +len: U32, ty: U32, fl: U32, +sid: U32) -> Bytes():
+  push32(Bytes.push(Bytes.push(Bytes.push(Bytes.push(Bytes.push(b, byte.at(len, 16n)), byte.at(len, 8n)),
     byte.at(len, 0n)), ty), fl), sid)
+
+def head(+len: U32, ty: U32, fl: U32, +sid: U32) -> Bytes():
+  head.on("", len, ty, fl, sid)
 
 def frame(ty: U32, fl: U32, +sid: U32, +pay: Bytes()) -> Bytes():
   Bytes.append(head(U32.from_nat(Bytes.len(pay)), ty, fl, sid), pay)
+
+# a frame written at the end of what is being written
+def put(w: Bytes(), ty: U32, fl: U32, +sid: U32, +pay: Bytes()) -> Bytes():
+  Bytes.append(head.on(w, U32.from_nat(Bytes.len(pay)), ty, fl, sid), pay)
