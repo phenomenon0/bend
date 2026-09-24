@@ -15,7 +15,9 @@
 # the client's own decision. The redirect laws are one induction on the
 # chain's budget, with the scripted peer's count and the cleanliness of
 # the request about to go carried along; follow's request is clean
-# because it keeps the credentials only for the first origin.
+# because it keeps the credentials only for the first origin. The
+# streamed bodies' laws lean on wire/http1's: drain_reads, reads_split,
+# feed_buf_is_feed, and walk.lem, the simulation resp_sim is made of.
 import Base
 import ../wire/reader.bend as Wr
 import ../wire/client.bend as C
@@ -27,10 +29,13 @@ import ../demos/io_http_engine/spec.bend as Spec
 import ../demos/io_proxy/core.bend as X
 import ../demos/io_proxy/LAWS.bend as PL
 import ../demos/io_proxy/PROOF.bend as PP
+import ../wire/http1/LAWS.bend as HL
+import ../wire/http1/PROOF.bend as HP
 import ./http.bend as Http
 import ./url.bend as U
 import ./server.bend as Server
 import ./client.bend as Client
+import ./stream.bend as Stream
 import ./LAWS.bend as Laws
 
 # Booleans
@@ -699,3 +704,195 @@ def Laws.redirect_creds(k, orig, rq, ans, c):
     {Laws.sc.leak(Pair.fst(Laws.Script, Client.Res(),
     Laws.sim.chain(k, orig, rq, Laws.Script{ans, 1n+k, False{}, orig, False{}}))) == False{} : Bool},
     chain.ok(k)(orig, rq, ans, c))
+
+# Streamed bodies
+# ===============
+#
+# stream_body is four known steps: Stream.drain is the kit's drain at
+# the reader's hooks (sd, by induction on the reads), whose chunks put
+# back are the reader fed the reads in turn (wire/http1's drain_reads),
+# which is the reader fed them joined (reads_split) a byte at a time
+# (feed_buf_is_feed), which from the body's entry is the spec's walk
+# from the same place (wire/http1/PROOF.bend's walk.lem, the simulation
+# resp_sim is made of: Stream.entry is the reader where emb puts the
+# walk entered at the body). stream_next follows: what follows the body
+# is the same with the chunks put back or not (ng). stream_bounded: a
+# take leaves the reader holding no body byte (take2), and the rest is
+# what fits checked.
+
+def sd.on(q: R.P & Bytes(), +acc: Bytes(), +e: R.Ask, -t: List<&2, Bytes()>,
+  ih: @p: R.P -> @+a: Bytes() ->
+    {Stream.drain(e, t, p, a) == Wr.drain(~R.Ask, ~R.P, ~R.wstep, ~R.wadv, ~R.take, e, t, p, a) : R.P & Bytes()}) ->
+  {Wr.drain.on(R.P, q, acc, p => a => Stream.drain(e, t, p, a)) ==
+    Wr.drain.on(R.P, q, acc, p => a => Wr.drain(~R.Ask, ~R.P, ~R.wstep, ~R.wadv, ~R.take, e, t, p, a)) :
+    R.P & Bytes()}:
+  match q:
+    case (p, +x):
+      ih(p, Bytes.append(acc, x))
+
+# a body's reads, as Stream.read steps them, are the kit's drain
+def sd(+e: R.Ask, rs: List<&2, Bytes()>, p: R.P, +acc: Bytes()) ->
+  {Stream.drain(e, rs, p, acc) == Wr.drain(~R.Ask, ~R.P, ~R.wstep, ~R.wadv, ~R.take, e, rs, p, acc) : R.P & Bytes()}:
+  match rs:
+    case Nil{}:
+      {==}
+    case Con{+r, t}:
+      sd.on(Stream.step(e, r, p), acc, e, t, p2 => a2 => sd(e, t, p2, a2))
+
+# the reader entered at the body is the spec's walk entered there
+def entry.spec(+e: R.Ask, f: Stream.Frame, +bs: List<&2, U32>) ->
+  {R.look(R.feed(e, bs, Stream.entry(e, f))) == Laws.spec.body(e, f, bs) : R.Look}:
+  match f:
+    case Stream.FLen{n}:
+      match n:
+        case 0n:
+          HP.walk.lem(e, bs, RS.W{RS.MDone{RS.resp(R.body.head(), Nil{}, False{}), Nil{}}, Nil{}})(Unit{})
+        case 1n+q:
+          HP.walk.lem(e, bs, RS.W{RS.MBody{R.body.head(), q, Nil{}}, Nil{}})(Unit{})
+    case Stream.FChunked{}:
+      HP.walk.lem(e, bs, RS.W{RS.MChunk{R.body.head(), R.ASize0{}, 0, Nil{}, R.ask.cap(e)}, Nil{}})(Unit{})
+
+def Laws.stream_body(e, f, rs):
+  +p0 = Stream.entry(e, f)
+  +bs = Bytes.concat(rs)
+  -sq = Stream.drain(e, rs, p0, "")
+  -wq = Wr.drain(~R.Ask, ~R.P, ~R.wstep, ~R.wadv, ~R.take, e, rs, p0, "")
+  %Equal.sym(R.P & Bytes(), sq, wq, sd(e, rs, p0, "")) :
+    {R.look(R.give(Wr.drain.b(R.P, _), Wr.drain.s(R.P, _))) == Laws.spec.body(e, f, Bytes.to_list(bs)) : R.Look}
+  %Equal.sym(R.P, R.give(Wr.drain.b(R.P, wq), Wr.drain.s(R.P, wq)), R.reads(e, rs, p0), HL.drain_reads(e, rs, p0)) :
+    {R.look(_) == Laws.spec.body(e, f, Bytes.to_list(bs)) : R.Look}
+  %Equal.sym(R.P, R.reads(e, rs, p0), R.feed_buf(e, bs, p0), HL.reads_split(e, rs, p0)) :
+    {R.look(_) == Laws.spec.body(e, f, Bytes.to_list(bs)) : R.Look}
+  %Equal.sym(R.P, R.feed_buf(e, bs, p0), R.feed(e, Bytes.to_list(bs), p0), HL.feed_buf_is_feed(e, bs, p0)) :
+    {R.look(_) == Laws.spec.body(e, f, Bytes.to_list(bs)) : R.Look}
+  entry.spec(e, f, Bytes.to_list(bs))
+
+# what follows the body is the same with bytes put back in front
+def ng(+g: Bytes(), p: R.P) -> {Stream.next(R.give(g, p)) == Stream.next(p) : Maybe<&2, Bytes()>}:
+  match p:
+    case R.P{st, out}:
+      match st:
+        case R.Fin{r, x}:
+          {==}
+        case R.SVer{a, b}:
+          {==}
+        case R.SCode{v10, n, k}:
+          {==}
+        case R.SWhy{v10, code}:
+          {==}
+        case R.Eol{h}:
+          {==}
+        case R.Lin{h}:
+          {==}
+        case R.Nam{h, cl, te, co}:
+          {==}
+        case R.Oth{h}:
+          {==}
+        case R.Len0{h}:
+          {==}
+        case R.Len{h, n}:
+          {==}
+        case R.LenW{h, n}:
+          {==}
+        case R.Te0{h}:
+          {==}
+        case R.Te{h, m}:
+          {==}
+        case R.Conn{h, cl, ka, mc, mk}:
+          {==}
+        case R.Eoh{h}:
+          {==}
+        case R.Bod{h, more, got}:
+          {==}
+        case R.Chk{h, at, n, got, left}:
+          {==}
+        case R.Dat{h, more, got, left}:
+          {==}
+        case R.Clo{h, got, left}:
+          {==}
+        case R.Bad{}:
+          {==}
+
+def nx.spec(l: R.Look) -> {Stream.next.of(l) == Laws.spec.next(l) : Maybe<&2, Bytes()>}:
+  match l:
+    case R.Look{i, end}:
+      match end:
+        case R.Final{r, x}:
+          {==}
+        case R.Open{}:
+          {==}
+        case R.Refused{}:
+          {==}
+        case R.Closing{r}:
+          {==}
+
+def nx.at(+g: Bytes(), p: R.P, +l: R.Look, e: {R.look(R.give(g, p)) == l : R.Look}) ->
+  {Stream.next(p) == Laws.spec.next(l) : Maybe<&2, Bytes()>}:
+  Equal.trans(Maybe<&2, Bytes()>, Stream.next(p), Stream.next(R.give(g, p)), Laws.spec.next(l),
+    Equal.sym(Maybe<&2, Bytes()>, Stream.next(R.give(g, p)), Stream.next(p), ng(g, p)),
+    Equal.trans(Maybe<&2, Bytes()>, Stream.next(R.give(g, p)), Stream.next.of(l), Laws.spec.next(l),
+      Equal.cong(R.Look, Maybe<&2, Bytes()>, x => Stream.next.of(x), R.look(R.give(g, p)), l, e),
+      nx.spec(l)))
+
+def Laws.stream_next(e, f, rs):
+  nx.at(Wr.drain.b(R.P, Laws.streamed(e, f, rs)), Wr.drain.s(R.P, Laws.streamed(e, f, rs)),
+    Laws.spec.body(e, f, Bytes.to_list(Bytes.concat(rs))), Laws.stream_body(e, f, rs))
+
+# a take leaves the reader holding no byte of the body
+def take2(z: R.P) -> {Wr.drain.b(R.P, R.take(Wr.drain.s(R.P, R.take(z)))) == "" : Bytes()}:
+  match z:
+    case R.P{st, out}:
+      match st:
+        case R.Fin{r, x}:
+          match r:
+            case R.Resp{c, v, cl, b}:
+              {==}
+        case R.SVer{a, b}:
+          {==}
+        case R.SCode{v10, n, k}:
+          {==}
+        case R.SWhy{v10, code}:
+          {==}
+        case R.Eol{h}:
+          {==}
+        case R.Lin{h}:
+          {==}
+        case R.Nam{h, cl, te, co}:
+          {==}
+        case R.Oth{h}:
+          {==}
+        case R.Len0{h}:
+          {==}
+        case R.Len{h, n}:
+          {==}
+        case R.LenW{h, n}:
+          {==}
+        case R.Te0{h}:
+          {==}
+        case R.Te{h, m}:
+          {==}
+        case R.Conn{h, cl, ka, mc, mk}:
+          {==}
+        case R.Eoh{h}:
+          {==}
+        case R.Bod{h, more, got}:
+          {==}
+        case R.Chk{h, at, n, got, left}:
+          {==}
+        case R.Dat{h, more, got, left}:
+          {==}
+        case R.Clo{h, got, left}:
+          {==}
+        case R.Bad{}:
+          {==}
+
+def bd.at(q: R.P & Bytes(), +n: Nat, h: {Wr.drain.b(R.P, R.take(Wr.drain.s(R.P, q))) == "" : Bytes()},
+  ok: {Stream.fits(Wr.drain.s(R.P, q), Wr.drain.b(R.P, q), n) == True{} : Bool}) ->
+  {Nat.is_le(Stream.kept(Wr.drain.s(R.P, q), Wr.drain.b(R.P, q)), n) == True{} : Bool}:
+  match q:
+    case (+p, +x):
+      %Equal.sym(Bytes(), Wr.drain.b(R.P, R.take(p)), "", h) : {Nat.is_le(Nat.add(Bytes.len(x), Nat.add(Bytes.len(_), Bytes.len(Stream.rest(p)))), n) == True{} : Bool}
+      ok
+
+def Laws.stream_bounded(e, bs, p, ok):
+  bd.at(Stream.step(e, bs, p), Bytes.len(bs), take2(R.feed_buf(e, bs, p)), ok)

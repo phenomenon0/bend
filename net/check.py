@@ -17,11 +17,14 @@ does not load named; and the client against Python peers: plain and
 TLS (a self-signed certificate refused, then trusted by --ca), refused
 connections and failed names, the exchange's deadline, redirects (the
 cap, 303 and 307, credentials kept to their origin), gzip, the body
-cap, and a pooled connection reused only when its response allows.
+cap, and a pooled connection reused only when its response allows;
+and streamed bodies (upload): 100 MB by length and chunked in bounded
+memory, the stream's cap (413), a stalled body (408), a handler that
+returns without reading, 100-continue, pipelining after a streamed body.
 Every Bend snippet in guide/NETWORKING.md must be in a file under net/,
 word for word. Prints PASS/FAIL per case and exits 1 on any failure.
 """
-import gzip, os, shutil, signal, socket, ssl, subprocess, sys, tempfile, threading, time
+import gzip, hashlib, os, shutil, signal, socket, ssl, subprocess, sys, tempfile, threading, time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
@@ -417,6 +420,158 @@ def check_client(fetch_bin, hello, tmp):
     ok("server: TLS, fetched by the client", c == 0 and out == "Hello, world!\n", (c, out, err))
     stop(p)
 
+# Streamed bodies
+# ===============
+
+def peak_kb(pid):
+    """the process's peak resident set (Linux's VmHWM), or its resident set now"""
+    try:
+        for l in open("/proc/%d/status" % pid):
+            if l.startswith("VmHWM:"):
+                return int(l.split()[1])
+    except OSError:
+        pass
+    r = subprocess.run(["ps", "-o", "rss=", "-p", str(pid)], capture_output=True, text=True)
+    return int(r.stdout.strip() or 0)
+
+class Peak:
+    """the most of peak_kb seen while a with-block runs (sampled where there is no VmHWM)"""
+    def __init__(self, pid):
+        self.pid, self.most, self.on = pid, peak_kb(pid), True
+    def __enter__(self):
+        def loop():
+            while self.on:
+                self.most = max(self.most, peak_kb(self.pid))
+                time.sleep(0.05)
+        self.t = threading.Thread(target=loop, daemon=True); self.t.start()
+        return self
+    def __exit__(self, *a):
+        self.on = False; self.t.join()
+        self.most = max(self.most, peak_kb(self.pid))
+
+def recv_all(s, total=10.0):
+    out, t0 = b"", time.time()
+    try:
+        while time.time() - t0 < total:
+            b = s.recv(65536)
+            if not b:
+                return out, True
+            out += b
+    except socket.timeout:
+        pass
+    except ConnectionResetError:
+        return out, True
+    return out, False
+
+def upload(port, path, n, chunked=False, extra=b""):
+    """n bytes of a pattern PUT to path, by length or chunked (odd chunk sizes): the answer,
+    whether the connection closed, the seconds it took, and the body's sha256"""
+    blk = bytes((i * 7 + 3) % 256 for i in range(1 << 20))
+    s = socket.create_connection(("127.0.0.1", port)); s.settimeout(20)
+    fr = b"Transfer-Encoding: chunked\r\n" if chunked else b"Content-Length: %d\r\n" % n
+    t0, h, left, k = time.time(), hashlib.sha256(), n, 0
+    s.sendall(b"PUT " + path.encode() + b" HTTP/1.1\r\nHost: t\r\n" + fr + extra + b"Connection: close\r\n\r\n")
+    while left:
+        m = min(left, len(blk) - (k % 4093) if chunked else len(blk))
+        part = blk[:m]
+        h.update(part)
+        s.sendall(b"%x;x=%d\r\n" % (m, k) + part + b"\r\n" if chunked else part)
+        left -= m; k += 1
+    if chunked:
+        s.sendall(b"0\r\nX-Trailer: 1\r\n\r\n")
+    r, eof = recv_all(s, 20)
+    s.close()
+    return r, eof, time.time() - t0, h.hexdigest()
+
+def sha_file(path):
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for b in iter(lambda: f.read(1 << 20), b""):
+            h.update(b)
+    return h.hexdigest()
+
+def check_stream(upload_bin, tmp):
+    port = PORT + 10
+    d = os.path.join(tmp, "up")
+    os.makedirs(d)
+    p = start([upload_bin, "--port", str(port), "--dir", d, "--max-stream", "150000000", "--progress-ms", "800",
+               "--max-body", "1000"], port)
+    r = get(port, "/")
+    ok("stream: a route not streamed is answered as Server.serve answers it", r.startswith(b"HTTP/1.1 200"), r)
+    r = get(port, "/count", method="POST", body=b"one\ntwo\nthree\n")
+    ok("stream: a body read a chunk at a time (Stream.read)", r.endswith(b"14 bytes, 3 lines\n"), r)
+    N = 100 * 1000 * 1000
+    base = peak_kb(p.pid)
+    with Peak(p.pid) as pk:
+        r, eof, dt, sha = upload(port, "/upload/big.bin", N)
+    got = os.path.join(d, "big.bin")
+    ok("stream: 100 MB by Content-Length, to a file (Stream.to_file), byte for byte",
+       r.endswith(b"saved big.bin: 100000000 bytes\n") and eof and os.path.getsize(got) == N and sha_file(got) == sha, r[-80:])
+    ok("stream: its memory bounded: peak RSS %d kB after 100 MB (%d kB before), %.0f MB/s" % (pk.most, base, N / dt / 1e6),
+       pk.most < base + 16384, (base, pk.most))
+    with Peak(p.pid) as pk:
+        r, eof, dt, sha = upload(port, "/upload/big2.bin", N, chunked=True)
+    got = os.path.join(d, "big2.bin")
+    ok("stream: 100 MB chunked (odd sizes, extensions, a trailer), byte for byte, peak RSS %d kB, %.0f MB/s" % (pk.most, N / dt / 1e6),
+       r.endswith(b"saved big2.bin: 100000000 bytes\n") and os.path.getsize(got) == N and sha_file(got) == sha
+       and pk.most < base + 16384, (r[-80:], pk.most))
+    r, eof = raw(port, b"PUT /upload/x HTTP/1.1\r\nHost: t\r\nContent-Length: 200000000\r\n\r\n")
+    ok("stream: a length past --max-stream is a 413 before a byte is read, and closes", r.startswith(b"HTTP/1.1 413") and eof, r)
+    r, eof = raw(port, b"PUT /upload/x HTTP/1.1\r\nHost: t\r\nContent-Length: 200000000\r\nExpect: 100-continue\r\n\r\n")
+    ok("stream: ... and with Expect: 100-continue, no 100 is sent", r.startswith(b"HTTP/1.1 413") and b" 100 " not in r and eof, r)
+    r, eof = raw(port, b"POST /count HTTP/1.1\r\nHost: t\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nhello\r\nzz\r\n")
+    ok("stream: a malformed chunked body is a 400 that closes", r.startswith(b"HTTP/1.1 400") and eof, r)
+    t0 = time.time()
+    r, eof = raw(port, b"PUT /upload/slow HTTP/1.1\r\nHost: t\r\nContent-Length: 100\r\n\r\nabc", wait=3, total=3)
+    dt = time.time() - t0
+    ok("stream: a body that stalls past --progress-ms is a 408 that closes (%.2f s)" % dt,
+       r.startswith(b"HTTP/1.1 408") and eof and 0.6 < dt < 2.0, (r, dt))
+    t0 = time.time()
+    s = socket.create_connection(("127.0.0.1", port)); s.settimeout(3)
+    s.sendall(b"PUT /upload/trickle HTTP/1.1\r\nHost: t\r\nContent-Length: 6\r\n\r\n")
+    for c in b"abcdef":
+        time.sleep(0.4); s.sendall(bytes([c]))
+    r, eof = recv_all(s, 3); s.close()
+    ok("stream: a slow body that keeps making progress is read whole", r.startswith(b"HTTP/1.1 201") and b"6 bytes" in r, r)
+    r, eof = raw(port, b"POST /refuse HTTP/1.1\r\nHost: t\r\nContent-Length: 5\r\n\r\nhello"
+                      b"GET / HTTP/1.1\r\nHost: t\r\nConnection: close\r\n\r\n")
+    ok("stream: a handler that returns without reading: the body drained, the pipelined request answered",
+       r.startswith(b"HTTP/1.1 403") and r.count(b"HTTP/1.1 ") == 2 and b"HTTP/1.1 200" in r and eof, r)
+    body = (b"GET /smuggled HTTP/1.1\r\nHost: t\r\n\r\n" * 70000)[:2 * 1000 * 1000]
+    s = socket.create_connection(("127.0.0.1", port)); s.settimeout(3)
+    s.sendall(b"POST /refuse HTTP/1.1\r\nHost: t\r\nContent-Length: %d\r\n\r\n" % len(body))
+    try:
+        s.sendall(body)
+    except OSError:
+        pass
+    r, eof = recv_all(s, 3); s.close()
+    ok("stream: past the drain, an unread body closes the connection, and none of it is read as a request",
+       r.startswith(b"HTTP/1.1 403") and b"connection: close" in r and r.count(b"HTTP/1.1 ") == 1 and eof, r)
+    s = socket.create_connection(("127.0.0.1", port)); s.settimeout(2)
+    s.sendall(b"PUT /upload/c.txt HTTP/1.1\r\nHost: t\r\nContent-Length: 4\r\nExpect: 100-continue\r\n\r\n")
+    first = s.recv(1000)
+    s.sendall(b"abcd")
+    rest, eof = recv_all(s, 1); s.close()
+    ok("stream: Expect: 100-continue is told to go on at the handler's first read, then answered",
+       first == b"HTTP/1.1 100 Continue\r\n\r\n" and rest.startswith(b"HTTP/1.1 201"), (first, rest))
+    r, eof = raw(port, b"POST /refuse HTTP/1.1\r\nHost: t\r\nContent-Length: 4\r\nExpect: 100-continue\r\n\r\n")
+    ok("stream: a handler that refuses without reading sends no 100, and the connection closes",
+       r.startswith(b"HTTP/1.1 403") and b" 100 " not in r and eof, r)
+    r, eof = raw(port, b"PUT /upload/p1 HTTP/1.1\r\nHost: t\r\nTransfer-Encoding: chunked\r\n\r\n3\r\nabc\r\n0\r\n\r\n"
+                      b"POST /count HTTP/1.1\r\nHost: t\r\nContent-Length: 2\r\n\r\nhi"
+                      b"GET / HTTP/1.1\r\nHost: t\r\nConnection: close\r\n\r\n")
+    ok("stream: pipelined after a streamed body, the next requests are read from the bytes after it",
+       r.count(b"HTTP/1.1 ") == 3 and b"saved p1: 3 bytes" in r and b"2 bytes, 0 lines" in r and eof, r)
+    r, eof = raw(port, b"PUT /upload/x HTTP/1.1\r\nHost: t\r\nContent-Length: 1\r\nTransfer-Encoding: chunked\r\n\r\n0\r\n\r\n")
+    ok("stream: a body framed two ways is a 400 that closes", r.startswith(b"HTTP/1.1 400") and eof, r)
+    r, eof = raw(port, b"PUT /upload/x HTTP/1.1\r\nContent-Length: 1\r\n\r\nx")
+    ok("stream: no Host is a 400", r.startswith(b"HTTP/1.1 400") and eof, r)
+    stop(p)
+    p = start([upload_bin, "--port", str(port), "--dir", d, "--max-stream", "1000"], port)
+    r, eof = raw(port, b"POST /count HTTP/1.1\r\nHost: t\r\nTransfer-Encoding: chunked\r\n\r\n400\r\n" + b"x" * 1024 + b"\r\n0\r\n\r\n")
+    ok("stream: a chunked body past --max-stream is a 413 that closes", r.startswith(b"HTTP/1.1 413") and eof, r)
+    stop(p)
+
 def check_guide():
     """every Bend snippet in guide/NETWORKING.md is in a file under net/, word for word"""
     srcs = []
@@ -450,6 +605,7 @@ def main():
         check_greet(greet)
         check_listen(hello, tmp)
         check_client(fetch_bin, hello, tmp)
+        check_stream(bins["upload"], tmp)
     finally:
         for p in PROCS:
             stop(p)

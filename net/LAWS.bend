@@ -25,6 +25,16 @@
 #   redirect_creds  and never sends a credential (Authorization, Cookie,
 #                   Proxy-Authorization) to an origin other than the
 #                   first request's
+#   stream_body     a streamed body's chunks, as a handler reads them,
+#                   are the body RFC 9112's framing (wire/http1/spec.bend)
+#                   finds in the stream, however TCP cut it
+#   stream_bounded  between reads a streamed body holds no more than the
+#                   read that brought it: the chunk it hands on and what
+#                   came after the body, nothing of the body before it
+#   stream_next     the connection goes on after a streamed body only
+#                   once the framing says it ended, with exactly the
+#                   bytes after it: an undrained body is never read as a
+#                   request
 #
 # and the vectors: percent-encoding's round trip over every byte, the
 # query, URLs and Locations as the URL standard reads them (and where
@@ -43,6 +53,7 @@ import ./http.bend as Http
 import ./url.bend as U
 import ./server.bend as Server
 import ./client.bend as Client
+import ./stream.bend as Stream
 
 # A handler sees what the RFC framed
 # ==================================
@@ -469,3 +480,92 @@ law resolve_vectors:
     url.of(U.resolve(base(), "mailto:x@y"))]
     == ["http://h/a/c", "http://h/x", "http://o:81/y", "http://h/a/b?z", "http://h/d", "https://t/", "http://h/a/b?q",
         "http://h/a/", "http://h/a/c", "refused: not a URL of this scheme"] : List<&2, Bytes()>}
+
+# Streamed bodies
+# ===============
+#
+# A stream route's body is read by wire/http1's reader entered at the
+# body (Stream.entry), a read at a time (Stream.step: fed, and the body
+# bytes taken), as net/stream.bend's Stream.read runs it; Stream.drain
+# is a body's reads in turn, the chunks handed on joined. The reference
+# is wire/http1/spec.bend's walk of RFC 9112's framing -- written line
+# by line from the RFC, and the reader held to it by resp_sim --
+# entered at the same place: a body of n bytes counted off, or a
+# chunked body under the budget, from its first byte.
+
+def spec.mode(+e: R.Ask, f: Stream.Frame) -> RS.Mode:
+  match f:
+    case Stream.FLen{n}:
+      match n:
+        case 0n:
+          RS.MDone{RS.resp(R.body.head(), Nil{}, False{}), Nil{}}
+        case 1n+q:
+          RS.MBody{R.body.head(), q, Nil{}}
+    case Stream.FChunked{}:
+      RS.MChunk{R.body.head(), R.ASize0{}, 0, Nil{}, R.ask.cap(e)}
+
+# what the RFC's framing reads of a body's bytes, from its first
+def spec.body(+e: R.Ask, f: Stream.Frame, bs: List<&2, U32>) -> R.Look:
+  RS.finish(e, RS.walk(e, bs, RS.W{spec.mode(e, f), Nil{}}))
+
+# a body, framed as f, read by the reads rs: the reader after the last,
+# and the chunks handed on, joined
+def streamed(+e: R.Ask, +f: Stream.Frame, rs: List<&2, Bytes()>) -> R.P & Bytes():
+  Stream.drain(e, rs, Stream.entry(e, f), "")
+
+# LAW: a streamed body is the body the RFC frames. For every framing a
+# head announces and every stream, however TCP cuts it into reads, the
+# chunks a handler is handed, joined in order, put back in front of what
+# the reader still holds, read exactly as RFC 9112's framing reads the
+# stream whole: when it ends, the chunks joined are its body, byte for
+# byte -- none lost, doubled, reordered or made up -- and what follows
+# is what follows it; refused, or not yet ended, the same.
+law stream_body:
+  for +e: R.Ask
+  for +f: Stream.Frame
+  for +rs: List<&2, Bytes()>
+  {R.look(R.give(Wr.drain.b(R.P, streamed(e, f, rs)), Wr.drain.s(R.P, streamed(e, f, rs)))) ==
+    spec.body(e, f, Bytes.to_list(Bytes.concat(rs))) : R.Look}
+
+# LAW: a streamed body costs one read. Whatever the reader's state and
+# whatever a read brings, once the read is kept (Stream.fits, which
+# Stream.read asks of every read, refusing the body otherwise) what the
+# Body holds after it -- the chunk it hands on, the body bytes the reader
+# still holds, the bytes after the body -- is at most that read, and the
+# reader holds no byte of the body at all. A read is at most
+# Stream.chunk() bytes (TCP.poll_buf's contract, rx.ok), so a connection
+# streaming a body holds at most that and its head, however large the
+# body: the bound wire/stream.bend's stream_window gives a window of one.
+law stream_bounded:
+  for +e: R.Ask
+  for +bs: Bytes()
+  for +p: R.P
+  for ok: {Stream.fits(Wr.drain.s(R.P, Stream.step(e, bs, p)), Wr.drain.b(R.P, Stream.step(e, bs, p)),
+    Bytes.len(bs)) == True{} : Bool}
+  {Nat.is_le(Stream.kept(Wr.drain.s(R.P, Stream.step(e, bs, p)), Wr.drain.b(R.P, Stream.step(e, bs, p))),
+    Bytes.len(bs)) == True{} : Bool}
+
+# what the RFC says follows a body: the bytes after it once it ended;
+# nothing while it has not, or when it was refused
+def spec.next(l: R.Look) -> Maybe<&2, Bytes()>:
+  match l:
+    case R.Look{i, end}:
+      match end:
+        case R.Final{r, rest}:
+          Some{rest}
+        case _:
+          None{}
+
+# LAW: an undrained body is never a request. After a streamed request --
+# the handler read all of its body, some, or none, and the server drained
+# what it could -- the connection goes on (Stream.next) only when RFC
+# 9112's framing says the body has ended, and then with exactly the bytes
+# it puts after the body; while the body has not ended, or was refused,
+# it goes on with nothing, and closes. No byte of a body is ever read as
+# the head of the next request, whatever the handler did.
+law stream_next:
+  for +e: R.Ask
+  for +f: Stream.Frame
+  for +rs: List<&2, Bytes()>
+  {Stream.next(Wr.drain.s(R.P, streamed(e, f, rs))) == spec.next(spec.body(e, f, Bytes.to_list(Bytes.concat(rs)))) :
+    Maybe<&2, Bytes()>}

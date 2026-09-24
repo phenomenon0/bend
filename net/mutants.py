@@ -7,8 +7,13 @@
 # that skips a hit, counts routes wrong, lists a method twice or one of
 # a route that does not match; a pool that takes back a connection its
 # response closed; a redirect that keeps credentials, forgets a cookie,
-# or sends once more past its cap; percent-escapes and URLs read wrong
-# -- and net/PROOF.bend must refuse every one. Each runs in a scratch
+# or sends once more past its cap; percent-escapes and URLs read wrong;
+# a streamed body read from past a read's first byte, a read dropped, a
+# length counted one too many, a chunked body given a budget of its own,
+# a reader that keeps the body instead of handing it on, a read kept
+# whatever came after the body, a connection that goes on before its
+# body ended or without the bytes after it -- and net/PROOF.bend must
+# refuse every one. Each runs in a scratch
 # copy of the tree the proof imports, where bend-proxy's proof (which
 # net/'s uses: rr.h, u32.eq, the list lemmas, and scan_is_spec and
 # frames_agree through them) is replaced by its statements left open:
@@ -25,6 +30,7 @@ ROOT = os.path.dirname(HERE)
 DIRS = ['net', 'wire', 'demos/io_http_engine', 'demos/io_proxy', 'power']
 
 H, S, C, U = 'net/http.bend', 'net/server.bend', 'net/client.bend', 'net/url.bend'
+B = 'net/stream.bend'
 
 # (what, file, before, after)
 MUTANTS = [
@@ -110,6 +116,29 @@ MUTANTS = [
   ('a user and password in a URL taken (url_vectors)', U,
     '''  url.made(Nat.is_lt(Bytes.find_byte(auth, 0n, 64), Bytes.len(auth)), U32.is_eq(Bytes.get(auth, 0n), 91),''',
     '''  url.made(False{}, U32.is_eq(Bytes.get(auth, 0n), 91),'''),
+  ('a streamed body read from past each read\'s first byte (stream_body)', B,
+    '''  R.take(R.feed_buf(e, bs, p))''', '''  R.take(R.feed_buf(e, String.drop(bs, 1n), p))'''),
+  ('a read of a streamed body dropped (stream_body)', B,
+    '''      Wr.drain.on(R.P, step(e, r, p), acc, q => a => drain(e, t, q, a))''',
+    '''      drain(e, t, p, acc)'''),
+  ('a length counted one byte too many (stream_body)', B,
+    '''      R.Bod{R.body.head(), q, ""}''', '''      R.Bod{R.body.head(), 1n+q, ""}'''),
+  ('a chunked body given a budget of its own (stream_body)', B,
+    '''R.Chk{R.body.head(), R.ASize0{}, 0, "", R.ask.cap(e)}''', '''R.Chk{R.body.head(), R.ASize0{}, 0, "", 268435455}'''),
+  ('the reader keeps the body instead of handing it on (stream_bounded)', B,
+    '''  R.take(R.feed_buf(e, bs, p))''', '''  (R.feed_buf(e, bs, p), "")'''),
+  ('a read kept whatever came after the body (stream_bounded)', B,
+    '''  Nat.is_le(Nat.add(Bytes.len(x), Bytes.len(rest(p))), n)''', '''  Nat.is_le(Bytes.len(x), n)'''),
+  ('the connection goes on before the body ended (stream_next)', B,
+    '''          Some{x}
+        case _:
+          None{}''', '''          Some{x}
+        case _:
+          Some{""}'''),
+  ('the bytes after a streamed body dropped (stream_next)', B,
+    '''        case R.Final{r, x}:
+          Some{x}''', '''        case R.Final{r, x}:
+          Some{""}'''),
 ]
 
 # bend-proxy's proof, as net/PROOF.bend uses it: its statements, open
