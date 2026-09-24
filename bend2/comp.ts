@@ -2050,12 +2050,189 @@ function anf(cb: Carb, t: HTerm, ty: HTerm | null = null): HTerm {
 function def_body(cb: Carb, k: Bend.Name): TLD | undefined {
   const tld = cb.book.tlds[k];
   if (tld?.$ === "Def" && tld.e !== undefined && tld.h === undefined) {
-    const h = Bend.term_higher(tld.e);
+    const h0 = Bend.term_higher(tld.e);
+    const h = pick_any(tld.e) ? pick_lift(cb, k, h0) : h0;
     const n = tld.n + Math.min(def_raise(cb.book, h, tld.n),
       tele_unbind(cb.book, tld.T).doms.length - tld.n);
     cb.book.tlds[k] = { ...tld, n, h };
   }
   return cb.book.tlds[k];
+}
+
+// Pick
+// ----
+// Bool.pick(A, c, a, b) is a def, so a call evaluates both arms. A site
+// whose arms are not both cheap (a variable, a literal, a constructor or a
+// word op of those) becomes a call to a def of its own that matches on c,
+// as a hand-written helper would: c and the arms' free variables are its
+// parameters, so only the chosen arm runs and the other's variables drop
+// with the match's arm. The checker never sees it: this is the emitters'
+// view of the body alone. The def's body is lowered to levels (its type
+// cells kept as they are), each site is lifted bottom-up, and the result
+// is raised again; a def with no such site keeps its body.
+
+type PickBind = { k: Bend.Name; q: Bend.Quant; A: HTerm | null };
+
+const PICK_WORD = /^(U32|I32|F32|U64|I64|F64|Char|Nat)\./;
+
+function pick_cheap(cb: Carb, t: Bend.LTerm): boolean {
+  const s = Bend.term_strip(t);
+  switch (s.$) {
+    case "Var": case "Lit": return true;
+    case "Ctr": return s.x.every((x) => pick_cheap(cb, x));
+    case "App": {
+      const [g, xs] = pick_spine(s);
+      const it = g.$ === "Ref" ? intr_of(cb, g.k) : undefined;
+      return g.$ === "Ref" && it !== undefined && it.call !== true
+        && PICK_WORD.test(g.k) && xs.every((x) => pick_cheap(cb, x)
+          || "Ref ADT Typ Qua".includes(Bend.term_strip(x).$));
+    }
+    default: return false;
+  }
+}
+
+function pick_lift(cb: Carb, def: Bend.Name, h: HTerm): HTerm {
+  let n = 0;
+  const cell = (T: HTerm): Bend.LTerm => Bend.term_cell(T) as Bend.LTerm;
+  const lift = (as: Bend.LTerm[], R: HTerm | null, d: number,
+    bs: PickBind[]): Bend.LTerm | null => {
+    const [, c, a, b] = as;
+    if (R === null || (pick_cheap(cb, a) && pick_cheap(cb, b))) {
+      return null;
+    }
+    const lv = new Set<number>();
+    const scan = (t: Bend.LTerm): void => {
+      switch (t.$) {
+        case "Var": if (t.i >= 0 && t.i < d) lv.add(t.i); return;
+        case "Sub": return scan(t.f);
+        case "Let": t.v.forEach(scan); return scan(t.f);
+        case "All": scan(t.A); return scan(t.B);
+        case "Lam": return scan(t.f);
+        case "App": scan(t.f); return scan(t.x);
+        case "ADT": case "Ctr": return t.x.forEach(scan);
+        case "Mat": scan(t.h); return scan(t.m);
+        case "Eql": scan(t.a); scan(t.b); return scan(t.T);
+        case "Rwt": scan(t.e); scan(t.p); return scan(t.f);
+        case "Min": scan(t.a); return scan(t.b);
+        case "Typ": return scan(t.g);
+        case "Ann": scan(t.x); return scan(t.T);
+        default: return;
+      }
+    };
+    scan(a);
+    scan(b);
+    const fv = [...lv].sort((x, y) => x - y);
+    if (fv.some((i) => bs[i]?.A == null)) {
+      return null;
+    }
+    const ps = fv.map((i) => bs[i]);
+    const k = def + "$pick" + String(n++);
+    const tel = (j: number): HTerm => j === ps.length ? R
+      : Bend.All(ps[j].q, ps[j].k, 0, ps[j].A as HTerm, () => tel(j + 1));
+    const T = Bend.All(Bend.Lone(), "c", 0, Bend.Ref("Bool"), () => tel(0));
+    const arm = (x: Bend.LTerm, j: number, env: Bend.Env): HTerm =>
+      j === ps.length ? Bend.term_higher(x, env)
+      : Bend.Ann(Bend.Lam(ps[j].k, 0, (v: HTerm) =>
+        arm(x, j + 1, Bend.list_set(env, fv[j], v)), undefined, ps[j].q),
+      tel(j));
+    const m = Bend.Ann(Bend.Mat("False", arm(b, 0, null),
+      Bend.Ann(Bend.Mat("True", arm(a, 0, null), Bend.Ann(Bend.Efq(), T)), T)),
+    T);
+    cb.book.tlds[k] = { $: "Def", n: 1 + ps.length, x: 0, T, v: m, h: m };
+    return Bend.Ann(fv.reduce((f: Bend.LTerm, i, j) => Bend.App(f,
+      Bend.Ann(Bend.Var(ps[j].k, i), cell(ps[j].A as HTerm))),
+    Bend.App(Bend.Ref(k), c)), cell(R));
+  };
+  const low = (t0: HTerm, d: number, bs: PickBind[],
+    ty: HTerm | null): Bend.LTerm => {
+    const t = t0.$ === "Var" && t0.i < 0 ? t0 : Bend.term_force(t0);
+    switch (t.$) {
+      case "Var": return t.i < 0 ? t as Bend.LTerm : Bend.Var(t.k, t.i, t.s);
+      case "Ref": return Bend.Ref(t.k, t.s, t.b);
+      case "Sub": return Bend.Sub(t.i, t.v.$ === "PVar" || t.v.$ === "PCtr"
+        ? t.v : low(t.v, d, bs, null), low(t.f, d, bs, null), t.s);
+      case "Let": {
+        const xs = t.k.map((k, j): HTerm => Bend.Var(k, d + j));
+        const vs = t.v.map((v) => low(v, d, bs, null));
+        const inner = [...bs, ...t.k.map((k, j): PickBind =>
+          ({ k, q: t.q[j] ?? Bend.Lone(), A: ty_ann(t.v[j]) }))];
+        return Bend.Let(t.k, xs.map((_, j) => d + j), vs,
+          low(t.f(xs), d + t.k.length, inner, null), t.s, t.q);
+      }
+      case "Typ": return Bend.Typ(low(t.g, d, bs, null), t.s);
+      case "Qnt": case "Qua": case "Lit": return t as Bend.LTerm;
+      case "Min": return Bend.Min(low(t.a, d, bs, null), low(t.b, d, bs, null),
+        t.s);
+      case "All": return Bend.All(t.q, t.k, d, low(t.A, d, bs, null),
+        low(t.B(Bend.Var(t.k, d)), d + 1, [...bs, { k: t.k, q: t.q, A: null }],
+          null), t.s);
+      case "Lam": {
+        const all = ty && Bend.tele_open(cb.book, ty);
+        const b: PickBind = { k: t.k, q: all?.q ?? t.q ?? Bend.Lone(),
+          A: all?.A ?? null };
+        return Bend.Lam(t.k, d, low(t.f(Bend.Var(t.k, d)), d + 1, [...bs, b],
+          null), t.s, t.q);
+      }
+      case "App": {
+        const [g, xs] = pick_spine(t);
+        if (g.$ === "Ref" && g.k === "Bool.pick" && xs.length === 4) {
+          const ls = xs.map((x) => low(x, d, bs, null));
+          const r = lift(ls, ty ?? ty_ann(xs[2]), d, bs);
+          if (r !== null) {
+            return r;
+          }
+        }
+        return Bend.App(low(t.f, d, bs, null), low(t.x, d, bs, null), t.s);
+      }
+      case "ADT": return Bend.ADT(t.k, t.x.map((x) => low(x, d, bs, null)),
+        t.s, t.r);
+      case "Ctr": return Bend.Ctr(t.k, t.x.map((x) => low(x, d, bs, null)),
+        t.s);
+      case "Mat": return Bend.Mat(t.k, low(t.h, d, bs, null),
+        low(t.m, d, bs, null), t.s);
+      case "Efq": return Bend.Efq(t.s);
+      case "Eql": return Bend.Eql(low(t.a, d, bs, null), low(t.b, d, bs, null),
+        low(t.T, d, bs, null), t.s);
+      case "Rfl": return Bend.Rfl(t.s);
+      case "Rwt": return Bend.Rwt(low(t.e, d, bs, null), low(t.p, d, bs, null),
+        low(t.f, d, bs, null), t.s);
+      case "Hol": return Bend.Hol(t.k, t.s);
+      case "Ann": return Bend.Ann(low(t.x, d, bs, t.T), low(t.T, d, bs, null),
+        t.s);
+    }
+  };
+  const out = low(h, 0, [], null);
+  return n === 0 ? h : Bend.term_higher(out);
+}
+
+// Does an elaborated body call Bool.pick? (its type cells aside)
+function pick_any(t: Bend.LTerm): boolean {
+  switch (t.$) {
+    case "Ref": return t.k === "Bool.pick";
+    case "Sub": return (t.v.$ !== "PVar" && t.v.$ !== "PCtr"
+      && pick_any(t.v as Bend.LTerm)) || pick_any(t.f);
+    case "Let": return t.v.some(pick_any) || pick_any(t.f);
+    case "Lam": return pick_any(t.f);
+    case "App": return pick_any(t.f) || pick_any(t.x);
+    case "Ctr": return t.x.some(pick_any);
+    case "Mat": return pick_any(t.h) || pick_any(t.m);
+    case "Rwt": return pick_any(t.f);
+    case "Ann": return pick_any(t.x);
+    default: return false;
+  }
+}
+
+// A term's head and arguments, through its annotations
+function pick_spine<X>(t: Bend.TermOf<X>): [Bend.TermOf<X>, Bend.TermOf<X>[]] {
+  const xs: Bend.TermOf<X>[] = [];
+  let c = Bend.term_force(t);
+  while (c.$ === "Ann" || c.$ === "App") {
+    if (c.$ === "App") {
+      xs.push(c.x);
+    }
+    c = Bend.term_force(c.$ === "App" ? c.f : c.x);
+  }
+  return [c, xs.reverse()];
 }
 
 // The reachable defs, raised, with the bangs and call-site counts, and
