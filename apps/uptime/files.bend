@@ -84,8 +84,8 @@ def ops.apply.at(st: M.Store, r: Result<&2, &2, J.Why, J.Json>) -> M.Store:
     case Fail{w}:
       st
 
-# Bool.pick evaluates both of its arms: picking between the two replays
-# with it parsed every line twice, so the choice is a match
+# the choice is a match: Bool.pick once evaluated both arms, and parsed
+# every line twice (FRICTION.md 1; lazy since, and as fast)
 def apply.kind(results: Bool, st: M.Store, +line: Bytes()) -> M.Store:
   match results:
     case True{}:

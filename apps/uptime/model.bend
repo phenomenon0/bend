@@ -5,7 +5,7 @@ import Base
 import ../../net/json.bend as Json
 import ../../net/url.bend as Url
 import ../../power/json_value.bend as J
-import ./clock.bend as Time
+import ../../bend2/time.bend as Time
 
 # one probe: when (wall ms), up or not, latency, status (0: none came),
 # why it is down ("" when up), and how late it started (ms past its slot)
@@ -136,7 +136,7 @@ def spec.json(s: Spec) -> J.Json:
 def probe.kvs(p: Probe) -> List<&2, Sigma<&2, &2, Bytes(), _ => J.Json>>:
   match p:
     case Probe{+t, up, ms, code, err, lag}:
-      [Json.kv("t", nat(t)), Json.kv("at", Json.str(Time.iso(t))), Json.kv("up", Json.flag(up)),
+      [Json.kv("t", nat(t)), Json.kv("at", Json.str(Time.iso.ms(t))), Json.kv("up", Json.flag(up)),
        Json.kv("ms", Json.num(ms)), Json.kv("code", Json.num(code)), Json.kv("err", Json.str(err)),
        Json.kv("lag", Json.num(lag))]
 

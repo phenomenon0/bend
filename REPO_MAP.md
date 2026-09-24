@@ -10,6 +10,7 @@ this file says the same in more words, and maps the networking stack in full.
       comp.ts           the compiler and the runtimes: C (CPU), Metal, CUDA, JS
       main.ts           the `bend` command
       base.bend         the base library (`bend base` prints it)
+      time.bend         dates in UTC: Time.iso, Time.http (imported by path)
       effs/             the IO effects, a .c and a .js per effect
       bend.lean         the core, mechanized in Lean
     kernel/             a second, independent checker in Rust; it re-checks a
