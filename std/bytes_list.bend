@@ -66,8 +66,48 @@ def push(b: String, x: U32) -> String:
   String.append(b, SCon{Chr{x}, SNil{}})
 
 # the first n bytes and the rest
+# String.drop, counted on n first: dropping none hands s back as it is,
+# where String.drop takes s apart and builds it again (on the JS lane a
+# fresh string, which the next slice copies whole)
+def tail(s: String) -> String:
+  match s:
+    case SNil{}:
+      SNil{}
+    case SCon{h, t}:
+      t
+
+def skip(n: Nat, s: String) -> String:
+  match n:
+    case 0n:
+      s
+    case 1n+p:
+      skip(p, tail(s))
+
+def skip.nil(n: Nat) -> {skip(n, SNil{}) == SNil{} : String}:
+  match n:
+    case 0n:
+      {==}
+    case 1n+p:
+      skip.nil(p)
+
+def skip.is(+s: String, +n: Nat) -> {skip(n, s) == String.drop(s, n) : String}:
+  match s n:
+    case SNil{} 0n:
+      {==}
+    case SNil{} 1n+p:
+      skip.nil(p)
+    case SCon{h, t} 0n:
+      {==}
+    case SCon{h, t} 1n+p:
+      skip.is(t, p)
+
 def cut(+s: String, +n: Nat) -> String & String:
-  (String.take(s, n), String.drop(s, n))
+  (String.take(s, n), skip(n, s))
+
+# cut is the pair of Base's take and drop
+def cut.is(+s: String, +n: Nat) -> {cut(s, n) == (String.take(s, n), String.drop(s, n)) : String & String}:
+  Equal.cong(String, String & String, x => (String.take(s, n), x), skip(n, s), String.drop(s, n),
+    skip.is(s, n))
 
 # n bytes from at, clamped to the end
 def slice(b: String, +at: Nat, n: Nat) -> String:
@@ -108,7 +148,7 @@ def find_byte.run(s: String, +x: U32, on: Bool, k: Nat) -> Nat:
 
 # the first offset of the byte x at or after i; absent, the end
 def find_byte(+b: String, +i: Nat, x: U32) -> Nat:
-  find_byte.run(String.drop(b, i), x, True{}, i)
+  find_byte.run(skip(i, b), x, True{}, i)
 
 def find_any.run(s: String, +w: U32, +x: U32, +y: U32, +z: U32, on: Bool, k: Nat) -> Nat:
   match s on:
@@ -122,7 +162,7 @@ def find_any.run(s: String, +w: U32, +x: U32, +y: U32, +z: U32, on: Bool, k: Nat
 
 # the first offset at or after i of any of w, x, y, z; absent, the end
 def find_any(+b: String, +i: Nat, w: U32, x: U32, y: U32, z: U32) -> Nat:
-  find_any.run(String.drop(b, i), w, x, y, z, True{}, i)
+  find_any.run(skip(i, b), w, x, y, z, True{}, i)
 
 def span.run(s: String, +lo: U32, +hi: U32, on: Bool, k: Nat) -> Nat:
   match s on:
@@ -136,7 +176,7 @@ def span.run(s: String, +lo: U32, +hi: U32, on: Bool, k: Nat) -> Nat:
 
 # how many bytes from i are in [lo, hi)
 def span(+b: String, +i: Nat, lo: U32, hi: U32) -> Nat:
-  span.run(String.drop(b, i), lo, hi, True{}, 0n)
+  span.run(skip(i, b), lo, hi, True{}, 0n)
 
 def word_le.at(+b: String, i: Nat) -> U32:
   U32.and(get(b, i), 255)
@@ -207,11 +247,13 @@ def find_any.run_is(+s: String, +w: U32, +x: U32, +y: U32, +z: U32, on: Bool, +k
 # find_byte and find_any are their specifications' counts from i
 def find_byte.is(+b: String, +i: Nat, +x: U32) ->
   {find_byte(b, i, x) == Nat.add(i, Sp.find_byte.go(String.drop(b, i), x)) : Nat}:
-  find_byte.run_is(String.drop(b, i), x, True{}, i)
+  %skip.is(b, i) : {find_byte(b, i, x) == Nat.add(i, Sp.find_byte.go(_, x)) : Nat}
+  find_byte.run_is(skip(i, b), x, True{}, i)
 
 def find_any.is(+b: String, +i: Nat, +w: U32, +x: U32, +y: U32, +z: U32) ->
   {find_any(b, i, w, x, y, z) == Nat.add(i, Sp.find_any.go(String.drop(b, i), w, x, y, z)) : Nat}:
-  find_any.run_is(String.drop(b, i), w, x, y, z, True{}, i)
+  %skip.is(b, i) : {find_any(b, i, w, x, y, z) == Nat.add(i, Sp.find_any.go(_, w, x, y, z)) : Nat}
+  find_any.run_is(skip(i, b), w, x, y, z, True{}, i)
 
 # The reader
 # ==========
@@ -243,9 +285,9 @@ def size(b: Buf()) -> Buf() & U32:
 def seek.if(+whole: String, rest: String, +pos: Nat, +n: Nat, +k: Nat, ahead: Bool) -> Buf():
   match ahead:
     case True{}:
-      Cur{whole, String.drop(rest, Nat.sub(k, pos)), k, n}
+      Cur{whole, skip(Nat.sub(k, pos), rest), k, n}
     case False{}:
-      Cur{whole, String.drop(whole, k), k, n}
+      Cur{whole, skip(k, whole), k, n}
 
 # the cursor moved to k
 def seek(b: Buf(), +k: Nat) -> Buf():
@@ -253,14 +295,20 @@ def seek(b: Buf(), +k: Nat) -> Buf():
     case Cur{+whole, rest, +pos, +n}:
       seek.if(whole, rest, pos, n, k, Nat.is_le(pos, k))
 
+# the first byte, 0 for none; s is only looked at, so the cursor keeps the
+# very string it had (rebuilding SCon{h, t} is a fresh string on the JS
+# lane, which its next slice copies whole)
+def first(+s: String) -> U32:
+  match s:
+    case SNil{}:
+      0
+    case SCon{Chr{c}, t}:
+      U32.and(c, 255)
+
 def head(b: Buf()) -> Buf() & U32:
   match b:
-    case Cur{whole, rest, pos, n}:
-      match rest:
-        case SNil{}:
-          (Cur{whole, SNil{}, pos, n}, 0)
-        case SCon{Chr{+c}, t}:
-          (Cur{whole, SCon{Chr{c}, t}, pos, n}, U32.and(c, 255))
+    case Cur{whole, +rest, pos, n}:
+      (Cur{whole, rest, pos, n}, first(rest))
 
 # the byte at i, 0 past the end
 def at(b: Buf(), +i: U32) -> Buf() & U32:

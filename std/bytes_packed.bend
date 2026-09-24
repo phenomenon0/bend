@@ -39,6 +39,9 @@ def push(b: String, x: U32) -> String:
 def cut(+s: String, +n: Nat) -> String & String:
   String.cut(s, n)
 
+def cut.is(+s: String, +n: Nat) -> {cut(s, n) == (String.take(s, n), String.drop(s, n)) : String & String}:
+  {==}
+
 def slice(b: String, +at: Nat, n: Nat) -> String:
   Bytes.slice(b, at, n)
 

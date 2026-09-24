@@ -512,6 +512,11 @@ def lem.took(+d: Csv.Dialect, +q: Bool, +acc: String, +left: Nat, +s: String, +f
   +j: Nat, e: {RL(d, s, q, left) == 1n+j : Nat}) ->
   {Csv.feed_buf.last(d, Csv.run.took(d, q, acc, left, j, fl, cur, out, w, pos, By.cut(s, 1n+j))) ==
     Csv.feed_buf.slow(d, s, Csv.P{Csv.grow(q, acc, left), fl, cur, out, w, pos}) : Csv.P}:
+  # the cut is Base's take and drop (the interface's cut.is)
+  %Equal.sym(String & String, By.cut(s, 1n+j), (String.take(s, 1n+j), String.drop(s, 1n+j)),
+    By.cut.is(s, 1n+j)) :
+    {Csv.feed_buf.last(d, Csv.run.took(d, q, acc, left, j, fl, cur, out, w, pos, _)) ==
+      Csv.feed_buf.slow(d, s, Csv.P{Csv.grow(q, acc, left), fl, cur, out, w, pos}) : Csv.P}
   Equal.trans(Csv.P,
     Csv.feed_buf.last(d, Csv.one.step(d,
       Csv.P{Csv.grow(q, String.append(acc, String.take(s, 1n+j)), Nat.sub(left, 1n+j)), fl, cur, out,

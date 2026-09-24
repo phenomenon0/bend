@@ -118,12 +118,14 @@ def feed_buf.go(
     case 0n:
       feed_buf.last(~E, ~S, ~step, e, q)
     case 1n+m:
-      (p, s) = q
+      # s is looked at, not taken apart: the move gets the very string (on
+      # the JS lane a rebuilt SCon{h, t} is a fresh string, copied whole)
+      (p, +s) = q
       match s:
         case SNil{}:
           p
         case SCon{h, t}:
-          feed_buf.go(~E, ~S, ~step, ~adv, e, m, adv(e, SCon{h, t}, p))
+          feed_buf.go(~E, ~S, ~step, ~adv, e, m, adv(e, s, p))
 
 # The walk a server runs on a read: one packed block, moved through by
 # the protocol's own moves.
