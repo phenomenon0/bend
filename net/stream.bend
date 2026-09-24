@@ -36,29 +36,38 @@
 #                   framing puts after it: an undrained body's bytes are
 #                   never read as the next request
 #
+# and the head is the one RFC 9112 reads:
+#
+#   stream_head     a stream route's head is read by the engine's reader,
+#                   the server's own, and what the stream takes from it
+#                   at the blank line is the head spec.bend's frame()
+#                   holds there, judged as the RFC judges it, however the
+#                   stream was cut and whatever came before it
+#
+# Every request, streamed or not, goes through the one reader: a read is
+# fed to it a piece at a time (Where a read stops, below), and when it
+# stands at the blank line of a head a stream route takes, the read stops
+# there, the requests before it are answered as Server.serve answers
+# them, and the stream takes the rest. The head is the engine's; its
+# body cap (the server's max_body) is left to the requests it reads
+# whole, and a stream's body has the stream's.
+#
 # The bounds (Stream.Cfg): a body at most max_stream bytes (1 GiB; a
-# length past it is a 413 before a byte of it is read, and a chunked
+# length past it is a 413 before a byte of it is read -- one past
+# 4294967289, more than the reader reads a length as, a 400 -- and a chunked
 # body is cut there, and is at most 256 MiB, the reader's budget, kept
 # under 2^28 so a chunk's size never wraps); each read of a body within
 # progress (10 s) or a 408; the head within the server's head time and
-# at most its max_head (408, 431). An Expect: 100-continue is answered
-# at the handler's first read of the socket, so a handler that refuses
-# without reading never asks for the body. When the handler returns, the
-# server drains what is left of the body, up to drain.cap() (1 MiB),
-# each read within the progress time, and the connection goes on; past
-# that it answers and closes (and when a 100 Continue is still owed, the
-# client sends no body: it answers and closes at once). A read that failed (the body refused, too large, too slow)
-# is answered by the server itself (400, 413, 408) whatever the handler
-# answered, and the connection closes.
-#
-# Which requests are streamed is decided by the request line, before a
-# field is read: at the start of a read with no message in progress (as
-# every client but a pipelining one sends), a request line whose method
-# and path a stream route matches is read by this file; any other goes
-# through the server's own reader. A stream route's request that comes
-# pipelined behind another in one read is read by the server's reader,
-# whole, under max_body, and handed to its handler as a Body over those
-# bytes.
+# at most its max_head (408, 431), as every head. An Expect:
+# 100-continue is answered at the handler's first read of the socket, so
+# a handler that refuses without reading never asks for the body. When
+# the handler returns, the server drains what is left of the body, up to
+# drain.cap() (1 MiB), each read within the progress time, and the
+# connection goes on; past that it answers and closes (and when a 100
+# Continue is still owed, the client sends no body: it answers and
+# closes at once). A read that failed (the body refused, too large, too
+# slow) is answered by the server itself (400, 413, 408) whatever the
+# handler answered, and the connection closes.
 import Base
 import ../wire/reader.bend as Wr
 import ../wire/loop.bend as L
@@ -576,8 +585,7 @@ def run(rs: List<&1, Route>, r: Http.Request, b: Body) -> IO(Body & Http.Respons
 # decision step.head applies body.fit to. Nothing here reads a byte of a
 # head: net/LAWS.bend's stream_head says the view below is the one
 # spec.bend's frame() reaches at the same byte, for every stream however
-# cut, and stream_head_step that the engine's next step, on the LF, is
-# this decision with the cap put back.
+# cut.
 
 # a stream route's head: the request as the server hands one on (its
 # body empty), how its body is framed, and whether it is HTTP/1.0,
@@ -638,14 +646,12 @@ def at.head(+ip: Bytes(), p: Eng.P) -> Maybe<&2, Head>:
 # The connection
 # ==============
 #
-# Server.serve's loop, with one more way in: at the start of a read with
-# no message in progress, the request line is read first, and a stream
-# route's request is read here -- its head, then its body by the
-# handler -- while every other goes through the server's own reader,
-# as the same bytes (Server.scan is the proxy's scan, held to the spec
-# for any cut of the stream). After a streamed request the connection
-# goes on with the bytes after its body (Stream.next), read as the
-# start of the next request.
+# Server.serve's loop, with one more way out of a read: the engine's
+# reader stopped at a stream route's head (Where a read stops, below),
+# the head judged there, and the body read by the handler. After a
+# streamed request the connection goes on with the bytes after its body
+# (Stream.next), read from a fresh reader as the start of the next
+# request.
 
 # what the connection goes on with after a streamed request: the socket
 # and the bytes that came after the body

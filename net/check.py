@@ -568,8 +568,38 @@ def check_stream(upload_bin, tmp):
        r.count(b"HTTP/1.1 ") == 3 and b"saved p1: 3 bytes" in r and b"2 bytes, 0 lines" in r and eof, r)
     r, eof = raw(port, b"GET / HTTP/1.1\r\nHost: t\r\n\r\nPOST /count HTTP/1.1\r\nHost: t\r\nContent-Length: 6\r\n"
                       b"Connection: close\r\n\r\nab\ncd\n")
-    ok("stream: a stream route's request pipelined behind another in one read is read whole, then streamed",
+    ok("stream: a stream route's request pipelined behind another in one read is streamed",
        r.count(b"HTTP/1.1 200") == 2 and r.endswith(b"6 bytes, 2 lines\n") and eof, r)
+    big = b"line\n" * 400000
+    s = socket.create_connection(("127.0.0.1", port)); s.settimeout(3)
+    s.sendall(b"GET / HTTP/1.1\r\nHost: t\r\n\r\nPOST /count HTTP/1.1\r\nHost: t\r\nContent-Length: %d\r\n"
+              b"Connection: close\r\n\r\n" % len(big) + big)
+    r, eof = recv_all(s, 3); s.close()
+    ok("stream: ... with a body past --max-body and past the engine's 1 MiB, pipelined in the same write",
+       r.count(b"HTTP/1.1 200") == 2 and r.endswith(b"2000000 bytes, 400000 lines\n") and eof, r[-200:])
+    s = socket.create_connection(("127.0.0.1", port)); s.settimeout(3)
+    s.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+    s.sendall(b"POST /count HTTP/1.1\r\nHost: t\r\nContent-Length: 3\r\nConnection: close\r\n\r")
+    time.sleep(0.3)
+    s.sendall(b"\na\nb")
+    r, eof = recv_all(s, 3); s.close()
+    ok("stream: a head whose blank line is cut between its CR and its LF", r.endswith(b"3 bytes, 1 lines\n") and eof, r)
+    r, eof = raw(port, b"POST /count HTTP/1.1\r\nHost: t\r\nContent-Length: 3\r\nContent-Length: 3\r\n"
+                      b"Connection: close\r\n\r\nab\n")
+    ok("stream: two lengths that agree are one", r.endswith(b"3 bytes, 1 lines\n") and eof, r)
+    for what, req in [
+            ("two lengths that disagree", b"POST /count HTTP/1.1\r\nHost: t\r\nContent-Length: 3\r\nContent-Length: 4\r\n\r\nabcd"),
+            ("a bare LF", b"POST /count HTTP/1.1\r\nHost: t\nContent-Length: 1\r\n\r\nx"),
+            ("a folded line", b"POST /count HTTP/1.1\r\nHost: t\r\nX-A: 1\r\n  more\r\nContent-Length: 1\r\n\r\nx"),
+            ("a space before a colon", b"POST /count HTTP/1.1\r\nHost: t\r\nContent-Length : 1\r\n\r\nx"),
+            ("a length past what a U32 holds", b"POST /count HTTP/1.1\r\nHost: t\r\nContent-Length: 4294967290\r\n\r\nx"),
+            ("a coding but chunked", b"POST /count HTTP/1.1\r\nHost: t\r\nTransfer-Encoding: gzip\r\n\r\nx"),
+            ("two Hosts", b"POST /count HTTP/1.1\r\nHost: t\r\nHost: u\r\nContent-Length: 1\r\n\r\nx")]:
+        r, eof = raw(port, req)
+        ok("stream: a head with %s is a 400 that closes, and its body is not read" % what,
+           r.startswith(b"HTTP/1.1 400") and r.count(b"HTTP/1.1 ") == 1 and eof, r)
+    r, eof = raw(port, b"PUT /upload/x HTTP/1.1\r\nHost: t\r\nContent-Length: 3000000000\r\n\r\n")
+    ok("stream: a length past the engine's cap and --max-stream is a 413", r.startswith(b"HTTP/1.1 413") and eof, r)
     r, eof = raw(port, b"PUT /upload/x HTTP/1.1\r\nHost: t\r\nContent-Length: 1\r\nTransfer-Encoding: chunked\r\n\r\n0\r\n\r\n")
     ok("stream: a body framed two ways is a 400 that closes", r.startswith(b"HTTP/1.1 400") and eof, r)
     r, eof = raw(port, b"PUT /upload/x HTTP/1.1\r\nContent-Length: 1\r\n\r\nx")
