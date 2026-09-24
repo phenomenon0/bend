@@ -9,8 +9,9 @@
 # overflow to inf), whatever the tree looked like. This is Kulisch's
 # accumulator (the "exact dot product" of the 1970s-80s), in the shape the
 # power library wants: `Acc` is kind Data, a leaf carries its limbs as ten
-# words (no record per element), and `sum` forks one Vec of F32 bit patterns
-# with Array.fork -- two handles to one block in O(1), reads only, no copy.
+# words (no record per element). `sum` forks one Vec of F32 bit patterns with
+# Array.fork (two handles to one block in O(1), reads only, no copy); `sum_bytes`
+# forks Base's Bytes() -- a float32 file as File.read_buf hands it back.
 #
 # Inputs are finite: an inf or NaN is read as a large finite value (E = 255 is
 # not special-cased). demos/monoids/kulisch.bend is the showcase this was lifted
@@ -300,3 +301,66 @@ def sum(v: Vec.Vec, fork: Nat) -> Vec.Vec & U32:
   match v:
     case Vec.Vec{+n, d, arr}:
       sum.fin(n, d, tree(fork, Array.fork(U32, arr), 0, n))
+
+# -- the fork over Base's Bytes() ---------------------------------------------------
+
+# k words from word i of b (little-endian F32 bits, four bytes apiece)
+def words(k: Nat, +b: Bytes(), +i: U32, +l0: U32, +l1: U32, +l2: U32, +l3: U32,
+  +l4: U32, +l5: U32, +l6: U32, +l7: U32, +l8: U32, +l9: U32) -> Acc:
+  match k:
+    case 0n:
+      Acc{l0, l1, l2, l3, l4, l5, l6, l7, l8, l9}
+    case 1n++q:
+      +x = Bytes.word_le(b, U32.to_nat(U32.shln(i, 2n)))
+      +sm = U32.sub(0, U32.shrn(x, 31n))
+      +o = U32.sub(U32.max(U32.and(U32.shrn(x, 23n), 255), 1), 1)
+      +k = U32.shrn(o, 5n)
+      +m = mant(x)
+      +lo = U32.shln(m, U32.to_nat(U32.and(o, 31)))
+      +hi = U32.shrn(m, U32.to_nat(U32.sub(32, U32.and(o, 31))))
+      +c = U32.and(sm, 1)
+      +o0 = U32.xor(put(k, 0, lo, hi), sm)
+      +c0 = carry(l0, o0, c)
+      +o1 = U32.xor(put(k, 1, lo, hi), sm)
+      +c1 = carry(l1, o1, c0)
+      +o2 = U32.xor(put(k, 2, lo, hi), sm)
+      +c2 = carry(l2, o2, c1)
+      +o3 = U32.xor(put(k, 3, lo, hi), sm)
+      +c3 = carry(l3, o3, c2)
+      +o4 = U32.xor(put(k, 4, lo, hi), sm)
+      +c4 = carry(l4, o4, c3)
+      +o5 = U32.xor(put(k, 5, lo, hi), sm)
+      +c5 = carry(l5, o5, c4)
+      +o6 = U32.xor(put(k, 6, lo, hi), sm)
+      +c6 = carry(l6, o6, c5)
+      +o7 = U32.xor(put(k, 7, lo, hi), sm)
+      +c7 = carry(l7, o7, c6)
+      +o8 = U32.xor(put(k, 8, lo, hi), sm)
+      +c8 = carry(l8, o8, c7)
+      +o9 = U32.xor(put(k, 9, lo, hi), sm)
+      words(q, b, U32.inc(i),
+        U32.add(U32.add(l0, o0), c),
+        U32.add(U32.add(l1, o1), c0),
+        U32.add(U32.add(l2, o2), c1),
+        U32.add(U32.add(l3, o3), c2),
+        U32.add(U32.add(l4, o4), c3),
+        U32.add(U32.add(l5, o5), c4),
+        U32.add(U32.add(l6, o6), c5),
+        U32.add(U32.add(l7, o7), c6),
+        U32.add(U32.add(l8, o8), c7),
+        U32.add(U32.add(l9, o9), c8))
+
+def words.tree(d: Nat, +b: Bytes(), +lo: U32, +n: U32) -> Acc:
+  match d:
+    case 0n:
+      words(U32.to_nat(n), b, lo, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+    case 1n++p:
+      +h = U32.shr(n)
+      l r = words.tree(p, b, lo, h) words.tree(p, b, U32.add(lo, h), U32.sub(n, h))
+      join(l, r)
+
+# the exact sum of a buffer of little-endian F32s (a float32 file as read),
+# correctly rounded, as bits; 2^d leaves share the buffer. A trailing partial
+# word is not a float and is left out.
+def sum_bytes(+b: Bytes(), d: Nat) -> U32:
+  round(words.tree(d, b, 0, U32.shrn(U32.from_nat(Bytes.len(b)), 2n)))

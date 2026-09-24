@@ -289,34 +289,31 @@ def where(poison):
 
 BEND = r'''# Utf8 against CPython's decoder, over a real Bytes buffer: the corpus of
 # demos/monoids/utf8.bend (Threefry slots, eight kinds of injury) is pushed into
-# Bytes byte by byte, then `check` runs at fork depths 0, 3 and 8 and
+# Base's Bytes() byte by byte, then `check` runs at fork depths 0, 3 and 8 and
 # `first_bad` descends at 1, 4 and 9 -- every depth the same line. Cases: clean,
 # cut three tails short, starting one byte into a scalar, empty, three bytes,
 # and one per injury. utf8_gen.py prints this file.
 import Base
 import ../../power/rng.bend as Rng
-import ../../power/bytes.bend as Bytes
 import ../../power/utf8.bend as U
 
 ''' + CORPUS_SRC + r'''def fill(k: Nat, +seed: U32, +k1: U32, +t1: U32, +k2: U32, +t2: U32, +p: U32,
-  b: Bytes.Bytes) -> Bytes.Bytes:
+  b: Bytes()) -> Bytes():
   match k:
     case 0n:
       b
     case 1n++q:
       fill(q, seed, k1, t1, k2, t2, U32.inc(p), Bytes.push(b, byte(seed, k1, t1, k2, t2, p)))
 
-def buf(+seed: U32, +k1: U32, +t1: U32, +k2: U32, +t2: U32, +lo: U32, +n: U32) -> Bytes.Bytes:
-  fill(U32.to_nat(n), seed, k1, t1, k2, t2, lo, Bytes.new())
+def buf(+seed: U32, +k1: U32, +t1: U32, +k2: U32, +t2: U32, +lo: U32, +n: U32) -> Bytes():
+  fill(U32.to_nat(n), seed, k1, t1, k2, t2, lo, "")
 
-def row(name: String, r: Bytes.Bytes & U.Sum) -> String:
-  (b, s) = r
+def row(name: String, s: U.Sum) -> String:
   match s:
     case U.Sum{m, c}:
       name ++ " " ++ U32.show(m) ++ " " ++ U32.show(c)
 
-def bad(name: String, r: Bytes.Bytes & U32) -> String:
-  (b, p) = r
+def bad(name: String, +p: U32) -> String:
   name ++ " bad " ++ U32.show(p)
 
 def main() -> IO(Unit):

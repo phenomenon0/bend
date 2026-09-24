@@ -19,12 +19,12 @@
 #                    the same tree: a left half's map says whether a DFA
 #                    entering it dies inside, so only one child is entered
 #
-# The fork is Array.fork: two handles to the one block of cells, reads only, no
-# copy. demos/monoids/utf8.bend is the showcase this was lifted from;
-# tests/power/utf8.bend holds it to CPython's own decoder.
+# The buffer is Base's Bytes() -- a String of bytes, packed a byte a cell, kind
+# Data -- so the fork shares it (one count per fork, not per read) and every
+# read is Bytes.get's native borrowed load. demos/monoids/utf8.bend is the
+# showcase this was lifted from; tests/power/utf8.bend holds it to CPython's
+# own decoder.
 import Base
-import ./vec.bend as Vec
-import ./bytes.bend as Bytes
 
 type Sum is Data:
   Sum{map: U32, count: U32}
@@ -81,50 +81,48 @@ def cls(+b: U32) -> U32:
 def starts(+b: U32) -> U32:
   Bool.to_u32(U32.is_ne(U32.and(b, 192), 128))
 
-def byte(+w: U32, +p: U32) -> U32:
-  U32.and(U32.shrn(w, U32.to_nat(U32.shln(U32.and(p, 3), 3n))), 255)
+def byte(+b: Bytes(), +p: U32) -> U32:
+  U32.and(Bytes.get(b, U32.to_nat(p)), 255)
 
 # -- a leaf ---------------------------------------------------------------------------
 
-# k bytes from p as full maps; r is the read of p's cell
-def leaf.gen(k: Nat, +p: U32, r: Array<U32> & U32, +m: U32, +c: U32) -> Array<U32> & Sum:
+# k bytes from p as full maps
+def leaf.gen(k: Nat, +b: Bytes(), +p: U32, +m: U32, +c: U32) -> Sum:
   match k:
     case 0n:
-      (a, _) = r
-      (a, Sum{m, c})
+      Sum{m, c}
     case 1n++q:
-      (a, +w) = r
-      +b = byte(w, p)
-      leaf.gen(q, U32.inc(p), Array.get(U32, a, U32.shrn(U32.inc(p), 2n)), then(m, cls(b)),
-        U32.add(c, starts(b)))
+      +x = byte(b, p)
+      leaf.gen(q, b, U32.inc(p), then(m, cls(x)), U32.add(c, starts(x)))
 
 # k bytes from p through one converged DFA in state x
-def leaf.one(k: Nat, +p: U32, r: Array<U32> & U32, +x: U32, +c: U32) -> Array<U32> & Sum:
+def leaf.one(k: Nat, +b: Bytes(), +p: U32, +x: U32, +c: U32) -> Sum:
   match k:
     case 0n:
-      (a, _) = r
-      (a, Sum{x, c})
+      Sum{x, c}
     case 1n++q:
-      (a, +w) = r
-      +b = byte(w, p)
-      leaf.one(q, U32.inc(p), Array.get(U32, a, U32.shrn(U32.inc(p), 2n)), look(cls(b), x),
-        U32.add(c, starts(b)))
+      +y = byte(b, p)
+      leaf.one(q, b, U32.inc(p), look(cls(y), x), U32.add(c, starts(y)))
 
-# k whole cells from cell i: four bytes of one read a turn
-def leaf.cells(k: Nat, +i: U32, r: Array<U32> & U32, +x: U32, +c: U32) -> Array<U32> & Sum:
+# k whole words from byte p: four bytes of one borrowed read a turn
+def leaf.words(k: Nat, +b: Bytes(), +p: U32, +x: U32, +c: U32) -> Sum:
   match k:
     case 0n:
-      (a, _) = r
-      (a, Sum{x, c})
+      Sum{x, c}
     case 1n++q:
-      (a, +w) = r
+      +w = Bytes.word_le(b, U32.to_nat(p))
       +b0 = U32.and(w, 255)
       +b1 = U32.and(U32.shrn(w, 8n), 255)
       +b2 = U32.and(U32.shrn(w, 16n), 255)
       +b3 = U32.shrn(w, 24n)
       +n = U32.add(U32.add(starts(b0), starts(b1)), U32.add(starts(b2), starts(b3)))
-      leaf.cells(q, U32.inc(i), Array.get(U32, a, U32.inc(i)),
-        look(cls(b3), look(cls(b2), look(cls(b1), look(cls(b0), x)))), U32.add(c, n))
+      leaf.words(q, b, U32.add(p, 4), look(cls(b3), look(cls(b2), look(cls(b1), look(cls(b0), x)))),
+        U32.add(c, n))
+
+def leaf.tail(s: Sum, +b: Bytes(), +p: U32, +k: U32) -> Sum:
+  match s:
+    case Sum{x, c}:
+      leaf.one(U32.to_nat(k), b, p, x, c)
 
 # 0xF on each live nibble of a converged map, the one state they hold, and back
 def alive(+m: U32) -> U32:
@@ -138,126 +136,83 @@ def common(+v: U32) -> U32:
 def spread(+l: U32, +x: U32) -> U32:
   U32.or(U32.and(l, U32.mul(x, 286331153)), U32.and(U32.not(l), 2290649224))
 
-def leaf.end(+l: U32, r: Array<U32> & Sum) -> Array<U32> & Sum:
-  (a, s) = r
+def leaf.end(+l: U32, s: Sum) -> Sum:
   match s:
     case Sum{x, c}:
-      (a, Sum{spread(l, x), c})
+      Sum{spread(l, x), c}
 
-def leaf.tail(r: Array<U32> & Sum, +k: U32, +p: U32) -> Array<U32> & Sum:
-  (a, s) = r
-  match s:
-    case Sum{x, c}:
-      leaf.one(U32.to_nat(k), p, Array.get(U32, a, U32.shrn(p, 2n)), x, c)
-
-def leaf.mid(r: Array<U32> & Sum, +k: U32, +i: U32) -> Array<U32> & Sum:
-  (a, s) = r
-  match s:
-    case Sum{x, c}:
-      leaf.cells(U32.to_nat(k), i, Array.get(U32, a, i), x, c)
-
-# after the first four bytes: bytewise to a cell edge, whole cells, bytewise on
-def leaf.rest(r: Array<U32> & Sum, +k: U32, +p: U32) -> Array<U32> & Sum:
-  (a, s) = r
+# after the first four bytes: every live start has converged; one DFA on
+def leaf.rest(s: Sum, +b: Bytes(), +p: U32, +k: U32) -> Sum:
   match s:
     case Sum{+m, c}:
       +l = alive(m)
-      +e = U32.min(U32.and(U32.sub(0, p), 3), k)
-      +q = U32.add(p, e)
-      +ns = U32.shrn(U32.sub(k, e), 2n)
-      leaf.end(l, leaf.tail(leaf.mid(leaf.one(U32.to_nat(e), p,
-        Array.get(U32, a, U32.shrn(p, 2n)), common(U32.and(m, l)), c), ns, U32.shrn(q, 2n)),
-        U32.and(U32.sub(k, e), 3), U32.add(q, U32.shln(ns, 2n))))
+      +w = U32.shrn(k, 2n)
+      leaf.end(l, leaf.tail(leaf.words(U32.to_nat(w), b, p, common(U32.and(m, l)), c), b,
+        U32.add(p, U32.shln(w, 2n)), U32.and(k, 3)))
 
-def leaf.short(c: Bool, r: Array<U32> & Sum, +n: U32, +p: U32) -> Array<U32> & Sum:
+def leaf.short(c: Bool, s: Sum, +b: Bytes(), +p: U32, +n: U32) -> Sum:
   match c:
     case True{}:
-      r # under four bytes: no convergence promised, keep the full map
+      s # under four bytes: no convergence promised, keep the full map
     case False{}:
-      leaf.rest(r, U32.sub(n, 4), U32.add(p, 4))
+      leaf.rest(s, b, U32.add(p, 4), U32.sub(n, 4))
 
-def leaf(a: Array<U32>, +p: U32, +n: U32) -> Array<U32> & Sum:
-  leaf.short(U32.is_lt(n, 4), leaf.gen(U32.to_nat(U32.min(n, 4)), p,
-    Array.get(U32, a, U32.shrn(p, 2n)), ident(), 0), n, p)
+def leaf(+b: Bytes(), +p: U32, +n: U32) -> Sum:
+  leaf.short(U32.is_lt(n, 4), leaf.gen(U32.to_nat(U32.min(n, 4)), b, p, ident(), 0), b, p, n)
 
 # -- the tree -------------------------------------------------------------------------
 
-def tree.join(l: Array<U32> & Sum, r: Array<U32> & Sum) -> Array<U32> & Sum:
-  (a, x) = l
-  (b, y) = r
-  (Array.join(U32, a, b), join(x, y))
-
-# bytes lo .. lo+n-1, 2^d leaves; hs is two handles to the one array
-def tree(d: Nat, hs: Array<U32> & Array<U32>, +lo: U32, +n: U32) -> Array<U32> & Sum:
+# bytes lo .. lo+n-1 of b, 2^d leaves
+def tree(d: Nat, +b: Bytes(), +lo: U32, +n: U32) -> Sum:
   match d:
     case 0n:
-      (a, b) = hs
-      leaf(Array.join(U32, a, b), lo, n)
+      leaf(b, lo, n)
     case 1n++p:
-      (a, b) = hs
       +h = U32.shr(n)
-      l r = tree(p, Array.fork(U32, a), lo, h) tree(p, Array.fork(U32, b), U32.add(lo, h), U32.sub(n, h))
-      tree.join(l, r)
+      l r = tree(p, b, lo, h) tree(p, b, U32.add(lo, h), U32.sub(n, h))
+      join(l, r)
 
-def check.fin(n: U32, vn: U32, vd: Nat, r: Array<U32> & Sum) -> Bytes.Bytes & Sum:
-  (a, s) = r
-  (Bytes.Bytes{n, Vec.Vec{vn, vd, a}}, s)
-
-# the map and scalar count of all of b, over 2^d leaves; b comes back
-def check(b: Bytes.Bytes, d: Nat) -> Bytes.Bytes & Sum:
-  match b:
-    case Bytes.Bytes{+n, v}:
-      match v:
-        case Vec.Vec{vn, vd, a}:
-          check.fin(n, vn, vd, tree(d, Array.fork(U32, a), 0, n))
+# the map and scalar count of all of b, over 2^d leaves
+def check(+b: Bytes(), d: Nat) -> Sum:
+  tree(d, b, 0, U32.from_nat(Bytes.len(b)))
 
 # -- the first bad byte -------------------------------------------------------------
 
 # the first byte at or after p that kills a DFA standing in state s; if none
 # does and the bytes end mid-scalar, the end; else none()
-def walk(k: Nat, +p: U32, r: Array<U32> & U32, +s: U32, +at: U32) -> Array<U32> & U32:
+def walk(k: Nat, +b: Bytes(), +p: U32, +s: U32, +at: U32) -> U32:
   match k:
     case 0n:
-      (a, _) = r
-      (a, Bool.pick(U32, Bool.and(U32.is_eq(at, none()), U32.is_ne(s, 0)), p, at))
+      Bool.pick(U32, Bool.and(U32.is_eq(at, none()), U32.is_ne(s, 0)), p, at)
     case 1n++q:
-      (a, +w) = r
-      +s2 = look(cls(byte(w, p)), s)
+      +s2 = look(cls(byte(b, p)), s)
       +first = Bool.and(U32.is_eq(s2, 8), U32.is_eq(at, none()))
-      walk(q, U32.inc(p), Array.get(U32, a, U32.shrn(U32.inc(p), 2n)), s2,
-        Bool.pick(U32, first, p, at))
+      walk(q, b, U32.inc(p), s2, Bool.pick(U32, first, p, at))
+
+def map_of(s: Sum) -> U32:
+  match s:
+    case Sum{f, _}:
+      f
 
 # a node of n bytes from lo, entered in state s; left is its left half's
-# summary (made at depth d - 1) with the array's handle. Only one child is
-# entered: the left if the DFA dies there, else the right, in the state the
-# left half leaves it in. If nothing dies the path is the rightmost one, so
-# the last walk sees the end of the buffer.
-def dead(d: Nat, left: Array<U32> & Sum, +lo: U32, +n: U32, +s: U32) -> Array<U32> & U32:
+# summary (made at depth d - 1). Only one child is entered: the left if the
+# DFA dies there, else the right, in the state the left half leaves it in.
+# If nothing dies the path is the rightmost one, so the last walk sees the end.
+def dead(d: Nat, left: Sum, +b: Bytes(), +lo: U32, +n: U32, +s: U32) -> U32:
   match d:
     case 0n:
-      (a, _) = left
-      walk(U32.to_nat(n), lo, Array.get(U32, a, U32.shrn(lo, 2n)), s, none())
+      walk(U32.to_nat(n), b, lo, s, none())
     case 1n++p:
-      (a, sm) = left
-      match sm:
-        case Sum{f, _}:
-          +h = U32.shr(n)
-          +mid = look(f, s)
-          +go_left = U32.is_eq(mid, 8)
-          +lo2 = Bool.pick(U32, go_left, lo, U32.add(lo, h))
-          +n2 = Bool.pick(U32, go_left, h, U32.sub(n, h))
-          dead(p, tree(Nat.sub(p, 1n), Array.fork(U32, a), lo2, U32.shr(n2)), lo2, n2,
-            Bool.pick(U32, go_left, s, mid))
-
-def bad.fin(n: U32, vn: U32, vd: Nat, r: Array<U32> & U32) -> Bytes.Bytes & U32:
-  (a, p) = r
-  (Bytes.Bytes{n, Vec.Vec{vn, vd, a}}, p)
+      +h = U32.shr(n)
+      +mid = look(map_of(left), s)
+      +go_left = U32.is_eq(mid, 8)
+      +lo2 = Bool.pick(U32, go_left, lo, U32.add(lo, h))
+      +n2 = Bool.pick(U32, go_left, h, U32.sub(n, h))
+      dead(p, tree(Nat.sub(p, 1n), b, lo2, U32.shr(n2)), b, lo2, n2,
+        Bool.pick(U32, go_left, s, mid))
 
 # where a validator reading b from the start dies: the first byte it cannot
 # take; len(b) if b ends mid-scalar; none() if b is valid. 2^d leaves, d >= 1.
-def first_bad(b: Bytes.Bytes, +d: Nat) -> Bytes.Bytes & U32:
-  match b:
-    case Bytes.Bytes{+n, v}:
-      match v:
-        case Vec.Vec{vn, vd, a}:
-          bad.fin(n, vn, vd, dead(d, tree(Nat.sub(d, 1n), Array.fork(U32, a), 0, U32.shr(n)), 0, n, 0))
+def first_bad(+b: Bytes(), +d: Nat) -> U32:
+  +n = U32.from_nat(Bytes.len(b))
+  dead(d, tree(Nat.sub(d, 1n), b, 0, U32.shr(n)), b, 0, n, 0)

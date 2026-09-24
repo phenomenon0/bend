@@ -59,28 +59,34 @@ composes:
 
 ## Promoted to power/: real buffers
 
-Two of these are now library primitives over a real buffer, forked with
-`Array.fork` (2.0.22+: two handles to one block in O(1), reads only, no copy):
+Two of these are library primitives now:
 
-- `power/exact.bend`: `Ex.sum(vec, d)` is the exact sum of a Vec of F32 bit
-  patterns, and `Ex.add` / `Ex.join` / `Ex.round` are there for streaming.
-  Tested by `tests/power/exact.bend`.
-- `power/utf8.bend`: `U.check(bytes, d)` gives the state map and scalar count,
-  and `U.first_bad(bytes, d)` finds the first bad byte by tree descent. Tested
-  by `tests/power/utf8.bend`, which uses CPython's decoder as its oracle.
+- `power/utf8.bend`: `U.check(b, d)` gives the state map and scalar count of
+  a `Bytes()` buffer, and `U.first_bad(b, d)` finds the first bad byte by tree
+  descent. Tested by `tests/power/utf8.bend` against CPython's decoder.
+- `power/exact.bend`: `Ex.sum_bytes(b, d)` is the exact sum of a buffer of
+  little-endian F32s. `Ex.sum(vec, d)` does the same for a Vec, forked with
+  `Array.fork`. `Ex.add`, `join` and `round` are there for streaming. Tested by
+  `tests/power/exact.bend`.
 
-`real.sh` runs them on real files. It uses `slurp.bend`, which reads a file
-into Bytes so that a float32 file arrives one F32 per cell. The same box as
-above:
+Both run on Base's native `Bytes()`, which came from the net line. It is a String
+of bytes, packed one byte per cell, and it is kind Data, so every leaf of the fork
+shares it with no `Array.fork`. `File.read_buf` hands a file back as one.
+`real.sh` (with `slurp.bend`, a `read_buf` loop) runs both on real files. Same
+box, best of 2, read + compute:
 
-| input | Bend 1 thread | Bend 4 threads | baseline | verdict |
+| input | 1 thread | 4 threads | baseline | verdict |
 |---|---:|---:|---|---|
-| the deep dives' HTML x 8 (55.5 MB real UTF-8) | 249 ms | 67–82 ms | CPython `bytes.decode`: 145 ms | = CPython (valid, 54,403,536 scalars) |
-| same, one byte set to 0xFF | 260 ms (+239 first_bad) | 67 ms (+76) | | first bad byte 39,644,194 = CPython's |
-| 2^24 float32s (cancelling giants over a small sea) | 196 ms | 49 ms | naive C loop: ~22 ms, **wrong** | exact −1.3746 (`0xbfaff27f`) = Python's exact integer sum; naive float32 **and** float64 both say +0.0053 |
+| the deep dives' HTML x 8 (55.5 MB real UTF-8) | 85 + 426 ms | 85 + 132 ms | CPython `bytes.decode`: 145 ms | = CPython (valid, 54,403,536 scalars) |
+| same, one byte set to 0xFF | 76 + 393 (+446 first_bad) | 87 + 130 (+134) | | first bad byte 39,644,194 = CPython's |
+| 2^24 float32s (cancelling giants over a small sea) | 108 + 326 ms | 107 + 93 ms | naive C loop: ~22 ms, **wrong** | exact −1.3746 (`0xbfaff27f`) = Python's exact integer sum; naive float32 **and** float64 both say +0.0053 |
 
-Reading the file (64 KiB list chunks packed into cells) takes about 0.5 s and
-is not included above. It is now the slowest step.
+Before the native Bytes (a Vec of packed cells, filled from `File.read_bytes`'
+64 KiB lists), reading took about 0.5 s and dominated. Now it is about 0.1 s.
+Each read goes through the string descriptor (`str_peek_ro`: view, offset,
+width), so the per-byte compute cost is about 1.7x what the raw cells cost.
+utf8 reads a word at a time (`Bytes.word_le`) to amortize it. A bulk borrowed
+read would give back the rest.
 
 ## Oracles
 
