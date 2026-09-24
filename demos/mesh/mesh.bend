@@ -163,11 +163,11 @@ def shares(k: Nat, +gs: List<&2, Got>, +w: U32) -> String:
 
 def report(+p: Plan, +nw: U32, b: Board) -> IO(Unit):
   match p b:
-    case Plan{+k, +a, _, +c, _, _} Board{todo, +got, h, ag, df, r}:
+    case Plan{+k, +a, +t, +c, _, _} Board{todo, +got, h, ag, df, r}:
       +gap = missing(U32.to_nat(c), got, 0)
       do IO<Unit>:
         IO.print(Bool.pick(String, U32.is_eq(gap, NONE()),
-          J.render(k, a, fold(U32.to_nat(c), k, got, 0, J.zero(k))),
+          J.render(k, a, t, fold(U32.to_nat(c), k, got, 0, J.zero(k))),
           "INCOMPLETE: chunk " ++ U32.show(gap) ++ " never came back"))
         # the answer is in: end now, whatever is still out (a straggler's
         # copy is no longer needed, and its answer could only be the same)
@@ -220,13 +220,23 @@ def post(+ss: Client.Session, +url: Bytes(), +p: Plan, +i: U32) -> IO(Client.Res
   Client.fetch(ss, Client.Req{"POST", Bytes.append(url, "/leaf"), [Http.Header{"content-type", "text/plain"}],
     J.body(chunk.job(p, i))})
 
-# take a chunk, post it, record the answer, again -- until nothing is left, or
-# this worker fails once (its chunk goes back, and it retires)
-def work(fuel: Nat, +p: Plan, +db: Chan(Board), +w: U32, +url: Bytes(), +ss: Client.Session) -> IO(Unit):
-  match fuel:
-    case 0n:
+def STRIKES() -> Nat:
+  40n
+
+def BACKOFF() -> U32:
+  250
+
+# take a chunk, post it, record the answer, again -- until nothing is left.
+# A failed post gives the chunk back and costs a strike: the worker waits
+# BACKOFF ms and tries again (a spot machine may be back by then), and retires
+# after STRIKES failures in a row. An answer clears the strikes.
+def work(fuel: Nat, s: Nat, +p: Plan, +db: Chan(Board), +w: U32, +url: Bytes(), +ss: Client.Session) -> IO(Unit):
+  match fuel s:
+    case 0n _:
       IO.pure(Unit, Unit{})
-    case 1n++q:
+    case _ 0n:
+      IO.pure(Unit, Unit{})
+    case 1n++q 1n++z:
       IO.bind(U32, Unit, locked(U32, db, b => pick(Plan.chunks(p), b), NONE()), +i =>
         choose(IO(Unit), U32.is_eq(i, NONE()), u => IO.pure(Unit, Unit{}), u =>
           IO.bind(Client.Res(), Unit, post(ss, url, p, i), +r =>
@@ -234,8 +244,11 @@ def work(fuel: Nat, +p: Plan, +db: Chan(Board), +w: U32, +url: Bytes(), +ss: Cli
               u => IO.bind(Maybe<&2, Board>, Unit,
                 locked(Maybe<&2, Board>, db, b => record(Plan.chunks(p), i, words.of(r), w, b), None{}),
                 +m => choose(IO(Unit), Maybe.is_some(&2, Board, m), v => report.maybe(p, m),
-                  v => work(q, p, db, w, url, ss))),
-              u => locked(Unit, db, b => requeue(i, b), Unit{})))))
+                  v => work(q, STRIKES(), p, db, w, url, ss))),
+              u => do IO<Unit>:
+                locked(Unit, db, b => requeue(i, b), Unit{})
+                IO.sleep(BACKOFF())
+                work(q, z, p, db, w, url, ss)))))
 
 # -- the coordinator --------------------------------------------------------------------
 
@@ -247,7 +260,7 @@ def spawn.all(+p: Plan, +db: Chan(Board), +done: Chan(Unit), urls: List<&2, Byte
       do IO<Unit>:
         IO.spawn(Unit, do IO<Unit>:
           +ss : Client.Session <- Client.session(Client.with.timeout(Client.opts(), 600000))
-          work(65536n, p, db, w, url, ss)
+          work(65536n, STRIKES(), p, db, w, url, ss)
           Client.close(ss)
           ok : Bool <- Chan.send(Unit, done, Unit{})
           return Unit{})
@@ -297,7 +310,7 @@ def distributed(+p: Plan, +urls: List<&2, Bytes()>) -> IO(Unit):
 def local(+p: Plan) -> IO(Unit):
   match p:
     case Plan{+k, +a, +t, _, +d, _}:
-      IO.print(J.render(k, a, J.run(J.Job{k, a, 0, t, d})))
+      IO.print(J.render(k, a, t, J.run(J.Job{k, a, 0, t, d})))
 
 def arg(k: Nat, xs: List<&2, String>) -> String:
   match k:

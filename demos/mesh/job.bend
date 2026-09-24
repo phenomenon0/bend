@@ -7,6 +7,8 @@
 #
 #   exact  the Kulisch sum of kulisch.bend's draws(seed, i), i in [lo, lo+n):
 #          ten U32 limbs, joined by a 320-bit add
+#   option option.bend's Monte Carlo call price over paths [lo, lo+n) of seed
+#          a: two 96-bit fixed-point sums, joined by integer adds
 #   lost   lostupdate.bend's census of schedules of rank [lo, lo+n), for m
 #          increments a thread: sixteen U32 buckets, joined by adding them
 #
@@ -19,6 +21,7 @@
 import Base
 import ../monoids/kulisch.bend as K
 import ../monoids/lostupdate.bend as L
+import ./option.bend as O
 
 type Job is Data:
   Job{kind: U32, a: U32, lo: U32, n: U32, d: U32}
@@ -100,11 +103,28 @@ def EXACT() -> U32:
 def LOST() -> U32:
   2
 
+def opt.words(o: O.Opt) -> List<&2, U32>:
+  match o:
+    case O.Opt{a0, a1, a2, b0, b1, b2}:
+      [a0, a1, a2, b0, b1, b2]
+
+def opt.of(+xs: List<&2, U32>) -> O.Opt:
+  O.Opt{at(0n, xs), at(1n, xs), at(2n, xs), at(3n, xs), at(4n, xs), at(5n, xs)}
+
+def hex8(xs: List<&2, U32>) -> String:
+  match xs:
+    case Nil{}:
+      ""
+    case Con{x, t}:
+      " " ++ String.drop(K.hex(x), 2n) ++ hex8(t)
+
 def kind.of(+s: String) -> U32:
-  Bool.pick(U32, String.eq(s, "exact"), EXACT(), Bool.pick(U32, String.eq(s, "lost"), LOST(), 0))
+  Bool.pick(U32, String.eq(s, "exact"), EXACT(), Bool.pick(U32, String.eq(s, "lost"), LOST(),
+    Bool.pick(U32, String.eq(s, "option"), 3, 0)))
 
 def kind.name(+k: U32) -> String:
-  Bool.pick(String, U32.is_eq(k, EXACT()), "exact", Bool.pick(String, U32.is_eq(k, LOST()), "lost", "?"))
+  Bool.pick(String, U32.is_eq(k, EXACT()), "exact", Bool.pick(String, U32.is_eq(k, LOST()), "lost",
+    Bool.pick(String, U32.is_eq(k, 3), "option", "?")))
 
 def job.of(+kw: String, +ws: List<&2, U32>) -> Job:
   Job{kind.of(kw), at(0n, ws), at(1n, ws), at(2n, ws), at(3n, ws)}
@@ -131,6 +151,8 @@ def run.k(k: U32, +a: U32, +lo: U32, +n: U32, +d: U32) -> List<&2, U32>:
       acc.words(K.exact(U32.to_nat(d), a, lo, n))
     case 2:
       hist.words(L.tree(U32.to_nat(d), a, lo, n))
+    case 3:
+      opt.words(O.tree(U32.to_nat(d), a, lo, n))
     case _:
       Nil{}
 
@@ -145,6 +167,8 @@ def join(k: U32, xs: List<&2, U32>, ys: List<&2, U32>) -> List<&2, U32>:
   match k:
     case 1:
       acc.words(K.join(acc.of(xs), acc.of(ys)))
+    case 3:
+      opt.words(O.join(opt.of(xs), opt.of(ys)))
     case _:
       hist.words(L.join(hist.of(xs), hist.of(ys)))
 
@@ -152,14 +176,18 @@ def zero(k: U32) -> List<&2, U32>:
   match k:
     case 1:
       acc.words(K.zero())
+    case 3:
+      [0, 0, 0, 0, 0, 0]
     case _:
       [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
 
 # the final answer, as the single-process programs print it
-def render(k: U32, +a: U32, xs: List<&2, U32>) -> String:
+def render(k: U32, +a: U32, +n: U32, +xs: List<&2, U32>) -> String:
   match k:
     case 1:
       "exact " ++ K.hex(K.round(acc.of(xs)))
+    case 3:
+      "option paths=" ++ U32.show(n) ++ " acc=" ++ String.drop(hex8(xs), 1n) ++ " " ++ O.show(opt.of(xs), n)
     case _:
       L.show(hist.of(xs), a)
 

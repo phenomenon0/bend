@@ -403,7 +403,9 @@ function cli_build(bin: string, file: string): void {
   const libs  = [["X11", "X11"], ["alsa", "asound"]].flatMap(([h, l]) =>
     !mac && c.includes("#include <" + h + "/") ? ["-l" + l] : [])
     .concat(c.includes("#include <openssl/") ? ["-lssl", "-lcrypto"] : []);
-  const cpu = [...objc, "-std=c11", "-O3", file, "-lpthread", "-lm",
+  // -ffp-contract=off: an F64 add of an F64 mul must round twice, as the JS
+  // lane does; clang fuses them into one FMA by default (GCC does not in -std=c11)
+  const cpu = [...objc, "-std=c11", "-O3", "-ffp-contract=off", file, "-lpthread", "-lm",
     ...libs, "-o", path.resolve(bin)];
   const gpu = mac ? ["-DBEND_METAL=1", ...cpu]
     : ["-DBEND_CUDA=1", "-I" + cuda + "/include", "-L" + cuda + "/lib64",
