@@ -112,6 +112,8 @@ allow(/^kernel\/src\/[a-z]+\.rs$/, 12000);
 allow(/^kernel\/tests\/(run\.sh|[a-z_]+\.core)$/, 8000);
 allow(/^tests\/strings\/utf8\.bin$/, 200000, true);
 allow(/^tests\/(run|caps)\.sh$/, 4000);
+allow(/^tests\/fuzz\/(fuzz|gen)\.ts$/, 16000);
+allow("tests/fuzz/README.md", 1500);
 allow(/^tests\/[a-z0-9_]+\.bend$/, 4000);
 allow(/^tools\/bend-fmt-lsp\/(\.gitignore|README\.md|package\.json|package-lock\.json|tsconfig\.json)$/, 4000);
 allow(/^tools\/bend-fmt-lsp\/src\/(formatter|server)\.ts$/, 8000);

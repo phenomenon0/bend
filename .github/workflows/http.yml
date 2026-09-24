@@ -11,11 +11,11 @@ on:
     branches: [omen-http, claude/next-gen-tier-review-xss592]
     paths: ["demos/io_http_engine/**", "demos/io_proxy/**", "demos/io_resp/**", "demos/io_http2/**", "demos/io_sink/**",
       "demos/io_http_client/**", "wire/**", "net/**", "power/csv*", "power/gzip*", "power/deflate*", "power/json*",
-      "bend2/**", "kernel/**", ".github/workflows/http.yml"]
+      "bend2/**", "kernel/**", "tests/fuzz/**", ".github/workflows/http.yml"]
   pull_request:
     paths: ["demos/io_http_engine/**", "demos/io_proxy/**", "demos/io_resp/**", "demos/io_http2/**", "demos/io_sink/**",
       "demos/io_http_client/**", "wire/**", "net/**", "power/csv*", "power/gzip*", "power/deflate*", "power/json*",
-      "bend2/**", "kernel/**", ".github/workflows/http.yml"]
+      "bend2/**", "kernel/**", "tests/fuzz/**", ".github/workflows/http.yml"]
 jobs:
   engine:
     runs-on: ubuntu-24.04
@@ -85,6 +85,10 @@ jobs:
       # rsp_reframed) must refuse every one
       - name: the proxy's laws are not vacuous
         run: python3 demos/io_proxy/mutants.py
+      # the compiler is trusted, not proven: random well-typed programs
+      # (tests/fuzz) must print the same in the interpreter, JS and C
+      - name: the compiler's lanes agree on 60 random programs
+        run: BEND_NO_TELEMETRY=1 bun tests/fuzz/fuzz.ts --ci
       - name: the server builds
         run: |
           bun bend2/main.ts demos/io_http_engine/main.bend -o httpd
