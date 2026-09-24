@@ -56,7 +56,7 @@ repro for each and the branch that fixes it, if any.
 | F07 | only Base imports by name: a second standard module needs a bend.ts change | LIMITATION | check | low | none | upstream/import_name.bend |
 | F08 | a library cannot use a name Base has (type Event, constructor Emit), nor a def named after its own file | LIMITATION | check | low | none | upstream/base_name.bend, self_prefix.bend |
 | F09 | Base's only bytes are a String, a list: a read by offset walks, so decoders that index (inflate) are quadratic | LIMITATION | all | med | none (ours: the packed Bytes natives) | upstream/string_index.bend |
-| F10 | the JS lane walks a String 10-20x slower than the C lane | PERF | js, interp for IO mains | med | none | upstream/js_string_scan.bend |
+| F10 | the JS lane walks a String 10-20x slower than the C lane, and a match that rebuilds SCon{h, t} copies the rest | PERF | js, interp for IO mains | med | none | upstream/js_string_scan.bend |
 | F11 | Base's String.take recurses on the JS stack: 40000 chars overflow it | BUG | js, interp for IO mains | med | none | upstream/js_deep_take.bend |
 
 Verified on canon `95317d95`: every U/F row above reads REPRO except
@@ -438,9 +438,17 @@ stock runtime; these are what the port hit. Each reads REPRO on canon
   (`comp.ts:362`): a match takes it apart with `codePointAt` and
   `slice(1)`, SCon builds with `+`, and `String.length` is
   `[...s].length`. `upstream/js_string_scan.bend` walks a million
-  characters in 576 ms in JS and 68 ms in C. std/csv.bend reads
-  0.34 MB/s in canon's JS lane and 7.3 MB/s in its C lane; a 26 MB JSON
-  document does not finish in five minutes in JS (C: 8.7 s).
+  characters in 576 ms in JS and 68 ms in C. Worse, a match that gives
+  back what it took apart builds a new string: `String.drop(s, 0n)`
+  (`base.bend:1912`) answers `SCon{h, t}`, which is `h + t` in JS, and the
+  next `slice` of it copies the whole rest. A cursor that re-reads its
+  position through `String.drop` is quadratic in JS and linear in C;
+  std/json_value.bend took 5.3 s of CPU on 100 KB before
+  std/bytes_list.bend stopped rebuilding (its `skip`, `first`), 1.1 s
+  after. What is left is the walk itself: std/csv.bend reads 0.3 MB/s in
+  canon's JS lane and 8 MB/s in its C lane, std/json_value.bend 0.16 MB/s
+  and 3.2 MB/s. `bend F.bend` runs an IO main on the JS runtime, so this
+  is the speed a user gets by default.
 - **F11 deep recursion in the JS lane.** `String.take` (`base.bend:1903`)
   builds `SCon{h, String.take(t, p)}`, a call a char, and the JS lane and
   the interpreter (for an IO main) run it on the machine stack:

@@ -118,7 +118,8 @@ def main():
       shutil.copy(fixture, os.path.join(tmp, 'tests', 'std', 'csv.bend'))
       if PACKED:
         by = os.path.join(tmp, 'std', 'bytes.bend')
-        open(by, 'w').write(open(by).read().replace('import ./bytes_list.bend as Impl',
+        src = open(by).read()
+        open(by, 'w').write(src.replace('import ./bytes_list.bend as Impl',
           'import ./bytes_packed.bend as Impl'))
       src_path = os.path.join(tmp, 'std', 'csv.bend')
       src = open(src_path).read()

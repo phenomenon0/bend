@@ -63,7 +63,8 @@ def main():
   shutil.copytree(os.path.join(ROOT, "tests", "std"), os.path.join(work, "tests", "std"))
   if PACKED:
     by = os.path.join(work, "std", "bytes.bend")
-    open(by, "w").write(open(by).read().replace("import ./bytes_list.bend as Impl",
+    src = open(by).read()
+    open(by, "w").write(src.replace("import ./bytes_list.bend as Impl",
       "import ./bytes_packed.bend as Impl"))
   env = dict(os.environ, BEND_NO_TELEMETRY="1")
   names = NAMES or sorted(f[:-5] for f in os.listdir(os.path.join(work, "tests", "std")) if f.endswith(".bend"))

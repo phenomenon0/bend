@@ -77,7 +77,8 @@ def main():
   shutil.copytree(os.path.join(ROOT, "tests", "std", "bench"), os.path.join(work, "tests", "std", "bench"))
   if "--packed" in sys.argv:
     by = os.path.join(work, "std", "bytes.bend")
-    open(by, "w").write(open(by).read().replace("import ./bytes_list.bend as Impl",
+    src = open(by).read()
+    open(by, "w").write(src.replace("import ./bytes_list.bend as Impl",
       "import ./bytes_packed.bend as Impl"))
   data = os.path.join(work, "bench.csv")
   subprocess.run([sys.executable, os.path.join(ROOT, "tests", "power", "bench", "csv", "gen.py"), data,

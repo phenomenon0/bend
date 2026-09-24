@@ -56,7 +56,8 @@ def main():
   shutil.copytree(os.path.join(ROOT, "std"), os.path.join(work, "std"))
   if "--packed" in sys.argv:
     by = os.path.join(work, "std", "bytes.bend")
-    open(by, "w").write(open(by).read().replace("import ./bytes_list.bend as Impl",
+    src = open(by).read()
+    open(by, "w").write(src.replace("import ./bytes_list.bend as Impl",
       "import ./bytes_packed.bend as Impl"))
   env = dict(os.environ, BEND_NO_TELEMETRY="1")
   for name in sorted(os.listdir(os.path.join(work, "std", "examples"))):
