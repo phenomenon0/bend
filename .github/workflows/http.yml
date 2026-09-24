@@ -10,11 +10,11 @@ on:
   push:
     branches: [omen-http, claude/next-gen-tier-review-xss592]
     paths: ["demos/io_http_engine/**", "demos/io_proxy/**", "demos/io_resp/**", "demos/io_http2/**", "demos/io_sink/**",
-      "demos/io_http_client/**", "wire/**", "net/**", "power/csv*",
+      "demos/io_http_client/**", "wire/**", "net/**", "power/csv*", "power/gzip*", "power/deflate*", "power/json*",
       "bend2/**", "kernel/**", ".github/workflows/http.yml"]
   pull_request:
     paths: ["demos/io_http_engine/**", "demos/io_proxy/**", "demos/io_resp/**", "demos/io_http2/**", "demos/io_sink/**",
-      "demos/io_http_client/**", "wire/**", "net/**", "power/csv*",
+      "demos/io_http_client/**", "wire/**", "net/**", "power/csv*", "power/gzip*", "power/deflate*", "power/json*",
       "bend2/**", "kernel/**", ".github/workflows/http.yml"]
 jobs:
   engine:
@@ -36,7 +36,7 @@ jobs:
         run: |
           for f in demos/io_http_engine/PROOF.bend demos/io_resp/PROOF.bend power/csv_proof.bend \
             demos/io_http2/PROOF.bend wire/http1/PROOF.bend wire/client.bend wire/pool.bend wire/world.bend \
-            demos/io_proxy/PROOF.bend net/ws_proof.bend; do
+            demos/io_proxy/PROOF.bend net/ws_proof.bend net/PROOF.bend; do
             out=$(bun bend2/main.ts "$f"); echo "$out"
             [ "$out" = "All terms check." ] || { echo "$f: not a clean proof"; exit 1; }
           done
@@ -49,7 +49,7 @@ jobs:
           bash kernel/tests/run.sh
           for f in demos/io_http_engine/PROOF.bend demos/io_resp/PROOF.bend power/csv_proof.bend \
             demos/io_http2/PROOF.bend wire/http1/PROOF.bend wire/client.bend wire/pool.bend wire/world.bend \
-            demos/io_proxy/PROOF.bend net/ws_proof.bend; do
+            demos/io_proxy/PROOF.bend net/ws_proof.bend net/PROOF.bend; do
             bun bend2/main.ts "$f" --export proof.core
             kernel/target/release/bend-kernel -q proof.core || { echo "$f: the kernel refuses it"; exit 1; }
           done
@@ -169,6 +169,17 @@ jobs:
           pip install -q websockets || true
           bun bend2/main.ts net/ws_cli.bend -o wsc
           python3 net/ws_check.py ./wsc ./httpd 8860
+      # bend-net (net/): each of its mutants hands a handler what the RFC
+      # did not frame, writes a response a client would frame otherwise,
+      # routes wrong, pools a connection its response closed, or follows
+      # a redirect too far or with credentials, and net/PROOF.bend must
+      # refuse every one; then its examples, run against every default
+      # they promise: framing, timeouts, limits, the router, files, JSON,
+      # SIGTERM, and the client's TLS, redirects, gzip and pooling
+      - name: bend-net's laws are not vacuous, and its examples keep their defaults
+        run: |
+          python3 net/mutants.py
+          python3 net/check.py --bin net-bin --port 8870
       - name: the RESP server answers on bend-wire
         run: |
           bun bend2/main.ts demos/io_resp/main.bend -o respd
