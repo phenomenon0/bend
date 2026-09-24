@@ -35,6 +35,8 @@ allow("AGENTS.md", 2000);
 allow("CHANGELOG.md", 6000);
 allow("README.md", 3000);
 allow("REPO_MAP.md", 4000);
+allow("UPSTREAM.md", 16000);
+allow(/^upstream\/[a-z0-9_]+\.(bend|py|sh)$/, 4000);
 allow("WONTFIX.txt", 1500);
 allow("LICENSE", 4000);
 allow("flake.nix", 1500);

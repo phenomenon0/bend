@@ -41,6 +41,8 @@ lines its run must print, and the gates run on the mini cluster.
     guide/              GUIDE.md, and the extras SHADERS.md, EFFECTS.md and
                         NETWORKING.md (`bend guide networking`)
     REPO_MAP.md         this map in more words, and the networking stack whole
+    UPSTREAM.md         every bug we found that canon's main also has, kept
+                        current; upstream/ holds its repros and verify.sh
     paper/              BendTT.pdf, BendRT.pdf
     media/              the film and the charts
     .github/            ISSUE_TEMPLATE/bug.yml, the bug report form, and
