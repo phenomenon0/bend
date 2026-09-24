@@ -279,9 +279,16 @@ def IO.sleep(ms: U32) -> IO(Unit):
   import "./effs/sleep.c"
   import "./effs/sleep.js"
 
+# ms on a monotonic clock (since boot): for durations and deadlines
 def IO.now() -> IO(Nat):
   import "./effs/now.c"
   import "./effs/now.js"
+
+# ms since the Unix epoch, the wall clock (it can step): for dates, which
+# bend2/time.bend prints (Time.iso, Time.http)
+def IO.wall() -> IO(Nat):
+  import "./effs/wall.c"
+  import "./effs/wall.js"
 
 def IO.signal_pending(sig: U32) -> IO(Bool):
   import "./effs/signal_pending.c"

@@ -50,8 +50,8 @@ A probe is `{"name","t" (ms since the epoch),"at" (ISO 8601),"up","ms"
 
 ## How it works
 
-    clock.bend  Clock.wall (a foreign effect: clock.c, clock.js) and ISO dates
     model.bend  the types, their JSON both ways, the checks, the store's pure updates
+                (a probe's time is Base's IO.wall, its date bend2/time.bend's Time.iso.ms)
     env.bend    what is shared: the store behind a channel of one, the hub, the logs
     files.bend  whole-file reads, the logs replayed a MiB and a line at a time
     probe.bend  a loop per monitor, the webhook

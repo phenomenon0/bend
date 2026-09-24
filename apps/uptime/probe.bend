@@ -15,7 +15,6 @@ import ../../net/client.bend as Client
 import ../../net/json.bend as Json
 import ../../net/ws_frame.bend as F
 import ../../net/ws_server.bend as WsServer
-import ./clock.bend as Time
 import ./model.bend as M
 import ./env.bend as E
 
@@ -149,7 +148,7 @@ def wait(fuel: Nat, +until: Nat) -> IO(Unit):
 def probe.run(+e: E.Env, +ss: Client.Session, +s: M.Spec, +due: Nat, again: Nat -> IO(Unit)) -> IO(Unit):
   do IO<Unit>:
     +t0 : Nat <- IO.now()
-    +w : Nat <- Time.Clock.wall()
+    +w : Nat <- IO.wall()
     r : Client.Res() <- Client.fetch(ss, Client.req("GET", M.spec.url(s)))
     +t1 : Nat <- IO.now()
     told(e, s, judged(s, w, ms.between(t0, t1), ms.between(due, t0), r))

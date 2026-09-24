@@ -359,9 +359,12 @@ def main() -> IO(Unit):
 Every bind is annotated, and `x : T = v` binds a pure value in the middle of a
 block. A fallible effect answers `Result<&1, &1, U32 & String, A>`: `IO.try`
 unwraps it or exits with the error, and `IO.die` exits with your own. `IO.args`
-answers the command line, less the runtime's own options (a `--` ends them). A
-handle (`File`, `Socket`, `Window`) is an affine, opaque value, so every effect
-on one hands it back beside its result, and no program can forge or reuse one.
+answers the command line, less the runtime's own options (a `--` ends them).
+`IO.now` is a monotonic clock (ms since boot) for durations; `IO.wall` is the
+wall clock (ms since the Unix epoch), whose dates `bend2/time.bend` prints
+(`Time.iso`, `Time.http`). A handle (`File`, `Socket`, `Window`) is an affine,
+opaque value, so every effect on one hands it back beside its result, and no
+program can forge or reuse one.
 
 A Bend program is a set of computations interleaved by one event loop, as in
 Node.js: each runs its pure code (in parallel, on every core) up to its next

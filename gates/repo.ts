@@ -44,6 +44,7 @@ allow("bend2/bend.ts", 43000);
 allow("bend2/comp.ts", 85100);
 allow("bend2/main.ts", 10000);
 allow("bend2/export.ts", 3000);
+allow("bend2/time.bend", 3500);
 allow(/^bend2\/effs\/[a-z0-9_]+\.(c|js)$/, 4000);
 allow(/^bend2\/pack\/(\.gitignore|package\.json|tsconfig\.json|bun\.lock)$/, 1000);
 allow(/^bend2\/docs\/(BendRT|BendTT)\/(main\.typ|refs\.bib)$/, 60000);

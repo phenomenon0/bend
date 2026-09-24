@@ -19,7 +19,6 @@ import ../../net/ws.bend as Ws
 import ../../net/ws_frame.bend as F
 import ../../net/ws_server.bend as WsServer
 import ../../power/json_value.bend as J
-import ./clock.bend as Time
 import ./model.bend as M
 import ./env.bend as E
 import ./probe.bend as P
@@ -50,7 +49,7 @@ def errors(+status: U32, whys: List<&2, Bytes()>) -> Res():
 # GET /api/monitors
 def list(+e: E.Env, r: Http.Request) -> IO(Res()):
   do IO<Res()>:
-    +now : Nat <- Time.Clock.wall()
+    +now : Nat <- IO.wall()
     E.peek(Res(), e, st => answer(200, Json.arr(M.mons.json(M.store.mons(st), Nat.div(now, 3600000n)))), gone())
 
 # GET /api/monitors/:name/history?limit=
