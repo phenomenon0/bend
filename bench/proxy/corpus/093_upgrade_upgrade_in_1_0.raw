@@ -1,0 +1,5 @@
+GET / HTTP/1.0
+Host: a
+Connection: Upgrade
+Upgrade: websocket
+

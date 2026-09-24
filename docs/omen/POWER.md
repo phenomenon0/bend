@@ -35,7 +35,7 @@ Substrate — the three containers everything else is built from:
 | file | what it is | reference |
 |---|---|---|
 | `vec.bend` | a growable packed sequence of U32 over Base's `Array`, one flat block of native cells; one owner, every write in place | — |
-| `bytes.bend` | a growable byte buffer, four bytes to a U32 cell, little end first; `len` is the truth, so pop and truncate move no data | — |
+| `bytes.bend` | power's byte-buffer names over Base's `Bytes()` — the String the IO effects hand back, packed a byte a cell, cut by view, appended in place; the one byte type, so a socket's buffer goes to `json` or `blake3` unconverted | — |
 | `bitset.bend` | 32 flags to a cell, a fixed `32 * 2^depth` bits; and / or / xor / andnot / count as one index loop, popcount as the SWAR ladder | — |
 
 Order and arrangement:
@@ -62,7 +62,10 @@ Parsing and text:
 | file | what it is | reference |
 |---|---|---|
 | `json.bend` | JSON as an event stream: one token per `next()`, a span into the caller's own Bytes, never a tree and never a copy | CPython `json`, `py_scanstring` and `NUMBER_RE` **†** |
+| `json_value.bend` | JSON as a value over `json`'s stream: `parse` under a depth cap, a byte budget and a duplicate-key policy; canonical `show`; `get`, `at`, `to_f64`, `to_i64`. Numbers keep their lexeme and unescaped strings are views of the input | CPython `json` (`object_pairs_hook`, `json.dumps`' escaper) **†** |
 | `grammar.bend` | a parser state that is a *value*, plus the set of next bytes it will accept — lane 5's machine with the document taken out, so it forks | XGrammar's mask; CPython `json` as the acceptance authority **†** |
+| `csv.bend` | RFC 4180 and its dialect knobs as a streaming reader over Base's `Bytes()` -- a field that lies in one read is a view of it -- and a minimal-quoting writer; budgets make hostile input a refusal at a byte offset. `csv_spec.bend` is RFC 4180's ABNF read over a whole input; `csv_laws.bend` states, and `csv_proof.bend` proves, chunking, the Bytes bridge, the reader is the grammar for every dialect, input and split into reads, and the writer's round trip (`tests/power/csv_mutants.py`: ten mutants, each fails the proof) | CPython `csv` **†** |
+| `deflate.bend`, `gzip.bend` | RFC 1951 inflate as a bit machine over `Bytes()` (reads cut anywhere, an output cap, malformed streams refused as zlib refuses them) and deflate at levels 0-9 (zlib's hash chains and level knobs; stored, fixed and dynamic blocks); RFC 1952 members with FEXTRA, FNAME, FCOMMENT, FHCRC, CRC-32 and ISIZE checked. `deflate_laws.bend` states, and `deflate_proof.bend` proves, chunking, refusal, the cap, the window, CRC-32 against the bit-at-a-time register, the RFC's code tables and fixed codes, the round trip for stored (level 0) and fixed (`deflate_fixed`, its tokens checked as written) streams of any bytes, and that `inflate`, which reads a symbol whole wherever the machine is at the start of one, is the bit machine over any stream (`inflate_fast`, `inflate_proof.bend`); the dynamic round trip is checked on vectors (`tests/power/deflate_mutants.py`: twenty-five mutants, seven of them in the fast path, each fails the proof) | CPython `zlib` and `gzip` **†** |
 | `text.bend` | identity over bytes: UTF-8 with every code point's offset, grapheme cluster boundaries, and a normalizer that hands back the map from normalized text to the original's byte ranges | UAX #29, CPython `unicodedata` **†** |
 
 Content addressing:
@@ -283,55 +286,102 @@ compiled index loop over a flat block.
 exhausted fuel is a refusal with a price attached, never a partial answer and
 never a hang.
 
-## Known hazard: dropping an F64 on the C backend
+## Known cost: a byte at a time over Base's Bytes()
 
-Three lanes hit this independently in three shapes. An `F64` is stored
-**unboxed**, so a raw IEEE-754 double rides in a slot the runtime reads as a
-`Term`: the exponent becomes a heap tag and the low 40 mantissa bits a heap
-address. Sinking such a slot frees a block that was never allocated — a silent
-wrong answer, a blank run, `bend: out of memory`, or a memory fault, depending
-on what the bogus address lands on. It is deterministic per binary, reproduces
-at `--threads 1`, and `--gpu 8GB` does not help.
+`bytes.bend` moved from four bytes to a Vec cell onto Base's `Bytes()`, so the
+IO effects' buffers need no conversion; the bulk operations (slice, drop, find,
+append a run) are native and copy nothing. A single byte was not: on C,
+`Bytes.get` was a reference count up and down, a `Some` node and a fresh view
+descriptor (30 ns against the Vec cell's 2), a push allocated the one-byte
+buffer it appended (85 ns), and on JS a positional read walked the string from
+the front. Port alone, 1T: json 0.56 -> 2.97 s, bytes 0.57 -> 10.8, blake3
+0.29 -> 3.7, cdc 0.30 -> 3.3, text 2.19 -> 4.9.
 
-Exactly two surfaces put a double in that position:
+Base now has the scanner's reads as natives with Bend bodies (the spec the laws
+use; `tests/base/bytes_scan.bend` holds them equal on four lanes):
+`Bytes.get`, `len`, `word_le`, `span` (bytes in [lo, hi) from i), `find_byte`
+and `find_any` (the first of one or four bytes) borrow the buffer -- the call
+site neither shares nor drops it, the read is plain loads a loop hoists -- and
+`Bytes.push` stores into an unshared buffer's room. Measured on this sandbox
+(ns per byte, 16 MiB buffer, the loop's share): get 30 -> 0.9, a get-loop run
+36 -> 2.2, span 0.9, push 80 -> 6 (the Vec cell's push was 3.9). bytes.bend's
+reads are bound before the buffer goes back in their pair, so they borrow, and
+blake3 reads its blocks where they lie. 1T medians against the pre-port pins:
+json 0.54 -> 0.58 s, grammar 1.14 -> 1.07, text 2.22 -> 2.40, cdc 0.25 ->
+0.32, blake3 0.30 -> 0.48, bytes 0.53 -> 0.81. What is left is a descriptor's
+chain of loads per read where the Vec cell had one, and the push's.
 
-1. **`Array<F64>` cells.** `lay_arr` routes any element wider than `w32` into a
-   block whose cells `term_drop` / `blk_copy` / `blk_keep` walk as `Term`s.
-   (`Array<Nat>` is walked too and is safe only by accident — `nat_chk` caps a
-   `Nat` below `2^48` so its tag is always 0.)
-2. **Polymorphic parameters.** A def's signature is memoized by name, so the one
-   compiled `Bool.pick` emits `term_sink` on whatever word arrives.
+On JS, a read of a buffer that is being pushed to is still quadratic.
+`str_flat` (bend2/comp.ts) remembers the last string it tested for
+surrogates, and `Bytes.push` makes a new string every time, so every read
+after a push runs the regex over the whole buffer again. deflate.bend's
+copy (a read `dist` back, then a push) is that loop, so the JS lane
+inflates at kilobytes a second on large output. Ten lines show it: grow a
+buffer by pushing the byte seven back, n times; n = 100000 takes seconds
+on JS and milliseconds on C.
 
-Generic *containers* are fine: `List<F64>`, `Maybe<F64>`, `Pair<F64,F64>` get
-real `w64` fields. Whether a given double is a landmine is exact and computable
-— safe iff no mantissa bit is set below position 40 — which is why every earlier
-magnitude sweep looked random. The earlier "only a *computed* F64" reading is
-withdrawn; literals fail too.
+    def run(n: Nat, out: Bytes()) -> Bytes():
+      match n:
+        case 0n:
+          out
+        case 1n+p:
+          +o = out
+          +c = Bytes.get(o, Nat.sub(Bytes.len(o), 7n))
+          run(p, Bytes.push(o, U32.and(U32.add(c, 1), 255)))
 
-Root cause, the measured tables, the bit predicate and what a real fix costs (a
-third block mode across four backends, not a one-line flip) are in
-`docs/omen/f64-drop-c-backend.md`. The workaround is to prefer F32 or
-fixed-point U32 in arrays, and `match` rather than `Bool.pick` at F64.
+The fix is in the runtime and not here: `bytes_push` can leave the cache
+warm when the string it pushes to is the one cached and the byte is not
+a surrogate (`STR_FLAT_S = s + ch` with `STR_FLAT` unchanged).
 
-The F32 workaround is a layout guarantee rather than a lucky sample: `F32` gives
-cells of kind `w32`, which take the packed block and are never walked as `Term`s.
-Lane 14's earlier hedge — F32 is "correct in every shape run, and it was not run
-much" — was the honest thing to say while the cause was unknown, and the
-derivation supersedes it.
+## Known hazard: a U64, I64 or F64 in an Array on the C backend
 
-The same derivation reclassifies the doubles that *passed*. `pi`, `8193` and
-`10007` are not safe values; by the bit predicate they are landmines that did not
-detonate, the bogus free having landed somewhere the run never read back. Safe is
-exactly: no mantissa bit set below position 40, or zero, inf, NaN. This is why
-every attempt to find a magnitude threshold failed — there is no threshold, only
-the predicate.
+A `U64`, `I64` or `F64` is stored **unboxed**: its 64 raw bits ride in a word,
+and any bit pattern is legal. The runtime reads a word it drops or shares as a
+`Term`, whose top byte is a tag, whose bit 63 is the count bit and whose low 40
+bits are a heap address. A `Nat` is safe there by construction (`nat_chk` keeps
+it below `2^48`, tag 0); the full-width words are not: `2^63-1`, `-1`, `0.1d` and
+`pi` all read as references, and sinking one frees a block that was never
+allocated — a silent wrong answer, a blank run, `out of memory` or a memory
+fault, deterministic per binary.
+
+**Fixed: polymorphic parameters, generic fields and shared slots.** Three
+surfaces put such a word where a `Term` is dropped, and all three now box it
+(`comp.ts`: the `X64` layout, `x64_box` / `x64_take` in the runtime):
+
+1. a polymorphic parameter — `Bool.pick(I64, …)`, `Bool.pick(F64, …)`, a
+   generic swap, a closure applied through `A -> A`;
+2. a generic constructor's field — a `Maybe<I64>` or a `List<F64>` built under
+   a pick, a `Some` a native returns (`F64.read`);
+3. a union slot another arm holds a box in — `Result<String, I64>`'s `Done`
+   shares its word with `Fail`'s `String`; `lay_pack` now boxes that field
+   instead of sharing the slot.
+
+A boxed word that would read as a trivial `Term` (tag 0 or 1 below the heap,
+no count bit) rides as it is, so a small non-negative `I64` costs nothing; the
+rest ride in a one-word block (`TAG_BUF`, never walked). A native that takes
+a full word reads it back out of the box; a monomorphic path never boxes.
+`Bool.pick(Maybe<&2, I64>, False{}, Some{2^63-1}, None{})`, which crashed,
+and the reproducers of `docs/omen/f64-drop-c-backend.md` for this surface are
+held on four lanes by `tests/base/x64_boxed.bend`. `F64.min`/`F64.max` pick
+through the monomorphic `F64.pick`, so they never box.
+json_value's `to_i64` met this pick on `-9223372036854775809` before the fix,
+and matches instead.
+
+**Still open: `Array<U64>`, `Array<I64>`, `Array<F64>` cells.** `lay_arr` puts
+any element wider than `w32` in a `TAG_ARR` block whose cells `term_drop`,
+`blk_copy` and `blk_keep` walk as `Term`s; the packed `TAG_BUF` block is 32-bit
+cells only. A fix is a 64-bit packed block mode (or two cells an element)
+across the block operations of all four backends. Until then prefer `F32` or a
+fixed-point `U32` in arrays; the bit predicate (safe iff no mantissa bit below
+position 40, or zero, inf, NaN) says exactly which doubles survive. Root cause
+and measurements: `docs/omen/f64-drop-c-backend.md`.
 
 ## Not built
 
-The packed `File.read_bytes` effect from the plan's substrate row. It needs a
-row in `bend2/effs/`, no primitive here reads a file, and adding an effect would
-put the whole existing battery at risk for zero consumers. Flagged rather than
-silently cut.
+The packed `File.read_bytes` effect from the plan's substrate row is no longer
+needed: Base grew `Bytes()` and `File.read_buf` / `TCP.recv_buf` return it, and
+`bytes.bend` is now power's names over that type, so there is one byte buffer
+in the language rather than two.
 
 ## The reports
 

@@ -1,5 +1,10 @@
 # Dropping an `F64` on the C backend
 
+**Status.** Surface 2 below (a polymorphic parameter), and the same word in a
+generic field or in a slot another arm boxes, is fixed: comp.ts boxes a full
+64-bit word there (`X64`, `x64_box`), held by `tests/base/x64_boxed.bend`.
+Surface 1 (`Array` cells) is still open. See POWER.md's hazard section.
+
 A defect found while porting the power lanes. **Not filed as a fix** — not for
 lack of permission (`comp.ts` is editable; only `bend.ts` is not) but because
 the fix is a new block mode in the memory manager, across four backends. See

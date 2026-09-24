@@ -622,3 +622,8 @@ write a graphical or parallel app in Bend.
 `bend guide effects` prints "Effects in Bend", an AI-written note (to be
 revised by a human) on the C and JS side of custom effects. Read it before
 you write one.
+
+`bend guide networking` prints "Networking in Bend": the HTTP server and
+client, JSON bodies and the WebSocket client in `net/`, their defaults, their
+laws, and what is not built yet. Read it before you write a program that
+talks over the network.

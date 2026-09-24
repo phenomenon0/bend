@@ -1,0 +1,7 @@
+POST /e HTTP/1.1
+Host: a
+Content-Length: 3
+
+abcGET /b HTTP/1.1
+Host: a
+

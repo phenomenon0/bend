@@ -86,6 +86,10 @@ type Map<a, -V: Kind(a)> is Kind(a):
   MLeaf{key: String, val: V}
   MNode{pos: Nat, lo: Map<a, V>, hi: Map<a, V>}
 
+# A String below 256 in every Char: see Bytes under String
+def Bytes() -> Data:
+  String
+
 # The shapes the Regex types share: a code point range, a class, a span
 def Regex.Range() -> Data:
   Sigma<&2, &2, U32, _ => U32>
@@ -279,6 +283,16 @@ def IO.now() -> IO(Nat):
   import "./effs/now.c"
   import "./effs/now.js"
 
+def IO.signal_pending(sig: U32) -> IO(Bool):
+  import "./effs/signal_pending.c"
+  import "./effs/signal_pending.js"
+
+# whether the signal has arrived at all since it was first caught (by
+# either ask): nothing clears it, so every computation hears it
+def IO.signal_seen(sig: U32) -> IO(Bool):
+  import "./effs/signal_pending.c"
+  import "./effs/signal_pending.js"
+
 def Chan.new(-A: Type, room: U32) -> IO(Chan(A)):
   import "./effs/chan.c"
   import "./effs/chan.js"
@@ -317,6 +331,27 @@ def File.open(path: String, mode: String) ->
   IO(Result<&1, &1, U32 & String, File>):
   import "./effs/file_open.c"
   import "./effs/file_open.js"
+
+# path read-only below the directory root, never through a symbolic link
+# (one openat2 on Linux 5.6+, else an openat per component; the root's
+# descriptor is kept up to a second). Contract (wire/world.bend,
+# fopen.ok): Done only for a regular file; a missing name, a symbolic
+# link, a directory and a path that climbs out of root all fail.
+def File.open_under(root: String, path: String) ->
+  IO(Result<&1, &1, U32 & String, File>):
+  import "./effs/file_open_under.c"
+  import "./effs/file_open_under.js"
+
+# File.open_under with its fstat, and a file under small bytes read and
+# closed: (size, (mtime in s, (None, its bytes))), or a larger one left
+# open at 0 (Some, ""). Contract (wire/world.bend, fget.ok): opens what
+# open_under opens; a body is the whole file, under small. On C a small
+# file's answer is kept a second per thread and answered again from
+# memory (the memo: memo_bounded, memo_answers); the JS twin always asks.
+def File.get_under(root: String, path: String, small: U32) ->
+  IO(Result<&1, &1, U32 & String, U32 & U32 & Maybe<&1, File> & Bytes()>):
+  import "./effs/file_open_under.c"
+  import "./effs/file_open_under.js"
 
 def File.read(file: File, max: U32) ->
   IO(File & Result<&1, &1, U32 & String, String>):
@@ -383,6 +418,14 @@ def File.write_bytes(file: File, data: List<&2, U32>) ->
   import "./effs/file_write.c"
   import "./effs/file_write.js"
 
+# File.write_bytes from a Bytes: the block as it lies, no byte a cell,
+# every byte written (a Char past 255 is not a byte: EINVAL, nothing
+# written)
+def File.write_buf(file: File, data: Bytes()) ->
+  IO(File & Result<&1, &1, U32 & String, Unit>):
+  import "./effs/file_write.c"
+  import "./effs/file_write.js"
+
 def File.close(file: File) -> IO(Unit):
   import "./effs/file_close.c"
   import "./effs/file_close.js"
@@ -391,15 +434,118 @@ def TCP.listen(port: U32) -> IO(Result<&1, &1, U32 & String, Listener>):
   import "./effs/tcp_listen.c"
   import "./effs/tcp_listen.js"
 
+def TCP.listen_shared(port: U32) -> IO(Result<&1, &1, U32 & String, Listener>):
+  import "./effs/tcp_listen_shared.c"
+  import "./effs/tcp_listen_shared.js"
+
+def TLS.listen(port: U32, cert: String, key: String) ->
+  IO(Result<&1, &1, U32 & String, Listener>):
+  import "./effs/tls_listen.c"
+  import "./effs/tls_listen.js"
+
+# TLS.listen agreeing by ALPN to the names given, comma-separated, in
+# the server's order of preference ("h2", "h2,http/1.1"); TLS.listen
+# agrees to http/1.1
+def TLS.listen_alpn(port: U32, cert: String, key: String, names: String) ->
+  IO(Result<&1, &1, U32 & String, Listener>):
+  import "./effs/tls_listen.c"
+  import "./effs/tls_listen_alpn.js"
+
+# TCP.listen, TCP.listen_shared and TLS.listen bound to one address, a
+# dotted IPv4 one ("127.0.0.1": this machine alone); they bind 0.0.0.0
+def TCP.listen_on(host: String, port: U32) -> IO(Result<&1, &1, U32 & String, Listener>):
+  import "./effs/tcp_listen.c"
+  import "./effs/tcp_listen.js"
+
+def TCP.listen_shared_on(host: String, port: U32) -> IO(Result<&1, &1, U32 & String, Listener>):
+  import "./effs/tcp_listen_shared.c"
+  import "./effs/tcp_listen_shared.js"
+
+def TLS.listen_on(host: String, port: U32, cert: String, key: String) ->
+  IO(Result<&1, &1, U32 & String, Listener>):
+  import "./effs/tls_listen.c"
+  import "./effs/tls_listen.js"
+
 def TCP.accept(listener: Listener) ->
   IO(Listener & Result<&1, &1, U32 & String, Socket>):
   import "./effs/tcp_accept.c"
   import "./effs/tcp_accept.js"
 
+# Contract (demos/io_http_engine/world.bend, lsn.ok): Some{socket} for a
+# connection; None{} once ms have passed with none, or after shedding an
+# arrival it had no descriptor for; Fail only for a listener that is no
+# longer one, never with a code of the passing set (EMFILE, ENFILE,
+# ECONNABORTED, ENOBUFS, ENOMEM, ...), which it answers itself.
+def TCP.accept_poll(listener: Listener, ms: U32) ->
+  IO(Listener & Result<&1, &1, U32 & String, Maybe<&1, Socket>>):
+  import "./effs/tcp_accept_poll.c"
+  import "./effs/tcp_accept_poll.js"
+
 def TCP.connect(host: String, port: U32) ->
   IO(Result<&1, &1, U32 & String, Socket>):
   import "./effs/tcp_connect.c"
   import "./effs/tcp_connect.js"
+
+# TCP.connect with a deadline: host a dotted IPv4 address (DNS.resolve
+# turns a name into one). Contract (wire/world.bend, cx.ok): to a peer
+# that accepts, Done within ms; to a port nothing listens on, Fail with
+# ECONNREFUSED; to one that never answers, Fail with ETIMEDOUT (110 on
+# Linux, 60 on macOS) after at least ms, and never later than the loop's
+# next turn after it; a malformed address is EINVAL at once.
+def TCP.connect_poll(host: String, port: U32, ms: U32) ->
+  IO(Result<&1, &1, U32 & String, Socket>):
+  import "./effs/tcp_connect_poll.c"
+  import "./effs/tcp_connect_poll.js"
+
+# Whether nothing waits to be read on a socket and its peer has not
+# closed it: one poll with no wait, readable (a byte, the FIN, an error)
+# being not idle. Contract (wire/world.bend, idle.ok): False whenever a
+# byte or the FIN has arrived and not been read; True for a connection
+# with nothing pending. A pool asks it before handing a kept connection
+# out (wire/pool.bend).
+def TCP.idle(sock: Socket) -> IO(Socket & Bool):
+  import "./effs/tcp_idle.c"
+  import "./effs/tcp_idle.js"
+
+# The first IPv4 address the system's resolver has for a name, dotted
+# (/etc/hosts, then DNS); a dotted address is its own answer, and a name
+# with none is ENOENT. The resolver blocks, so it runs off the loop.
+def DNS.resolve(name: String) -> IO(Result<&1, &1, U32 & String, String>):
+  import "./effs/dns_resolve.c"
+  import "./effs/dns_resolve.js"
+
+# TLS.connect(addr, port, name, alpn, ca, ms): TCP.connect_poll and a
+# TLS client handshake under the one deadline; the socket then carries
+# the session through the byte effects, as TLS.listen's do. The peer's
+# chain is verified against the system's store (ca "") or the file ca
+# names (a pin), and its certificate against name (a host name, sent as
+# SNI too, or an address); alpn is offered comma-separated ("" for
+# none), and the answer carries the protocol chosen ("" for none). A
+# close without close_notify reads as a failure, never as a FIN.
+# Contract (wire/world.bend, tx.ok's sibling cx.ok, and tls.ok): Done
+# only when the handshake completed and the certificate verified; a
+# certificate refused (untrusted, another name) is EACCES; any other
+# handshake failure is EPROTO or ECONNRESET; the deadline is ETIMEDOUT.
+# The JS lane has no TLS and answers ENOSYS.
+def TLS.connect(addr: String, port: U32, name: String, alpn: String, ca: String, ms: U32) ->
+  IO(Result<&1, &1, U32 & String, Socket & String>):
+  import "./effs/tls_listen.c"
+  import "./effs/tls_connect.js"
+
+# The byte pair. A String is decoded as UTF-8, so TCP.recv and TCP.send
+# carry text and only text: a byte that is not valid UTF-8 arrives as
+# U+FFFD, three bytes for one. A protocol that carries bytes -- any
+# body that is not text -- needs these, which are to sockets what
+# File.read_bytes and File.write_bytes already are to files.
+def TCP.recv_bytes(sock: Socket, max: U32) ->
+  IO(Socket & Result<&1, &1, U32 & String, List<&2, U32>>):
+  import "./effs/tcp_recv_bytes.c"
+  import "./effs/tcp_recv_bytes.js"
+
+def TCP.send_bytes(sock: Socket, data: List<&2, U32>) ->
+  IO(Socket & Result<&1, &1, U32 & String, Unit>):
+  import "./effs/tcp_send_bytes.c"
+  import "./effs/tcp_send_bytes.js"
 
 def TCP.send(sock: Socket, data: String) ->
   IO(Socket & Result<&1, &1, U32 & String, Unit>):
@@ -415,6 +561,64 @@ def TCP.poll(sock: Socket, max: U32, ms: U32) ->
   IO(Socket & Result<&1, &1, U32 & String, Maybe<&1, String>>):
   import "./effs/tcp_poll.c"
   import "./effs/tcp_poll.js"
+
+def TCP.poll_bytes(sock: Socket, max: U32, ms: U32) ->
+  IO(Socket & Result<&1, &1, U32 & String, Maybe<&1, List<&2, U32>>>):
+  import "./effs/tcp_poll_bytes.c"
+  import "./effs/tcp_poll_bytes.js"
+
+# The buffer quartet: the byte pair and File.read_bytes with a Bytes in
+# place of the list, so no byte is ever a cell (see Bytes below).
+def TCP.recv_buf(sock: Socket, max: U32) ->
+  IO(Socket & Result<&1, &1, U32 & String, Bytes()>):
+  import "./effs/tcp_recv_buf.c"
+  import "./effs/tcp_recv_buf.js"
+
+def TCP.send_buf(sock: Socket, data: Bytes()) ->
+  IO(Socket & Result<&1, &1, U32 & String, Unit>):
+  import "./effs/tcp_send_buf.c"
+  import "./effs/tcp_send_buf.js"
+
+# TCP.send_buf with a deadline: a send that makes no progress for ms
+# fails with ETIMEDOUT, so a peer that stops reading cannot hold it.
+# Contract (demos/io_http_engine/world.bend, tx.ok): to a peer that
+# reads, each piece within ms of the last, Done once every byte is out
+# however long the whole takes; to one that stops reading, Fail with
+# ETIMEDOUT after at least ms; to one that resets, Fail. An empty send
+# is Done at once.
+def TCP.send_buf_poll(sock: Socket, data: Bytes(), ms: U32) ->
+  IO(Socket & Result<&1, &1, U32 & String, Unit>):
+  import "./effs/tcp_send_buf_poll.c"
+  import "./effs/tcp_send_buf_poll.js"
+
+# Contract (demos/io_http_engine/world.bend, rx.ok): None{} only once ms
+# have passed with nothing to read; Some{bytes} within ms, at most max
+# of them, the empty Bytes being the peer's FIN; Fail at any time.
+def TCP.poll_buf(sock: Socket, max: U32, ms: U32) ->
+  IO(Socket & Result<&1, &1, U32 & String, Maybe<&1, Bytes()>>):
+  import "./effs/tcp_poll_buf.c"
+  import "./effs/tcp_poll_buf.js"
+
+# Contract (demos/io_http_engine/world.bend, fread.ok): at most max bytes
+# and at most what is left, none only at the end of the file.
+def File.read_buf(file: File, max: U32) ->
+  IO(File & Result<&1, &1, U32 & String, Bytes()>):
+  import "./effs/file_read_buf.c"
+  import "./effs/file_read_buf.js"
+
+# The file's bytes from off, len of them, onto the socket, with
+# TCP.send_buf_poll's deadline: the kernel's sendfile on a plain socket,
+# a block at a time through the session under TLS. The file's position
+# does not move.
+# Contract (wire/world.bend, fsend.ok): to a peer that reads, Done once
+# the len bytes of the file from off are out, exactly those; when the
+# file has fewer, the peer has what it had and the send fails with
+# ENODATA; to one that stops reading, Fail with ETIMEDOUT after at least
+# ms; to one that resets, Fail.
+def File.sendfile(sock: Socket, file: File, off: U32, len: U32, ms: U32) ->
+  IO(Socket & File & Result<&1, &1, U32 & String, Unit>):
+  import "./effs/file_sendfile.c"
+  import "./effs/file_sendfile.js"
 
 # TCP.recv through a Utf8.Dec, as File.read_text: a scalar cut by the end
 # of a recv is carried; need answers 4 when the peer has closed.
@@ -1555,6 +1759,439 @@ def U32.from_nat(n: Nat) -> U32:
     case 1n+p:
       U32.inc(U32.from_nat(p))
 
+# U32 and Nat order
+# ------------------
+#
+# U32's order is its value's: Word.cmp decides by the highest bit that
+# differs, which is Nat.cmp of the two values (U32.cmp_nat). Nat's order
+# is proven here once, and a U32 comparison is read as a Nat one: flipped
+# (a < b is not b <= a), chained, and stepped by one (a < b + 1 is a <= b).
+
+def Bool.if(b: Bool, t: Type, f: Type) -> Type:
+  match b:
+    case True{}:
+      t
+    case False{}:
+      f
+
+# anything, from False == True
+def Bool.no(-g: Type, e: {False{} == True{} : Bool}) -> g:
+  %e : Bool.if(_, g, Unit)
+  Unit{}
+
+# a conjunction that holds, taken apart
+law Bool.and_l:
+  for a: Bool
+  for -b: Bool
+  for e: {Bool.and(a, b) == True{} : Bool}
+  {a == True{} : Bool}
+
+def Bool.and_l(a, b, e):
+  match a:
+    case True{}:
+      {==}
+    case False{}:
+      Bool.no({False{} == True{} : Bool}, e)
+
+law Bool.and_r:
+  for a: Bool
+  for b: Bool
+  for e: {Bool.and(a, b) == True{} : Bool}
+  {b == True{} : Bool}
+
+def Bool.and_r(a, b, e):
+  match a:
+    case True{}:
+      e
+    case False{}:
+      Bool.no({b == True{} : Bool}, e)
+
+# a number's bit below the rest: 2x, or 2x + 1
+def Nat.bit(b: Bool, x: Nat) -> Nat:
+  match b:
+    case False{}:
+      Nat.double(x)
+    case True{}:
+      1n+Nat.double(x)
+
+law Nat.cmp_bit:
+  for +ab: Bool
+  for +bb: Bool
+  for +x: Nat
+  for +y: Nat
+  {Nat.cmp(Nat.bit(ab, x), Nat.bit(bb, y)) == Word.cmp.fin(ab, bb, Nat.cmp(x, y)) : Cmp}
+
+def Nat.cmp_bit(ba, bc, x, y):
+  match ba bc x y:
+    case False{} False{} 0n 0n:
+      {==}
+    case False{} True{} 0n 0n:
+      {==}
+    case True{} False{} 0n 0n:
+      {==}
+    case True{} True{} 0n 0n:
+      {==}
+    case False{} False{} 0n 1n+q:
+      {==}
+    case False{} True{} 0n 1n+q:
+      {==}
+    case True{} False{} 0n 1n+q:
+      {==}
+    case True{} True{} 0n 1n+q:
+      {==}
+    case False{} False{} 1n+p 0n:
+      {==}
+    case False{} True{} 1n+p 0n:
+      {==}
+    case True{} False{} 1n+p 0n:
+      {==}
+    case True{} True{} 1n+p 0n:
+      {==}
+    case False{} False{} 1n+p 1n+q:
+      Nat.cmp_bit(False{}, False{}, p, q)
+    case False{} True{} 1n+p 1n+q:
+      Nat.cmp_bit(False{}, True{}, p, q)
+    case True{} False{} 1n+p 1n+q:
+      Nat.cmp_bit(True{}, False{}, p, q)
+    case True{} True{} 1n+p 1n+q:
+      Nat.cmp_bit(True{}, True{}, p, q)
+
+law Word.to_nat_bit:
+  for -p: Nat
+  for b: Bool
+  for -t: Word(p)
+  {Word.to_nat(1n+p, WCon{b, t}) == Nat.bit(b, Word.to_nat(p, t)) : Nat}
+
+def Word.to_nat_bit(p, b, t):
+  match b:
+    case False{}:
+      {==}
+    case True{}:
+      {==}
+
+def Word.cmp_nat.go(+p: Nat, +ab: Bool, +at: Word(p), +bb: Bool, +bt: Word(p)) ->
+  {Word.cmp.fin(ab, bb, Nat.cmp(Word.to_nat(p, at), Word.to_nat(p, bt))) ==
+    Nat.cmp(Word.to_nat(1n+p, WCon{ab, at}), Word.to_nat(1n+p, WCon{bb, bt})) : Cmp}:
+  %Equal.sym(Nat, Word.to_nat(1n+p, WCon{ab, at}), Nat.bit(ab, Word.to_nat(p, at)),
+    Word.to_nat_bit(p, ab, at)) :
+    {Word.cmp.fin(ab, bb, Nat.cmp(Word.to_nat(p, at), Word.to_nat(p, bt))) ==
+      Nat.cmp(_, Word.to_nat(1n+p, WCon{bb, bt})) : Cmp}
+  %Equal.sym(Nat, Word.to_nat(1n+p, WCon{bb, bt}), Nat.bit(bb, Word.to_nat(p, bt)),
+    Word.to_nat_bit(p, bb, bt)) :
+    {Word.cmp.fin(ab, bb, Nat.cmp(Word.to_nat(p, at), Word.to_nat(p, bt))) ==
+      Nat.cmp(Nat.bit(ab, Word.to_nat(p, at)), _) : Cmp}
+  Equal.sym(Cmp, Nat.cmp(Nat.bit(ab, Word.to_nat(p, at)), Nat.bit(bb, Word.to_nat(p, bt))),
+    Word.cmp.fin(ab, bb, Nat.cmp(Word.to_nat(p, at), Word.to_nat(p, bt))),
+    Nat.cmp_bit(ab, bb, Word.to_nat(p, at), Word.to_nat(p, bt)))
+
+law Word.cmp_nat:
+  for +n: Nat
+  for +a: Word(n)
+  for +b: Word(n)
+  {Word.cmp(n, a, b) == Nat.cmp(Word.to_nat(n, a), Word.to_nat(n, b)) : Cmp}
+
+def Word.cmp_nat(n, a, b):
+  match n:
+    case 0n:
+      {==}
+    case 1n+p:
+      match a b:
+        case WCon{ab, at} WCon{bb, bt}:
+          Equal.trans(Cmp, Word.cmp.fin(ab, bb, Word.cmp(p, at, bt)),
+            Word.cmp.fin(ab, bb, Nat.cmp(Word.to_nat(p, at), Word.to_nat(p, bt))),
+            Nat.cmp(Word.to_nat(1n+p, WCon{ab, at}), Word.to_nat(1n+p, WCon{bb, bt})),
+            Equal.cong(Cmp, Cmp, x => Word.cmp.fin(ab, bb, x), Word.cmp(p, at, bt),
+              Nat.cmp(Word.to_nat(p, at), Word.to_nat(p, bt)), Word.cmp_nat(p, at, bt)),
+            Word.cmp_nat.go(p, ab, at, bb, bt))
+
+# U32's order is its value's
+law U32.cmp_nat:
+  for a: U32
+  for b: U32
+  {U32.cmp(a, b) == Nat.cmp(U32.to_nat(a), U32.to_nat(b)) : Cmp}
+
+def U32.cmp_nat(a, b):
+  match a b:
+    case U32{x} U32{y}:
+      Word.cmp_nat(32n, x, y)
+
+law U32.lt_nat:
+  for a: U32
+  for b: U32
+  {U32.is_lt(a, b) == Nat.is_lt(U32.to_nat(a), U32.to_nat(b)) : Bool}
+
+def U32.lt_nat(a, b):
+  Equal.cong(Cmp, Bool, Cmp.is_lt, U32.cmp(a, b), Nat.cmp(U32.to_nat(a), U32.to_nat(b)),
+    U32.cmp_nat(a, b))
+
+law U32.le_nat:
+  for a: U32
+  for b: U32
+  {U32.is_le(a, b) == Nat.is_le(U32.to_nat(a), U32.to_nat(b)) : Bool}
+
+def U32.le_nat(a, b):
+  Equal.cong(Cmp, Bool, Cmp.is_le, U32.cmp(a, b), Nat.cmp(U32.to_nat(a), U32.to_nat(b)),
+    U32.cmp_nat(a, b))
+
+law U32.eq_nat:
+  for a: U32
+  for b: U32
+  {U32.is_eq(a, b) == Nat.is_eq(U32.to_nat(a), U32.to_nat(b)) : Bool}
+
+def U32.eq_nat(a, b):
+  Equal.cong(Cmp, Bool, Cmp.is_eq, U32.cmp(a, b), Nat.cmp(U32.to_nat(a), U32.to_nat(b)),
+    U32.cmp_nat(a, b))
+
+# Nat's order: a < b is not b <= a
+law Nat.lt_flip:
+  for a: Nat
+  for b: Nat
+  {Bool.not(Nat.is_lt(a, b)) == Nat.is_le(b, a) : Bool}
+
+def Nat.lt_flip(a, b):
+  match a b:
+    case 0n 0n:
+      {==}
+    case 0n 1n+q:
+      {==}
+    case 1n+p 0n:
+      {==}
+    case 1n+p 1n+q:
+      Nat.lt_flip(p, q)
+
+law Nat.le_flip:
+  for a: Nat
+  for b: Nat
+  {Bool.not(Nat.is_le(a, b)) == Nat.is_lt(b, a) : Bool}
+
+def Nat.le_flip(a, b):
+  match a b:
+    case 0n 0n:
+      {==}
+    case 0n 1n+q:
+      {==}
+    case 1n+p 0n:
+      {==}
+    case 1n+p 1n+q:
+      Nat.le_flip(p, q)
+
+def Nat.lt_succ.z(p: Nat) -> {Nat.is_lt(1n+p, 1n) == Nat.is_le(1n+p, 0n) : Bool}:
+  match p:
+    case 0n:
+      {==}
+    case 1n+r:
+      {==}
+
+# a < b + 1 is a <= b
+law Nat.lt_succ:
+  for a: Nat
+  for b: Nat
+  {Nat.is_lt(a, 1n+b) == Nat.is_le(a, b) : Bool}
+
+def Nat.lt_succ(a, b):
+  match a b:
+    case 0n 0n:
+      {==}
+    case 0n 1n+q:
+      {==}
+    case 1n+p 0n:
+      Nat.lt_succ.z(p)
+    case 1n+p 1n+q:
+      Nat.lt_succ(p, q)
+
+law Nat.is_le_trans:
+  for a: Nat
+  for b: Nat
+  for c: Nat
+  for ab: {Nat.is_le(a, b) == True{} : Bool}
+  for bc: {Nat.is_le(b, c) == True{} : Bool}
+  {Nat.is_le(a, c) == True{} : Bool}
+
+def Nat.is_le_trans(a, b, c, ab, bc):
+  match a b c:
+    case 0n _ 0n:
+      {==}
+    case 0n _ 1n+r:
+      {==}
+    case 1n+p 0n _:
+      Bool.no({Nat.is_le(1n+p, c) == True{} : Bool}, ab)
+    case 1n+p 1n+q 0n:
+      Bool.no({Nat.is_le(1n+p, 0n) == True{} : Bool}, bc)
+    case 1n+p 1n+q 1n+r:
+      Nat.is_le_trans(p, q, r, ab, bc)
+
+law Nat.is_lt_le_trans:
+  for a: Nat
+  for b: Nat
+  for c: Nat
+  for ab: {Nat.is_lt(a, b) == True{} : Bool}
+  for bc: {Nat.is_le(b, c) == True{} : Bool}
+  {Nat.is_lt(a, c) == True{} : Bool}
+
+def Nat.is_lt_le_trans(a, b, c, ab, bc):
+  match a b c:
+    case 0n 0n _:
+      Bool.no({Nat.is_lt(0n, c) == True{} : Bool}, ab)
+    case 1n+p 0n _:
+      Bool.no({Nat.is_lt(1n+p, c) == True{} : Bool}, ab)
+    case 0n 1n+q 0n:
+      Bool.no({Nat.is_lt(0n, 0n) == True{} : Bool}, bc)
+    case 0n 1n+q 1n+r:
+      {==}
+    case 1n+p 1n+q 0n:
+      Bool.no({Nat.is_lt(1n+p, 0n) == True{} : Bool}, bc)
+    case 1n+p 1n+q 1n+r:
+      Nat.is_lt_le_trans(p, q, r, ab, bc)
+
+# a <= b and not a < b: a is b
+law Nat.is_le_eq:
+  for a: Nat
+  for b: Nat
+  for le: {Nat.is_le(a, b) == True{} : Bool}
+  for nlt: {Nat.is_lt(a, b) == False{} : Bool}
+  {Nat.is_eq(a, b) == True{} : Bool}
+
+def Nat.is_le_eq(a, b, le, nlt):
+  match a b:
+    case 0n 0n:
+      {==}
+    case 0n 1n+q:
+      Bool.no({Nat.is_eq(0n, 1n+q) == True{} : Bool}, Equal.sym(Bool, True{}, False{}, nlt))
+    case 1n+p 0n:
+      Bool.no({Nat.is_eq(1n+p, 0n) == True{} : Bool}, le)
+    case 1n+p 1n+q:
+      Nat.is_le_eq(p, q, le, nlt)
+
+# a Bool that is not True is False; a disjunction with a True in it holds
+law Bool.not_true:
+  for a: Bool
+  for e: {Bool.not(a) == True{} : Bool}
+  {a == False{} : Bool}
+
+def Bool.not_true(a, e):
+  match a:
+    case False{}:
+      {==}
+    case True{}:
+      Bool.no({True{} == False{} : Bool}, e)
+
+law Bool.or_true:
+  for a: Bool
+  {Bool.or(a, True{}) == True{} : Bool}
+
+def Bool.or_true(a):
+  match a:
+    case False{}:
+      {==}
+    case True{}:
+      {==}
+
+# U32's order, read as Nat's
+law U32.lt_flip:
+  for +a: U32
+  for +b: U32
+  {Bool.not(U32.is_lt(a, b)) == U32.is_le(b, a) : Bool}
+
+def U32.lt_flip(a, b):
+  %Equal.sym(Bool, U32.is_lt(a, b), Nat.is_lt(U32.to_nat(a), U32.to_nat(b)), U32.lt_nat(a, b)) :
+    {Bool.not(_) == U32.is_le(b, a) : Bool}
+  %Equal.sym(Bool, U32.is_le(b, a), Nat.is_le(U32.to_nat(b), U32.to_nat(a)), U32.le_nat(b, a)) :
+    {Bool.not(Nat.is_lt(U32.to_nat(a), U32.to_nat(b))) == _ : Bool}
+  Nat.lt_flip(U32.to_nat(a), U32.to_nat(b))
+
+law U32.le_flip:
+  for +a: U32
+  for +b: U32
+  {Bool.not(U32.is_le(a, b)) == U32.is_lt(b, a) : Bool}
+
+def U32.le_flip(a, b):
+  %Equal.sym(Bool, U32.is_le(a, b), Nat.is_le(U32.to_nat(a), U32.to_nat(b)), U32.le_nat(a, b)) :
+    {Bool.not(_) == U32.is_lt(b, a) : Bool}
+  %Equal.sym(Bool, U32.is_lt(b, a), Nat.is_lt(U32.to_nat(b), U32.to_nat(a)), U32.lt_nat(b, a)) :
+    {Bool.not(Nat.is_le(U32.to_nat(a), U32.to_nat(b))) == _ : Bool}
+  Nat.le_flip(U32.to_nat(a), U32.to_nat(b))
+
+# c < b is c <= a, when b is a + 1
+law U32.lt_succ:
+  for +c: U32
+  for +a: U32
+  for +b: U32
+  for e: {U32.to_nat(b) == 1n+U32.to_nat(a) : Nat}
+  {U32.is_lt(c, b) == U32.is_le(c, a) : Bool}
+
+def U32.lt_succ(c, a, b, e):
+  %Equal.sym(Bool, U32.is_lt(c, b), Nat.is_lt(U32.to_nat(c), U32.to_nat(b)), U32.lt_nat(c, b)) :
+    {_ == U32.is_le(c, a) : Bool}
+  %Equal.sym(Bool, U32.is_le(c, a), Nat.is_le(U32.to_nat(c), U32.to_nat(a)), U32.le_nat(c, a)) :
+    {Nat.is_lt(U32.to_nat(c), U32.to_nat(b)) == _ : Bool}
+  %Equal.sym(Nat, U32.to_nat(b), 1n+U32.to_nat(a), e) :
+    {Nat.is_lt(U32.to_nat(c), _) == Nat.is_le(U32.to_nat(c), U32.to_nat(a)) : Bool}
+  Nat.lt_succ(U32.to_nat(c), U32.to_nat(a))
+
+law U32.le_trans:
+  for +a: U32
+  for +b: U32
+  for +c: U32
+  for ab: {U32.is_le(a, b) == True{} : Bool}
+  for bc: {U32.is_le(b, c) == True{} : Bool}
+  {U32.is_le(a, c) == True{} : Bool}
+
+def U32.le_trans(a, b, c, ab, bc):
+  %Equal.sym(Bool, U32.is_le(a, c), Nat.is_le(U32.to_nat(a), U32.to_nat(c)), U32.le_nat(a, c)) :
+    {_ == True{} : Bool}
+  Nat.is_le_trans(U32.to_nat(a), U32.to_nat(b), U32.to_nat(c),
+    Equal.trans(Bool, Nat.is_le(U32.to_nat(a), U32.to_nat(b)), U32.is_le(a, b), True{},
+      Equal.sym(Bool, U32.is_le(a, b), Nat.is_le(U32.to_nat(a), U32.to_nat(b)), U32.le_nat(a, b)), ab),
+    Equal.trans(Bool, Nat.is_le(U32.to_nat(b), U32.to_nat(c)), U32.is_le(b, c), True{},
+      Equal.sym(Bool, U32.is_le(b, c), Nat.is_le(U32.to_nat(b), U32.to_nat(c)), U32.le_nat(b, c)), bc))
+
+law U32.lt_le_trans:
+  for +a: U32
+  for +b: U32
+  for +c: U32
+  for ab: {U32.is_lt(a, b) == True{} : Bool}
+  for bc: {U32.is_le(b, c) == True{} : Bool}
+  {U32.is_lt(a, c) == True{} : Bool}
+
+def U32.lt_le_trans(a, b, c, ab, bc):
+  %Equal.sym(Bool, U32.is_lt(a, c), Nat.is_lt(U32.to_nat(a), U32.to_nat(c)), U32.lt_nat(a, c)) :
+    {_ == True{} : Bool}
+  Nat.is_lt_le_trans(U32.to_nat(a), U32.to_nat(b), U32.to_nat(c),
+    Equal.trans(Bool, Nat.is_lt(U32.to_nat(a), U32.to_nat(b)), U32.is_lt(a, b), True{},
+      Equal.sym(Bool, U32.is_lt(a, b), Nat.is_lt(U32.to_nat(a), U32.to_nat(b)), U32.lt_nat(a, b)), ab),
+    Equal.trans(Bool, Nat.is_le(U32.to_nat(b), U32.to_nat(c)), U32.is_le(b, c), True{},
+      Equal.sym(Bool, U32.is_le(b, c), Nat.is_le(U32.to_nat(b), U32.to_nat(c)), U32.le_nat(b, c)), bc))
+
+# lo <= c < lo + 1: c is lo
+law U32.eq_of_lt_succ:
+  for +c: U32
+  for +lo: U32
+  for +hi: U32
+  for ge: {Bool.not(U32.is_lt(c, lo)) == True{} : Bool}
+  for lt: {U32.is_lt(c, hi) == True{} : Bool}
+  for e: {U32.to_nat(hi) == 1n+U32.to_nat(lo) : Nat}
+  {U32.is_eq(c, lo) == True{} : Bool}
+
+def U32.eq_of_lt_succ(c, lo, hi, ge, lt, e):
+  %Equal.sym(Bool, U32.is_eq(c, lo), Nat.is_eq(U32.to_nat(c), U32.to_nat(lo)), U32.eq_nat(c, lo)) :
+    {_ == True{} : Bool}
+  Nat.is_le_eq(U32.to_nat(c), U32.to_nat(lo),
+    Equal.trans(Bool, Nat.is_le(U32.to_nat(c), U32.to_nat(lo)), U32.is_le(c, lo), True{},
+      Equal.sym(Bool, U32.is_le(c, lo), Nat.is_le(U32.to_nat(c), U32.to_nat(lo)), U32.le_nat(c, lo)),
+      Equal.trans(Bool, U32.is_le(c, lo), U32.is_lt(c, hi), True{},
+        Equal.sym(Bool, U32.is_lt(c, hi), U32.is_le(c, lo), U32.lt_succ(c, lo, hi, e)), lt)),
+    Equal.trans(Bool, Nat.is_lt(U32.to_nat(c), U32.to_nat(lo)), U32.is_lt(c, lo), False{},
+      Equal.sym(Bool, U32.is_lt(c, lo), Nat.is_lt(U32.to_nat(c), U32.to_nat(lo)), U32.lt_nat(c, lo)),
+      Bool.not_true(U32.is_lt(c, lo), ge)))
+
+# nothing is below zero
+def Nat.lt_zero(-g: Type, k: Nat, e: {Nat.is_lt(k, 0n) == True{} : Bool}) -> g:
+  match k:
+    case 0n:
+      Bool.no(g, e)
+    case 1n+j:
+      Bool.no(g, e)
+
 def U32.log2.go(+k: Nat, +n: U32, +d: Nat) -> Nat:
   match k:
     case 0n:
@@ -2273,11 +2910,19 @@ law F64.read:
   for s: String
   Maybe<&2, F64>
 
+# Bool.pick at F64, monomorphic: a double never rides a boxed parameter
+def F64.pick(c: Bool, a: F64, b: F64) -> F64:
+  match c:
+    case False{}:
+      b
+    case True{}:
+      a
+
 def F64.min(+a: F64, +b: F64) -> F64:
-  Bool.pick(F64, F64.is_lt(a, b), a, b)
+  F64.pick(F64.is_lt(a, b), a, b)
 
 def F64.max(+a: F64, +b: F64) -> F64:
-  Bool.pick(F64, F64.is_lt(a, b), b, a)
+  F64.pick(F64.is_lt(a, b), b, a)
 
 def F64.clamp(x: F64, lo: F64, hi: F64) -> F64:
   F64.min(F64.max(x, lo), hi)
@@ -3130,6 +3775,458 @@ def String.hash.go(s: String, h: U32) -> U32:
 # Bend spec, not Python's hash
 def String.hash(s: String) -> U32:
   String.hash.go(s, 2166136261)
+
+# Bytes
+# -----
+
+# A byte buffer is a String whose every Char is below 256. The runtime
+# packs such a String a byte a cell in one block, cuts it by view and
+# appends to it in place, so it is what List<&2, U32> is on the wire at a
+# byte a byte instead of a cell a byte. An ASCII literal is its own bytes;
+# TCP.send_buf refuses a Char past 255 (EINVAL) rather than encode it.
+def Bytes.len(b: Bytes()) -> Nat:
+  String.length(b)
+
+def Bytes.byte(m: Maybe<&2, Char>) -> U32:
+  match m:
+    case None{}:
+      256
+    case Some{Chr{c}}:
+      c
+
+# the byte at i; past the end, 256, which no byte is
+def Bytes.get(b: Bytes(), i: Nat) -> U32:
+  Bytes.byte(String.get(b, i))
+
+# n bytes from at, a view: nothing is copied
+def Bytes.slice(b: Bytes(), at: Nat, n: Nat) -> Bytes():
+  String.take(String.drop(b, at), n)
+
+def Bytes.drop(b: Bytes(), n: Nat) -> Bytes():
+  String.drop(b, n)
+
+# in place when a is the buffer's one owner and has room
+def Bytes.append(a: Bytes(), b: Bytes()) -> Bytes():
+  String.append(a, b)
+
+def Bytes.concat(xs: List<&2, Bytes()>) -> Bytes():
+  String.concat(xs)
+
+def Bytes.starts_with(b: Bytes(), p: Bytes()) -> Bool:
+  String.starts_with(b, p)
+
+# the first offset of p in b, as "\r\n\r\n" ends a head
+def Bytes.find(b: Bytes(), p: Bytes()) -> Maybe<&2, Nat>:
+  String.find(b, p)
+
+def Bytes.from_list(xs: List<&2, U32>) -> Bytes():
+  match xs:
+    case Nil{}:
+      SNil{}
+    case h <> t:
+      SCon{Chr{h}, Bytes.from_list(t)}
+
+def Bytes.to_list(b: Bytes()) -> List<&2, U32>:
+  match b:
+    case SNil{}:
+      Nil{}
+    case SCon{Chr{c}, t}:
+      c <> Bytes.to_list(t)
+
+law Bytes.list:
+  for xs: List<&2, U32>
+  {Bytes.to_list(Bytes.from_list(xs)) == xs : List<&2, U32>}
+
+def Bytes.list(xs):
+  match xs:
+    case Nil{}:
+      {==}
+    case h <> t:
+      Equal.cong(List<&2, U32>, List<&2, U32>, ys => h <> ys,
+        Bytes.to_list(Bytes.from_list(t)), t, Bytes.list(t))
+
+# the bytes of two buffers joined are the bytes of each, joined
+law Bytes.to_list_append:
+  for +a: Bytes()
+  for +b: Bytes()
+  {Bytes.to_list(Bytes.append(a, b))
+    == List.append(&2, U32, Bytes.to_list(a), Bytes.to_list(b)) : List<&2, U32>}
+
+def Bytes.to_list_append(a, b):
+  match a:
+    case SNil{}:
+      {==}
+    case SCon{Chr{c}, t}:
+      Equal.cong(List<&2, U32>, List<&2, U32>, ys => c <> ys,
+        Bytes.to_list(Bytes.append(t, b)),
+        List.append(&2, U32, Bytes.to_list(t), Bytes.to_list(b)),
+        Bytes.to_list_append(t, b))
+
+law Bytes.len.shift:
+  for +s: String
+  for +m: Nat
+  {String.length.go(s, 1n+m) == 1n+String.length.go(s, m) : Nat}
+
+def Bytes.len.shift(s, m):
+  match s:
+    case SNil{}:
+      {==}
+    case SCon{h, t}:
+      Bytes.len.shift(t, 1n+m)
+
+law Bytes.len.from:
+  for +s: String
+  for +m: Nat
+  {String.length.go(s, m) == Nat.add(m, String.length.go(s, 0n)) : Nat}
+
+def Bytes.len.from(s, m):
+  match m:
+    case 0n:
+      {==}
+    case 1n+p:
+      Equal.trans(Nat, String.length.go(s, 1n+p), 1n+String.length.go(s, p),
+        1n+Nat.add(p, String.length.go(s, 0n)), Bytes.len.shift(s, p),
+        Equal.cong(Nat, Nat, y => 1n+y, String.length.go(s, p),
+          Nat.add(p, String.length.go(s, 0n)), Bytes.len.from(s, p)))
+
+law Bytes.len.go:
+  for +a: String
+  for +b: String
+  for +m: Nat
+  {String.length.go(String.append(a, b), m)
+    == Nat.add(String.length.go(a, m), String.length.go(b, 0n)) : Nat}
+
+def Bytes.len.go(a, b, m):
+  match a:
+    case SNil{}:
+      Bytes.len.from(b, m)
+    case SCon{h, t}:
+      Bytes.len.go(t, b, 1n+m)
+
+law Bytes.len_append:
+  for +a: Bytes()
+  for +b: Bytes()
+  {Bytes.len(Bytes.append(a, b)) == Nat.add(Bytes.len(a), Bytes.len(b)) : Nat}
+
+def Bytes.len_append(a, b):
+  Bytes.len.go(a, b, 0n)
+
+law Bytes.get.take:
+  for +s: String
+  for +k: Nat
+  for +m: Nat
+  {String.get(String.take(s, 1n+Nat.add(k, m)), k) == String.get(s, k)
+    : Maybe<&2, Char>}
+
+def Bytes.get.take(s, k, m):
+  match s k:
+    case SNil{} _:
+      {==}
+    case SCon{h, t} 0n:
+      {==}
+    case SCon{h, t} 1n+q:
+      Bytes.get.take(t, q, m)
+
+law Bytes.get.drop:
+  for +s: String
+  for +i: Nat
+  for +k: Nat
+  {String.get(String.drop(s, i), k) == String.get(s, Nat.add(i, k))
+    : Maybe<&2, Char>}
+
+def Bytes.get.drop(s, i, k):
+  match s i:
+    case SNil{} _:
+      {==}
+    case SCon{h, t} 0n:
+      {==}
+    case SCon{h, t} 1n+p:
+      Bytes.get.drop(t, p, k)
+
+# a byte of a slice is the byte at its offset, for every k it holds
+law Bytes.get_slice:
+  for +b: Bytes()
+  for +i: Nat
+  for +k: Nat
+  for +m: Nat
+  {Bytes.get(Bytes.slice(b, i, 1n+Nat.add(k, m)), k)
+    == Bytes.get(b, Nat.add(i, k)) : U32}
+
+def Bytes.get_slice(b, i, k, m):
+  Equal.cong(Maybe<&2, Char>, U32, Bytes.byte,
+    String.get(Bytes.slice(b, i, 1n+Nat.add(k, m)), k),
+    String.get(b, Nat.add(i, k)),
+    Equal.trans(Maybe<&2, Char>,
+      String.get(String.take(String.drop(b, i), 1n+Nat.add(k, m)), k),
+      String.get(String.drop(b, i), k), String.get(b, Nat.add(i, k)),
+      Bytes.get.take(String.drop(b, i), k, m), Bytes.get.drop(b, i, k)))
+
+# The scanner's reads. Natively get, span and the finds borrow the buffer:
+# the call reads the packed cells where they lie, and neither shares nor
+# drops the buffer, builds a view or a Maybe; push writes into an unshared
+# buffer's spare room. The bodies below are what the laws are about.
+
+# b with the byte x on its end
+def Bytes.push(b: Bytes(), x: U32) -> Bytes():
+  String.append(b, SCon{Chr{x}, SNil{}})
+
+law Bytes.push_list:
+  for +b: Bytes()
+  for +x: U32
+  {Bytes.to_list(Bytes.push(b, x)) == List.append(&2, U32, Bytes.to_list(b), x <> Nil{})
+    : List<&2, U32>}
+
+def Bytes.push_list(b, x):
+  Bytes.to_list_append(b, SCon{Chr{x}, SNil{}})
+
+# lo <= c < hi, the two tests a byte class is written with
+def Bytes.span.in(+c: U32, lo: U32, hi: U32) -> Bool:
+  Bool.and(Bool.not(U32.is_lt(c, lo)), Bool.not(U32.is_le(hi, c)))
+
+law Bytes.span.go:
+  for s: String
+  for +lo: U32
+  for +hi: U32
+  Nat
+
+def Bytes.span.at(ok: Bool, t: String, +lo: U32, +hi: U32) -> Nat:
+  match ok:
+    case False{}:
+      0n
+    case True{}:
+      1n+Bytes.span.go(t, lo, hi)
+
+def Bytes.span.go(s, lo, hi):
+  match s:
+    case SNil{}:
+      0n
+    case SCon{Chr{c}, t}:
+      Bytes.span.at(Bytes.span.in(c, lo, hi), t, lo, hi)
+
+# how many bytes from i are in [lo, hi): a run of digits, of a token, of
+# anything but a delimiter. It reads one byte past the run and no further.
+def Bytes.span(b: Bytes(), i: Nat, lo: U32, hi: U32) -> Nat:
+  Bytes.span.go(String.drop(b, i), lo, hi)
+
+law Bytes.span.go_le:
+  for +s: String
+  for +lo: U32
+  for +hi: U32
+  {Nat.is_le(Bytes.span.go(s, lo, hi), String.length.go(s, 0n)) == True{} : Bool}
+
+law Bytes.span.at_le.go:
+  for ok: Bool
+  for +t: String
+  for +lo: U32
+  for +hi: U32
+  {Nat.is_le(Bytes.span.at(ok, t, lo, hi), 1n+String.length.go(t, 0n)) == True{} : Bool}
+
+def Bytes.span.at_le.go(ok, t, lo, hi):
+  match ok:
+    case False{}:
+      {==}
+    case True{}:
+      Bytes.span.go_le(t, lo, hi)
+
+law Bytes.span.at_le:
+  for ok: Bool
+  for +t: String
+  for +lo: U32
+  for +hi: U32
+  {Nat.is_le(Bytes.span.at(ok, t, lo, hi), String.length.go(t, 1n)) == True{} : Bool}
+
+def Bytes.span.at_le(ok, t, lo, hi):
+  Equal.trans(Bool, Nat.is_le(Bytes.span.at(ok, t, lo, hi), String.length.go(t, 1n)),
+    Nat.is_le(Bytes.span.at(ok, t, lo, hi), 1n+String.length.go(t, 0n)), True{},
+    Equal.cong(Nat, Bool, y => Nat.is_le(Bytes.span.at(ok, t, lo, hi), y),
+      String.length.go(t, 1n), 1n+String.length.go(t, 0n), Bytes.len.shift(t, 0n)),
+    Bytes.span.at_le.go(ok, t, lo, hi))
+
+def Bytes.span.go_le(s, lo, hi):
+  match s:
+    case SNil{}:
+      {==}
+    case SCon{Chr{c}, t}:
+      Bytes.span.at_le(Bytes.span.in(c, lo, hi), t, lo, hi)
+
+# the run never passes the end: span <= len - i
+law Bytes.span_le:
+  for +b: Bytes()
+  for +i: Nat
+  for +lo: U32
+  for +hi: U32
+  {Nat.is_le(Bytes.span(b, i, lo, hi), Bytes.len(Bytes.drop(b, i))) == True{} : Bool}
+
+def Bytes.span_le(b, i, lo, hi):
+  Bytes.span.go_le(String.drop(b, i), lo, hi)
+
+# A byte in a span's range: lo <= c and c < hi; in a range, in any range
+# around it
+law Bytes.span.in_lo:
+  for +c: U32
+  for +lo: U32
+  for +hi: U32
+  for +e: {Bytes.span.in(c, lo, hi) == True{} : Bool}
+  {U32.is_le(lo, c) == True{} : Bool}
+
+def Bytes.span.in_lo(c, lo, hi, e):
+  %U32.lt_flip(c, lo) : {_ == True{} : Bool}
+  Bool.and_l(Bool.not(U32.is_lt(c, lo)), Bool.not(U32.is_le(hi, c)), e)
+
+law Bytes.span.in_hi:
+  for +c: U32
+  for +lo: U32
+  for +hi: U32
+  for +e: {Bytes.span.in(c, lo, hi) == True{} : Bool}
+  {U32.is_lt(c, hi) == True{} : Bool}
+
+def Bytes.span.in_hi(c, lo, hi, e):
+  %U32.le_flip(hi, c) : {_ == True{} : Bool}
+  Bool.and_r(Bool.not(U32.is_lt(c, lo)), Bool.not(U32.is_le(hi, c)), e)
+
+law Bytes.span.in_of:
+  for +c: U32
+  for +lo: U32
+  for +hi: U32
+  for l: {U32.is_le(lo, c) == True{} : Bool}
+  for h: {U32.is_lt(c, hi) == True{} : Bool}
+  {Bytes.span.in(c, lo, hi) == True{} : Bool}
+
+def Bytes.span.in_of(c, lo, hi, l, h):
+  %Equal.sym(Bool, Bool.not(U32.is_lt(c, lo)), U32.is_le(lo, c), U32.lt_flip(c, lo)) :
+    {Bool.and(_, Bool.not(U32.is_le(hi, c))) == True{} : Bool}
+  %Equal.sym(Bool, Bool.not(U32.is_le(hi, c)), U32.is_lt(c, hi), U32.le_flip(hi, c)) :
+    {Bool.and(U32.is_le(lo, c), _) == True{} : Bool}
+  %Equal.sym(Bool, U32.is_le(lo, c), True{}, l) : {Bool.and(_, U32.is_lt(c, hi)) == True{} : Bool}
+  h
+
+law Bytes.span.in_widen:
+  for +c: U32
+  for +lo: U32
+  for +hi: U32
+  for +lo2: U32
+  for +hi2: U32
+  for +e: {Bytes.span.in(c, lo, hi) == True{} : Bool}
+  for l: {U32.is_le(lo2, lo) == True{} : Bool}
+  for h: {U32.is_le(hi, hi2) == True{} : Bool}
+  {Bytes.span.in(c, lo2, hi2) == True{} : Bool}
+
+def Bytes.span.in_widen(c, lo, hi, lo2, hi2, e, l, h):
+  Bytes.span.in_of(c, lo2, hi2, U32.le_trans(lo2, lo, c, l, Bytes.span.in_lo(c, lo, hi, e)),
+    U32.lt_le_trans(c, hi, hi2, Bytes.span.in_hi(c, lo, hi, e), h))
+
+# every byte a span counts is in its range
+def Bytes.span.go_get.at(+c: U32, +t: String, +lo: U32, +hi: U32, +k: Nat, ok: Bool,
+  ih: @+j: Nat -> {Nat.is_lt(j, Bytes.span.go(t, lo, hi)) == True{} : Bool} ->
+    {Bytes.span.in(Bytes.get(t, j), lo, hi) == True{} : Bool}) ->
+  {Bytes.span.in(c, lo, hi) == ok : Bool} ->
+  {Nat.is_lt(k, Bytes.span.at(ok, t, lo, hi)) == True{} : Bool} ->
+  {Bytes.span.in(Bytes.get(SCon{Chr{c}, t}, k), lo, hi) == True{} : Bool}:
+  match k ok:
+    case _ False{}:
+      e => lt => Nat.lt_zero({Bytes.span.in(Bytes.get(SCon{Chr{c}, t}, k), lo, hi) == True{} : Bool}, k, lt)
+    case 0n True{}:
+      e => lt => e
+    case 1n+j True{}:
+      e => lt => ih(j, lt)
+
+law Bytes.span.go_get:
+  for +s: String
+  for +lo: U32
+  for +hi: U32
+  for +k: Nat
+  for lt: {Nat.is_lt(k, Bytes.span.go(s, lo, hi)) == True{} : Bool}
+  {Bytes.span.in(Bytes.get(s, k), lo, hi) == True{} : Bool}
+
+def Bytes.span.go_get(s, lo, hi, k, lt):
+  match s:
+    case SNil{}:
+      Nat.lt_zero({Bytes.span.in(Bytes.get(SNil{}, k), lo, hi) == True{} : Bool}, k, lt)
+    case SCon{Chr{+c}, t}:
+      Bytes.span.go_get.at(c, t, lo, hi, k, Bytes.span.in(c, lo, hi),
+        j => l => Bytes.span.go_get(t, lo, hi, j, l))({==}, lt)
+
+# the bytes from i that Bytes.span counts are each in [lo, hi)
+law Bytes.span_get:
+  for +b: Bytes()
+  for +i: Nat
+  for +lo: U32
+  for +hi: U32
+  for +k: Nat
+  for lt: {Nat.is_lt(k, Bytes.span(b, i, lo, hi)) == True{} : Bool}
+  {Bytes.span.in(Bytes.get(b, Nat.add(i, k)), lo, hi) == True{} : Bool}
+
+def Bytes.span_get(b, i, lo, hi, k, lt):
+  %Equal.cong(Maybe<&2, Char>, U32, Bytes.byte, String.get(String.drop(b, i), k),
+    String.get(b, Nat.add(i, k)), Bytes.get.drop(b, i, k)) :
+    {Bytes.span.in(_, lo, hi) == True{} : Bool}
+  Bytes.span.go_get(String.drop(b, i), lo, hi, k, lt)
+
+law Bytes.find_byte.go:
+  for s: String
+  for +x: U32
+  Nat
+
+def Bytes.find_byte.at(hit: Bool, t: String, +x: U32) -> Nat:
+  match hit:
+    case True{}:
+      0n
+    case False{}:
+      1n+Bytes.find_byte.go(t, x)
+
+def Bytes.find_byte.go(s, x):
+  match s:
+    case SNil{}:
+      0n
+    case SCon{Chr{c}, t}:
+      Bytes.find_byte.at(U32.is_eq(c, x), t, x)
+
+# the first offset of the byte x at or after i; absent, the end
+# (Bytes.len(b), from any i up to it)
+def Bytes.find_byte(b: Bytes(), +i: Nat, x: U32) -> Nat:
+  Nat.add(i, Bytes.find_byte.go(String.drop(b, i), x))
+
+# w, x, y or z: the test a byte class of four names is written with
+def Bytes.find_any.in(+c: U32, w: U32, x: U32, y: U32, z: U32) -> Bool:
+  Bool.or(U32.is_eq(c, w), Bool.or(U32.is_eq(c, x), Bool.or(U32.is_eq(c, y), U32.is_eq(c, z))))
+
+law Bytes.find_any.go:
+  for s: String
+  for +w: U32
+  for +x: U32
+  for +y: U32
+  for +z: U32
+  Nat
+
+def Bytes.find_any.at(hit: Bool, t: String, +w: U32, +x: U32, +y: U32, +z: U32) -> Nat:
+  match hit:
+    case True{}:
+      0n
+    case False{}:
+      1n+Bytes.find_any.go(t, w, x, y, z)
+
+def Bytes.find_any.go(s, w, x, y, z):
+  match s:
+    case SNil{}:
+      0n
+    case SCon{Chr{c}, t}:
+      Bytes.find_any.at(Bytes.find_any.in(c, w, x, y, z), t, w, x, y, z)
+
+# the first offset at or after i of any of the four bytes w, x, y, z (name
+# one twice for fewer), as a delimiter, a quote or a line end ends a
+# field; absent, the end
+def Bytes.find_any(b: Bytes(), +i: Nat, w: U32, x: U32, y: U32, z: U32) -> Nat:
+  Nat.add(i, Bytes.find_any.go(String.drop(b, i), w, x, y, z))
+
+# the low eight bits of the cell at i, 0 past the end
+def Bytes.word_le.at(+b: Bytes(), i: Nat) -> U32:
+  U32.and(Bytes.get(b, i), 255)
+
+# the four bytes from i as one U32, little end first, a byte past the end 0:
+# the word a hash or a checksum reads, in one borrowed read natively
+def Bytes.word_le(+b: Bytes(), +i: Nat) -> U32:
+  U32.or(U32.or(Bytes.word_le.at(b, i), U32.shln(Bytes.word_le.at(b, 1n+i), 8n)),
+    U32.or(U32.shln(Bytes.word_le.at(b, 2n+i), 16n), U32.shln(Bytes.word_le.at(b, 3n+i), 24n)))
 
 # Regex
 # -----

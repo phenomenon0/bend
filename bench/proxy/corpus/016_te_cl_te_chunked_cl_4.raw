@@ -1,0 +1,10 @@
+POST / HTTP/1.1
+Host: a
+Transfer-Encoding: chunked
+Content-Length: 4
+
+5c
+GPOST / HTTP/1.1
+
+0
+

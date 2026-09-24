@@ -1,0 +1,6 @@
+GET /ws HTTP/1.1
+Host: a
+Connection: Upgrade
+Upgrade: websocket
+
+EXTRA-SMUGGLED-BYTES
