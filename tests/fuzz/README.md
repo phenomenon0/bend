@@ -57,3 +57,14 @@ Kept out, by design and counted as agreement: a Char past U+10FFFF or a
 surrogate in a string (the JS lane refuses it, and says so), Nats past a
 few thousand (the normalizer counts in unary, UPSTREAM U16),
 `List.map` on a `List<&2, _>` (UPSTREAM F05).
+
+## Found
+
+- UPSTREAM U19: a `U32{w}` handed on whole and walked to a default arm;
+  the C emitter lays a `WNil` whose id it never declared, and clang
+  refuses the file (`tests/base/word_unpack.bend`; also on canon).
+- `I64.neg` of I64's minimum negated through `int64_t` in C: undefined,
+  seen by UBSan, and at -O3 clang folds `neg(x) == x` to `x == 0`
+  (`tests/base/i64_neg_min.bend`; I64 is ours, not canon's).
+- Reverting either known fix (a peek argument evaluated twice, c823679d)
+  or breaking `U32.mul` on one lane is found in under a hundred programs.

@@ -47,6 +47,7 @@ repro for each and the branch that fixes it, if any.
 | U16 | a pure main counts Nats in unary: epoch-sized numbers (1.7e9) are unusable | PERF | interp (pure main) | med | none | upstream/interp_nat_epoch.bend, interp_nat_mul.bend |
 | U17 | TCP.listen binds 0.0.0.0 and takes no address: no loopback-only server | LIMITATION | interp js c | med | upstream/05-listen-on | verify.sh U17 (Base's signature) |
 | U18 | TCP.connect takes dotted IPv4 only (no names, no resolver) and has no deadline | LIMITATION | interp js c | med | upstream/06-connect-poll-dns | upstream/connect_name.bend |
+| U19 | a U32 taken apart to its Word and walked to a default arm: the C build fails (CID_WNIL undeclared) | BUG | c | med | ours: WNil among comp.ts's RUNTIME_ADTS | upstream/word_unpack.bend |
 | F01 | no wall clock: IO.now is monotonic | LIMITATION | all | med | none | verify.sh F01 |
 | F02 | no rename, fsync, seek, remove or mkdir | LIMITATION | all | med | none | verify.sh F02 |
 | F03 | File.read_at takes a U32 offset and answers a List cell per byte | LIMITATION | all | low | none | verify.sh F03 |
@@ -362,6 +363,27 @@ no resolver: `upstream/connect_name.bend`, `TCP.connect("localhost",
 29605)`, answers `Fail 22: Invalid argument` in every lane (expected:
 connection refused). A connect to a black hole waits the kernel's ~75 s
 (no timeout argument).
+
+## U19. A word taken apart: the C emitter lays a WNil it never declared
+
+**Class** BUG, med. **Lanes** C (the build). **Fix** ours: `Word.Nil`
+joins `RUNTIME_ADTS` in comp.ts, so its constructor id is always
+declared; `tests/base/word_unpack.bend`.
+
+**Where** (canon `95317d95`) `comp.ts:2934`: the constructor ids the C
+file declares (`fl.cids`, `comp.ts:3037`) are the constructors of the
+datatypes a program reaches, plus `RUNTIME_ADTS`, which holds `Word.Con`
+but not `Word.Nil`. When a `U32{w}` pattern hands its word on whole, the
+emitter lays the WCon chain itself, down to `term_pak(CID_WNIL, 0)`
+(`ctr_build`, `comp.ts:1081`); a program that never names `WNil` (it
+matches `WCon` and ends the word in a default arm) reaches no `Word.Nil`.
+
+**Repro** `upstream/word_unpack.bend` counts a U32's one bits through
+`match n: case 1n+p: match w: case WCon{..}` and `case _:`.
+
+**Observed** interp and JS `"0 32 16"`; C: clang refuses the file, "use
+of undeclared identifier 'CID_WNIL'". **Expected** `"0 32 16"` in every
+lane. Found by the compiler's differential fuzzer (`tests/fuzz`).
 
 ## F01-F06. From apps/uptime/FRICTION.md, checked on canon
 

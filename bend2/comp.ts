@@ -247,7 +247,8 @@ const OPERATIONS: Record<string, Intr> = Object.setPrototypeOf({
     JS: "cmp_new(BigInt.asIntN(64, $0), BigInt.asIntN(64, $1))",
   },
   i64_neg: {
-    C:  "((u64)(-(int64_t)($0)))",
+    // in u64: -(int64_t)x overflows (C's undefined behaviour) at I64's min
+    C:  "((u64)0 - (u64)($0))",
     JS: "((-$0) & 0xFFFFFFFFFFFFFFFFn)",
   },
   i64_shr_s: {
@@ -3821,9 +3822,10 @@ function compile_reqs(fl: File): void {
 
 const TABLES = ["CID_ARITY_T", "CID_HOT_T", "FID_ARITY_T", "FID_FLAG_T", "FID_RESW_T"];
 
-// The datatypes whose constructors the runtime or the elaborator lays itself.
-const RUNTIME_ADTS = ["Sigma", "String", "Word.Con", "IO.OP", "Result",
-  "Maybe", "Bool", "Unit", "List", "Char", "Cmp", "Inst", "Match"];
+// The datatypes whose constructors the runtime or the elaborator lays itself
+// (a word taken apart is laid WCon by WCon down to its WNil, named or not).
+const RUNTIME_ADTS = ["Sigma", "String", "Word.Con", "Word.Nil", "IO.OP",
+  "Result", "Maybe", "Bool", "Unit", "List", "Char", "Cmp", "Inst", "Match"];
 
 // The compiler knows base.bend's types by their names alone, and applies
 // a closure through CLO_APPLY, a def it synthesizes. SYNTH is the name no
