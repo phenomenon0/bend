@@ -20,6 +20,8 @@ lines its run must print, and the gates run on the mini cluster.
                         page's and the film's numbers), gen_gifs.ts (the images)
     bench/runtime/      one dir per bench: main.bend and its twins (C, TS, Lean)
     bench/checker/      one dir per bench: main.bend and its rivals
+    bench/net/          netperf.py: the HTTP stack's instructions and syscalls
+                        per request (callgrind, strace), against _pin_/
     bench/*/_pin_/      the pins, one file per hardware: apple_m4 the gate's,
                         apple_m4_max the record
     tests/<ns>/         the tests by namespace, with their foreign .c/.js
@@ -31,7 +33,12 @@ lines its run must print, and the gates run on the mini cluster.
                         check and a release, on a localhost hub
     gates/_run.ts       the four gates with --gate
     demos/              one dir per demo
-    guide/              GUIDE.md
+    net/                the networking library: HTTP server and client, JSON,
+                        a WebSocket client; its laws, mutants and examples
+    wire/               bend-wire, the loops, readers and pool net/ is built on
+    guide/              GUIDE.md, and the extras SHADERS.md, EFFECTS.md and
+                        NETWORKING.md (`bend guide networking`)
+    REPO_MAP.md         this map in more words, and the networking stack whole
     paper/              BendTT.pdf, BendRT.pdf
     media/              the film and the charts
     .github/            ISSUE_TEMPLATE/bug.yml, the bug report form, and

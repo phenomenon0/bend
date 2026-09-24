@@ -1,0 +1,10 @@
+[package]
+name = "bend-kernel"
+version = "0.1.0"
+edition = "2021"
+description = "An independent re-checker for Bend's core calculus (bend2/bend.lean Part I)"
+
+[dependencies]
+
+[profile.release]
+opt-level = 3

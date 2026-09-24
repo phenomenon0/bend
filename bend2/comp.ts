@@ -127,7 +127,8 @@ type Call = {
 type Intr = {
   C?: string | string[];
   call?: boolean;
-  JS: string;
+  peek?: number[];
+  JS: Gen;
 };
 
 type Dom = [Bend.Quant, Name, HTerm];
@@ -159,8 +160,14 @@ const BOX: Lay = { ks: ["box"], arms: null };
 
 const W64: Lay = { ks: ["w64"], arms: null };
 
+// A U64, I64 or F64: a w64 like Nat's (lay_eq), but any bit pattern, where a
+// Nat stays below 2^48 and so always reads as a trivial Term. It is told
+// apart by identity: val_box boxes it (x64_box), lay_pack keeps it out of a
+// slot another arm drops as a Term.
+const X64: Lay = { ks: ["w64"], arms: null };
+
 const WORDS: Record<string, Lay> = Object.setPrototypeOf(
-  { U32: W32, F32: W32, F64: W64, Nat: W64, U64: W64, I64: W64 }, null);
+  { U32: W32, F32: W32, F64: X64, Nat: W64, U64: X64, I64: X64 }, null);
 
 // The widest flat layout (u8 arity tables); the shader's Tri is 24 words.
 const WIDE = 255;
@@ -342,6 +349,16 @@ const OPERATIONS: Record<string, Intr> = Object.setPrototypeOf({
     C:  "($0 < $1)",
     JS: "($0 < $1)",
   },
+  nat_min: {
+    C:  "($0 < $1 ? $0 : $1)",
+    JS: "($0 < $1 ? $0 : $1)",
+  },
+  nat_max: {
+    C:  "($0 < $1 ? $1 : $0)",
+    JS: "($0 < $1 ? $1 : $0)",
+  },
+  nat_show: { C: "str_show_u64(e, (u64)($0))", JS: "String($0)" },
+  u32_show: { C: "str_show_u64(e, (u64)(u32)($0))", JS: "String($0 >>> 0)" },
   nat_divmod: {
     C:    ["($1 == 0 ? 0 : $0 / $1)", "($1 == 0 ? $0 : $0 % $1)"],
     call: true,
@@ -372,7 +389,7 @@ const OPERATIONS: Record<string, Intr> = Object.setPrototypeOf({
   string_cmp: { C: ["$0", "$1", "str_order_peek(e, $0, $1)"], JS: "str_cmp($0, $1)" },
   ...tpl_ops("string_", "order join repeat partition",
     "str_$o_take(e, $0, $1)", "str_$o($0, $1)"),
-  string_eq: { C: "(str_order_take(e, $0, $1) == 1)", JS: "($0 === $1)" },
+  string_eq: { C: "str_eq_take(e, $0, $1)", JS: "($0 === $1)" },
   ...tpl_ops("string_", "is_lt:< is_le:<= is_gt:> is_ge:>=",
     "(str_order_take(e, $0, $1) $o 1)",
     '(({LT: 0, EQ: 1, GT: 2})[str_order($0, $1).$] $o 1)'),
@@ -403,6 +420,19 @@ const OPERATIONS: Record<string, Intr> = Object.setPrototypeOf({
   // Map.bit borrows the key and returns it: the tree order and the 33-bit key
   // protocol of the reference definition, O(1) on C, an endpoint scan on JS.
   map_bit: { C: ["$0", "str_bit_peek(e, $0, $1)"], JS: "map_bit($0, $1)" },
+  // Bytes: len, get, span and the finds borrow the buffer (peek): the call site
+  // neither shares nor drops it, so a scan loop over one buffer touches no
+  // count; push appends in place into an unshared buffer's spare room.
+  bytes_get: { C: "str_byte_peek(e, $0, $1)", peek: [0], JS: "bytes_get($0, $1)" },
+  bytes_len: { C: "str_len_peek(e, $0)", peek: [0], JS: "str_length($0)" },
+  bytes_word_le: { C: "str_word_le_peek(e, $0, $1)", peek: [0], JS: "bytes_word_le($0, $1)" },
+  bytes_push: { C: "str_push_take(e, $0, $1)", JS: "bytes_push($0, $1)" },
+  bytes_span: { C: "str_span_peek(e, $0, $1, $2, $3)", peek: [0],
+    JS: "bytes_span($0, $1, $2, $3)" },
+  bytes_find_byte: { C: "str_find_byte_peek(e, $0, $1, $2)", peek: [0],
+    JS: "bytes_find_byte($0, $1, $2)" },
+  bytes_find_any: { C: "str_find_any_peek(e, $0, $1, $2, $3, $4, $5)", peek: [0],
+    JS: "bytes_find_any($0, $1, $2, $3, $4, $5)" },
   // the C lane lays these out by the element (arr_op)
   ...Object.fromEntries(Object.entries({
     new: "array_new($0, $1)", set: "($0[$1 % $0.length] = $2, $0)",
@@ -698,7 +728,7 @@ static Term f64_show(Env e, Term x) {
 static Term f64_read(Env e, Term s) {
   u64 n = 0;
   char* text = io_cstr(e, s, &n);
-  Term out = io_num(text, n) ? io_box(e, CID_SOME, f64_rewrap(strtod(text, NULL)))
+  Term out = io_num(text, n) ? io_box(e, CID_SOME, x64_box(e, f64_rewrap(strtod(text, NULL))))
     : term_pak(CID_NONE, 0);
   free(text);
   return out;
@@ -825,11 +855,68 @@ function str_prepend(c, s) {
   if (typeof c !== "string") { throw "bend: JS strings cannot contain non-scalar Char values"; }
   return c + s;
 }
-function str_length(s) { let n = 0n; for (const c of s) { n++; } return n; }
+// A string with no surrogate is its own code points: a position is an
+// index. The last string asked about is remembered, so a scanner reading
+// one buffer at many positions tests it once.
+let STR_FLAT_S = "", STR_FLAT = true;
+function str_flat(s) {
+  if (s !== STR_FLAT_S) { STR_FLAT_S = s; STR_FLAT = !/[\uD800-\uDFFF]/.test(s); }
+  return STR_FLAT;
+}
+function str_length(s) {
+  if (str_flat(s)) { return BigInt(s.length); }
+  let n = 0n; for (const c of s) { n++; } return n;
+}
 function str_offset(s, n) {
+  if (n >= 32n && str_flat(s)) { return n < BigInt(s.length) ? Number(n) : s.length; }
   let i = 0;
   while (n > 0n && i < s.length) { i += s.codePointAt(i) > 0xffff ? 2 : 1; n--; }
   return i;
+}
+function bytes_get(s, i) {
+  const j = str_offset(s, i);
+  return j < s.length ? s.codePointAt(j) : 256;
+}
+function bytes_word_le(s, i) {
+  let j = str_offset(s, i), x = 0;
+  for (let k = 0; k < 4 && j < s.length; k++) {
+    const c = s.codePointAt(j);
+    x |= (c & 255) << (8 * k);
+    j += c > 0xffff ? 2 : 1;
+  }
+  return x >>> 0;
+}
+function bytes_push(s, c) { return s + str_prepend(char_new(c), ""); }
+function bytes_span(s, i, lo, hi) {
+  let j = str_offset(s, i), n = 0;
+  while (j < s.length) {
+    const c = s.codePointAt(j);
+    if (c < lo || c >= hi) { break; }
+    j += c > 0xffff ? 2 : 1; n++;
+  }
+  return BigInt(n);
+}
+function bytes_find_any(s, i, w, x, y, z) {
+  let j = str_offset(s, i), n = 0;
+  while (j < s.length) {
+    const c = s.codePointAt(j);
+    if (c === w || c === x || c === y || c === z) { break; }
+    j += c > 0xffff ? 2 : 1; n++;
+  }
+  return i + BigInt(n);
+}
+function bytes_find_byte(s, i, x) {
+  let j = str_offset(s, i), n = 0;
+  if (str_flat(s) && x < 0xd800) {
+    const k = s.indexOf(String.fromCharCode(x), j);
+    return i + BigInt((k < 0 ? s.length : k) - j);
+  }
+  while (j < s.length) {
+    const c = s.codePointAt(j);
+    if (c === x) { break; }
+    j += c > 0xffff ? 2 : 1; n++;
+  }
+  return i + BigInt(n);
 }
 function str_slice(s, lo, hi) {
   if (hi <= lo) { return ""; }
@@ -1488,8 +1575,34 @@ function lay_wide(lays: Lay[]): Lay[] {
     ? lays.map((l) => l.ks.length > 1 ? BOX : l) : lays;
 }
 
-// Fields start after the tag; the packer owns their final offsets.
-function lay_pack(arms: [Name, Lay[]][]): Lay {
+// Fields start after the tag; the packer owns their final offsets. A
+// full word (X64) sharing a slot with another arm's box would be dropped as
+// a Term when that slot is: its field is boxed instead, until none does.
+function lay_pack(arms: [Bend.Name, Lay[]][]): Lay {
+  for (;;) {
+    const lay = lay_pack_at(arms);
+    const full = lay_full(lay);
+    const bad = full.map((f, j) => f && lay.ks[j] === "box");
+    if (!bad.includes(true)) {
+      return lay;
+    }
+    arms = lay.arms!.map((a) => [a.k, a.fs.map((f) => lay_full(f.lay)
+      .some((b, j) => b && bad[f.at + j]) ? BOX : f.lay)]);
+  }
+}
+
+// The words of a layout that may hold a full 64-bit word.
+function lay_full(lay: Lay): boolean[] {
+  if (lay === X64) {
+    return [true];
+  }
+  const out = lay.ks.map(() => false);
+  lay.arms?.forEach((a) => a.fs.forEach((f) => lay_full(f.lay)
+    .forEach((b, j) => b && (out[f.at + j] = true))));
+  return out;
+}
+
+function lay_pack_at(arms: [Bend.Name, Lay[]][]): Lay {
   const tag = arms.length > 1 ? 1 : 0;
   const ks: Kind[] = tag === 1 ? ["w32"] : [];
   return { ks, arms: arms.map(([k, lays]) => {
@@ -2394,7 +2507,8 @@ function val_arms(fl: File, lay: Lay, sel: string,
 
 function val_box(fl: File, v: Val): string {
   if (v.lay.arms === null) {
-    return val_own(fl, v)[0];
+    const w = val_own(fl, v)[0];
+    return v.lay === X64 ? emit_alias(fl, `x64_box(e, ${w})`, "b") : w;
   }
   const arms = v.lay.arms!;
   const build = (arm: Arm): string => {
@@ -2415,7 +2529,9 @@ function val_box(fl: File, v: Val): string {
 
 function val_unbox(fl: File, v: Val, lay: Lay): Val {
   if (lay.arms === null) {
-    return val_new(v.ws, lay);
+    const w = v.ws[0];
+    return lay !== X64 ? val_new(v.ws, lay) : val_new([emit_alias(fl,
+      `x64_${fl.brwl.has(w) ? "peek" : "take"}(e, ${w})`, "u", "w64")], lay);
   }
   const t = emit_alias(fl, v.ws[0], "u");
   return val_arms(fl, lay, t, (_, i) =>
@@ -2749,7 +2865,12 @@ function emit_intr(fl: File, it: Intr, x: HTerm,
   ty: HTerm | null): Val {
   const m = term_spine(fl, x);
   const k = (m.t as Of<"Ref">).k;
-  const args = emit_each(fl, m.args, null);
+  // A full word a polymorphic call handed back boxed is read out of its box.
+  const lays = sig_def(fl, k).lays;
+  const peek = it.peek ?? [];
+  const sinks: Val[] = [];
+  const args = emit_peek(fl, m.args, peek, sinks).map((v, i) =>
+    lays[i] === X64 && lay_box(v.lay) ? val_to(fl, v, X64) : v);
   const op = eff_name(k);
   // Native aggregate builders publish sealed fields. Teach field extraction and
   // the transitive borrow analysis about those counts on every pass.
@@ -2769,7 +2890,7 @@ function emit_intr(fl: File, it: Intr, x: HTerm,
     return arr_op(fl, op, lay_el(fl.book, m.all[0]), args);
   }
   const ws = op.startsWith("regex_") ? args.flatMap((v) => val_own(fl, v))
-    : args.map((v) => (val_own(fl, v), val_word(v)));
+    : args.map((v, i) => (peek.includes(i) || val_own(fl, v), val_word(v)));
   if (Array.isArray(it.C)) {
     const as = ws.map((z) => emit_alias(fl, z, "a"));
     const vs: string[] = [];
@@ -2779,11 +2900,53 @@ function emit_intr(fl: File, it: Intr, x: HTerm,
     return val_new(vs, lay_of(fl.book, ty ?? tele_unbind(fl.book,
       (fl.book.tlds[k] as Bend.Def).T).ret));
   }
-  const C = it.C as string;
-  const out = tpl(C, /\$(\d)[^]*\$\1/.test(C)
-    ? ws.map((a) => emit_alias(fl, a, "a")) : ws);
+  const dup = typeof it.C === "string" && /\$(\d)[^]*\$\1/.test(it.C);
+  let out = tpl(it.C as Gen, dup ? ws.map((a) => emit_alias(fl, a, "a")) : ws);
+  // A peek reads now: a later argument or statement may take what it lent.
+  if (peek.length > 0) {
+    out = emit_hold(fl, [out], "a", [lay_of(fl.book, ty ?? tele_unbind(fl.book,
+      (fl.book.tlds[k] as Bend.Def).T).ret).ks[0] ?? "w64"])[0];
+    sinks.forEach((v) => val_sink(fl, v));
+  }
   const lay = lay_of(fl.book, ty);
-  return val_new([out], lay.ks.length === 1 ? lay : BOX);
+  // a full word is raw, whatever the site knows of its type
+  return val_new([out], sig_def(fl, k).ret === X64 ? X64
+    : lay.ks.length === 1 ? lay : BOX);
+}
+
+// A native's arguments in order, each seeing the later ones as its rest. A
+// peeked one is only read: a variable's use is counted but not taken (no
+// share, no ownership asked of a borrowed root), and one that dies here, or
+// a computed one, is sunk after the call (sinks).
+function emit_peek(fl: File, xs: HTerm[], peek: number[], sinks: Val[]): Val[] {
+  const rest = fl.rest;
+  const vs = xs.map((x, i) => {
+    fl.rest = [...xs.slice(i + 1), ...rest];
+    const s = term_strip(x);
+    if (!peek.includes(i)) {
+      return emit_expr(fl, x, null, null);
+    }
+    const later = s.$ === "Var" && xs.slice(i + 1).some((y) =>
+      term_use(term_uses(fl, y), probe_of(s)) > 0);
+    if (s.$ !== "Var" || later) {
+      // held: the call reads it and the sink drops it, one evaluation
+      // (a computed SCon twice would prepend twice onto one tail)
+      const v = val_hold(fl, emit_expr(fl, x, null, null), "p");
+      sinks.push(v);
+      return v;
+    }
+    const p = probe_of(s);
+    const b = bind_of(fl, p);
+    if (b.n <= 1) {
+      fl.uses.delete(p);
+      sinks.push(b.val);
+    } else {
+      fl.uses.set(p, { ...b, n: b.n - 1 });
+    }
+    return b.val;
+  });
+  fl.rest = rest;
+  return vs;
 }
 
 // A closure moves its captures into a node (each one use of its binding,
@@ -2810,15 +2973,15 @@ function emit_clo(fl: File, x: HTerm, ty: HTerm | null): Val {
 // are evaluated here; open tails stay on the ordinary prepend path.
 function str_constant(t: HTerm): number[] | null {
   const cells: number[] = [];
-  for (let s = Bend.term_strip(t); s.$ === "Ctr";) {
+  for (let s = term_strip(t); s.$ === "Ctr";) {
     if (s.k === "SNil") { return cells; }
     if (s.k !== "SCon") { return null; }
-    const h = Bend.term_strip(s.x[0]);
+    const h = term_strip(s.x[0]);
     const n = h.$ === "Ctr" && h.k === "Chr"
       ? Bend.u32_from_term(h.x[0], "U32") : null;
     if (n === null) { return null; }
     cells.push(n);
-    s = Bend.term_strip(s.x[1]);
+    s = term_strip(s.x[1]);
   }
   return null;
 }
@@ -3228,7 +3391,7 @@ function emit_row(fl: File, t: HTerm, ty: HTerm | null): string | null {
   }
   const m = term_spine(fl, s);
   const it = m.t.$ === "Ref" ? intr_of(fl, m.t.k) : undefined;
-  if (it === undefined || TAB_BAD.test(it.JS)) {
+  if (it === undefined || typeof it.JS !== "string" || TAB_BAD.test(it.JS)) {
     return null;
   }
   const xs = m.args.map((a) => emit_row(fl, a, null));
@@ -3952,6 +4115,11 @@ using namespace metal;
 #include <time.h>
 #include <poll.h>
 #include <sys/select.h>
+#include <sys/wait.h>
+#ifdef __linux__
+#include <sys/epoll.h>
+#include <sys/prctl.h>
+#endif
 #ifdef __APPLE__
 #include <mach-o/dyld.h>
 #endif
@@ -4260,6 +4428,9 @@ static Stk  io_stk;
 static const char* CLI_HELP =
   "usage: %s [options] [arguments]\n"
   "  --threads N       worker threads, 1 to 128 (default: the CPU count)\n"
+  "  --workers N       run N copies of the program as processes, as nginx\n"
+  "                    runs its workers; a server shares its port\n"
+  "                    (TCP.listen_shared) (default: 1)\n"
   "  --gpu on|off|4GB  run ! calls on the GPU, over this much of its memory\n"
   "                    (default: on if present, over 2GB on Metal)\n"
   "  --gpu-build       write the GPU program and exit\n"
@@ -4733,6 +4904,39 @@ INLINE void term_sink(Env e, Term t) {
   }
 }
 
+// A U64, I64 or F64 in a slot the runtime drops or shares as a Term (a
+// polymorphic parameter, a generic constructor's field): a word that would
+// read as a reference (a heap location, or the count bit) rides in a
+// one-word block, the rest ride as they are. A boxed one is never trivial.
+INLINE bool x64_raw(u64 w) {
+  return term_triv(w) && !term_rfc(w);
+}
+
+INLINE Term x64_box(Env e, u64 w) {
+  if (x64_raw(w)) {
+    return w;
+  }
+  Loc l = heap_alloc(e, 0);
+  if (err_seen(e.mem)) {
+    return 0;
+  }
+  e.mem[l] = w;
+  return term_buf(0, l);
+}
+
+INLINE u64 x64_peek(Env e, Term t) {
+  return x64_raw(t) ? t : e.mem[term_peek(e, t)];
+}
+
+INLINE u64 x64_take(Env e, Term t) {
+  if (x64_raw(t)) {
+    return t;
+  }
+  u64 w = e.mem[term_peek(e, t)];
+  term_drop(e, t);
+  return w;
+}
+
 OUTLINE void span_fade(Env e, Term t, Loc src, u32 n) {
   for (u32 j = 0; j < n; j += 1) {
     Term f = e.mem[src + j];
@@ -4921,10 +5125,13 @@ INLINE Term blk_new(Env e, bool arr, Nat d, u32 lgs, u32 n, THR Term* v) {
 // never changes nar; a write of a wider cell reallocates in str_reserve.
 // Peek borrows. Take consumes metadata and moves/retains the payload BEFORE
 // releasing a shared descriptor. Only taken parts may enter str_writable.
+// Taken from its one owner, a heap descriptor is not released but kept as
+// home, and str_view_owned writes the new view back into it: a cut, a push
+// or an append on an unshared string frees and allocates no descriptor.
 #define STR_LIMIT (1ull << 31)
 #define str_nar(p) ((p).data ? (u32)(term_aux((p).data) >> 5) & 3 : 2)
 #define str_cap(d) (1ull << (blk_cls(d) + ((term_aux(d) >> 5) & 3)))
-typedef struct { Term data; u32 off; u32 len; } StrParts;
+typedef struct { Term data; u32 off; u32 len; Term home; } StrParts;
 
 INLINE u32 str_fit(u32 c) { return c < 256 ? 2 : c < 65536 ? 1 : 0; }
 
@@ -4941,7 +5148,10 @@ INLINE StrParts str_peek(Env e, Term s) {
 
 INLINE StrParts str_take(Env e, Term s) {
   StrParts p = str_peek(e, s);
-  if (p.len) {
+  if (p.len && term_rfc(s)
+      && (rfc_view(e, term_loc(s)) & RFC_CNT) == 1) {
+    p.home = s;
+  } else if (p.len) {
     Term data[1];
     Loc l = ctr_take(e, s, 1, data);
     p.data = data[0];
@@ -4950,16 +5160,35 @@ INLINE StrParts str_take(Env e, Term s) {
   return p;
 }
 
+// A home no view goes back into: its count cell and node are freed, the
+// payload it held having been taken with the parts.
+INLINE void str_home_free(Env e, Term h) {
+  if (h) {
+    Loc r = term_loc(h);
+    Loc l = rfc_view(e, r) >> 24;
+    heap_free(e, 0, r);
+    spare_free(e, 1, l);
+  }
+}
+
 INLINE Term str_view_owned(Env e, StrParts p) {
   if (!p.len || err_seen(e.mem)) {
+    str_home_free(e, p.home);
     term_sink(e, p.data);
     return term_pak(CID_SNIL, 0);
   }
   u64 cap = str_cap(p.data);
   if (cap > STR_LIMIT || p.len > cap || p.off > cap - p.len) {
     err_post(e.mem, ERR_STRS);
+    str_home_free(e, p.home);
     term_sink(e, p.data);
     return term_pak(CID_SNIL, 0);
+  }
+  if (p.home) {
+    Loc l = rfc_view(e, term_loc(p.home)) >> 24;
+    e.mem[l] = p.data;
+    e.mem[l + 1] = ((u64)p.off << 32) | p.len;
+    return p.home;
   }
   Loc l = heap_alloc(e, 1);
   if (err_seen(e.mem)) { term_sink(e, p.data); return term_pak(CID_SNIL, 0); }
@@ -5014,6 +5243,16 @@ INLINE void str_copy_cells(Env e, StrParts dst, u32 at, StrParts src) {
   u32 poll = 0;
   Loc from = term_peek(e, src.data), to = term_peek(e, dst.data);
   u32 sn = str_nar(src), dn = str_nar(dst);
+#if !DEVICE
+  // cells of one width are laid out alike (1, 2 or 4 bytes, the low
+  // byte first): the copy is one block move
+  if (sn == dn) {
+    u32 w = 4u >> sn;
+    memmove((u8*)(e.mem + to) + (u64)(dst.off + at) * w,
+      (const u8*)(e.mem + from) + (u64)src.off * w, (u64)src.len * w);
+    return;
+  }
+#endif
   for (u32 i = 0; i < src.len; i++) {
     if (err_spun(e.mem, &poll)) { return; }
     str_cell_put(e.mem, to, dn, dst.off + at + i,
@@ -5028,7 +5267,7 @@ INLINE StrParts str_reserve(Env e, StrParts p, u64 need, bool front, u32 nar) {
   if (n > STR_LIMIT) {
     err_post(e.mem, ERR_STRS);
     term_sink(e, p.data);
-    StrParts z = {0, 0, 0}; return z;
+    StrParts z = {0, 0, 0, p.home}; return z;
   }
   u64 cap = p.data ? str_cap(p.data) : 0;
   if (str_nar(p) < nar) { nar = str_nar(p); }
@@ -5044,6 +5283,7 @@ INLINE StrParts str_reserve(Env e, StrParts p, u64 need, bool front, u32 nar) {
     str_copy_cells(e, q, 0, p);
   }
   term_sink(e, p.data);
+  q.home = p.home;
   return q;
 }
 
@@ -5052,7 +5292,7 @@ INLINE Term str_prepend_take(Env e, u32 c, Term s) {
   // Putting back the cell an uncons just stepped past is a view, not a
   // write: nothing is stored, so a shared or static payload qualifies.
   if (p.data && p.off > 0) {
-    StrParts b = {p.data, p.off - 1, p.len + 1};
+    StrParts b = {p.data, p.off - 1, p.len + 1, p.home};
     if (str_at_peek(e, b, 0) == c) { return str_view_owned(e, b); }
   }
   p = str_reserve(e, p, 1, true, str_fit(c));
@@ -5093,6 +5333,144 @@ INLINE void str_uncons(Env e, Term s, THR Term* out) {
   out[1] = str_view_owned(e, p);
 }
 
+// Bytes.push: one cell on the end, in place when the string is its
+// payload's one owner with room (append's doubling amortizes the rest).
+FAR Term str_push_grow(Env e, Term s, u32 c) {
+  StrParts p = str_reserve(e, str_take(e, s), 1, false, str_fit(c));
+  if (!err_seen(e.mem) && p.data) {
+    str_put(e, p, p.len, c);
+    p.len++;
+  }
+  return str_view_owned(e, p);
+}
+
+INLINE Term str_push_take(Env e, Term s, u32 c) {
+  // The filling loop's case, read once: the one owner of a descriptor
+  // holding the one count of a heap payload with room and wide enough
+  // cells stores the cell and bumps the length.
+  // Both counts are read whole and plainly; the one acquire, once both are
+  // one, orders the store after whatever the last other owners did.
+  if (!term_triv(s) && term_rfc(s)) {
+    u64 cell = e.mem[term_loc(s)];
+    Loc l = cell >> 24;
+    Term d = e.mem[l];
+    u64 ol = e.mem[l + 1];
+    if ((cell & RFC_CNT) == 1 && (u32)ol && term_rfc(d)) {
+      u64 dc = e.mem[term_loc(d)];
+      Loc dl = dc >> 24;
+      u32 nar = (u32)(term_aux(d) >> 5) & 3, at = (u32)(ol >> 32) + (u32)ol;
+      if ((dc & RFC_CNT) == 1 && dl >= HEAP_OFF && str_fit(c) >= nar
+          && at < str_cap(d)) {
+        a32_acq(a32_at(e.mem, term_loc(d)));
+        str_cell_put(e.mem, dl, nar, at, c);
+        e.mem[l + 1] = ol + 1;
+        return s;
+      }
+    }
+  }
+  return str_push_grow(e, s, c);
+}
+
+// Bytes.len, get, span and the finds borrow the string (the call
+// site neither shares nor drops it): no view, no count, no Maybe.
+// A borrowed read holds a count on what it reads, so no location it follows
+// can move and nothing it reads was written after it got the count: its
+// loads are plain ones, which a loop over one buffer hoists.
+INLINE Loc term_peek_ro(Env e, Term t) {
+  return term_rfc(t) ? (Loc)(e.mem[term_loc(t)] >> 24) : term_loc(t);
+}
+
+INLINE StrParts str_peek_ro(Env e, Term s) {
+  StrParts p = {0, 0, 0, 0};
+  if (term_tag(s) == TAG_STR) {
+    Loc l = term_peek_ro(e, s);
+    p.data = e.mem[l];
+    p.off = (u32)(e.mem[l + 1] >> 32);
+    p.len = (u32)e.mem[l + 1];
+  }
+  return p;
+}
+
+INLINE Nat str_len_peek(Env e, Term s) {
+  return str_peek_ro(e, s).len;
+}
+
+INLINE u32 str_byte_peek(Env e, Term s, Nat i) {
+  StrParts p = str_peek_ro(e, s);
+  return i < p.len
+    ? str_cell(e.mem, term_peek_ro(e, p.data), str_nar(p), p.off + (u32)i) : 256;
+}
+
+// the four cells from i, each's low byte, little end first, 0 past the end
+INLINE u32 str_word_le_peek(Env e, Term s, Nat i) {
+  StrParts p = str_peek_ro(e, s);
+  if (i >= p.len) { return 0; }
+  Loc l = term_peek_ro(e, p.data);
+  u32 nar = str_nar(p), j = p.off + (u32)i, n = p.len - (u32)i, x = 0;
+  if (nar == 2 && n >= 4) {
+    DEV u8* b = (DEV u8*)(e.mem + l) + j;
+    return (u32)b[0] | (u32)b[1] << 8 | (u32)b[2] << 16 | (u32)b[3] << 24;
+  }
+  for (u32 k = 0; k < 4 && k < n; k++) {
+    x |= (str_cell(e.mem, l, nar, j + k) & 255) << (8 * k);
+  }
+  return x;
+}
+
+// how many cells from i are in [lo, hi)
+INLINE Nat str_span_peek(Env e, Term s, Nat i, u32 lo, u32 hi) {
+  StrParts p = str_peek_ro(e, s);
+  if (i >= p.len || hi <= lo) { return 0; }
+  Loc l = term_peek_ro(e, p.data);
+  u32 nar = str_nar(p), w = hi - lo, j = p.off + (u32)i, end = p.off + p.len;
+  if (nar == 2) {
+    DEV u8* b = (DEV u8*)(e.mem + l);
+    while (j < end && (u32)b[j] - lo < w) { j++; }
+  } else {
+    while (j < end && str_cell(e.mem, l, nar, j) - lo < w) { j++; }
+  }
+  return j - p.off - (u32)i;
+}
+
+// i plus how many cells from i come before the first x
+INLINE Nat str_find_byte_peek(Env e, Term s, Nat i, u32 x) {
+  StrParts p = str_peek_ro(e, s);
+  if (i >= p.len) { return i; }
+  Loc l = term_peek_ro(e, p.data);
+  u32 nar = str_nar(p), j = p.off + (u32)i, end = p.off + p.len;
+  if (nar == 2) {
+    if (x > 255) { return p.len; }
+    DEV u8* b = (DEV u8*)(e.mem + l);
+#if DEVICE
+    while (j < end && b[j] != x) { j++; }
+#else
+    const u8* at = (const u8*)memchr((const u8*)b + j, (int)x, end - j);
+    j = at ? (u32)(at - (const u8*)b) : end;
+#endif
+  } else {
+    while (j < end && str_cell(e.mem, l, nar, j) != x) { j++; }
+  }
+  return j - p.off;
+}
+
+// i plus how many cells from i come before the first of w, x, y, z
+INLINE Nat str_find_any_peek(Env e, Term s, Nat i, u32 w, u32 x, u32 y, u32 z) {
+  StrParts p = str_peek_ro(e, s);
+  if (i >= p.len) { return i; }
+  Loc l = term_peek_ro(e, p.data);
+  u32 nar = str_nar(p), j = p.off + (u32)i, end = p.off + p.len;
+  if (nar == 2) {
+    DEV u8* b = (DEV u8*)(e.mem + l);
+    while (j < end && b[j] != w && b[j] != x && b[j] != y && b[j] != z) { j++; }
+  } else {
+    for (; j < end; j++) {
+      u32 c = str_cell(e.mem, l, nar, j);
+      if (c == w || c == x || c == y || c == z) { break; }
+    }
+  }
+  return j - p.off;
+}
+
 INLINE Nat str_length_take(Env e, Term s) {
   Nat n = str_peek(e, s).len;
   term_sink(e, s);
@@ -5102,6 +5480,30 @@ INLINE Nat str_length_take(Env e, Term s) {
 INLINE Term str_append_take(Env e, Term a, Term b) {
   StrParts q = str_peek(e, b);
   if (!q.len) { term_sink(e, b); return a; }
+  // The building loop's case, as str_push_take reads it: the one owner of
+  // a descriptor holding the one count of a heap payload with room for b,
+  // in cells as wide as b's or wider, copies b's cells in and bumps the
+  // length; no descriptor is taken, reserved or viewed again.
+  if (!term_triv(a) && term_rfc(a)) {
+    u64 cell = e.mem[term_loc(a)];
+    Loc l = cell >> 24;
+    Term d = e.mem[l];
+    u64 ol = e.mem[l + 1];
+    if ((cell & RFC_CNT) == 1 && (u32)ol && term_rfc(d)) {
+      u64 dc = e.mem[term_loc(d)];
+      Loc dl = dc >> 24;
+      u32 nar = (u32)(term_aux(d) >> 5) & 3, at = (u32)(ol >> 32) + (u32)ol;
+      if ((dc & RFC_CNT) == 1 && dl >= HEAP_OFF && str_nar(q) >= nar
+          && (u64)at + q.len <= str_cap(d)) {
+        a32_acq(a32_at(e.mem, term_loc(d)));
+        StrParts p = {d, 0, at, 0};
+        str_copy_cells(e, p, at, q);
+        e.mem[l + 1] = ol + q.len;
+        term_sink(e, b);
+        return a;
+      }
+    }
+  }
   if (!str_peek(e, a).len) { term_sink(e, a); return b; }
   StrParts p = str_reserve(e, str_take(e, a), q.len, false, str_nar(q));
   if (!err_seen(e.mem)) {
@@ -5109,6 +5511,20 @@ INLINE Term str_append_take(Env e, Term a, Term b) {
     p.len += q.len;
   }
   term_sink(e, b);
+  return str_view_owned(e, p);
+}
+
+// Nat.show and U32.show: the decimal digits, most significant first,
+// "0" for zero, in one payload of byte cells (the Bend definitions'
+// digit-at-a-time prepends, each a view and a count, made at once)
+INLINE Term str_show_u64(Env e, u64 v) {
+  u32 d[20];
+  u32 n = 0;
+  do { d[n++] = 48 + (u32)(v % 10); v /= 10; } while (v != 0);
+  StrParts p = str_alloc(e, n, 2);
+  if (!err_seen(e.mem) && p.data) {
+    for (u32 i = 0; i < n; i++) { str_put(e, p, i, d[n - 1 - i]); }
+  }
   return str_view_owned(e, p);
 }
 
@@ -5166,6 +5582,14 @@ INLINE u32 str_order_peek(Env e, Term a, Term b) {
   StrParts p = str_peek(e, a), q = str_peek(e, b);
   u32 poll = 0, n = p.len < q.len ? p.len : q.len;
   Loc pl = term_peek(e, p.data), ql = term_peek(e, q.data);
+#if !DEVICE
+  // byte cells on both sides order as their bytes do, unsigned
+  if (n && str_nar(p) == 2 && str_nar(q) == 2) {
+    int c = memcmp((const u8*)(e.mem + pl) + p.off, (const u8*)(e.mem + ql) + q.off, n);
+    if (c != 0) { return c < 0 ? 0 : 2; }
+    n = 0;
+  }
+#endif
   for (u32 i = 0; i < n; i++) {
     if (err_spun(e.mem, &poll)) { return 1; }
     u32 x = str_cell(e.mem, pl, str_nar(p), p.off + i);
@@ -5181,11 +5605,25 @@ INLINE u32 str_order_take(Env e, Term a, Term b) {
   return c;
 }
 
+// String.eq: two lengths that differ answer before a cell is read
+INLINE bool str_eq_take(Env e, Term a, Term b) {
+  bool eq = str_peek(e, a).len == str_peek(e, b).len && str_order_peek(e, a, b) == 1;
+  term_sink(e, a); term_sink(e, b);
+  return eq;
+}
+
 INLINE bool str_edge_take(Env e, Term s, Term sub, bool end) {
   StrParts p = str_peek(e, s), q = str_peek(e, sub);
   bool ok = q.len <= p.len;
   u32 off = ok && end ? p.len - q.len : 0, poll = 0;
   Loc pl = term_peek(e, p.data), ql = term_peek(e, q.data);
+#if !DEVICE
+  if (ok && q.len && str_nar(p) == 2 && str_nar(q) == 2) {
+    ok = memcmp((const u8*)(e.mem + pl) + p.off + off, (const u8*)(e.mem + ql) + q.off, q.len) == 0;
+    term_sink(e, s); term_sink(e, sub);
+    return ok;
+  }
+#endif
   for (u32 i = 0; ok && i < q.len; i++) {
     if (err_spun(e.mem, &poll)) { ok = false; break; }
     ok = str_cell(e.mem, pl, str_nar(p), p.off + off + i)
@@ -5411,6 +5849,25 @@ INLINE u64 str_search_take(Env e, Term s, Term needle, u32 mode) {
   StrParts p = str_peek(e, s), q = str_peek(e, needle);
   u64 out = mode == 2 ? 0 : STR_ABSENT;
   if (!q.len) { out = mode == 0 ? 0 : (u64)p.len + (mode == 2); }
+#if !DEVICE
+  // The first hit of a short needle in byte cells, as a head is searched
+  // for "\r\n\r\n" or a field's name: memchr to each candidate for the
+  // needle's first byte, then one compare. A needle this short bounds
+  // the compares at 32 a byte; a longer one keeps the prefix table's
+  // linear walk.
+  else if (mode == 0 && q.len <= 32 && str_nar(p) == 2 && str_nar(q) == 2) {
+    const u8* h = (const u8*)(e.mem + term_peek(e, p.data)) + p.off;
+    const u8* n = (const u8*)(e.mem + term_peek(e, q.data)) + q.off;
+    if (q.len <= p.len) {
+      const u8* at = h;
+      const u8* end = h + (p.len - q.len) + 1;
+      while (at < end && (at = (const u8*)memchr(at, n[0], (size_t)(end - at))) != NULL) {
+        if (memcmp(at, n, q.len) == 0) { out = (u64)(at - h); break; }
+        at++;
+      }
+    }
+  }
+#endif
   else {
     StrSearch k = str_search_open(e, p, q);
     u32 at;
@@ -6889,6 +7346,7 @@ typedef struct IoAct {
   Term          item;
   u64           time;
   short         evts;
+  u32           heap;
   struct IoAct* next;
 } IoAct;
 
@@ -6900,6 +7358,176 @@ typedef struct {
 static IoQue io_runs;
 static IoQue io_park;
 static IoQue io_jobs;
+
+// Where a parked activation waits. On Linux a descriptor waiter is
+// registered with epoll once and a deadline waiter sits in a binary
+// min-heap, so a pass costs what is ready rather than what is waiting.
+// An activation can be in both at once -- that is what TCP.poll is --
+// so it carries its heap slot (heap - 1, 0 when it is in no heap) and
+// whichever fires first takes it out of the other. Everywhere else
+// io_park holds them all and poll reads the whole set every pass, as
+// it always has.
+#ifdef __linux__
+static int     io_ep = -1;
+static u32     io_fds;
+static IoAct** io_time;
+static u32     io_time_n;
+static u32     io_time_cap;
+
+// A descriptor's place in the poller, and the activations parked on it
+// each way (rd, wr). reg is whether it is believed to be in the set.
+//
+// A socket the runtime made itself (own: accepted or connected, and
+// closed through Socket.close) is registered once, for both ways and
+// edge-triggered, and stays until it is closed: a park costs no syscall
+// and a wake none either. An edge says the socket became ready since the
+// poller last reported it, so what it needs besides is what was learnt
+// in between: rdy holds, a bit a way (1 read, 2 write), whether it may
+// be ready -- set by an edge, cleared by a call that found it not
+// (EAGAIN) and by a plain read that came back short, which on Linux
+// means the socket was drained. A read that finds its bit clear parks
+// without trying, as nginx does.
+//
+// Any other descriptor (a listener, a foreign effect's, one whose close
+// the runtime may not see) is registered with EPOLLONESHOT and left
+// there: the kernel disarms it as it fires, so a wake costs no syscall
+// and the next park is one MOD rather than an ADD and a DEL. That belief
+// can be wrong in one way -- a descriptor closed and its number handed
+// out again -- so every call takes the other operation when the first
+// is refused, which is what makes reg a hint rather than bookkeeping.
+typedef struct {
+  IoAct* rd;
+  IoAct* wr;
+  u8     reg;
+  u8     rdy;
+  u8     own;
+} IoFd;
+
+static IoFd* io_fdt;
+static u32   io_fdt_cap;
+
+static IoFd* io_fd_at(int fd) {
+  if ((u32)fd >= io_fdt_cap) {
+    u32 was = io_fdt_cap;
+    io_fdt_cap = io_fdt_cap != 0 ? io_fdt_cap * 2 : 1024;
+    while ((u32)fd >= io_fdt_cap) {
+      io_fdt_cap *= 2;
+    }
+    io_fdt = io_mem(realloc(io_fdt, io_fdt_cap * sizeof *io_fdt));
+    for (u32 i = was; i < io_fdt_cap; i += 1) {
+      io_fdt[i] = (IoFd){ NULL, NULL, 0, 3, 0 };
+    }
+  }
+  return &io_fdt[fd];
+}
+
+#endif
+
+// Whether a read would find nothing: the descriptor is registered and
+// nothing has arrived since it was found empty. Only a plain socket's
+// reads keep this; a TLS session buffers what it decrypted.
+static bool io_fd_quiet(int fd, u8 way) {
+#ifdef __linux__
+  return fd >= 0 && (u32)fd < io_fdt_cap && io_fdt[fd].own && io_fdt[fd].reg
+    && !(io_fdt[fd].rdy & way);
+#else
+  (void)fd; (void)way;
+  return false;
+#endif
+}
+
+// what a call learnt: that a way may be ready, or that it is not
+static void io_fd_seen(int fd, u8 way, bool ready) {
+#ifdef __linux__
+  if (fd >= 0) {
+    IoFd* d = io_fd_at(fd);
+    d->rdy = ready ? d->rdy | way : d->rdy & (u8)~way;
+  }
+#else
+  (void)fd; (void)way; (void)ready;
+#endif
+}
+
+// A socket an effect has just made (own), or one it is about to close.
+static void io_fd_made(int fd, bool own) {
+#ifdef __linux__
+  if (fd >= 0 && (own || (u32)fd < io_fdt_cap)) {
+    *io_fd_at(fd) = (IoFd){ NULL, NULL, 0, 3, own };
+  }
+#else
+  (void)fd; (void)own;
+#endif
+}
+
+#define io_fd_fresh(fd) io_fd_made((fd), true)
+#define io_fd_gone(fd)  io_fd_made((fd), false)
+
+#ifdef __linux__
+static void io_time_put(IoAct* a, u32 i) {
+  io_time[i] = a;
+  a->heap    = i + 1;
+}
+
+static void io_time_up(u32 i) {
+  while (i != 0) {
+    u32 p = (i - 1) / 2;
+    if (io_time[p]->time <= io_time[i]->time) {
+      break;
+    }
+    IoAct* t = io_time[p];
+    io_time_put(io_time[i], p);
+    io_time_put(t, i);
+    i = p;
+  }
+}
+
+static void io_time_down(u32 i) {
+  for (;;) {
+    u32 l = 2 * i + 1;
+    u32 r = l + 1;
+    u32 m = i;
+    if (l < io_time_n && io_time[l]->time < io_time[m]->time) {
+      m = l;
+    }
+    if (r < io_time_n && io_time[r]->time < io_time[m]->time) {
+      m = r;
+    }
+    if (m == i) {
+      break;
+    }
+    IoAct* t = io_time[m];
+    io_time_put(io_time[i], m);
+    io_time_put(t, i);
+    i = m;
+  }
+}
+
+static void io_time_push(IoAct* a) {
+  if (io_time_n == io_time_cap) {
+    io_time_cap = io_time_cap != 0 ? io_time_cap * 2 : 64;
+    io_time = io_mem(realloc(io_time, io_time_cap * sizeof *io_time));
+  }
+  io_time_put(a, io_time_n);
+  io_time_n += 1;
+  io_time_up(io_time_n - 1);
+}
+
+// Takes it out of the heap wherever it sits, which is how the other
+// half of a descriptor-and-deadline park is cancelled.
+static void io_time_drop(IoAct* a) {
+  if (a->heap == 0) {
+    return;
+  }
+  u32 i = a->heap - 1;
+  a->heap = 0;
+  io_time_n -= 1;
+  if (i != io_time_n) {
+    io_time_put(io_time[io_time_n], i);
+    io_time_up(i);
+    io_time_down(i);
+  }
+}
+#endif
 
 static void io_push(IoQue* q, IoAct* a) {
   a->next = NULL;
@@ -6929,7 +7557,36 @@ static Term io_wait_on(IoWork* w, int fd, short evts, u64 time, IoPack more) {
   a->work.pack = more;
   a->time      = time;
   a->evts      = evts;
+#ifdef __linux__
+  if (evts != 0) {
+    IoFd* d   = io_fd_at(fd);
+    u8    way = evts == POLLOUT ? 2 : 1;
+    // the caller has just found it not ready that way
+    d->rdy &= (u8)~way;
+    if (!d->own || !d->reg) {
+      struct epoll_event ev;
+      ev.events   = d->own ? EPOLLIN | EPOLLOUT | EPOLLRDHUP | EPOLLET
+        : (way == 2 ? EPOLLOUT : EPOLLIN) | EPOLLONESHOT;
+      ev.data.u64 = (u64)fd + 1;
+      bool known  = d->reg;
+      if (epoll_ctl(io_ep, known ? EPOLL_CTL_MOD : EPOLL_CTL_ADD, fd, &ev) != 0
+          && epoll_ctl(io_ep, known ? EPOLL_CTL_ADD : EPOLL_CTL_MOD, fd, &ev) != 0) {
+        err_fail("the poller refused a descriptor");
+      }
+      d->reg = 1;
+    }
+    *(way == 2 ? &d->wr : &d->rd) = a;
+    io_fds += 1;
+  }
+  if (time != 0) {
+    io_time_push(a);
+  }
+  if (evts == 0 && time == 0) {
+    io_push(&io_park, a);
+  }
+#else
   io_push(&io_park, a);
+#endif
   return IO_PARK;
 }
 
@@ -7035,6 +7692,33 @@ static Term io_str(Env e, const char* p, u64 n) {
   return str_view_owned(e, out);
 }
 
+// Bytes as they are: a byte a 1-byte cell, one copy, no decoder.
+static inline Term io_buf(Env e, const char* p, u64 n) {
+  StrParts out = str_alloc(e, n, 2);
+  if (out.data && !err_seen(e.mem)) {
+    memcpy((u8*)(e.mem + term_peek(e, out.data)), p, n);
+  }
+  return str_view_owned(e, out);
+}
+
+// A Bytes' cells as a byte run: the block itself when its cells are one
+// byte (*own = NULL), else a copy (*own to free); a cell past 255 is NULL.
+static inline const char* io_buf_ptr(Env e, Term s, u32* n, char** own) {
+  StrParts p = str_peek(e, s);
+  *n = p.len;
+  *own = NULL;
+  if (!p.len || str_nar(p) == 2) {
+    return p.len ? (const char*)(e.mem + term_peek(e, p.data)) + p.off : "";
+  }
+  *own = io_mem(malloc(p.len));
+  for (u32 i = 0; i < p.len; i++) {
+    u32 c = str_at_peek(e, p, i);
+    if (c > 255) { free(*own); *own = NULL; return NULL; }
+    (*own)[i] = (char)c;
+  }
+  return *own;
+}
+
 #define io_tup(e, a, b) io_node(e, CID_TUPLE, a, b)
 #define io_done(e, v)   io_box(e, CID_DONE, v)
 
@@ -7103,6 +7787,15 @@ static Term io_work(IoWork* w, IoCall call, IoPack pack) {
   return IO_PARK;
 }
 
+// Run call on the loop itself and resume at once: for work that does not
+// block on a warm system (an open, an fstat, a read the page cache holds),
+// where a helper's round trip -- two wakes and the eventfd -- costs more
+// than the call.
+static Term io_now(Env e, IoWork* w, IoCall call, IoPack pack) {
+  call(w);
+  return pack(e, w);
+}
+
 // Consume cont's request node; the effect returns a value or IO_PARK.
 static Term io_exec(Env e, IoWork* w) {
   IoAct* a = (IoAct*)w;
@@ -7114,8 +7807,101 @@ static Term io_exec(Env e, IoWork* w) {
   return io_eff_rows[c].run(e, fs, w);
 }
 
-// macOS poll misses FIFO EOF, so select, sets sized to the highest fd
-// (_DARWIN_UNLIMITED_SELECT allows fds past FD_SETSIZE).
+// Whether nothing waits on a descriptor or a deadline. On Linux those
+// live in the epoll set and the heap rather than on io_park, so the
+// deadlock test has to ask.
+static bool io_idle(void) {
+#ifdef __linux__
+  return io_fds == 0 && io_time_n == 0;
+#else
+  return true;
+#endif
+}
+
+#ifdef __linux__
+
+// Takes the activation out of both sets and runs its continuation. A
+// re-park puts it back through io_wait_on, so nothing is left behind
+// when the effect changes what it waits for.
+// ready says the descriptor is what woke this activation, and the poller
+// has already taken it from its slot. A deadline that fires first leaves
+// it in the slot, so it is taken out there; the registration stays.
+static void io_fire(Env e, IoAct* a, bool ready) {
+  io_time_drop(a);
+  if (a->evts != 0) {
+    if (!ready) {
+      IoFd* d = io_fd_at((int)a->work.word);
+      if (d->rd == a) { d->rd = NULL; }
+      if (d->wr == a) { d->wr = NULL; }
+      // armed and pointing at an activation that has moved on
+      if (!d->own) {
+        epoll_ctl(io_ep, EPOLL_CTL_DEL, (int)a->work.word, NULL);
+        d->reg = 0;
+      }
+    }
+    io_fds -= 1;
+    a->evts = 0;
+  }
+  Term x = a->work.pack(e, &a->work);
+  if (x != IO_PARK) {
+    a->item = x;
+    io_push(&io_runs, a);
+  }
+}
+
+// One pass: wait for a descriptor to be ready or for the soonest
+// deadline, then fire what fired. Only what fired is touched.
+static void io_wait(Env e) {
+  struct epoll_event es[64];
+  int ms = -1;
+  if (io_time_n != 0) {
+    u64 soon = io_time[0]->time;
+    u64 tick = io_tick();
+    u64 gap  = soon > tick ? (soon - tick) / 1000000 + 1 : 0;
+    ms = gap > 0x7fffffff ? 0x7fffffff : (int)gap;
+  }
+  int m;
+  io_sync();
+  while ((m = epoll_wait(io_ep, es, 64, ms)) < 0) {
+    if (errno != EINTR) {
+      err_fail("the poller failed");
+    }
+  }
+  for (int i = 0; i < m; i += 1) {
+    u64 k = es[i].data.u64;
+    if (k == 0) {
+      io_take(e);
+      continue;
+    }
+    IoFd* d = io_fd_at((int)(k - 1));
+    u32   v = es[i].events;
+    if (v & (EPOLLIN | EPOLLRDHUP | EPOLLHUP | EPOLLERR)) {
+      d->rdy |= 1;
+      if (d->rd != NULL) {
+        IoAct* a = d->rd;
+        d->rd = NULL;
+        io_fire(e, a, true);
+      }
+    }
+    if (v & (EPOLLOUT | EPOLLHUP | EPOLLERR)) {
+      d->rdy |= 2;
+      if (d->wr != NULL) {
+        IoAct* a = d->wr;
+        d->wr = NULL;
+        io_fire(e, a, true);
+      }
+    }
+  }
+  u64 now = io_tick();
+  while (io_time_n != 0 && io_time[0]->time <= now) {
+    io_fire(e, io_time[0], false);
+  }
+}
+
+#else
+
+// macOS poll misses FIFO EOF. Size select sets to the highest fd;
+// _DARWIN_UNLIMITED_SELECT allows fds past FD_SETSIZE.
 static bool io_bit(u8* set, int fd, bool put) {
   u8* at = set + fd / 8;
   *at |= put << fd % 8;
@@ -7174,6 +7960,55 @@ static void io_wait(Env e) {
     }
   }
   free(set[0]);
+}
+
+#endif
+
+// The wire under a socket
+// =======================
+
+// A plain socket reads and writes itself. Something that sits between
+// the socket and the bytes -- a TLS session is the only one so far --
+// installs this, and the effects that carry bytes go through it without
+// knowing what it is. NULL is the plain path, which costs one branch
+// the processor predicts.
+//
+// read and write answer as recv and send do, and set dir when they
+// could not finish: POLLIN or POLLOUT says which way the socket has to
+// become ready before trying again, since a TLS read may be waiting to
+// write and the other way about. join is told about a socket accepted
+// from a listener, and shut about one that is closing.
+typedef struct IoWire {
+  ssize_t (*read)(int fd, void* buf, size_t len, short* dir);
+  ssize_t (*write)(int fd, const void* buf, size_t len, short* dir);
+  void    (*join)(int lfd, int fd);
+  void    (*shut)(int fd);
+} IoWire;
+
+static IoWire* io_wire;
+
+static ssize_t io_wire_read(int fd, void* buf, size_t len, short* dir) {
+  *dir = POLLIN;
+  return io_wire != NULL ? io_wire->read(fd, buf, len, dir)
+    : recv(fd, buf, len, 0);
+}
+
+static ssize_t io_wire_write(int fd, const void* buf, size_t len, short* dir) {
+  *dir = POLLOUT;
+  return io_wire != NULL ? io_wire->write(fd, buf, len, dir)
+    : send(fd, buf, len, 0);
+}
+
+static void io_wire_join(int lfd, int fd) {
+  if (io_wire != NULL) {
+    io_wire->join(lfd, fd);
+  }
+}
+
+static void io_wire_shut(int fd) {
+  if (io_wire != NULL) {
+    io_wire->shut(fd);
+  }
 }
 
 ${NATIVE.IO}
@@ -7322,6 +8157,17 @@ static int io_step(Env e, IoAct* a) {
     u32 need = io_eff_rows[c].ask;
     u32 word = (u32)(need & IO_READ ? io_hand_v(e.mem[at]) : e.mem[at]);
     a->cont  = req;
+#ifdef __linux__
+    // Parked before any call has found the descriptor empty, an edge
+    // already reported (and a read that left bytes behind) would never
+    // come again, so a registered one is asked as it stands.
+    if (need & IO_READ && io_fdt_cap > word && io_fdt[word].own && io_fdt[word].reg) {
+      struct pollfd q = { (int)word, POLLIN, 0 };
+      if (poll(&q, 1, 0) > 0) {
+        need = 0;
+      }
+    }
+#endif
     if (need != 0) {
       io_wait_on(&a->work, (int)word, need & IO_READ ? POLLIN : 0,
         need & IO_TIME ? io_tick() + (u64)word * 1000000ull : 0, io_exec);
@@ -7339,9 +8185,21 @@ OUTLINE int io_loop(Corpus H) {
   Env e = { H, ALC[0] };
   io_stk = pool_stack();
   signal(SIGPIPE, SIG_IGN);
+#ifdef __linux__
+  io_ep = epoll_create1(0);
+  if (io_ep < 0) {
+    err_fail("the poller could not be opened");
+  }
+#endif
   if (pipe(io_wake_fd) | fcntl(io_wake_fd[0], F_SETFL, O_NONBLOCK)) {
     err_fail("the event loop failed to open");
   }
+#ifdef __linux__
+  struct epoll_event wake = { .events = EPOLLIN, .data.u64 = 0 };
+  if (epoll_ctl(io_ep, EPOLL_CTL_ADD, io_wake_fd[0], &wake)) {
+    err_fail("the event loop failed to open");
+  }
+#endif
   Term m = corpus_eval(H, term_tsk(MAIN_FID, task_node(e, MAIN_FID,
     TERM_HOLE, 0, 0)));
 #if MAIN_PURE
@@ -7355,7 +8213,7 @@ OUTLINE int io_loop(Corpus H) {
       if (io_live == 0) {
         return 0;
       }
-      if (io_park.head == NULL && io_busy == 0) {
+      if (io_park.head == NULL && io_idle() && io_busy == 0) {
         io_sync();
         fprintf(stderr, "bend: deadlock: every computation waits on a"
           " channel\n");
@@ -7387,11 +8245,74 @@ static void cli_fail(const char* msg, const char* arg) {
   exit(1);
 }
 
+// Workers
+// =======
+
+// --workers N: the process forks N copies of the program before it
+// starts a thread, and stays as their master, as nginx's does: it runs
+// no program itself, passes SIGTERM, SIGINT and SIGHUP on to every
+// copy, and ends when they have all ended, with the first failure's
+// code. A copy dies with its master. Each is its own heap, its own loop
+// and its own threads; a server's copies share its port through
+// SO_REUSEPORT, and the kernel spreads the connections between them.
+static pid_t* cli_kids;
+static int    cli_kids_n;
+
+static void cli_pass(int sig) {
+  for (int i = 0; i < cli_kids_n; i += 1) {
+    if (cli_kids[i] > 0) {
+      kill(cli_kids[i], sig);
+    }
+  }
+}
+
+static int cli_workers(long n) {
+  cli_kids   = io_mem(calloc((size_t)n, sizeof *cli_kids));
+  pid_t boss = getpid();
+  for (long i = 0; i < n; i += 1) {
+    pid_t k = fork();
+    if (k < 0) {
+      cli_pass(SIGTERM);
+      cli_fail("could not fork a worker", NULL);
+    }
+    if (k == 0) {
+#ifdef __linux__
+      prctl(PR_SET_PDEATHSIG, SIGTERM);
+#endif
+      if (getppid() != boss) {
+        _exit(1);
+      }
+      return -1;
+    }
+    cli_kids[cli_kids_n++] = k;
+  }
+  struct sigaction sa = { .sa_handler = cli_pass };
+  sigemptyset(&sa.sa_mask);
+  sigaction(SIGTERM, &sa, NULL);
+  sigaction(SIGINT, &sa, NULL);
+  sigaction(SIGHUP, &sa, NULL);
+  int code = 0, left = cli_kids_n, st = 0;
+  while (left > 0) {
+    pid_t k = waitpid(-1, &st, 0);
+    if (k < 0) {
+      if (errno == EINTR) {
+        continue;
+      }
+      break;
+    }
+    left -= 1;
+    int c = WIFEXITED(st) ? WEXITSTATUS(st) : 128 + WTERMSIG(st);
+    code  = code != 0 ? code : c;
+  }
+  return code;
+}
+
 // Main
 // ====
 
 int main(int argc, char** argv) {
   long thr = 0;
+  long wks = 1;
   int  gpu = -1;
   u64  mem = 0;
   io_argv = argv + 1;
@@ -7417,6 +8338,13 @@ int main(int argc, char** argv) {
         cli_fail("expected a thread count of 1 or more after --threads", NULL);
       }
       i += 1;
+    } else if (strcmp(a, "--workers") == 0) {
+      char* end = NULL;
+      wks = v != NULL ? strtol(v, &end, 10) : 0;
+      if (wks < 1 || wks > 1024 || end == NULL || *end != '\0') {
+        cli_fail("expected a worker count of 1 to 1024 after --workers", NULL);
+      }
+      i += 1;
     } else if (strcmp(a, "--gpu") == 0) {
       char*  end = NULL;
       double n   = v != NULL ? strtod(v, &end) : 0;
@@ -7433,6 +8361,12 @@ int main(int argc, char** argv) {
       i += 1;
     } else {
       io_argv[io_argc++] = argv[i];
+    }
+  }
+  if (wks > 1) {
+    int code = cli_workers(wks);
+    if (code >= 0) {
+      return code;
     }
   }
   bool dev = gpu != 0 && BANGS != 0 && gpu_probe();
@@ -7513,7 +8447,8 @@ const RUNTIME_MAIN: string = String.raw`
 // Cli
 // ===
 
-// A JS program runs one thread and no GPU: --threads and --gpu do nothing.
+// A JS program runs one thread, one process and no GPU: --threads,
+// --workers and --gpu do nothing.
 let cli_args = [];
 
 function cli(argv) {
@@ -7524,7 +8459,7 @@ function cli(argv) {
     } else if (argv[i] === "--help") {
       io_out(1, io_bytes("usage: " + process.argv[1] + "\n"));
       process.exit(0);
-    } else if (argv[i] === "--threads" || argv[i] === "--gpu") {
+    } else if (argv[i] === "--threads" || argv[i] === "--workers" || argv[i] === "--gpu") {
       i += 1;
     } else {
       cli_args.push(argv[i]);

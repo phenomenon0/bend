@@ -22,6 +22,7 @@ import type { BunPlugin } from "bun";
 
 import * as Bend from "./bend.ts";
 import * as Comp from "./comp.ts";
+import * as Export from "./export.ts";
 
 // Main
 // ====
@@ -43,6 +44,8 @@ usage:
   bend link <name>@<version> 0x<hash>
                                 name a package already on the hub
   bend login                    log in to Bender for --publish <name>@…
+  bend <file.bend> --export <o> check the file, write its core terms to <o>
+                    (--export-unchecked: parse only, for the kernel's refusals)
   bend <page.html> -o <dir>     bundle a page that imports .bend files
   bend base [--types|<name>]    print Base, its types, or a name and subnames
   bend guide                    print the Bend guide
@@ -198,6 +201,8 @@ async function cli_file(args: string[]): Promise<void> {
   let checkup = false;
   let publish = false;
   let named: string | undefined;
+  let exp: string | undefined;
+  let raw = false;
   for (let i = 0; i < args.length; i += 1) {
     const a = args[i];
     if (a === "--help" || a === "-h") {
@@ -213,6 +218,10 @@ async function cli_file(args: string[]): Promise<void> {
         named = args[i];
         named_parts(named);
       }
+    } else if (a === "--export" || a === "--export-unchecked") {
+      raw = a === "--export-unchecked";
+      i += 1;
+      exp = args[i] ?? cli_fail("--export needs an output file");
     } else if (a === "-o") {
       i += 1;
       outs.push(args[i] ?? cli_fail("-o needs an output file"));
@@ -250,6 +259,13 @@ async function cli_file(args: string[]): Promise<void> {
       + " import alone");
   }
   try {
+    if (exp !== undefined) {
+      const book = raw ? Bend.book_nil() : (await book_read(file))[0];
+      if (raw) {
+        await Bend.book_load(book, file, "", new Map());
+      }
+      return fs.writeFileSync(exp, Export.book_export(book));
+    }
     if (publish) {
       return await cli_publish(file, named);
     }
@@ -385,7 +401,8 @@ function cli_build(bin: string, file: string): void {
   const objc  = mac && (bangs || /^#import /m.test(c))
     ? ["-x", "objective-c", "-fobjc-arc", "-fmodules"] : [];
   const libs  = [["X11", "X11"], ["alsa", "asound"]].flatMap(([h, l]) =>
-    !mac && c.includes("#include <" + h + "/") ? ["-l" + l] : []);
+    !mac && c.includes("#include <" + h + "/") ? ["-l" + l] : [])
+    .concat(c.includes("#include <openssl/") ? ["-lssl", "-lcrypto"] : []);
   const cpu = [...objc, "-std=c11", "-O3", file, "-lpthread", "-lm",
     ...libs, "-o", path.resolve(bin)];
   const gpu = mac ? ["-DBEND_METAL=1", ...cpu]

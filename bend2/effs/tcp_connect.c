@@ -12,6 +12,7 @@ static Term tcp_connect_more(Env e, IoWork* w) {
     err = errno;
   }
   if (err != 0 && fd >= 0) {
+    io_fd_gone(fd);
     close(fd);
   }
   free(w->data);
@@ -30,6 +31,7 @@ Term tcp_connect_run(Env e, Term* f, IoWork* w) {
     close(fd);
     fd = -1;
   }
+  io_fd_fresh(fd);
   w->made = fd;
   io_sys_end(w, fd < 0 ? fd : connect(fd, (struct sockaddr*)&at, sizeof(at)));
   return w->code == EINPROGRESS

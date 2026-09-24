@@ -62,3 +62,31 @@ static void __attribute__((constructor)) file_write_bytes_use(void) {
 }
 
 #endif
+
+#ifdef CID_FILE_WRITE_BUF
+
+// File.write_bytes from a Bytes: the packed block copied once for the
+// worker, a byte a cell; a Char past 255 fails with EINVAL before any
+// byte is written.
+Term file_write_buf_run(Env e, Term* f, IoWork* w) {
+  u32   len = 0;
+  char* own = NULL;
+  const char* p = io_buf_ptr(e, f[1], &len, &own);
+  w->hand = (intptr_t)io_hand_v(f[0]);
+  w->code = p == NULL ? EINVAL : 0;
+  w->size = len;
+  w->data = io_mem(malloc(len ? len : 1));
+  if (p != NULL) {
+    memcpy(w->data, p, len);
+  }
+  free(own);
+  term_sink(e, f[1]);
+  return w->code ? file_write_pack(e, w)
+    : io_work(w, file_write_call, file_write_pack);
+}
+
+static void __attribute__((constructor)) file_write_buf_use(void) {
+  io_eff(CID_FILE_WRITE_BUF, file_write_buf_run, 0);
+}
+
+#endif
