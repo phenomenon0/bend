@@ -1,5 +1,6 @@
-# A query string, a handler that can fail, middleware as templates, and
-# a configuration set in code (the command line may still change it).
+# A query string, a handler that can fail, middleware as templates (a
+# line per request on stderr, the browser's headers), and a
+# configuration set in code (the command line may still change it).
 #
 #   bend net/examples/greet.bend -o greet && ./greet --port 8080
 #   curl 'localhost:8080/greet?name=Ada'     Hello, Ada!
@@ -16,7 +17,7 @@ def greet(r: Http.Request) -> IO(Http.Response):
   Http.reply(Http.text(200, Bytes.concat(["Hello, ", name, "!\n"])))
 
 # GET /add/:a/:b: a handler that answers Done{response} or Fail{why};
-# Server.recover.around turns a Fail into a plain 500
+# Server.recovered.around turns a Fail into a plain 500
 def sum(a: Maybe<&2, U32>, b: Maybe<&2, U32>) -> Result<&2, &2, Bytes(), Http.Response>:
   match a b:
     case Some{x} Some{y}:
@@ -28,15 +29,10 @@ def add(+r: Http.Request) -> IO(Result<&2, &2, Bytes(), Http.Response>):
   IO.pure(Result<&2, &2, Bytes(), Http.Response>, sum(U32.read(Http.param(r, "a")), U32.read(Http.param(r, "b"))))
 
 def routes() -> List<Server.Route>:
-  [Server.get("/greet", greet), Server.get("/add/:a/:b", r => Server.recover.around(add(r)))]
-
-# a line per request on stderr (the around form: it reads r twice, so r
-# is reusable here and app hands it over)
-def app.go(+r: Http.Request) -> IO(Http.Response):
-  Server.log.around(r, Server.route(routes(), r))
+  [Server.get("/greet", greet), Server.get("/add/:a/:b", r => Server.recovered.around(add(r)))]
 
 def app(r: Http.Request) -> IO(Http.Response):
-  app.go(r)
+  Server.route(routes(), r)
 
 # 2 s of idle, bodies of at most 64 KiB, at most 256 connections
 def config() -> Server.Cfg:
@@ -44,5 +40,5 @@ def config() -> Server.Cfg:
 
 def main() -> IO(Unit):
   do IO<Unit>:
-    xs : List<&2, String> <- Server.argv()
-    Server.serve(~Server.secured(~app), Server.args(xs, config()))
+    xs : List<String> <- IO.args()
+    Server.serve(~Server.logged(~Server.secured(~app)), Server.args(xs, config()))

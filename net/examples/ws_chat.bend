@@ -142,7 +142,7 @@ def talk(says: List<&2, String>, +name: String, +wait: U32, c: Ws.Conn) -> IO(Un
     h : Maybe<&1, Ws.Conn> <- then(m, cc => listen(Ws.big(), wait, cc))
     leave(h)
 
-def joined(says: List<&2, String>, +name: String, +wait: U32, r: Result<&1, &1, Ws.Err, Ws.Conn>) -> IO(Unit):
+def joined(says: List<&2, String>, +name: String, +wait: U32, r: Result<&2, &1, Ws.Err, Ws.Conn>) -> IO(Unit):
   match r:
     case Done{c}:
       talk(says, name, wait, c)
@@ -152,7 +152,7 @@ def joined(says: List<&2, String>, +name: String, +wait: U32, r: Result<&1, &1, 
 def run(c: Cli) -> IO(Unit):
   match c:
     case Cli{u, +n, ss, ca, +w, p}:
-      IO.bind(Result<&1, &1, Ws.Err, Ws.Conn>, Unit, Ws.connect(u, Ws.opts.ca(Ws.opts(), ca)),
+      IO.bind(Result<&2, &1, Ws.Err, Ws.Conn>, Unit, Ws.connect(u, Ws.opts.ca(Ws.opts(), ca)),
         r => joined(ss, Bool.pick(String, String.is_empty(n), "anon", n), w, r))
 
 def main() -> IO(Unit):

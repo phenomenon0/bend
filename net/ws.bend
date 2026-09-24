@@ -595,20 +595,20 @@ type Hr is Data:
   Hr{head: Bytes(), rest: Bytes()}
 
 def RC() -> Type:
-  IO(Result<&1, &1, Err, Conn>)
+  IO(Result<&2, &1, Err, Conn>)
 
 def st.new(+o: Opts, proto: Bytes(), rest: Bytes()) -> St:
   st.feed(St{Ws.new(), Nil{}, F.Idle{}, o, proto, False{}, 0, 0}, rest)
 
 def open.fail(s: Socket, e: Err) -> RC():
-  IO.bind(Unit, Result<&1, &1, Err, Conn>, Socket.close(s), u => IO.pure(Result<&1, &1, Err, Conn>, Fail{e}))
+  IO.bind(Unit, Result<&2, &1, Err, Conn>, Socket.close(s), u => IO.pure(Result<&2, &1, Err, Conn>, Fail{e}))
 
 def opened.judged(s: Socket, +o: Opts, rest: Bytes(), v: Result<&2, &2, H.Hw, Bytes()>) -> RC():
   match v:
     case Fail{w}:
       open.fail(s, EHand{w})
     case Done{proto}:
-      IO.pure(Result<&1, &1, Err, Conn>, Done{Conn{s, st.new(o, proto, rest)}})
+      IO.pure(Result<&2, &1, Err, Conn>, Done{Conn{s, st.new(o, proto, rest)}})
 
 # the head judged: the connection, its first frames fed already
 def opened(+key: Bytes(), +o: Opts, g: Socket & Result<&2, &2, Err, Hr>) -> RC():
@@ -685,7 +685,7 @@ def asked(+key: Bytes(), +o: Opts, +until: Nat, g: Socket & Result<&1, &1, U32 &
       (code, msg) = e
       open.fail(s, ESend{code})
     case Done{u}:
-      IO.bind(Socket & Result<&2, &2, Err, Hr>, Result<&1, &1, Err, Conn>,
+      IO.bind(Socket & Result<&2, &2, Err, Hr>, Result<&2, &1, Err, Conn>,
         head.go(big(), s, "", o.head(o), until), h => opened(key, o, h))
 
 # the key: sixteen bytes from the host's entropy, in base64
@@ -714,16 +714,16 @@ def keyed(+u: H.Url, +o: Opts, +until: Nat, s: Socket, r: Result<&1, &1, U32 & S
       open.fail(s, ERand{code})
     case Done{bs}:
       +key = Bytes.from_list(B64.enc(bs))
-      IO.bind(Socket & Result<&1, &1, U32 & String, Unit>, Result<&1, &1, Err, Conn>,
+      IO.bind(Socket & Result<&1, &1, U32 & String, Unit>, Result<&2, &1, Err, Conn>,
         TCP.send_buf_poll(s, H.request(u, key, o.protocols(o)), o.connect(o)), g => asked(key, o, until, g))
 
 def dialed(+u: H.Url, +o: Opts, +until: Nat, r: Result<&1, &1, U32 & String, Socket>) -> RC():
   match r:
     case Fail{e}:
       (code, msg) = e
-      IO.pure(Result<&1, &1, Err, Conn>, Fail{EConnect{code}})
+      IO.pure(Result<&2, &1, Err, Conn>, Fail{EConnect{code}})
     case Done{s}:
-      IO.bind(Result<&1, &1, U32 & String, List<&2, U32>>, Result<&1, &1, Err, Conn>, rand(4n, Nil{}),
+      IO.bind(Result<&1, &1, U32 & String, List<&2, U32>>, Result<&2, &1, Err, Conn>, rand(4n, Nil{}),
         k => keyed(u, o, until, s, k))
 
 def tls.strip(r: Result<&1, &1, U32 & String, Socket & String>) -> IO(Result<&1, &1, U32 & String, Socket>):
@@ -750,9 +750,9 @@ def resolved(+u: H.Url, +o: Opts, +until: Nat, r: Result<&1, &1, U32 & String, S
   match r:
     case Fail{e}:
       (code, msg) = e
-      IO.pure(Result<&1, &1, Err, Conn>, Fail{EDns{code}})
+      IO.pure(Result<&2, &1, Err, Conn>, Fail{EDns{code}})
     case Done{addr}:
-      IO.bind(Result<&1, &1, U32 & String, Socket>, Result<&1, &1, Err, Conn>, dial(u, o, addr),
+      IO.bind(Result<&1, &1, U32 & String, Socket>, Result<&2, &1, Err, Conn>, dial(u, o, addr),
         d => dialed(u, o, until, d))
 
 def url.host(u: H.Url) -> String:
@@ -761,15 +761,15 @@ def url.host(u: H.Url) -> String:
       host
 
 def connect.at(+u: H.Url, +o: Opts, +now: Nat) -> RC():
-  IO.bind(Result<&1, &1, U32 & String, String>, Result<&1, &1, Err, Conn>, DNS.resolve(url.host(u)),
+  IO.bind(Result<&1, &1, U32 & String, String>, Result<&2, &1, Err, Conn>, DNS.resolve(url.host(u)),
     r => resolved(u, o, Nat.add(now, U32.to_nat(o.connect(o))), r))
 
 def connect.url(+o: Opts, may: Maybe<&2, H.Url>) -> RC():
   match may:
     case None{}:
-      IO.pure(Result<&1, &1, Err, Conn>, Fail{EUrl{}})
+      IO.pure(Result<&2, &1, Err, Conn>, Fail{EUrl{}})
     case Some{+u}:
-      IO.bind(Nat, Result<&1, &1, Err, Conn>, IO.now(), +now => connect.at(u, o, now))
+      IO.bind(Nat, Result<&2, &1, Err, Conn>, IO.now(), +now => connect.at(u, o, now))
 
 # Open a WebSocket to a ws:// or wss:// URL: the connection, or why not.
 def connect(url: String, +o: Opts) -> RC():

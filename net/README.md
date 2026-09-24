@@ -49,17 +49,24 @@ and the router's params. `Response{status, headers, body}`, built by
 `Http.text/html/json/bytes(status, ...)`, `Http.file(root, path)`,
 `Http.plain(status)`, `Http.redirect(status, loc)`,
 `Http.with.header(r, n, v)`; `Http.reply(r)` is `IO.pure`. Headers:
-`Http.get/set/add/del/has`. `Http.decode`, `Http.form`, `Http.encode`
-(percent-encoding), `Http.query.pairs(q)`.
+`Http.get/set/add/del/has`. Percent-encoding: `Http.pct.encode`,
+`Http.pct.decode`, `Http.form.decode` ('+' a space too);
+`Http.query.pairs(q)`. `Http.write(...)` is the bytes a response goes out
+as (the server's writer, `respond_framed`'s).
 
 **Server.** `Server.serve(~app, cfg)` with `app: Http.Request ->
 IO(Http.Response)`; `Server.serve.with(~E, ~app, env, cfg)` hands `env`
 (a channel, a configuration: shared state) to every call. `cfg` is
-`Server.config(port)` changed by `Server.set.idle/head/body/send/
+`Server.config(port)` changed by `Server.set.host/idle/head/body/send/
 max_head/max_body/conns/grace/tls(cert, key)/shared`, or read from the
-command line by `Server.args(xs, cfg)` (`--port --idle-ms --head-ms
---body-ms --max-head --max-body --max-conns --grace-ms --tls-cert
---tls-key --shared`; `Server.argv()`, `Server.flag(xs, name, d)`).
+command line (`xs` is `IO.args()`) by `Server.args(xs, cfg)` (`--host
+--port --idle-ms --head-ms --body-ms --max-head --max-body --max-conns
+--grace-ms --tls-cert --tls-key --shared`; `Server.flag(xs, name, d)`
+reads one of your own). Precedence: a flag given wins over `cfg`, and a
+`set.*` applied to what `args` answers wins over the flag. The server
+binds `host` (0.0.0.0, every IPv4 interface, by default) and says so on
+stderr; a certificate or key that does not load ends it with `TLS setup
+failed` and the file.
 Router: `Server.route(routes, req)` over `[Server.get(pat, h),
 Server.post(...), put, patch, delete, Server.on(methods, pat, h),
 Server.static(prefix, root)]`, patterns of literals, `:name` and a last
@@ -67,9 +74,11 @@ Server.static(prefix, root)]`, patterns of literals, `:name` and a last
 and GET answers HEAD. Middleware is Handler -> Handler as a template:
 `~Server.logged(~app)` (a line per request on stderr),
 `~Server.secured(~app)` (nosniff, DENY, no-referrer, CSP 'self', each
-unless set), `~Server.recover(~app)` (a handler answering
-`Result<Bytes(), Response>`, a failure a plain 500); each has an
-`*.around` form over a handler's IO for handlers with an environment.
+unless set), `~Server.recovered(~app)` (a handler answering
+`Result<Bytes(), Response>`, a failure a plain 500); they nest
+(`~Server.logged(~Server.secured(~app))`), and each has a `.around` form
+over a handler's IO (`Server.logged.around(r, io)`) for handlers with an
+environment.
 
 **Client.** `Client.get(url)`, `Client.post(url, ctype, body)`,
 `Client.request(Client.Req{method, url, headers, body}, opts)`: each
@@ -78,11 +87,19 @@ unless set), `~Server.recover(~app)` (a handler answering
 connections between requests. `NetError = Timeout | Refused | Dns | Tls
 | Protocol | TooLarge | Closed | BadUrl | TooManyRedirects | Io`.
 `Client.opts()` changed by `Client.with.connect/timeout/max_body/
-redirects/ca/gzip`.
+redirects/ca/gzip` (each a `U32` but `ca`, a file, and `gzip`, a `Bool`).
+
+Results: an error is always reusable (`&2`), and so is a value that is
+`Data`: `Client.Res()` is `Result<&2, &2, NetError, Response>`. Only a
+value that holds a handle is affine: `Ws.connect` answers `Result<&2,
+&1, Ws.Err, Ws.Conn>`. A command line is what `IO.args()` answers,
+`List<String>`, and every flag reader takes it as it is.
 
 **Json.** `Json.respond(status, j)`, `Json.body(req, budget)`,
 `Json.of(resp, budget)` (`Result<J.Why, J.Json>`), `Json.obj/kv/arr/
-str/num/yes/no/null`, `Json.get`, `Json.get.str`, `Json.refused(why)`.
+str/yes/no/null`, numbers by `Json.num` (a `U32`), `Json.i64` (an `I64`)
+and `Json.f64` (an `F64`; NaN and infinities are null), `Json.get`,
+`Json.get.str`, `Json.refused(why)`.
 
 ## The defaults
 
@@ -153,10 +170,11 @@ about), the deadlines and limits (checked by `check.py`).
 
 `guide/NETWORKING.md` (`bend guide networking`) walks through them.
 
-`python3 net/check.py` builds the first four and checks, from outside: framing,
+`python3 net/check.py` builds every example and checks, from outside: framing,
 pipelining, HEAD, keep-alive, HTTP/1.0, 400/408/413/414/431, the idle,
 head and body timeouts, the connection limit, 100-continue, SIGTERM,
-404/405, JSON and files; and the client against Python peers: pooling,
+404/405, JSON and files, the middleware, `--host` and its banner, a TLS
+certificate that does not load; and the client against Python peers: pooling,
 refused, DNS, the deadline, redirects (cap, 303, 307, credentials),
 gzip, the body cap, a field with a line end refused, TLS refused
 self-signed, trusted by `--ca`, the name checked, and the server over

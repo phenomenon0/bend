@@ -301,10 +301,10 @@ def with.max_body(o: Opts, n: U32) -> Opts:
     case Opts{c, t, mb, rd, ca, gz}:
       Opts{c, t, n, rd, ca, gz}
 
-def with.redirects(o: Opts, n: Nat) -> Opts:
+def with.redirects(o: Opts, n: U32) -> Opts:
   match o:
     case Opts{c, t, mb, rd, ca, gz}:
-      Opts{c, t, mb, n, ca, gz}
+      Opts{c, t, mb, U32.to_nat(n), ca, gz}
 
 def with.ca(o: Opts, file: String) -> Opts:
   match o:

@@ -220,7 +220,8 @@ static int tls_pick(SSL* ssl, const unsigned char** out, unsigned char* outn,
     == OPENSSL_NPN_NEGOTIATED ? SSL_TLSEXT_ERR_OK : SSL_TLSEXT_ERR_NOACK;
 }
 
-static SSL_CTX* tls_make(const char* cert, const char* key, TlsAlpn* alpn, uint32_t* err) {
+// The context, or why not, in words that name the file at fault
+static SSL_CTX* tls_make(const char* cert, const char* key, TlsAlpn* alpn, uint32_t* err, char* why, u64 wn) {
   SSL_CTX* ctx = SSL_CTX_new(TLS_server_method());
   if (ctx == NULL) {
     *err = ENOMEM;
@@ -239,10 +240,22 @@ static SSL_CTX* tls_make(const char* cert, const char* key, TlsAlpn* alpn, uint3
   SSL_CTX_set_mode(ctx, SSL_MODE_ENABLE_PARTIAL_WRITE
     | SSL_MODE_ACCEPT_MOVING_WRITE_BUFFER | SSL_MODE_RELEASE_BUFFERS);
   SSL_CTX_set_alpn_select_cb(ctx, tls_pick, alpn);
-  if (SSL_CTX_set_cipher_list(ctx, "ECDHE+AESGCM:ECDHE+CHACHA20:!aNULL") != 1
-    || SSL_CTX_use_certificate_chain_file(ctx, cert) != 1
-    || SSL_CTX_use_PrivateKey_file(ctx, key, SSL_FILETYPE_PEM) != 1
-    || SSL_CTX_check_private_key(ctx) != 1) {
+  const char* bad = NULL;
+  const char* at  = "";
+  if (SSL_CTX_set_cipher_list(ctx, "ECDHE+AESGCM:ECDHE+CHACHA20:!aNULL") != 1) {
+    bad = "the cipher list was refused";
+  } else if (SSL_CTX_use_certificate_chain_file(ctx, cert) != 1) {
+    bad = "no certificate (PEM) could be read from ";
+    at  = cert;
+  } else if (SSL_CTX_use_PrivateKey_file(ctx, key, SSL_FILETYPE_PEM) != 1) {
+    bad = "no private key (PEM) matching the certificate could be read from ";
+    at  = key;
+  } else if (SSL_CTX_check_private_key(ctx) != 1) {
+    bad = "the key does not match the certificate: ";
+    at  = key;
+  }
+  if (bad != NULL) {
+    snprintf(why, wn, "%s%s", bad, at);
     ERR_clear_error();
     SSL_CTX_free(ctx);
     *err = EINVAL;
@@ -254,7 +267,7 @@ static SSL_CTX* tls_make(const char* cert, const char* key, TlsAlpn* alpn, uint3
 // The same socket TCP.listen opens, opened here rather than borrowed:
 // an effect is only compiled into a program that uses it, so one that
 // leans on another's C is one that does not build.
-static uint32_t tls_bind(uint32_t port, int* out) {
+static uint32_t tls_bind(const char* host, uint32_t port, int* out) {
   int fd = socket(AF_INET, SOCK_STREAM, 0);
   if (fd < 0) {
     return (uint32_t)errno;
@@ -262,7 +275,7 @@ static uint32_t tls_bind(uint32_t port, int* out) {
   int one = 1;
   setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
   struct sockaddr_in at;
-  if (io_sys_addr("0.0.0.0", port, &at) < 0) {
+  if (io_sys_addr(host, port, &at) < 0) {
     close(fd);
     return EINVAL;
   }
@@ -277,11 +290,12 @@ static uint32_t tls_bind(uint32_t port, int* out) {
   return 0;
 }
 
-// a listener: the certificate and key, the ALPN list, the port
-static Term tls_listen_go(Env e, Term* f, TlsAlpn* alpn) {
+// a listener: the address, the port, the certificate and key (their
+// terms), the ALPN list
+static Term tls_listen_go(Env e, const char* host, uint32_t port, Term tc, Term tk, TlsAlpn* alpn) {
   u64   cn = 0, kn = 0;
-  char* cert = io_cstr(e, f[1], &cn);
-  char* key  = io_cstr(e, f[2], &kn);
+  char* cert = io_cstr(e, tc, &cn);
+  char* key  = io_cstr(e, tk, &kn);
   if (io_nul(cert, cn) || io_nul(key, kn)) {
     free(cert);
     free(key);
@@ -289,15 +303,17 @@ static Term tls_listen_go(Env e, Term* f, TlsAlpn* alpn) {
     return io_fail(e, EINVAL, NULL);
   }
   uint32_t err = 0;
-  SSL_CTX* ctx = tls_make(cert, key, alpn, &err);
+  char     why[1024];
+  why[0] = 0;
+  SSL_CTX* ctx = tls_make(cert, key, alpn, &err, why, sizeof(why));
   free(cert);
   free(key);
   if (ctx == NULL) {
     free(alpn);
-    return io_fail(e, err, NULL);
+    return io_fail(e, err, why[0] != 0 ? why : NULL);
   }
   int out = -1;
-  uint32_t q = tls_bind((uint32_t)f[0], &out);
+  uint32_t q = tls_bind(host, port, &out);
   if (q != 0) {
     SSL_CTX_free(ctx);
     free(alpn);
@@ -311,11 +327,31 @@ static Term tls_listen_go(Env e, Term* f, TlsAlpn* alpn) {
 
 #ifdef CID_TLS_LISTEN
 Term tls_listen_run(Env e, Term* f, IoWork* w) {
-  return tls_listen_go(e, f, NULL);
+  return tls_listen_go(e, "0.0.0.0", (uint32_t)f[0], f[1], f[2], NULL);
 }
 
 static void __attribute__((constructor)) tls_listen_use(void) {
   io_eff(CID_TLS_LISTEN, tls_listen_run, 0);
+}
+#endif
+
+// TLS.listen_on(host, port, cert, key): TLS.listen on the one dotted
+// IPv4 address named
+#ifdef CID_TLS_LISTEN_ON
+Term tls_listen_on_run(Env e, Term* f, IoWork* w) {
+  u64   hn = 0;
+  char* host = io_cstr(e, f[0], &hn);
+  if (io_nul(host, hn)) {
+    free(host);
+    return io_fail(e, EINVAL, NULL);
+  }
+  Term r = tls_listen_go(e, host, (uint32_t)f[1], f[2], f[3], NULL);
+  free(host);
+  return r;
+}
+
+static void __attribute__((constructor)) tls_listen_on_use(void) {
+  io_eff(CID_TLS_LISTEN_ON, tls_listen_on_run, 0);
 }
 #endif
 
@@ -353,7 +389,7 @@ Term tls_listen_alpn_run(Env e, Term* f, IoWork* w) {
   if (alpn == NULL) {
     return io_fail(e, EINVAL, NULL);
   }
-  return tls_listen_go(e, f, alpn);
+  return tls_listen_go(e, "0.0.0.0", (uint32_t)f[0], f[1], f[2], alpn);
 }
 
 static void __attribute__((constructor)) tls_listen_alpn_use(void) {

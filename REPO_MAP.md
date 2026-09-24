@@ -149,8 +149,9 @@ Ubuntu, it:
    bend-h2 through h2spec;
 10. keeps the `httpd` and `h2d` binaries as build artifacts.
 
-`net/check.py` builds `hello`, `json_api`, `file_server` and `fetch` only. The
-other examples are not built by CI.
+`net/check.py` builds every example in `net/examples/`, so a snippet the docs
+quote cannot rot, and runs `hello`, `json_api`, `file_server`, `greet` and
+`fetch`.
 
 ### The Allow List
 

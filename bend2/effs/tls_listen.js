@@ -7,3 +7,7 @@
 function tls_listen(port, cert, key) {
   return io_fail(38);
 }
+
+function tls_listen_on(host, port, cert, key) {
+  return io_fail(38);
+}

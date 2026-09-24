@@ -11,7 +11,7 @@
 # passed on), the body (whole, and bounded), the peer's address, and the
 # router's :params. A Response is a status, header fields and a body:
 # bytes, or a file under a root that goes out by sendfile. It is written
-# by encode, whose every output a client reads back as exactly one
+# by write, whose every output a client reads back as exactly one
 # response with that status and body (net/LAWS.bend's respond_framed).
 import Base
 import ../wire/reader.bend as Wr
@@ -175,12 +175,13 @@ def req.of(+ip: Bytes(), r: Eng.Req) -> Request:
 # Percent-encoding
 # ================
 #
-# decode is the URL standard's percent-decode: %XX (either case) is the
-# byte XX, and a '%' not followed by two hex digits is itself. form
-# decodes '+' as a space too (application/x-www-form-urlencoded).
-# encode escapes every byte but the unreserved ones (ALPHA DIGIT - . _
-# ~) as %XX in capitals. LAWS.bend: decode(encode(s)) is s for every
-# byte and for the vectors named there.
+# pct.decode is the URL standard's percent-decode: %XX (either case) is
+# the byte XX, and a '%' not followed by two hex digits is itself.
+# form.decode decodes '+' as a space too (application/x-www-form-
+# urlencoded). pct.encode escapes every byte but the unreserved ones
+# (ALPHA DIGIT - . _ ~) as %XX in capitals. LAWS.bend:
+# pct.decode(pct.encode(s)) is s for every byte and for the vectors
+# named there.
 
 def hex.val(+c: U32) -> U32:
   Bool.pick(U32, U32.is_le(48, c) && U32.is_le(c, 57), (c - 48 : U32),
@@ -225,10 +226,10 @@ def pct.go(k: Nat, +plus: Bool, ob: Bytes() & Bytes()) -> Bytes():
 def decode.as(+plus: Bool, +s: Bytes()) -> Bytes():
   pct.go(Bytes.len(s), plus, ("", s))
 
-def decode(s: Bytes()) -> Bytes():
+def pct.decode(s: Bytes()) -> Bytes():
   decode.as(False{}, s)
 
-def form(s: Bytes()) -> Bytes():
+def form.decode(s: Bytes()) -> Bytes():
   decode.as(True{}, s)
 
 def unreserved(+c: U32) -> Bool:
@@ -250,7 +251,7 @@ def enc.go(s: Bytes(), out: Bytes()) -> Bytes():
     case SCon{Chr{+c}, t}:
       enc.go(t, enc.one(out, c, unreserved(c)))
 
-def encode(s: Bytes()) -> Bytes():
+def pct.encode(s: Bytes()) -> Bytes():
   enc.go(s, "")
 
 # The query
@@ -260,7 +261,7 @@ def encode(s: Bytes()) -> Bytes():
 # name alone has the value ""), both form-decoded; empty pieces dropped
 def qpair(+piece: Bytes()) -> Header:
   +i = Bytes.find_byte(piece, 0n, 61)
-  Header{form(String.take(piece, i)), form(String.drop(piece, 1n+i))}
+  Header{form.decode(String.take(piece, i)), form.decode(String.drop(piece, 1n+i))}
 
 def qput(+piece: Bytes(), +rest: List<&2, Header>) -> List<&2, Header>:
   Bool.pick(List<&2, Header>, String.is_empty(piece), rest, Con{qpair(piece), rest})
@@ -556,10 +557,10 @@ def enc.pick(ok: Bool, +head: Bool, +code: U32, h: X.RHead, +body: Bytes(), +clo
 def enc.of(+head: Bool, +code: U32, +h: X.RHead, +body: Bytes(), +closing: Bool, +v10: Bool) -> Bytes():
   enc.pick(enc.check(head, code, h, body), head, code, h, body, closing, v10)
 
-# The bytes of a response with a body: head says the request was HEAD,
-# closing that the connection ends after it, v10 that the request was
-# HTTP/1.0 (kept alive, it is told so).
-def encode.bytes(+head: Bool, +closing: Bool, +v10: Bool, +code: U32, hs: List<&2, Header>, +body: Bytes()) -> Bytes():
+# The bytes a response with a body goes out as: head says the request
+# was HEAD, closing that the connection ends after it, v10 that the
+# request was HTTP/1.0 (kept alive, it is told so).
+def write(+head: Bool, +closing: Bool, +v10: Bool, +code: U32, hs: List<&2, Header>, +body: Bytes()) -> Bytes():
   enc.of(head, code, rhead(code, hs, body), body, closing, v10)
 
 # A file's head: its status line and type, the handler's fields, and

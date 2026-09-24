@@ -231,7 +231,7 @@ def add_zero(x):
 - Strings are linked lists of characters, so text processing is slow.
 - Base is small: expect to write helpers other languages ship built in.
 - Effects are few: print, env, time, sleep, spawn, channels, files, TCP, UDP.
-- No TLS, HTTP library, JSON or regex for now (but you can add them as foreigns).
+- HTTP/1.1, TLS, WebSockets and JSON live in net/ (guide/NETWORKING.md), not Base.
 - Targets are C, Metal, CUDA and JavaScript; Lua, Luau and Python are planned.
 - The JavaScript target runs on one core and has no graphics or audio.
 - Parallelism requires balanced calls. Flexible parallelism will be added later.

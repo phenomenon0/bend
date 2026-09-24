@@ -4,18 +4,22 @@ every default the library promises checked from the outside.
 
     python3 net/check.py [--bin DIR] [--port N]
 
-Builds net/examples/{hello,json_api,file_server,fetch}.bend into DIR
-(a temporary directory by default; a binary already there is kept) and
-runs them on ports N.. (21040 by default): the server's framing,
+Builds every net/examples/*.bend into DIR (a temporary directory by
+default; a binary already there is kept), so no example the docs quote
+can rot, and runs hello, json_api, file_server, greet and fetch on
+ports N.. (21040 by default): the server's framing,
 pipelining, HEAD, keep-alive and close, its refusals (400, 408, 413,
 414, 431), its timeouts (head, body, idle), the connection limit,
 100-continue and SIGTERM; the router's 404 and 405 with Allow, the JSON
-API and the file server; and the client against Python peers: plain and
+API and the file server; the middleware as templates (greet), the
+listening address and the banner that names it, a TLS certificate that
+does not load named; and the client against Python peers: plain and
 TLS (a self-signed certificate refused, then trusted by --ca), refused
 connections and failed names, the exchange's deadline, redirects (the
 cap, 303 and 307, credentials kept to their origin), gzip, the body
 cap, and a pooled connection reused only when its response allows.
-Prints PASS/FAIL per case and exits 1 on any failure.
+Every Bend snippet in guide/NETWORKING.md must be in a file under net/,
+word for word. Prints PASS/FAIL per case and exits 1 on any failure.
 """
 import gzip, os, shutil, signal, socket, ssl, subprocess, sys, tempfile, threading, time
 
@@ -214,6 +218,36 @@ def check_notes(notes):
     log = p.stderr.read().decode()
     ok("middleware: a log line per request", "POST /notes 201" in log and "GET /notes/1 404" in log, log)
 
+def check_greet(greet):
+    port = PORT + 6
+    p = start([greet, "--port", str(port)], port)
+    r = get(port, "/greet?name=Ada")
+    ok("greet: a query value, decoded", r.startswith(b"HTTP/1.1 200") and r.endswith(b"Hello, Ada!\n"), r)
+    ok("greet: ~Server.logged(~Server.secured(~app)) adds the browser's headers", b"x-frame-options: DENY" in r, r)
+    r = get(port, "/add/2/3")
+    ok("greet: a handler that can fail, answering", r.endswith(b"\r\n\r\n5\n"), r)
+    r = get(port, "/add/2/x")
+    ok("greet: a handler's Fail is a plain 500", r.startswith(b"HTTP/1.1 500"), r)
+    stop(p)
+    log = p.stderr.read().decode()
+    ok("greet: the logged template writes a line per request", "GET /greet 200" in log and "GET /add/2/x 500" in log
+       and "handler failed: /add wants two numbers" in log, log)
+
+def check_listen(hello, tmp):
+    port = PORT + 7
+    p = start([hello, "--port", str(port), "--host", "127.0.0.1"], port)
+    r = get(port, "/")
+    ok("server: --host binds that address", r.endswith(b"Hello, world!\n"), r)
+    stop(p)
+    log = p.stderr.read().decode()
+    ok("server: the banner names the address it listens on", ("listening on http://127.0.0.1:%d" % port) in log, log)
+    missing = os.path.join(tmp, "no-such-cert.pem")
+    r = subprocess.run([hello, "--port", str(port), "--tls-cert", missing, "--tls-key", missing], capture_output=True,
+                       timeout=10)
+    err = r.stderr.decode()
+    ok("server: a certificate that does not load ends it, saying TLS setup failed and naming the file",
+       r.returncode != 0 and "TLS setup failed" in err and "no certificate" in err and missing in err, (r.returncode, err))
+
 def check_files(files, root):
     port = PORT + 2
     p = start([files, "--port", str(port), "--root", root], port)
@@ -383,11 +417,24 @@ def check_client(fetch_bin, hello, tmp):
     ok("server: TLS, fetched by the client", c == 0 and out == "Hello, world!\n", (c, out, err))
     stop(p)
 
+def check_guide():
+    """every Bend snippet in guide/NETWORKING.md is in a file under net/, word for word"""
+    srcs = []
+    for d, _, fs in os.walk(HERE):
+        srcs += [open(os.path.join(d, f)).read() for f in fs if f.endswith(".bend")]
+    guide = open(os.path.join(ROOT, "guide", "NETWORKING.md")).read()
+    snips = [b.split("```", 1)[0] for b in guide.split("```python\n")[1:]]
+    stale = [b for b in snips if not any(b in src for src in srcs)]
+    ok("guide: each of NETWORKING.md's %d snippets is in a file under net/" % len(snips), not stale,
+       stale[0][:200] if stale else "")
+
 def main():
-    hello = build("hello", "hello.bend")
-    notes = build("notes", "json_api.bend")
-    files = build("files", "file_server.bend")
-    fetch_bin = build("fetch", "fetch.bend")
+    check_guide()
+    # every example builds (a doc snippet is copied from one), then the
+    # ones below are run
+    bins = {f[:-5]: build(f[:-5], f) for f in sorted(os.listdir(os.path.join(HERE, "examples"))) if f.endswith(".bend")}
+    ok("every example builds: " + ", ".join(sorted(bins)), True)
+    hello, notes, files, fetch_bin, greet = bins["hello"], bins["json_api"], bins["file_server"], bins["fetch"], bins["greet"]
     tmp = tempfile.mkdtemp(prefix="bend-net-www-")
     root = os.path.join(tmp, "www")
     os.makedirs(os.path.join(root, "sub"))
@@ -400,6 +447,8 @@ def main():
         check_server(hello)
         check_notes(notes)
         check_files(files, root)
+        check_greet(greet)
+        check_listen(hello, tmp)
         check_client(fetch_bin, hello, tmp)
     finally:
         for p in PROCS:

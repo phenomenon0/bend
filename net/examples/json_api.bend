@@ -125,14 +125,14 @@ def routes(+db: Chan(Store)) -> List<Server.Route>:
 
 # the routes, each request logged, the browser's headers added
 def app.go(+db: Chan(Store), +r: Http.Request) -> IO(Http.Response):
-  Server.log.around(r, Server.secure.around(Server.route(routes(db), r)))
+  Server.logged.around(r, Server.secured.around(Server.route(routes(db), r)))
 
 def app(+db: Chan(Store), r: Http.Request) -> IO(Http.Response):
   app.go(db, r)
 
 def main() -> IO(Unit):
   do IO<Unit>:
-    xs : List<&2, String> <- Server.argv()
+    xs : List<String> <- IO.args()
     +db : Chan(Store) <- Chan.new(Store, 1)
     ok : Bool <- Chan.send(Store, db, Store{1, Map.new(&2, Bytes())})
     Server.serve.with(~Chan(Store), ~app, db, Server.args(xs, Server.config(8080)))

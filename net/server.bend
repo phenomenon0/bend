@@ -4,8 +4,8 @@
 #
 # app is a handler, Http.Request -> IO(Http.Response), passed as a
 # template: it compiles into the connection loop as a direct call.
-# Middleware is a template from handler to handler (logged, recover,
-# secured below), so ~Server.logged(~Server.secured(~app)) is one.
+# Middleware is a template from handler to handler (logged, secured,
+# recovered below), so ~Server.logged(~Server.secured(~app)) is one.
 #
 # Each connection is read by the HTTP engine's reader
 # (demos/io_http_engine, held to RFC 9112 by frame_sim) through
@@ -13,7 +13,7 @@
 # spec for any cut of the stream by scan_is_spec): every read goes
 # through it whole, and the requests it completes are handed to the
 # handler in order, adapted by Http.req.of (net/LAWS.bend's
-# handler_framed). Each response is written by Http.encode.bytes
+# handler_framed). Each response is written by Http.write
 # (respond_framed) or, for a file, by the engine's page path, and a
 # read's responses go out in one send. Everything is bounded and timed:
 #
@@ -51,137 +51,152 @@ def Peer.addr(s: Socket) -> IO(Socket & String):
 # =============
 
 type Cfg is Data:
-  Cfg{port: U32, idle: U32, head: U32, body: U32, send: U32, max_head: U32, max_body: U32,
+  Cfg{host: String, port: U32, idle: U32, head: U32, body: U32, send: U32, max_head: U32, max_body: U32,
     conns: U32, grace: U32, cert: String, key: String, shared: Bool}
 
-# the defaults: every one a bound
+# the defaults: every one a bound; every IPv4 interface (0.0.0.0)
 def config(port: U32) -> Cfg:
-  Cfg{port, 5000, 10000, 30000, 10000, 16384, 1048576, 1024, 5000, "", "", False{}}
+  Cfg{"0.0.0.0", port, 5000, 10000, 30000, 10000, 16384, 1048576, 1024, 5000, "", "", False{}}
+
+def cfg.host(c: Cfg) -> String:
+  match c:
+    case Cfg{host, port, idle, head, body, send, mh, mb, conns, grace, cert, key, shared}:
+      host
 
 def cfg.port(c: Cfg) -> U32:
   match c:
-    case Cfg{port, idle, head, body, send, mh, mb, conns, grace, cert, key, shared}:
+    case Cfg{host, port, idle, head, body, send, mh, mb, conns, grace, cert, key, shared}:
       port
 
 def cfg.idle(c: Cfg) -> U32:
   match c:
-    case Cfg{port, idle, head, body, send, mh, mb, conns, grace, cert, key, shared}:
+    case Cfg{host, port, idle, head, body, send, mh, mb, conns, grace, cert, key, shared}:
       idle
 
 def cfg.head(c: Cfg) -> U32:
   match c:
-    case Cfg{port, idle, head, body, send, mh, mb, conns, grace, cert, key, shared}:
+    case Cfg{host, port, idle, head, body, send, mh, mb, conns, grace, cert, key, shared}:
       head
 
 def cfg.body(c: Cfg) -> U32:
   match c:
-    case Cfg{port, idle, head, body, send, mh, mb, conns, grace, cert, key, shared}:
+    case Cfg{host, port, idle, head, body, send, mh, mb, conns, grace, cert, key, shared}:
       body
 
 def cfg.send(c: Cfg) -> U32:
   match c:
-    case Cfg{port, idle, head, body, send, mh, mb, conns, grace, cert, key, shared}:
+    case Cfg{host, port, idle, head, body, send, mh, mb, conns, grace, cert, key, shared}:
       send
 
 def cfg.max_head(c: Cfg) -> U32:
   match c:
-    case Cfg{port, idle, head, body, send, mh, mb, conns, grace, cert, key, shared}:
+    case Cfg{host, port, idle, head, body, send, mh, mb, conns, grace, cert, key, shared}:
       mh
 
 def cfg.max_body(c: Cfg) -> U32:
   match c:
-    case Cfg{port, idle, head, body, send, mh, mb, conns, grace, cert, key, shared}:
+    case Cfg{host, port, idle, head, body, send, mh, mb, conns, grace, cert, key, shared}:
       mb
 
 def cfg.conns(c: Cfg) -> U32:
   match c:
-    case Cfg{port, idle, head, body, send, mh, mb, conns, grace, cert, key, shared}:
+    case Cfg{host, port, idle, head, body, send, mh, mb, conns, grace, cert, key, shared}:
       conns
 
 def cfg.grace(c: Cfg) -> U32:
   match c:
-    case Cfg{port, idle, head, body, send, mh, mb, conns, grace, cert, key, shared}:
+    case Cfg{host, port, idle, head, body, send, mh, mb, conns, grace, cert, key, shared}:
       grace
 
 def cfg.cert(c: Cfg) -> String:
   match c:
-    case Cfg{port, idle, head, body, send, mh, mb, conns, grace, cert, key, shared}:
+    case Cfg{host, port, idle, head, body, send, mh, mb, conns, grace, cert, key, shared}:
       cert
 
 def cfg.key(c: Cfg) -> String:
   match c:
-    case Cfg{port, idle, head, body, send, mh, mb, conns, grace, cert, key, shared}:
+    case Cfg{host, port, idle, head, body, send, mh, mb, conns, grace, cert, key, shared}:
       key
 
 def cfg.shared(c: Cfg) -> Bool:
   match c:
-    case Cfg{port, idle, head, body, send, mh, mb, conns, grace, cert, key, shared}:
+    case Cfg{host, port, idle, head, body, send, mh, mb, conns, grace, cert, key, shared}:
       shared
+
+# the address to listen on, a dotted IPv4 one ("127.0.0.1" for this
+# machine alone)
+def set.host(c: Cfg, h: String) -> Cfg:
+  match c:
+    case Cfg{host, port, idle, head, body, send, mh, mb, conns, grace, cert, key, shared}:
+      Cfg{h, port, idle, head, body, send, mh, mb, conns, grace, cert, key, shared}
 
 def set.idle(c: Cfg, ms: U32) -> Cfg:
   match c:
-    case Cfg{port, idle, head, body, send, mh, mb, conns, grace, cert, key, shared}:
-      Cfg{port, ms, head, body, send, mh, mb, conns, grace, cert, key, shared}
+    case Cfg{host, port, idle, head, body, send, mh, mb, conns, grace, cert, key, shared}:
+      Cfg{host, port, ms, head, body, send, mh, mb, conns, grace, cert, key, shared}
 
 def set.head(c: Cfg, ms: U32) -> Cfg:
   match c:
-    case Cfg{port, idle, head, body, send, mh, mb, conns, grace, cert, key, shared}:
-      Cfg{port, idle, ms, body, send, mh, mb, conns, grace, cert, key, shared}
+    case Cfg{host, port, idle, head, body, send, mh, mb, conns, grace, cert, key, shared}:
+      Cfg{host, port, idle, ms, body, send, mh, mb, conns, grace, cert, key, shared}
 
 def set.body(c: Cfg, ms: U32) -> Cfg:
   match c:
-    case Cfg{port, idle, head, body, send, mh, mb, conns, grace, cert, key, shared}:
-      Cfg{port, idle, head, ms, send, mh, mb, conns, grace, cert, key, shared}
+    case Cfg{host, port, idle, head, body, send, mh, mb, conns, grace, cert, key, shared}:
+      Cfg{host, port, idle, head, ms, send, mh, mb, conns, grace, cert, key, shared}
 
 def set.send(c: Cfg, ms: U32) -> Cfg:
   match c:
-    case Cfg{port, idle, head, body, send, mh, mb, conns, grace, cert, key, shared}:
-      Cfg{port, idle, head, body, ms, mh, mb, conns, grace, cert, key, shared}
+    case Cfg{host, port, idle, head, body, send, mh, mb, conns, grace, cert, key, shared}:
+      Cfg{host, port, idle, head, body, ms, mh, mb, conns, grace, cert, key, shared}
 
 def set.max_head(c: Cfg, n: U32) -> Cfg:
   match c:
-    case Cfg{port, idle, head, body, send, mh, mb, conns, grace, cert, key, shared}:
-      Cfg{port, idle, head, body, send, n, mb, conns, grace, cert, key, shared}
+    case Cfg{host, port, idle, head, body, send, mh, mb, conns, grace, cert, key, shared}:
+      Cfg{host, port, idle, head, body, send, n, mb, conns, grace, cert, key, shared}
 
 # at most the engine's cap, 1 MiB
 def set.max_body(c: Cfg, n: U32) -> Cfg:
   match c:
-    case Cfg{port, idle, head, body, send, mh, mb, conns, grace, cert, key, shared}:
-      Cfg{port, idle, head, body, send, mh, U32.min(n, 1048576), conns, grace, cert, key, shared}
+    case Cfg{host, port, idle, head, body, send, mh, mb, conns, grace, cert, key, shared}:
+      Cfg{host, port, idle, head, body, send, mh, U32.min(n, 1048576), conns, grace, cert, key, shared}
 
 def set.conns(c: Cfg, n: U32) -> Cfg:
   match c:
-    case Cfg{port, idle, head, body, send, mh, mb, conns, grace, cert, key, shared}:
-      Cfg{port, idle, head, body, send, mh, mb, n, grace, cert, key, shared}
+    case Cfg{host, port, idle, head, body, send, mh, mb, conns, grace, cert, key, shared}:
+      Cfg{host, port, idle, head, body, send, mh, mb, n, grace, cert, key, shared}
 
 def set.grace(c: Cfg, ms: U32) -> Cfg:
   match c:
-    case Cfg{port, idle, head, body, send, mh, mb, conns, grace, cert, key, shared}:
-      Cfg{port, idle, head, body, send, mh, mb, conns, ms, cert, key, shared}
+    case Cfg{host, port, idle, head, body, send, mh, mb, conns, grace, cert, key, shared}:
+      Cfg{host, port, idle, head, body, send, mh, mb, conns, ms, cert, key, shared}
 
 # serve TLS (1.2+, ALPN http/1.1) with the PEM files at these paths
 def set.tls(c: Cfg, crt: String, k: String) -> Cfg:
   match c:
-    case Cfg{port, idle, head, body, send, mh, mb, conns, grace, cert, key, shared}:
-      Cfg{port, idle, head, body, send, mh, mb, conns, grace, crt, k, shared}
+    case Cfg{host, port, idle, head, body, send, mh, mb, conns, grace, cert, key, shared}:
+      Cfg{host, port, idle, head, body, send, mh, mb, conns, grace, crt, k, shared}
 
 # share the port with other copies (SO_REUSEPORT; the runtime's
 # --workers N forks them)
 def set.shared(c: Cfg) -> Cfg:
   match c:
-    case Cfg{port, idle, head, body, send, mh, mb, conns, grace, cert, key, shared}:
-      Cfg{port, idle, head, body, send, mh, mb, conns, grace, cert, key, True{}}
+    case Cfg{host, port, idle, head, body, send, mh, mb, conns, grace, cert, key, shared}:
+      Cfg{host, port, idle, head, body, send, mh, mb, conns, grace, cert, key, True{}}
 
-# a configuration from the command line: --port N, --idle-ms N,
-# --head-ms N, --body-ms N, --max-body N, --max-conns N, --grace-ms N,
-# --tls-cert F --tls-key F, --shared; anything else is left alone
+# A configuration from the command line (IO.args()), read over cfg: a
+# flag given wins over what cfg says, and a set.* applied to what args
+# answers wins over the flag. --host A, --port N, --idle-ms N, --head-ms
+# N, --body-ms N, --max-head N, --max-body N, --max-conns N, --grace-ms
+# N, --tls-cert F --tls-key F, --shared; anything else is left alone.
 def arg.num(+s: String, d: U32) -> U32:
   Maybe.default(&2, U32, U32.read(s), d)
 
 def args.one(+prev: String, +x: String, +c: Cfg) -> Cfg:
   match c:
-    case Cfg{port, idle, head, body, send, mh, mb, conns, grace, cert, key, shared}:
-      Cfg{Bool.pick(U32, String.eq(prev, "--port"), arg.num(x, port), port),
+    case Cfg{host, port, idle, head, body, send, mh, mb, conns, grace, cert, key, shared}:
+      Cfg{Bool.pick(String, String.eq(prev, "--host"), x, host),
+        Bool.pick(U32, String.eq(prev, "--port"), arg.num(x, port), port),
         Bool.pick(U32, String.eq(prev, "--idle-ms"), arg.num(x, idle), idle),
         Bool.pick(U32, String.eq(prev, "--head-ms"), arg.num(x, head), head),
         Bool.pick(U32, String.eq(prev, "--body-ms"), arg.num(x, body), body), send,
@@ -192,14 +207,14 @@ def args.one(+prev: String, +x: String, +c: Cfg) -> Cfg:
         Bool.pick(String, String.eq(prev, "--tls-cert"), x, cert),
         Bool.pick(String, String.eq(prev, "--tls-key"), x, key), shared || String.eq(x, "--shared")}
 
-def args.go(xs: List<&2, String>, +prev: String, c: Cfg) -> Cfg:
+def args.go(xs: List<String>, +prev: String, c: Cfg) -> Cfg:
   match xs:
     case Nil{}:
       c
     case Con{+x, t}:
       args.go(t, x, args.one(prev, x, c))
 
-def args(xs: List<&2, String>, c: Cfg) -> Cfg:
+def args(xs: List<String>, c: Cfg) -> Cfg:
   args.go(xs, "", c)
 
 def strs(xs: List<String>) -> List<&2, String>:
@@ -209,10 +224,6 @@ def strs(xs: List<String>) -> List<&2, String>:
     case Con{x, t}:
       Con{x, strs(t)}
 
-# the command line, as a list every flag reader may read
-def argv() -> IO(List<&2, String>):
-  IO.bind(List<String>, List<&2, String>, IO.args(), xs => IO.pure(List<&2, String>, strs(xs)))
-
 def head.or(xs: List<&2, String>, d: String) -> String:
   match xs:
     case Nil{}:
@@ -220,13 +231,16 @@ def head.or(xs: List<&2, String>, d: String) -> String:
     case Con{v, t}:
       v
 
-# a flag's value (the argument after it), or d
-def flag(xs: List<&2, String>, +name: String, +d: String) -> String:
+def flag.go(xs: List<&2, String>, +name: String, +d: String) -> String:
   match xs:
     case Nil{}:
       d
     case Con{+x, +t}:
-      Bool.pick(String, String.eq(x, name), head.or(t, d), flag(t, name, d))
+      Bool.pick(String, String.eq(x, name), head.or(t, d), flag.go(t, name, d))
+
+# a flag's value (the argument after it) in the command line, or d
+def flag(xs: List<String>, +name: String, +d: String) -> String:
+  flag.go(strs(xs), name, d)
 
 # The router
 # ==========
@@ -294,7 +308,7 @@ def slice() -> U32:
 
 # the server's own answers: a status and its reason, closing
 def own(+head: Bool, +v10: Bool, +code: U32) -> Bytes():
-  Http.encode.bytes(head, True{}, v10, code, [Http.Header{"content-type", "text/plain; charset=utf-8"}],
+  Http.write(head, True{}, v10, code, [Http.Header{"content-type", "text/plain; charset=utf-8"}],
     Bytes.append(Bytes.append(U32.show(code), Bytes.append(" ", Http.reason(code))), "\n"))
 
 # the segments waiting, newest first, written in order
@@ -308,7 +322,7 @@ def rev.onto(xs: List<&2, L.Seg>, acc: List<&2, L.Seg>) -> List<&2, L.Seg>:
 # a file that could not be opened: a 404 that says keep-alive, so a
 # Shut before it can make it say close
 def miss(head: Bool) -> Bytes():
-  Http.encode.bytes(head, False{}, True{}, 404, [Http.Header{"content-type", "text/plain; charset=utf-8"}],
+  Http.write(head, False{}, True{}, 404, [Http.Header{"content-type", "text/plain; charset=utf-8"}],
     "404 Not Found\n")
 
 def fhead(pre: Bytes(), n: U32) -> Bytes():
@@ -487,7 +501,7 @@ def file.segs(+head: Bool, +closing: Bool, +v10: Bool, hs: List<&2, Http.Header>
     case L.Page{root, path, ct, h}:
       file.shut(closing, L.Page{root, path, Http.fhead.pre(ct, hs), h})
     case _:
-      [L.Raw{Http.encode.bytes(head, closing, v10, 404, [Http.Header{"content-type", "text/plain; charset=utf-8"}],
+      [L.Raw{Http.write(head, closing, v10, 404, [Http.Header{"content-type", "text/plain; charset=utf-8"}],
         "404 Not Found\n")}]
 
 def segs.of(+head: Bool, +closing: Bool, +v10: Bool, r: Http.Response) -> List<&2, L.Seg>:
@@ -495,7 +509,7 @@ def segs.of(+head: Bool, +closing: Bool, +v10: Bool, r: Http.Response) -> List<&
     case Http.Response{code, hs, b}:
       match b:
         case Http.BBody{bs}:
-          [L.Raw{Http.encode.bytes(head, closing, v10, code, hs, bs)}]
+          [L.Raw{Http.write(head, closing, v10, code, hs, bs)}]
         case Http.BFile{root, path}:
           file.segs(head, closing, v10, hs, Eng.page(root, path, head))
 
@@ -688,7 +702,7 @@ def seg.on(k: Sk, +p: Bytes(), +x: Bytes(), xt: List<&2, Bytes()>, acc: List<&2,
   match k:
     case SParam{}:
       seg.then(Bool.not(String.is_empty(x)), xt,
-        List.append(&2, Http.Header, acc, [Http.Header{String.drop(p, 1n), Http.decode(x)}]), go)
+        List.append(&2, Http.Header, acc, [Http.Header{String.drop(p, 1n), Http.pct.decode(x)}]), go)
     case _:
       seg.then(String.eq(p, x), xt, acc, go)
 
@@ -853,10 +867,11 @@ def route(rs: List<&1, Route>, r: Http.Request) -> IO(Http.Response):
 # Middleware
 # ==========
 #
-# Each is Handler -> Handler as a template: ~logged(~app) is a handler.
-# Each is also an *.around form, over the IO a handler returns, for a
-# handler that takes an environment (serve.with) and so is no template
-# argument: Server.log.around(r, Server.route(routes(db), r)).
+# Each is Handler -> Handler as a template: ~logged(~app) is a handler,
+# and so is ~logged(~secured(~app)). Each also has an .around form, over
+# the IO a handler returns, for a handler that takes an environment
+# (serve.with) and so is no template argument:
+# Server.logged.around(r, Server.route(routes(db), r)).
 
 def ms.since(+t0: Nat, t1: Nat) -> Bytes():
   Nat.show(Nat.sub(t1, t0))
@@ -865,24 +880,28 @@ def logged.line(+r: Http.Request, +resp: Http.Response, +t0: Nat, t1: Nat) -> By
   Bytes.concat([Http.method(r), " ", Http.path(r), " ", U32.show(Http.status(resp)), " ",
     Nat.show(Bytes.len(Http.resp.body(resp))), " ", ms.since(t0, t1), "ms"])
 
-def log.done(+r: Http.Request, +t0: Nat, +resp: Http.Response) -> IO(Http.Response):
+def logged.done(+r: Http.Request, +t0: Nat, +resp: Http.Response) -> IO(Http.Response):
   do IO<Http.Response>:
     t1 : Nat <- IO.now()
     IO.print_err(logged.line(r, resp, t0, t1))
     return resp
 
 # a line per request on stderr: the method, the path, the status, the
-# body's length and the time the handler took
-def log.around(+r: Http.Request, io: IO(Http.Response)) -> IO(Http.Response):
+# body's length and the time the handler took (r is read twice, so it
+# is reusable here)
+def logged.around(+r: Http.Request, io: IO(Http.Response)) -> IO(Http.Response):
   do IO<Http.Response>:
     +t0 : Nat <- IO.now()
     +resp : Http.Response <- io
-    log.done(r, t0, resp)
+    logged.done(r, t0, resp)
 
-def logged(~h: Http.Request -> IO(Http.Response), +r: Http.Request) -> IO(Http.Response):
-  log.around(r, h(r))
+def logged.go(~h: Http.Request -> IO(Http.Response), +r: Http.Request) -> IO(Http.Response):
+  logged.around(r, h(r))
 
-def recover.at(r: Result<&2, &2, Bytes(), Http.Response>) -> IO(Http.Response):
+def logged(~h: Http.Request -> IO(Http.Response), r: Http.Request) -> IO(Http.Response):
+  logged.go(~h, r)
+
+def recovered.at(r: Result<&2, &2, Bytes(), Http.Response>) -> IO(Http.Response):
   match r:
     case Done{resp}:
       Http.reply(resp)
@@ -893,29 +912,29 @@ def recover.at(r: Result<&2, &2, Bytes(), Http.Response>) -> IO(Http.Response):
 
 # a handler that may fail with a message, as a handler: a failure is a
 # plain 500 to the client (the message goes to stderr, not to the peer)
-def recover.around(io: IO(Result<&2, &2, Bytes(), Http.Response>)) -> IO(Http.Response):
-  IO.bind(Result<&2, &2, Bytes(), Http.Response>, Http.Response, io, recover.at)
+def recovered.around(io: IO(Result<&2, &2, Bytes(), Http.Response>)) -> IO(Http.Response):
+  IO.bind(Result<&2, &2, Bytes(), Http.Response>, Http.Response, io, recovered.at)
 
-def recover(~h: Http.Request -> IO(Result<&2, &2, Bytes(), Http.Response>), r: Http.Request) -> IO(Http.Response):
-  recover.around(h(r))
+def recovered(~h: Http.Request -> IO(Result<&2, &2, Bytes(), Http.Response>), r: Http.Request) -> IO(Http.Response):
+  recovered.around(h(r))
 
-def secure.one(r: Http.Response, +n: Bytes(), v: Bytes()) -> Http.Response:
+def secured.one(r: Http.Response, +n: Bytes(), v: Bytes()) -> Http.Response:
   match r:
     case Http.Response{s, +hs, b}:
       Http.Response{s, Bool.pick(List<&2, Http.Header>, Http.has(hs, n), hs, Http.add(hs, n, v)), b}
 
-def secure.all(r: Http.Response) -> Http.Response:
-  secure.one(secure.one(secure.one(secure.one(r, "x-content-type-options", "nosniff"),
+def secured.all(r: Http.Response) -> Http.Response:
+  secured.one(secured.one(secured.one(secured.one(r, "x-content-type-options", "nosniff"),
     "x-frame-options", "DENY"), "referrer-policy", "no-referrer"),
     "content-security-policy", "default-src 'self'")
 
 # the headers a browser should see, each unless the handler set it:
 # nosniff, no framing, no referrer, and a CSP of 'self'
-def secure.around(io: IO(Http.Response)) -> IO(Http.Response):
-  IO.bind(Http.Response, Http.Response, io, resp => Http.reply(secure.all(resp)))
+def secured.around(io: IO(Http.Response)) -> IO(Http.Response):
+  IO.bind(Http.Response, Http.Response, io, resp => Http.reply(secured.all(resp)))
 
 def secured(~h: Http.Request -> IO(Http.Response), r: Http.Request) -> IO(Http.Response):
-  secure.around(h(r))
+  secured.around(h(r))
 
 # The connection
 # ==============
@@ -936,24 +955,40 @@ def srv.conns(~E: Data, s: Srv<E>) -> U32:
 def listen.at(plain: Bool, shared: Bool, +cfg: Cfg) -> IO(Result<&1, &1, U32 & String, Listener>):
   match plain shared:
     case False{} _:
-      TLS.listen(cfg.port(cfg), cfg.cert(cfg), cfg.key(cfg))
+      TLS.listen_on(cfg.host(cfg), cfg.port(cfg), cfg.cert(cfg), cfg.key(cfg))
     case True{} True{}:
-      TCP.listen_shared(cfg.port(cfg))
+      TCP.listen_shared_on(cfg.host(cfg), cfg.port(cfg))
     case True{} False{}:
-      TCP.listen(cfg.port(cfg))
+      TCP.listen_on(cfg.host(cfg), cfg.port(cfg))
 
 def listen(+cfg: Cfg) -> IO(Result<&1, &1, U32 & String, Listener>):
   listen.at(String.is_empty(cfg.cert(cfg)), cfg.shared(cfg), cfg)
 
+def scheme(+cfg: Cfg) -> String:
+  Bool.pick(String, String.is_empty(cfg.cert(cfg)), "http", "https")
+
 def banner(+cfg: Cfg) -> String:
-  "bend-net: listening on " ++ Bool.pick(String, String.is_empty(cfg.cert(cfg)), "http", "https") ++ "://127.0.0.1:"
-    ++ U32.show(cfg.port(cfg))
+  "bend-net: listening on " ++ scheme(cfg) ++ "://" ++ cfg.host(cfg) ++ ":" ++ U32.show(cfg.port(cfg))
+
+# why the server could not start: for TLS, the files it was given (a
+# missing or unreadable file, or a key not the certificate's)
+def refused(+cfg: Cfg, +msg: String) -> String:
+  Bool.pick(String, String.is_empty(cfg.cert(cfg)),
+    "bend-net: cannot listen on " ++ cfg.host(cfg) ++ ":" ++ U32.show(cfg.port(cfg)) ++ ": " ++ msg,
+    "bend-net: TLS setup failed (certificate " ++ cfg.cert(cfg) ++ ", key " ++ cfg.key(cfg) ++ "): " ++ msg)
+
+def listened(+cfg: Cfg, r: Result<&1, &1, U32 & String, Listener>) -> IO(Listener):
+  match r:
+    case Done{l}:
+      IO.pure(Listener, l)
+    case Fail{(code, msg)}:
+      IO.die(Listener, 1, refused(cfg, msg))
 
 # serve app with cfg, until SIGTERM; env is handed to every call of
 # app (shared state: a channel, a configuration)
 def serve.with(~E: Data, ~app: Hx(E), +env: E, +cfg: Cfg) -> IO(Unit):
   do IO<Unit>:
-    l : Listener <- IO.try(Listener, listen(cfg))
+    l : Listener <- IO.bind(Result<&1, &1, U32 & String, Listener>, Listener, listen(cfg), r => listened(cfg, r))
     IO.print_err(banner(cfg))
     Fx.run(~Srv<E>, ~go(~E, ~app), ~srv.grace(~E), ~srv.conns(~E), "bend-net", Srv{cfg, env}, l)
 

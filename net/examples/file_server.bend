@@ -17,12 +17,13 @@ def routes(+root: Bytes()) -> List<Server.Route>:
   [Server.get("/health", health), Server.static("", root)]
 
 def app.go(+root: Bytes(), +r: Http.Request) -> IO(Http.Response):
-  Server.log.around(r, Server.secure.around(Server.route(routes(root), r)))
+  Server.logged.around(r, Server.secured.around(Server.route(routes(root), r)))
 
 def app(+root: Bytes(), r: Http.Request) -> IO(Http.Response):
   app.go(root, r)
 
 def main() -> IO(Unit):
   do IO<Unit>:
-    +xs : List<&2, String> <- Server.argv()
-    Server.serve.with(~Bytes(), ~app, Server.flag(xs, "--root", "www"), Server.args(xs, Server.config(8080)))
+    xs : List<String> <- IO.args()
+    ys : List<String> <- IO.args()
+    Server.serve.with(~Bytes(), ~app, Server.flag(xs, "--root", "www"), Server.args(ys, Server.config(8080)))

@@ -242,7 +242,7 @@ def steps(xs: List<&2, String>, c: Ws.Conn) -> IO(Unit):
     case Con{s, t}:
       IO.bind(Maybe<&1, Ws.Conn>, Unit, step(s, c), may => steps.next(may, cc => steps(t, cc)))
 
-def opened(steps0: List<&2, String>, r: Result<&1, &1, Ws.Err, Ws.Conn>) -> IO(Unit):
+def opened(steps0: List<&2, String>, r: Result<&2, &1, Ws.Err, Ws.Conn>) -> IO(Unit):
   match r:
     case Fail{e}:
       IO.die(Unit, 1, "error " ++ Ws.err.show(e))
@@ -281,7 +281,7 @@ def ab.count.got(g: Ws.Out(F.Msg)) -> IO(U32):
         Ws.drop(c)
         return 0
 
-def ab.count(r: Result<&1, &1, Ws.Err, Ws.Conn>) -> IO(U32):
+def ab.count(r: Result<&2, &1, Ws.Err, Ws.Conn>) -> IO(U32):
   match r:
     case Fail{e}:
       IO.die(U32, 1, "getCaseCount: " ++ Ws.err.show(e))
@@ -295,7 +295,7 @@ def ab.left(m: Maybe<&1, Ws.Conn>) -> IO(Unit):
     case Some{c}:
       Ws.drop(c)
 
-def ab.case.opened(+i: U32, r: Result<&1, &1, Ws.Err, Ws.Conn>) -> IO(Unit):
+def ab.case.opened(+i: U32, r: Result<&2, &1, Ws.Err, Ws.Conn>) -> IO(Unit):
   match r:
     case Fail{e}:
       IO.print("case " ++ U32.show(i) ++ ": " ++ Ws.err.show(e))
@@ -309,11 +309,11 @@ def ab.cases(k: Nat, +i: U32, +base: String, +agent: String, +o: Ws.Opts) -> IO(
     case 1n+j:
       do IO<Unit>:
         IO.print_err("case " ++ U32.show(i))
-        r : Result<&1, &1, Ws.Err, Ws.Conn> <- Ws.connect(base ++ "/runCase?case=" ++ U32.show(i) ++ "&agent=" ++ agent, o)
+        r : Result<&2, &1, Ws.Err, Ws.Conn> <- Ws.connect(base ++ "/runCase?case=" ++ U32.show(i) ++ "&agent=" ++ agent, o)
         ab.case.opened(i, r)
         ab.cases(j, (i + 1 : U32), base, agent, o)
 
-def ab.report(r: Result<&1, &1, Ws.Err, Ws.Conn>) -> IO(Unit):
+def ab.report(r: Result<&2, &1, Ws.Err, Ws.Conn>) -> IO(Unit):
   match r:
     case Fail{e}:
       IO.print("updateReports: " ++ Ws.err.show(e))
@@ -322,11 +322,11 @@ def ab.report(r: Result<&1, &1, Ws.Err, Ws.Conn>) -> IO(Unit):
 
 def autobahn(+base: String, +agent: String, +o: Ws.Opts) -> IO(Unit):
   do IO<Unit>:
-    r : Result<&1, &1, Ws.Err, Ws.Conn> <- Ws.connect(base ++ "/getCaseCount", o)
+    r : Result<&2, &1, Ws.Err, Ws.Conn> <- Ws.connect(base ++ "/getCaseCount", o)
     +n : U32 <- ab.count(r)
     IO.print("cases " ++ U32.show(n))
     ab.cases(U32.to_nat(n), 1, base, agent, o)
-    q : Result<&1, &1, Ws.Err, Ws.Conn> <- Ws.connect(base ++ "/updateReports?agent=" ++ agent, o)
+    q : Result<&2, &1, Ws.Err, Ws.Conn> <- Ws.connect(base ++ "/updateReports?agent=" ++ agent, o)
     ab.report(q)
 
 # Main
@@ -339,7 +339,7 @@ def run(+c: Cli, ab: Bool) -> IO(Unit):
         case True{}:
           autobahn(url, ab2, cli.opts(c))
         case False{}:
-          IO.bind(Result<&1, &1, Ws.Err, Ws.Conn>, Unit, Ws.connect(url, cli.opts(c)), r => opened(steps0, r))
+          IO.bind(Result<&2, &1, Ws.Err, Ws.Conn>, Unit, Ws.connect(url, cli.opts(c)), r => opened(steps0, r))
 
 def cli.ab(c: Cli) -> String:
   match c:

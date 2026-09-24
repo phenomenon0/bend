@@ -17,8 +17,25 @@ def Json() -> Data:
 def str(s: Bytes()) -> J.Json:
   J.Str{s}
 
+# A number is its text (J.Num); J.to_i64 and J.to_f64 read one back.
 def num(n: U32) -> J.Json:
   J.Num{U32.show(n)}
+
+def i64.mag(n: I64) -> Bytes():
+  match n:
+    case I64{w}:
+      Nat.show(Word.to_nat(64n, w))
+
+def i64(+n: I64) -> J.Json:
+  J.Num{Bool.pick(Bytes(), I64.is_neg(n), Bytes.append("-", i64.mag(I64.neg(n))), i64.mag(n))}
+
+def f64.of(+t: Bytes()) -> J.Json:
+  Bool.pick(J.Json, String.eq(t, "nan") || String.eq(t, "inf") || String.eq(t, "-inf"), J.Null{}, J.Num{t})
+
+# the shortest text that reads back as x (-1.5, 0.1, 1e+21); JSON has no
+# NaN or infinity, so those are null
+def f64(x: F64) -> J.Json:
+  f64.of(F64.show(x))
 
 def yes() -> J.Json:
   J.Flag{True{}}

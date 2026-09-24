@@ -69,7 +69,7 @@ def fetched(+id: Bytes(), +up: Bytes(), r: Client.Res()) -> IO(Http.Response):
 def user(+env: Env, r: Http.Request) -> IO(Http.Response):
   +id = Http.param(r, "id")
   +up = env.up(env)
-  +url = Bytes.concat([up, "/users/", Http.encode(id)])
+  +url = Bytes.concat([up, "/users/", Http.pct.encode(id)])
   do IO<Http.Response>:
     res : Client.Res() <- Client.fetch(env.s(env), Client.req("GET", url))
     fetched(id, up, res)
@@ -81,14 +81,15 @@ def routes(+env: Env) -> List<Server.Route>:
   [Server.get("/health", health), Server.get("/users/:id", r => user(env, r))]
 
 def app.go(+env: Env, +r: Http.Request) -> IO(Http.Response):
-  Server.log.around(r, Server.route(routes(env), r))
+  Server.logged.around(r, Server.route(routes(env), r))
 
 def app(+env: Env, r: Http.Request) -> IO(Http.Response):
   app.go(env, r)
 
 def main() -> IO(Unit):
   do IO<Unit>:
-    +xs : List<&2, String> <- Server.argv()
+    xs : List<String> <- IO.args()
+    ys : List<String> <- IO.args()
     +s : Client.Session <- Client.session(Client.with.timeout(Client.opts(), 5000))
     +env : Env = Env{s, Server.flag(xs, "--upstream", "http://127.0.0.1:9000")}
-    Server.serve.with(~Env, ~app, env, Server.args(xs, Server.config(8080)))
+    Server.serve.with(~Env, ~app, env, Server.args(ys, Server.config(8080)))

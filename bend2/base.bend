@@ -437,6 +437,21 @@ def TLS.listen_alpn(port: U32, cert: String, key: String, names: String) ->
   import "./effs/tls_listen.c"
   import "./effs/tls_listen_alpn.js"
 
+# TCP.listen, TCP.listen_shared and TLS.listen bound to one address, a
+# dotted IPv4 one ("127.0.0.1": this machine alone); they bind 0.0.0.0
+def TCP.listen_on(host: String, port: U32) -> IO(Result<&1, &1, U32 & String, Listener>):
+  import "./effs/tcp_listen.c"
+  import "./effs/tcp_listen.js"
+
+def TCP.listen_shared_on(host: String, port: U32) -> IO(Result<&1, &1, U32 & String, Listener>):
+  import "./effs/tcp_listen_shared.c"
+  import "./effs/tcp_listen_shared.js"
+
+def TLS.listen_on(host: String, port: U32, cert: String, key: String) ->
+  IO(Result<&1, &1, U32 & String, Listener>):
+  import "./effs/tls_listen.c"
+  import "./effs/tls_listen.js"
+
 def TCP.accept(listener: Listener) ->
   IO(Listener & Result<&1, &1, U32 & String, Socket>):
   import "./effs/tcp_accept.c"

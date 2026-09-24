@@ -35,7 +35,7 @@ def flag(+p: Bytes(), +a: Bytes(), +c: Cli) -> Cli:
         Bool.pick(Client.Opts, String.eq(p, "--timeout"), Client.with.timeout(o, num(a, 30000)),
         Bool.pick(Client.Opts, String.eq(p, "--connect"), Client.with.connect(o, num(a, 10000)),
         Bool.pick(Client.Opts, String.eq(p, "--max-body"), Client.with.max_body(o, num(a, 10485760)),
-        Bool.pick(Client.Opts, String.eq(p, "--max-redirects"), Client.with.redirects(o, U32.to_nat(num(a, 10))),
+        Bool.pick(Client.Opts, String.eq(p, "--max-redirects"), Client.with.redirects(o, num(a, 10)),
         Bool.pick(Client.Opts, String.eq(a, "--no-gzip"), Client.with.gzip(o, False{}), o)))))),
         sh || String.eq(a, "-i"), tw || String.eq(a, "--twice"),
         Bool.pick(Bytes(), String.is_empty(p) && (String.eq(a, "-X") || String.eq(a, "-d") || String.eq(a, "-H")

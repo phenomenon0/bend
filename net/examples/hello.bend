@@ -11,5 +11,5 @@ def hello(req: Http.Request) -> IO(Http.Response):
 
 def main() -> IO(Unit):
   do IO<Unit>:
-    xs : List<&2, String> <- Server.argv()
+    xs : List<String> <- IO.args()
     Server.serve(~hello, Server.args(xs, Server.config(8080)))

@@ -146,7 +146,7 @@ law respond_framed:
   for +code: U32
   for +hs: List<&2, Http.Header>
   for +body: Bytes()
-  {RS.response(X.rask(head), Bytes.to_list(Http.encode.bytes(head, closing, v10, code, hs, body))) ==
+  {RS.response(X.rask(head), Bytes.to_list(Http.write(head, closing, v10, code, hs, body))) ==
     sent(head, closing, code, Http.enc.check(head, code, Http.rhead(code, hs, body), body), body) : R.Look}
 
 # the check passes the responses handlers write, and fails the ones that
@@ -417,13 +417,13 @@ def upto(k: Nat, +i: U32) -> List<&2, U32>:
 def all.bytes() -> Bytes():
   Bytes.from_list(upto(256n, 0))
 
-# decode undoes encode, over every byte
+# pct.decode undoes pct.encode, over every byte
 law pct_round_trip:
-  {Http.decode(Http.encode(all.bytes())) == all.bytes() : Bytes()}
+  {Http.pct.decode(Http.pct.encode(all.bytes())) == all.bytes() : Bytes()}
 
 law pct_vectors:
-  {[Http.encode("a b/c?d=_-.~"), Http.decode("a%20b"), Http.decode("%41%62%2f"), Http.decode("%zz%4"),
-    Http.decode("100%"), Http.decode("a+b"), Http.form("a+b%2B"), Http.decode("%E2%82%ac")]
+  {[Http.pct.encode("a b/c?d=_-.~"), Http.pct.decode("a%20b"), Http.pct.decode("%41%62%2f"), Http.pct.decode("%zz%4"),
+    Http.pct.decode("100%"), Http.pct.decode("a+b"), Http.form.decode("a+b%2B"), Http.pct.decode("%E2%82%ac")]
     == ["a%20b%2Fc%3Fd%3D_-.~", "a b", "Ab/", "%zz%4", "100%", "a+b", "a b+", Bytes.from_list([226, 130, 172])] :
     List<&2, Bytes()>}
 

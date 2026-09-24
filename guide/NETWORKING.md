@@ -21,7 +21,7 @@ def hello(req: Http.Request) -> IO(Http.Response):
 
 def main() -> IO(Unit):
   do IO<Unit>:
-    xs : List<&2, String> <- Server.argv()
+    xs : List<String> <- IO.args()
     Server.serve(~hello, Server.args(xs, Server.config(8080)))
 ```
 
@@ -35,7 +35,8 @@ A handler is a function from `Http.Request` to `IO(Http.Response)`.
 passes it as a template, so it compiles into the connection loop as a direct
 call. Each connection is its own computation, with its own socket and
 deadlines, so one connection's failure is its own. The server listens on every
-IPv4 interface (`0.0.0.0`).
+IPv4 interface (`0.0.0.0`) unless `Server.set.host` or `--host` names one, and
+says where on stderr.
 
 ## Serving
 
@@ -59,9 +60,9 @@ field with `Http.with.header(resp, name, value)`. `Http.reply(resp)` is
 
 ### Configuration
 
-`Server.config(port)` is the defaults. `Server.set.idle`, `head`, `body`,
-`send`, `max_head`, `max_body`, `conns`, `grace`, `tls(cert, key)` and `shared`
-change one each:
+`Server.config(port)` is the defaults. `Server.set.host`, `idle`, `head`,
+`body`, `send`, `max_head`, `max_body`, `conns`, `grace`, `tls(cert, key)` and
+`shared` change one each:
 
 ```python
 # 2 s of idle, bodies of at most 64 KiB, at most 256 connections
@@ -69,12 +70,14 @@ def config() -> Server.Cfg:
   Server.set.conns(Server.set.max_body(Server.set.idle(Server.config(8080), 2000), 65536), 256)
 ```
 
-`Server.args(xs, cfg)` then reads the command line over it: `--port`,
-`--idle-ms`, `--head-ms`, `--body-ms`, `--max-head`, `--max-body`,
-`--max-conns`, `--grace-ms`, `--tls-cert`, `--tls-key` and `--shared`. Anything
-else is left alone. `Server.argv()` answers the command line and
-`Server.flag(xs, "--root", "www")` reads a flag of your own. A `max_body` past
-1 MiB is cut to 1 MiB, the engine's cap.
+`Server.args(xs, cfg)` then reads the command line, `xs` as `IO.args()`
+answers it, over it: `--host`, `--port`, `--idle-ms`, `--head-ms`,
+`--body-ms`, `--max-head`, `--max-body`, `--max-conns`, `--grace-ms`,
+`--tls-cert`, `--tls-key` and `--shared`. Anything else is left alone. A flag
+given wins over `cfg`; a `Server.set` applied to what `args` answers wins over
+the flag. `Server.flag(xs, "--root", "www")` reads a flag of your own. Each
+reader takes the list whole, so ask `IO.args()` once for each. A `max_body`
+past 1 MiB is cut to 1 MiB, the engine's cap.
 
 ### The Router
 
@@ -112,43 +115,45 @@ def greet(r: Http.Request) -> IO(Http.Response):
   Http.reply(Http.text(200, Bytes.concat(["Hello, ", name, "!\n"])))
 ```
 
-`Http.query.pairs(q)` answers every pair in order, and `Http.decode`,
-`Http.form` and `Http.encode` do percent-encoding by hand.
+`Http.query.pairs(q)` answers every pair in order, and `Http.pct.decode`,
+`Http.form.decode` (`+` is a space too) and `Http.pct.encode` do
+percent-encoding by hand.
 
 ### Middleware
 
-Middleware is a template from handler to handler. `~Server.secured(~app)` adds
-the headers a browser should see (nosniff, `DENY` framing, no referrer, a CSP
-of `'self'`), each unless the handler set it:
+Middleware is a template from handler to handler, and they nest.
+`~Server.logged(~app)` writes a line per request on stderr: the method, the
+path, the status, the body's length and the time the handler took.
+`~Server.secured(~app)` adds the headers a browser should see (nosniff, `DENY`
+framing, no referrer, a CSP of `'self'`), each unless the handler set it:
 
 ```python
 def main() -> IO(Unit):
   do IO<Unit>:
-    xs : List<&2, String> <- Server.argv()
-    Server.serve(~Server.secured(~app), Server.args(xs, config()))
+    xs : List<String> <- IO.args()
+    Server.serve(~Server.logged(~Server.secured(~app)), Server.args(xs, config()))
 ```
 
-Each also has an `.around` form over the IO a handler returns.
-`Server.log.around` writes a line per request on stderr: the method, the path,
-the status, the body's length and the time the handler took. It reads the
-request twice, so the request is reusable (`+r`) there:
+A handler that takes an environment (below) is no template argument, so each
+also has an `.around` form over the IO a handler returns. `Server.logged.around`
+reads the request twice, so the request is reusable (`+r`) there:
 
 ```python
 # the routes, each request logged, the browser's headers added
 def app.go(+db: Chan(Store), +r: Http.Request) -> IO(Http.Response):
-  Server.log.around(r, Server.secure.around(Server.route(routes(db), r)))
+  Server.logged.around(r, Server.secured.around(Server.route(routes(db), r)))
 
 def app(+db: Chan(Store), r: Http.Request) -> IO(Http.Response):
   app.go(db, r)
 ```
 
 A handler that can fail answers `Result<&2, &2, Bytes(), Http.Response>`.
-`Server.recover.around` turns a `Fail` into a plain 500. The message goes to
-stderr, not to the client:
+`~Server.recovered(~h)`, or `Server.recovered.around`, turns a `Fail` into a
+plain 500. The message goes to stderr, not to the client:
 
 ```python
 # GET /add/:a/:b: a handler that answers Done{response} or Fail{why};
-# Server.recover.around turns a Fail into a plain 500
+# Server.recovered.around turns a Fail into a plain 500
 def sum(a: Maybe<&2, U32>, b: Maybe<&2, U32>) -> Result<&2, &2, Bytes(), Http.Response>:
   match a b:
     case Some{x} Some{y}:
@@ -160,7 +165,7 @@ def add(+r: Http.Request) -> IO(Result<&2, &2, Bytes(), Http.Response>):
   IO.pure(Result<&2, &2, Bytes(), Http.Response>, sum(U32.read(Http.param(r, "a")), U32.read(Http.param(r, "b"))))
 
 def routes() -> List<Server.Route>:
-  [Server.get("/greet", greet), Server.get("/add/:a/:b", r => Server.recover.around(add(r)))]
+  [Server.get("/greet", greet), Server.get("/add/:a/:b", r => Server.recovered.around(add(r)))]
 ```
 
 ### Shared State
@@ -173,7 +178,7 @@ it back, so two requests never see half a change:
 ```python
 def main() -> IO(Unit):
   do IO<Unit>:
-    xs : List<&2, String> <- Server.argv()
+    xs : List<String> <- IO.args()
     +db : Chan(Store) <- Chan.new(Store, 1)
     ok : Bool <- Chan.send(Store, db, Store{1, Map.new(&2, Bytes())})
     Server.serve.with(~Chan(Store), ~app, db, Server.args(xs, Server.config(8080)))
@@ -196,10 +201,8 @@ a file is not bound by `max_body`.
 ```python
 def main() -> IO(Unit):
   do IO<Unit>:
-    +xs : List<&2, String> <- Server.argv()
-    +cert : String = Server.flag(xs, "--tls-cert", "cert.pem")
-    +key : String = Server.flag(xs, "--tls-key", "key.pem")
-    Server.serve(~app, Server.set.tls(Server.args(xs, Server.config(8443)), cert, key))
+    xs : List<String> <- IO.args()
+    Server.serve(~app, Server.args(xs, Server.set.tls(Server.config(8443), "cert.pem", "key.pem")))
 ```
 
 ```bash
@@ -209,9 +212,11 @@ bend net/examples/tls_server.bend -o tls && ./tls --port 8443 --tls-cert cert.pe
 curl --cacert cert.pem https://localhost:8443/
 ```
 
-`Server.set.tls(cfg, cert, key)` takes two PEM files. The server then speaks
-TLS 1.2 or later, with ALPN `http/1.1`. Every other default is the same. A
-certificate that cannot be loaded ends the program before it listens.
+`Server.set.tls(cfg, cert, key)` takes two PEM files, and `--tls-cert` and
+`--tls-key`, read over it, win. The server then speaks TLS 1.2 or later, with
+ALPN `http/1.1`. Every other default is the same. A certificate or key that
+cannot be loaded ends the program before it listens, with `TLS setup failed`
+and the file at fault.
 
 ## Fetching
 
@@ -226,7 +231,9 @@ def run(+base: Bytes()) -> IO(Unit):
 ```
 
 `Client.get(url)` and `Client.post(url, ctype, body)` answer
-`IO(Client.Res())`, which is `Result<&2, &2, Client.NetError, Http.Response>`.
+`IO(Client.Res())`, which is `Result<&2, &2, Client.NetError, Http.Response>`:
+in `net/`, an error and a `Data` value are reusable (`&2`), and only a value
+holding a handle, like a WebSocket connection, is affine.
 Read a response with `Http.status(resp)`, `Http.resp.header(resp, "name")` and
 `Http.resp.body(resp)`.
 
@@ -235,8 +242,8 @@ Read a response with `Http.status(resp)`, `Http.resp.header(resp, "name")` and
 `Client.request(req, opts)` takes a request you build and options.
 `Client.req(method, url)` is a request with no fields and no body;
 `Client.req.header` sets a field and `Client.req.body` the body. `Client.opts()` is the
-defaults, and `Client.with.connect`, `timeout`, `max_body`, `redirects`, `ca`
-and `gzip` change one each:
+defaults, and `Client.with.connect`, `timeout`, `max_body`, `redirects` (each
+a `U32`), `ca` and `gzip` change one each:
 
 ```python
         g : Client.Res() <- Client.get(url)
@@ -320,6 +327,7 @@ the first request's origin. Past the cap, the answer is `TooManyRedirects`.
 
 `net/json.bend` writes and reads JSON on `power/json_value.bend`. Build a value
 with `Json.obj`, `Json.kv`, `Json.arr`, `Json.str`, `Json.num` (a `U32`),
+`Json.i64` (an `I64`), `Json.f64` (an `F64`; NaN and infinities are `null`),
 `Json.yes`, `Json.no` and `Json.null`, and answer it with
 `Json.respond(status, j)`. `Json.text(j)` is its text, for a request body.
 
@@ -370,7 +378,7 @@ def fetched(+id: Bytes(), +up: Bytes(), r: Client.Res()) -> IO(Http.Response):
 def user(+env: Env, r: Http.Request) -> IO(Http.Response):
   +id = Http.param(r, "id")
   +up = env.up(env)
-  +url = Bytes.concat([up, "/users/", Http.encode(id)])
+  +url = Bytes.concat([up, "/users/", Http.pct.encode(id)])
   do IO<Http.Response>:
     res : Client.Res() <- Client.fetch(env.s(env), Client.req("GET", url))
     fetched(id, up, res)
@@ -381,17 +389,18 @@ Its session is made once, in `main`, and handed to every handler:
 ```python
 def main() -> IO(Unit):
   do IO<Unit>:
-    +xs : List<&2, String> <- Server.argv()
+    xs : List<String> <- IO.args()
+    ys : List<String> <- IO.args()
     +s : Client.Session <- Client.session(Client.with.timeout(Client.opts(), 5000))
     +env : Env = Env{s, Server.flag(xs, "--upstream", "http://127.0.0.1:9000")}
-    Server.serve.with(~Env, ~app, env, Server.args(xs, Server.config(8080)))
+    Server.serve.with(~Env, ~app, env, Server.args(ys, Server.config(8080)))
 ```
 
 ## WebSockets
 
 `net/ws.bend` is a WebSocket client (RFC 6455), over TCP or TLS.
-`Ws.connect(url, Ws.opts())` answers the connection or a `Ws.Err`. A
-connection is affine: every call hands it back beside its result, and
+`Ws.connect(url, Ws.opts())` answers the connection or a `Ws.Err`, as
+`Result<&2, &1, Ws.Err, Ws.Conn>`. A connection is affine: every call hands it back beside its result, and
 `Ws.close` or `Ws.drop` lets it go.
 
 ```python
@@ -545,4 +554,4 @@ checked response writer that `respond_framed` is about (`net/README.md`).
   connection.
 - HTTP/2 in `net/`. `demos/io_http2` is an HTTP/2 server of its own, not
   behind `Server.serve`.
-- A choice of address to listen on. The server binds every IPv4 interface.
+- IPv6. The server binds an IPv4 address, and the client refuses an IPv6 one.
