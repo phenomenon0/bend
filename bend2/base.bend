@@ -243,6 +243,16 @@ def File.open(path: String, mode: String) ->
   import "./effs/file_open.c"
   import "./effs/file_open.js"
 
+# path, read-only, below the directory root and never through a symbolic
+# link (one openat2 on Linux 5.6+, else an openat per component). Done
+# only for a regular file; a missing name, a symbolic link, a directory,
+# an empty, "." or ".." component and a path that climbs out of root all
+# fail. root itself is taken as given: it is the program's, not a peer's.
+def File.open_under(root: String, path: String) ->
+  IO(Result<&1, &1, U32 & String, File>):
+  import "./effs/file_open_under.c"
+  import "./effs/file_open_under.js"
+
 def File.read(file: File, max: U32) ->
   IO(File & Result<&1, &1, U32 & String, String>):
   import "./effs/file_read.c"
