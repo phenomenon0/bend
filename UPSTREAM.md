@@ -11,7 +11,7 @@ repro for each and the branch that fixes it, if any.
   example `git worktree add --detach /tmp/canon canon/main` then
   `upstream/verify.sh /tmp/canon`. It runs every repro in `upstream/` in
   the lanes that apply and prints `REPRO`, `FIXED` or `SKIP` per item and
-  lane (about three minutes; ports 29601-29613). Point it at a fix branch to
+  lane (about three minutes; ports 29601-29613 and 29800). Point it at a fix branch to
   see the item turn `FIXED`. For a NOT-REPRO or OURS item, `FIXED` on
   canon is the expected answer.
 - **Lanes.** `interp` is `bend F.bend`: a pure `main` runs in the
@@ -31,7 +31,7 @@ repro for each and the branch that fixes it, if any.
 |---|---|---|---|---|---|---|
 | U01 | TCP.recv/send decode and re-encode UTF-8: binary bytes become U+FFFD, lengths change | BUG | interp js c | high | fix/socket-bytes-v2 (= upstream/01-tcp-bytes) | upstream/tcp_bytes.bend + peer.py echo |
 | U02 | TCP.listen's backlog is 16: bursts lose SYNs, 1 s / 3 s stalls | BUG | interp js c | med | fix/listen-backlog-v2 (= upstream/02-listen-backlog) | upstream/listen_backlog.bend + peer.py burst |
-| U03 | the IO loop's select walks every waiter per pass: n arrivals cost O(n^2) | PERF | js c | high | fix/epoll-v2 (= upstream/03-epoll): descriptors only; timers stay O(n) | upstream/io_fd_waiters.bend, io_waiters.bend |
+| U03 | the IO loop's select walks every waiter per pass: n arrivals cost O(n^2) | PERF | js c | high | fix/epoll-v2 (= upstream/03-epoll): descriptors; upstream/03b-epoll-timers (local, on it): timers too | upstream/io_fd_waiters.bend, io_waiters.bend, io_timer_waiters.bend |
 | U04 | Nat.min / Nat.max are unary recursions in every lane: stack overflow on big Nats | BUG | js c | med | upstream/04-nat-min-max | upstream/nat_min_max.bend |
 | U05 | File.write UTF-8-encodes bytes >= 0x80 | OURS | - | - | (ours: File.write_buf) | upstream/file_write_text.bend |
 | U06 | Bool.pick (Base's only `if`) evaluates both arms | PERF | js c, interp for IO mains (a pure main is lazy) | med | none | upstream/bool_pick.bend, bool_pick_pure.bend |
@@ -47,6 +47,7 @@ repro for each and the branch that fixes it, if any.
 | U16 | a pure main counts Nats in unary: epoch-sized numbers (1.7e9) are unusable | PERF | interp (pure main) | med | none | upstream/interp_nat_epoch.bend, interp_nat_mul.bend |
 | U17 | TCP.listen binds 0.0.0.0 and takes no address: no loopback-only server | LIMITATION | interp js c | med | upstream/05-listen-on | verify.sh U17 (Base's signature) |
 | U18 | TCP.connect takes dotted IPv4 only (no names, no resolver) and has no deadline | LIMITATION | interp js c | med | upstream/06-connect-poll-dns | upstream/connect_name.bend |
+| U19 | a Socket dropped without Socket.close keeps its descriptor until exit: the checker allows the drop, the runtime never closes | LIMITATION | interp js c | med | none (ours leaks too) | upstream/socket_drop.bend |
 | F01 | no wall clock: IO.now is monotonic | LIMITATION | all | med | none | verify.sh F01 |
 | F02 | no rename, fsync, seek, remove or mkdir | LIMITATION | all | med | none | verify.sh F02 |
 | F03 | File.read_at takes a U32 offset and answers a List cell per byte | LIMITATION | all | low | none | verify.sh F03 |
@@ -61,7 +62,9 @@ is lazy, as it should be) and U14's tls_close and marshal (they pass on
 canon). Against the fix branches: U01 FIXED on
 fix/socket-bytes-v2, U02 on fix/listen-backlog-v2, U04 on
 upstream/04-nat-min-max, U03 (descriptors) on fix/epoll-v2 in both
-lanes, while U03t (timers) stays REPRO there.
+lanes, while U03t (timers) stays REPRO there and turns FIXED in every
+lane on upstream/03b-epoll-timers. U19 (dropped sockets) reads REPRO
+on canon and on our branch.
 
 ---
 
@@ -120,7 +123,8 @@ the HTTP engine with the loop fixed: connection ramps with walls of
 ## U03. A pass through the IO loop costs what waits, not what fired
 
 **Class** PERF, high. **Lanes** JS, C. **Fix** `fix/epoll-v2` for
-descriptor waiters; none for timers.
+descriptor waiters; `upstream/03b-epoll-timers` (local, one commit on
+it) for timers too.
 
 **Where** C `comp.ts:5738` `io_wait`: every pass sizes a descriptor set
 by the highest live fd, walks the park list to fill it and find the
@@ -131,6 +135,8 @@ dispatch. JS `comp.ts:6311`, the same shape.
 each) alone, then beside 4000 clients parked in `TCP.recv` (port 29603;
 accepts one client at a time so U02 does not interfere).
 `upstream/io_waiters.bend` does the same beside 20000 parked sleepers.
+`upstream/io_timer_waiters.bend` times 4000 zero sleeps beside 16384
+sleepers and prints `flat` under 1 s, else `slow: N ms`.
 
 **Observed** (C) alone 1 ms, beside 4000 descriptors 1048-1704 ms
 (ratio ~500); beside 20000 timers 1056 ms. JS: 32 ms vs 2067 ms; 40 ms
@@ -138,9 +144,39 @@ vs 1136 ms. **Expected** a ratio near 1.
 
 On `fix/epoll-v2`: descriptors flat in both lanes (1 ms vs 1 ms in C,
 38 ms vs 14 ms in JS), but timers still O(parked) per pass (C 2 ms vs
-695 ms), because it keeps deadlines on the park list. Our own branch
-(`959a64e0`, "epoll and a deadline heap") is flat for both in C, and
-still quadratic in JS for both.
+695 ms), because it keeps deadlines on the park list.
+
+On `upstream/03b-epoll-timers` (`82fdd0af`, fix/epoll-v2 rebased onto
+`95317d95` plus one commit) the deadlines are a binary min-heap in both
+lanes (`comp.ts:5567` `io_heap_fix`, `:5812` `io_wait`; JS `:6402`
+`io_heap_pop`, `:6419` `io_wait`). 4000 zero sleeps beside n sleepers,
+ms for all 4000, three runs each:
+
+| n | C before | C after | JS before | JS after |
+|---|---|---|---|---|
+| 0 | 2 | 2 | 48-58 | 63-70 |
+| 1k | 34-42 | 2 | 206-264 | 55-98 |
+| 4k | 147-187 | 2 | 416-478 | 55-70 |
+| 16k | 1094-1210 | 4-9 | 1453-1650 | 62-113 |
+
+Per pass at 16k: C 290 us before, about 1 us after; JS 390 us before,
+16-28 us after (what a pass costs with no sleeper at all). io_waiters:
+C 1 ms vs 1 ms, JS 40 ms vs 18 ms. Its test `io/sleep_many_waiters`
+prints `flat` in check, interp, JS and C (the park list: 1.6-1.8 s,
+`slow`). canon's tests/io, run locally before and after in every lane:
+no new failure (only the three ALSA audio builds fail, plus a JS
+sleep-order flake of U14's `fork_join` before). comp.ts is 63,989 of its
+64,000 cap there (U15): the commit sheds its tie-break field by making
+`io_tick` strictly increasing, which keeps equal spans in park order.
+
+Our own branch (`959a64e0`, "epoll and a deadline heap") was flat for
+both in C, and quadratic in JS for both: its JS `io_wait` still
+`select`s over `io.waits`. The timer half is fixed on our branch
+(`comp.ts:9163` `io_heap_pop`, `:9221` `io_park_on`: a waiter on the
+clock alone goes to a heap; one with an fd stays on `io.waits`):
+4000 passes beside 1k / 4k / 16k sleepers, JS, 204-285 / 497-574 /
+1563-1948 ms before, 47-73 / 61-71 / 60-107 ms after. Our JS lane
+stays O(n) per pass in parked descriptors (U03's first half).
 
 Measured earlier with `demos/io_http_engine/ramp.c` (connections opened
 and held): 2.1 ms per connection at 500 live, 4.1 at 1,000, 11.3 at
@@ -151,9 +187,10 @@ with an epoll loop.
 
 **Fix** register each fd with the kernel's poller once (epoll on Linux,
 kqueue on macOS, `EPOLLONESHOT` re-armed in place), as `fix/epoll-v2`
-does in both lanes, and keep deadlines in a min-heap (not yet on the
-branch; `TCP.poll` waits on both, so each side must take the waiter out
-of the other).
+does in both lanes, and keep deadlines in a min-heap, as
+`upstream/03b-epoll-timers` does. `TCP.poll` waits on both, so each side
+takes the waiter out of the other: C keeps each waiter's heap slot, JS
+marks a fired waiter done and the heap skips it at its deadline.
 
 ## U04. `Nat.min` and `Nat.max` are unary recursions in every lane
 
@@ -296,7 +333,9 @@ port range) on `tests/io`: 111 of 117 pass.
   dispatches every due waiter in park order, not deadline order, once a
   pass comes late, which fits; a direct repro of that did not trigger,
   so the cause is not confirmed. **Fix** space the sleeps 100 ms apart,
-  or order due timers by deadline.
+  or order due timers by deadline, which `upstream/03b-epoll-timers`'s
+  heap does: 20 of 20 JS runs in order there for both tests (canon this
+  time: `fork_join` 1 of 10 out of order), too few to call it fixed.
 - `tls_connect_close`, `http_url_parse` and `marshal_char_scalar` pass
   on canon (NOT-REPRO); the first and last fail on our branch only (see
   OURS below).
@@ -362,6 +401,49 @@ no resolver: `upstream/connect_name.bend`, `TCP.connect("localhost",
 29605)`, answers `Fail 22: Invalid argument` in every lane (expected:
 connection refused). A connect to a black hole waits the kernel's ~75 s
 (no timeout argument).
+
+## U19. A dropped `Socket` is never closed
+
+**Class** LIMITATION, med. **Lanes** interp, JS, C. **Fix** none; our
+branch leaks the same.
+
+**Where** (canon `95317d95`) a handle is affine, and "dropping one is
+always free" (`guide/GUIDE.md:219`), though Base's own comment calls
+handles "linear (Type), so none copies or reuses one"
+(`base.bend:92-93`): the checker forbids the copy, not the drop. At run
+time a handle is its fd packed in a word, `io_hand` (`comp.ts:5414`), a
+`TAG_PAK` term that owns no heap (`comp.ts:4017`), so dropping it runs
+nothing; in JS it is a plain number (`effs/tcp_accept.js`). Only
+`Socket.close` (`effs/socket_close.c:5`) closes the fd. No finalizer
+exists to call it, and none could: the runtime does not know which
+words are handles.
+
+**Repro** `upstream/socket_drop.bend` connects to its own listener
+(29800), accepts, and drops both sockets, 400 rounds, then sleeps 2 s.
+The drop needs no erase or annotation: a match arm binds the socket and
+never uses it (`case Done{s}: k(l)`), and `bend --check-only` answers
+"All terms check." with no note.
+
+**Observed** in every lane, `/proc/PID/fd` during the sleep: 803
+sockets open (812 fds in interp and JS, 806 in C), two per round plus
+the listener; under `ulimit -n 256` the rounds stop at `round 122: Fail
+24: Too many open files` (C: 124-125). Our branch (`0c164c43`) gives the
+same counts. **Expected** of a language whose handles are "linear":
+either the drop is refused or it closes; today the first dropped socket
+is a leak for the life of the process. A server that drops a socket on
+one path (an error arm beside a live socket) leaks a descriptor per peer
+that takes it, and at the usual soft limit of 1024 its accepts turn into
+U13's `Fail 24`. `upstream/accept_emfile.bend` (U13) relies on exactly
+this leak to fill the table.
+
+It is a LIMITATION rather than a BUG: canon's rules say the drop is
+free, and the runtime does what they say. The same holds for every
+handle (`File`, `Listener`, `Window`, `Audio`), which share `io_hand`.
+**Suggest** make the opaque handles relevant (used exactly once: the
+checker refuses a handle that reaches the end of its scope, so every
+path must close it or hand it on), or at least warn on a dropped
+handle, and say in GUIDE.md's handle paragraph that a dropped handle
+stays open.
 
 ## F01-F06. From apps/uptime/FRICTION.md, checked on canon
 
