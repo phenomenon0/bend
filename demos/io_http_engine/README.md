@@ -201,10 +201,13 @@ its answers the file system's when they were read (`memo_answers`,
 the new size after the second.
 
 The type comes from the extension, by a table whose rows keep the head
-a 200 of that type starts with; `file_head_is_built` says it is the
-head `mime.pre` builds from the type's name, and that a request asking
-nothing of the file gets all of it after the head `cond.bend`'s
-`hd.full.is` spells out piece by piece.
+a 200 of that type starts with. The row is picked by the extension's
+first and last bytes and its length (no two rows share all three) and
+then compared once, so an extension no row names costs a few compares
+of numbers rather than a string compare per row. `file_head_is_built`
+says the head is the one `mime.pre` builds from the type's name, and
+that a request asking nothing of the file gets all of it after the head
+`cond.bend`'s `hd.full.is` spells out piece by piece.
 
 ### Conditional and range requests
 

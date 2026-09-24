@@ -765,8 +765,17 @@ def tg.walk(+tag: Bytes(), +strong: Bool, s: Bytes(), +st: Tg, hit: Bool) -> Boo
 
 # whether a field value names the tag: "*" (the file exists), or a list
 # of entity-tags with it among them
+# "*", or the tag itself (as a client sends back the one it was given),
+# are hits at once; anything else is walked
+def tags.at(hit: Bool, +v: Bytes(), +tag: Bytes(), strong: Bool) -> Bool:
+  match hit:
+    case True{}:
+      True{}
+    case False{}:
+      tg.walk(tag, strong, v, TSep{}, False{})
+
 def tags.hit(+v: Bytes(), +tag: Bytes(), strong: Bool) -> Bool:
-  String.eq(v, "*") || tg.walk(tag, strong, v, TSep{}, False{})
+  tags.at(String.eq(v, "*") || String.eq(v, tag), v, tag, strong)
 
 # Ranges
 # ======
@@ -1031,36 +1040,11 @@ def joined(m: Maybe<&2, Bytes()>, v: Bytes()) -> Maybe<&2, Bytes()>:
     case Some{x}:
       Some{Bytes.append(x, Bytes.append(", ", v))}
 
-def ows.trim.lead.at(w: Bool, c: U32, t: Bytes(), rest: Bytes()) -> Bytes():
-  match w:
-    case True{}:
-      rest
-    case False{}:
-      SCon{Chr{c}, t}
-
-def ows.trim.lead(s: Bytes()) -> Bytes():
-  match s:
-    case SNil{}:
-      SNil{}
-    case SCon{Chr{+c}, +t}:
-      ows.trim.lead.at(ows.b(c), c, t, ows.trim.lead(t))
-
-def ows.trim.end.at(w: Bool, c: U32, r: Bytes()) -> Bytes():
-  match w r:
-    case True{} SNil{}:
-      SNil{}
-    case _ _:
-      SCon{Chr{c}, r}
-
-def ows.trim.end(s: Bytes()) -> Bytes():
-  match s:
-    case SNil{}:
-      SNil{}
-    case SCon{Chr{+c}, t}:
-      ows.trim.end.at(ows.b(c), c, ows.trim.end(t))
-
+# a value's leading and trailing whitespace: a value carries no control
+# but HTAB (the reader refuses the rest), so the whitespace String.trim
+# takes off is exactly RFC 9110's OWS, SP and HTAB
 def ows.trim(s: Bytes()) -> Bytes():
-  ows.trim.end(ows.trim.lead(s))
+  String.trim(s)
 
 # which of the six a field is
 type Which is Data:
