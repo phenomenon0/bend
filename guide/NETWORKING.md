@@ -256,9 +256,13 @@ is read only when the handler asks, at most 64 KiB at a time, so a slow handler
 slows the client down and the server holds one read. A 100 MB upload runs in
 about 6 MB of memory.
 
-`Stream.config(cfg)` wraps a server configuration. `Stream.set.max_stream`
-(1 GiB) caps a body: a longer Content-Length is a 413 before a byte is read,
-and a chunked body is cut there (a chunked body is at most 256 MiB).
+The head is read by the reader every request goes through, which stops at the
+blank line of a head a stream route takes, wherever it comes on the connection:
+first, or pipelined behind other requests in one read. The server's
+`max_body` is not a stream's: `Stream.config(cfg)` wraps a server
+configuration, and `Stream.set.max_stream` (1 GiB) caps a streamed body: a
+longer Content-Length is a 413 before a byte is read, and a chunked body is
+cut there (a chunked body is at most 256 MiB).
 `Stream.set.progress` (10 s) is the time each read has to bring a byte, or
 408. `Stream.args` reads `--max-stream` and `--progress-ms`, and every
 `Server.args` flag. An `Expect: 100-continue` is answered at the handler's
@@ -648,6 +652,10 @@ parsed under the budget you pass, at most 64 containers deep.
 - `stream_next`: after a streamed request the connection goes on only once
   the body has ended, with exactly the bytes after it. A body a handler did not
   read is never read as the next request.
+- `stream_head`: a stream route's head is read by the server's own reader, and
+  the head a stream handler gets (its fields, its framing, or a 400) is the one
+  RFC 9112's spec reads at the same byte, however TCP cut the stream and
+  whatever came before it on the connection.
 - the vectors: percent-encoding round-trips every byte, and the query, URL,
   Location and route pattern readings match the tables listed there.
 
@@ -669,9 +677,8 @@ python3 net/check.py           # the examples, checked from outside against ever
 ```
 
 What is not proven: the IO loops themselves (they call the functions the laws
-are about), the deadlines and limits, and a stream route's head, which
-`net/stream.bend` reads line by line with the engine's spec views.
-`net/check.py` checks those from outside.
+are about, and stop a read at every stream route's head), and the deadlines
+and limits. `net/check.py` checks those from outside.
 
 ## Speed
 

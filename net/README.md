@@ -99,10 +99,12 @@ rest to a file and answers its length. The socket is read only as the
 handler reads, 64 KiB at a time. `Stream.config(cfg)` changed by
 `Stream.set.max_stream` (1 GiB; 413) and `Stream.set.progress` (10 s a
 read; 408), or `Stream.args(xs, c)` (`--max-stream --progress-ms`, and
-Server's flags). A stream route is chosen by the request line, before a
-field is read; its head is read by `net/stream.bend` (a Content-Length of
-any size), its body by wire/http1's reader entered at the body. An
-`Expect: 100-continue` is answered at the handler's first read; what a
+Server's flags). A stream route's head is read by the server's own reader
+(the engine's), which stops a read at the blank line of a head a stream
+route takes, first on the connection or pipelined behind other requests;
+its framing is the engine's without the engine's body cap (a
+Content-Length up to 4294967289), and its body is read by wire/http1's
+reader entered at the body. An `Expect: 100-continue` is answered at the handler's first read; what a
 handler leaves is drained up to 1 MiB, else the answer closes; a body
 that failed is answered by the server (400, 408, 413).
 
@@ -211,6 +213,11 @@ passes its export. `net/LAWS.bend`:
   (Stream.next) only once the RFC's framing says the body ended, with
   exactly the bytes after it; else it closes. An undrained body is never
   read as a request.
+- `stream_head`: a stream route's head is the engine reader's, and for every
+  stream however cut into reads, the reader stands at a head's blank line
+  exactly where spec.bend's frame() walk does, and the head the stream takes
+  there (Stream.at.head: the request, adapted as a handler's, its framing, or
+  refused) is the walk's, judged as RFC 9112 judges it.
 - vectors: percent-encoding over every byte, the query, URLs and
   Locations, the router's patterns, the response check.
 
@@ -225,10 +232,12 @@ connection takes are the spec's reassembly of the input, for every cut
 of it into reads), `srv_close_once` and `srv_close_after` (at most one
 close written, none after this end's own), and vectors.
 
-`python3 net/mutants.py`: twenty-nine broken servers, streams and
-clients, each refused; `python3 net/ws_mutants.py`: the WebSocket ones. Not
-proven: the IO loops (they call the functions the laws are about), the
-deadlines and limits, a stream route's head (checked by `check.py`).
+`python3 net/mutants.py`: thirty-seven broken servers, streams, stream
+heads (a bare LF, a folded line, two lengths that disagree, a head judged
+wrong) and clients, each refused; `python3 net/ws_mutants.py`: the WebSocket
+ones. Not proven: the IO loops (they call the functions the laws are about,
+and stop a read at every stream route's head: checked by `check.py`), the
+deadlines and limits.
 
 ## The examples
 
@@ -259,7 +268,9 @@ TLS; and streamed bodies: 100 MB by length and chunked, written to a file
 byte for byte with the server's peak RSS measured (about 6 MB; 1 GiB by
 hand, the same), the stream's cap, a stalled body, a handler that
 returns without reading (drained, or closed with no byte of it read as a
-request), 100-continue, and pipelining after a streamed body;
+request), 100-continue, pipelining after a streamed body and before one
+(a 2 MB body behind a GET in one write), a head cut between its blank
+line's CR and LF, and the heads refused (a bare LF, a fold, two lengths);
 and WebSockets on the server: the chat room's broadcast between two
 ws_chat clients, its 426, 400 and 101, SIGTERM's 1001.
 `python3 net/ws_check.py ./wsc ./httpd PORT --server ./echo --autobahn`
@@ -272,6 +283,5 @@ response written as a literal the loop matches the engine, so the
 difference is the checked writer (`respond_framed`'s).
 
 Not yet: streaming response bodies, a chunked streamed body past 256
-MiB, a stream route's request pipelined behind another in one read (read
-whole, under max_body), a deadline on the handler itself, WebSocket
-compression (permessage-deflate is declined).
+MiB, a deadline on the handler itself, WebSocket compression
+(permessage-deflate is declined).

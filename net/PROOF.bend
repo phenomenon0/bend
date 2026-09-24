@@ -18,6 +18,8 @@
 # because it keeps the credentials only for the first origin. The
 # streamed bodies' laws lean on wire/http1's: drain_reads, reads_split,
 # feed_buf_is_feed, and walk.lem, the simulation resp_sim is made of.
+# stream_head leans on the engine's: STEP, the step of the simulation
+# frame_sim is made of, carried over every byte, and read where it ends.
 import Base
 import ../wire/reader.bend as Wr
 import ../wire/client.bend as C

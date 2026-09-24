@@ -20,7 +20,11 @@ cap, 303 and 307, credentials kept to their origin), gzip, the body
 cap, and a pooled connection reused only when its response allows;
 and streamed bodies (upload): 100 MB by length and chunked in bounded
 memory, the stream's cap (413), a stalled body (408), a handler that
-returns without reading, 100-continue, pipelining after a streamed body.
+returns without reading, 100-continue, pipelining after a streamed body
+and before one (a body past max-body and the engine's 1 MiB behind a GET
+in one write), a head cut between its blank line's CR and LF, and the
+heads the RFC refuses (a bare LF, a fold, two lengths that disagree, a
+length past a U32, two Hosts) each a 400 with no byte of its body read.
 WebSockets on the server: chat_server's room with two ws_chat clients
 (its broadcast), its page beside it, its 426 and 400, the 101's Accept
 and subprotocol, SIGTERM's 1001, and ws_echo from Python's websockets

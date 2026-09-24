@@ -35,6 +35,11 @@
 #                   once the framing says it ended, with exactly the
 #                   bytes after it: an undrained body is never read as a
 #                   request
+#   stream_head     a stream route's head is the engine reader's, and at
+#                   every blank line the reader stands at, the head the
+#                   stream takes is the one spec.bend's frame() walk
+#                   holds there, judged as RFC 9112 judges it, however
+#                   TCP cut the stream
 #
 # and the vectors: percent-encoding's round trip over every byte, the
 # query, URLs and Locations as the URL standard reads them (and where
