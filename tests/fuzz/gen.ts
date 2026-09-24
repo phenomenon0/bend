@@ -12,7 +12,7 @@
 // =====
 
 export type Ty = "U32" | "Nat" | "Bool" | "Str" | "Chr" | "LU" | "LS" | "U64"
-  | "I64" | "MU" | "MN" | "T" | "F64" | "FUU";
+  | "I64" | "MU" | "MN" | "T" | "F64" | "FUU" | "MP" | "AR";
 
 // A node: text with holes. `ty` lets the reducer put a leaf in its place.
 export type Node = { ty: Ty; parts: (string | Node)[] };
@@ -27,7 +27,11 @@ export type Let = { names: string[]; plus: boolean; ty: Ty | null; v: Node[] };
 
 export type Def = { name: string; head: string; body: Body; uses: string[] };
 
-export type Stmt = { $: "print"; e: Node } | { $: "bind"; x: string; ty: Ty; e: Node };
+// pick: the step is Bool.pick(IO(..), c, step(e), step(b)), a choice of
+// actions (the twin picks the values)
+export type Pick = { c: Node; b: Node };
+
+export type Stmt = { $: "print"; e: Node; pick?: Pick } | { $: "bind"; x: string; ty: Ty; e: Node; pick?: Pick };
 
 export type Prog = {
   seed: number;
@@ -65,14 +69,18 @@ export const TY: Record<Ty, string> = {
   U32: "U32", Nat: "Nat", Bool: "Bool", Str: "String", Chr: "Char",
   LU: "List<&2, U32>", LS: "List<&2, String>", U64: "U64", I64: "I64",
   MU: "Maybe<&2, U32>", MN: "Maybe<&2, Nat>", T: "T0", F64: "F64",
-  FUU: "U32 -> U32",
+  FUU: "U32 -> U32", MP: "Map<&2, U32>", AR: "Array<U32>",
 };
+
+// Types whose values are not Data: never `+`
+export const LINEAR = new Set<Ty>(["FUU", "AR"]);
 
 // The smallest value of each type: what the reducer puts in a node's place.
 export const LEAF: Record<Ty, string> = {
   U32: "0", Nat: "0n", Bool: "False{}", Str: "\"\"", Chr: "'a'", LU: "Nil{}",
   LS: "Nil{}", U64: "u64.of(0, 0)", I64: "i64.of(0, 0)", MU: "None{}",
-  MN: "None{}", T: "K2{}", F64: "0.0d", FUU: "(x => x)",
+  MN: "None{}", T: "K2{}", F64: "0.0d", FUU: "(x => x)", MP: "Map.new(&2, U32)",
+  AR: "Array.new(U32, 1n, 0)",
 };
 
 export function node_text(n: Node): string {
@@ -107,9 +115,13 @@ function pure_body(p: Prog): string {
 
 // an IO program's steps, as lines of a do block
 function io_steps(p: Prog): string {
-  return p.stmts.map((s) => s.$ === "print"
-    ? "    IO.print(" + node_text(s.e) + ")\n"
-    : "    " + s.x + " : " + TY[s.ty] + " <- IO.pure(" + TY[s.ty] + ", " + node_text(s.e) + ")\n").join("");
+  const act = (s: Stmt, e: Node): string => s.$ === "print" ? "IO.print(" + node_text(e) + ")"
+    : "IO.pure(" + TY[s.ty] + ", " + node_text(e) + ")";
+  const io = (s: Stmt): string => s.pick === undefined ? act(s, s.e)
+    : "Bool.pick(IO(" + (s.$ === "print" ? "Unit" : TY[s.ty]) + "), " + node_text(s.pick.c) + ", "
+      + act(s, s.e) + ", " + act(s, s.pick.b) + ")";
+  return p.stmts.map((s) => s.$ === "print" ? "    " + io(s) + "\n"
+    : "    " + s.x + " : " + TY[s.ty] + " <- " + io(s) + "\n").join("");
 }
 
 export function prog_text(p: Prog, twin = false): string {
@@ -121,9 +133,11 @@ export function prog_text(p: Prog, twin = false): string {
     out.push("def main() -> String:\n" + pure_body(p));
   } else if (twin) {
     // the interpreter's twin: each bind a let, the prints one string
+    const val = (s: Stmt, ty: Ty): string => s.pick === undefined ? node_text(s.e)
+      : "Bool.pick(" + TY[ty] + ", " + node_text(s.pick.c) + ", " + node_text(s.e) + ", " + node_text(s.pick.b) + ")";
     const lets = p.stmts.flatMap((s) => s.$ === "bind"
-      ? ["  +" + s.x + " : " + TY[s.ty] + " = " + node_text(s.e) + "\n"] : []);
-    const outs = p.stmts.flatMap((s) => s.$ === "print" ? [node_text(s.e)] : []);
+      ? ["  +" + s.x + " : " + TY[s.ty] + " = " + val(s, s.ty) + "\n"] : []);
+    const outs = p.stmts.flatMap((s) => s.$ === "print" ? [val(s, "Str")] : []);
     out.push("def main() -> String:\n" + lets.join("") + "  "
       + (outs.length === 0 ? "\"\"" : outs.map((o) => "(" + o + ")").join(" ++ \"\\n\" ++ ")) + "\n");
   } else {
@@ -192,6 +206,44 @@ export const PRELUDE_DEFS: Record<string, string> = {
   match x:
     case U32{w}:
       w.hex(32n, w)
+`,
+  "mp.snd": `def mp.snd(p: Map<&2, U32> & U32) -> U32:
+  match p:
+    case (m, v):
+      v
+`,
+  "mp.get": `def mp.get(m: Map<&2, U32>, k: String, d: U32) -> U32:
+  mp.snd(Map.get(U32, d, m, k))
+`,
+  "mp.hsnd": `def mp.hsnd(p: Map<&2, U32> & Bool) -> Bool:
+  match p:
+    case (m, v):
+      v
+`,
+  "mp.has": `def mp.has(m: Map<&2, U32>, k: String) -> Bool:
+  mp.hsnd(Map.has(&2, U32, m, k))
+`,
+  "mp.show": `def mp.show(+m: Map<&2, U32>) -> String:
+  Nat.show(Map.size(&2, U32, m)) ++ List.show(~&2, ~String, ~(k => "<" ++ k ++ ">"), Map.keys(&2, U32, m))
+`,
+  "arr.snd": `def arr.snd(p: Array<U32> & U32) -> U32:
+  match p:
+    case (a, v):
+      v
+`,
+  "arr.get": `def arr.get(a: Array<U32>, i: U32) -> U32:
+  arr.snd(Array.get(U32, a, i))
+`,
+  "arr.show": `def arr.show(a: Array<U32>) -> String:
+  List.show(~&1, ~U32, ~U32.show, Array.to_list(~U32, a))
+`,
+  "arr.both": `def arr.both(p: Array<U32> & Array<U32>) -> Array<U32>:
+  match p:
+    case (a, b):
+      Array.set(U32, a, 0, arr.get(b, 1))
+`,
+  "arr.dup": `def arr.dup(a: Array<U32>) -> Array<U32>:
+  arr.both(Array.clone(U32, a))
 `,
   "app": `def app(f: U32 -> U32, x: U32) -> U32:
   f(x)
@@ -384,7 +436,7 @@ export class Gen {
       this.selfUsed = true;
       return this.selfcall(d - 1);
     }
-    if (ty !== "FUU" && this.chance(0.07)) {
+    if (!LINEAR.has(ty) && this.chance(0.07)) {
       return this.bpick(ty, d - 1);
     }
     return this.op(ty, d - 1);
@@ -435,6 +487,12 @@ export class Gen {
     ])();
   }
 
+  // a map key: a few short strings, so keys meet
+  key(d: number): Node {
+    return this.chance(0.7) ? this.N("Str", this.pick(["\"\"", "\"a\"", "\"b\"", "\"ab\"", "\"é\"", "\"a\\0\""]))
+      : this.e("Str", d);
+  }
+
   // a Nat the interpreter can count: literals, lengths, small arithmetic
   small(d: number): Node {
     if (d <= 0 || this.chance(0.4)) {
@@ -469,6 +527,8 @@ export class Gen {
       case "T": return this.N(ty, this.pick(["K2{}", "K0{7, \"t\"}", "K1{2n, K2{}}", "K3{[1, 2], True{}, K2{}}"]));
       case "F64": return this.N(ty, this.pick(["0.0d", "1.0d", "0.5d", "2.5d", "3.0d", "1.0e10d", "0.1d", "7.25d"]));
       case "FUU": return this.lam(0);
+      case "MP": return this.N(ty, "Map.new(&2, U32)");
+      case "AR": return this.N(ty, "Array.new(U32, " + String(this.int(3)) + "n, " + String(this.pick(U32S)) + ")");
     }
   }
 
@@ -537,6 +597,8 @@ export class Gen {
         });
         add(1, () => N("U32", "Bool.pick(U32 -> U32, ", E("Bool"), ", ", this.lam(d), ", ", this.lam(d), ")(", E("U32"), ")"));
         add(1, () => this.tmatch("U32", d));
+        add(1, () => F("mp.get", E("MP"), this.key(d), E("U32")));
+        add(1, () => F("arr.get", E("AR"), E("U32")));
         if (this.f64) add(2, () => F("F64.to_u32", E("F64")));
         break;
       case "Nat":
@@ -565,6 +627,7 @@ export class Gen {
         add(1, () => F("Bool.not", E("Bool")));
         add(1, () => N("Bool", "(", E("Bool"), this.pick([" && ", " || "]), E("Bool"), ")"));
         add(1, () => F("Bytes.starts_with", E("Str"), E("Str")));
+        add(1, () => F("mp.has", E("MP"), this.key(d)));
         add(1, () => F("Maybe.is_some", "&2", "U32", E("MU")));
         add(1, () => F("List.is_empty", "&2", "U32", E("LU")));
         add(1, () => F("Cmp.is_" + this.pick(["lt", "eq", "gt", "le", "ge"]), N("Bool", "U32.cmp(", E("U32"), ", ", E("U32"), ")")));
@@ -674,6 +737,15 @@ export class Gen {
       case "FUU":
         add(1, () => this.lam(d));
         break;
+      case "MP":
+        add(3, () => F("Map.set", "&2", "U32", E("MP"), this.key(d), E("U32")));
+        add(1, () => F("Map.del", "&2", "U32", E("MP"), this.key(d)));
+        break;
+      case "AR":
+        add(3, () => F("Array.set", "U32", E("AR"), E("U32"), E("U32")));
+        add(1, () => N("AR", "[", E("U32"), " : U32*" + this.pick(["1n", "2n", "4n", "8n"]) + "]"));
+        add(1, () => F("arr.dup", E("AR")));
+        break;
     }
     return this.pick(choices)();
   }
@@ -706,7 +778,7 @@ export class Gen {
         continue;
       }
       const ty = this.ty(true);
-      const plus = ty !== "FUU" && this.chance(0.6);
+      const plus = !LINEAR.has(ty) && this.chance(0.6);
       const x = this.fresh();
       const v = this.e(ty, d);
       out.push({ names: [x], plus, ty, v: [v] });
@@ -724,7 +796,7 @@ export class Gen {
   }
 
   ty(fn = false): Ty {
-    const ts: Ty[] = ["U32", "U32", "U32", "Str", "Str", "Str", "Nat", "Bool", "LU", "LS", "U64", "I64", "MU", "T", "Chr"];
+    const ts: Ty[] = ["U32", "U32", "U32", "Str", "Str", "Str", "Nat", "Bool", "LU", "LS", "U64", "I64", "MU", "T", "Chr", "MP", "AR"];
     if (fn) ts.push("FUU");
     if (this.f64) ts.push("F64", "F64");
     return this.pick(ts);
@@ -824,7 +896,7 @@ export class Gen {
   def(i: number): Def {
     const name = "f" + this.tag + String(i);
     const kind = this.pick(["plain", "plain", "mat", "mat", "nat", "nat", "list", "str", "tree"]);
-    const ret = this.pick<Ty>(["U32", "U32", "Str", "Str", "Str", "Bool", "LU", "Nat", "T", "FUU", ...(this.f64 ? ["F64" as Ty] : [])]);
+    const ret = this.pick<Ty>(["U32", "U32", "Str", "Str", "Str", "Bool", "LU", "Nat", "T", "FUU", "MP", "AR", ...(this.f64 ? ["F64" as Ty] : [])]);
     const first: Ty | null = kind === "nat" ? "Nat" : kind === "list" ? "LU" : kind === "str" ? "Str"
       : kind === "tree" ? "T" : null;
     const np = this.int(3) + (first === null ? 1 : 0);
@@ -832,7 +904,7 @@ export class Gen {
     if (first !== null) ps.push({ ty: first, q: "" });
     for (let j = 0; j < np; j++) {
       const ty = this.ty(this.chance(0.3));
-      ps.push({ ty, q: ty === "FUU" ? "" : this.pick(["", "+", "+"]) });
+      ps.push({ ty, q: LINEAR.has(ty) ? "" : this.pick(["", "+", "+"]) });
     }
     if (this.chance(0.15)) {
       ps.push({ ty: "U32", q: "-" });
@@ -931,11 +1003,17 @@ export function prog_gen(seed: number, io: boolean, f64: boolean, tag = ""): Pro
       if (g.chance(0.35)) {
         const ty = g.pick<Ty>(["U32", "Str", "Nat", "LU", "T"]);
         const x = g.fresh("b");
-        p.stmts.push({ $: "bind", x, ty, e: g.e(ty, 3) });
+        const pk = g.chance(0.25);
+        const c = pk ? g.e("Bool", 2) : null;
+        const [e, b] = [g.e(ty, 3), pk ? g.e(ty, 3) : null];
+        p.stmts.push({ $: "bind", x, ty, e, ...c !== null && b !== null ? { pick: { c, b } } : {} });
         g.vars.push({ k: x, ty, plus: false, used: false });
       } else {
         const ty = g.ty(true);
-        p.stmts.push({ $: "print", e: show_of(ty, g.e(ty, 3), g.chance(0.7)) });
+        const pk = g.chance(0.2);
+        const c = pk ? g.e("Bool", 2) : null;
+        const [e, b] = [show_of(ty, g.e(ty, 3), g.chance(0.7)), pk ? g.e("Str", 3) : null];
+        p.stmts.push({ $: "print", e, ...c !== null && b !== null ? { pick: { c, b } } : {} });
       }
     }
     for (const e of shows()) p.stmts.push({ $: "print", e });
@@ -950,7 +1028,7 @@ export function show_of(ty: Ty, n: Node, hex = false): Node {
   const f: Record<Ty, string> = {
     U32: "U32.show", Nat: "Nat.show", Bool: "Bool.show", Str: "", Chr: "Char.show", LU: "showlu",
     LS: "showls", U64: "u64.show", I64: "i64.show", MU: "showmu", MN: "showmn", T: "showt",
-    F64: "F64.show", FUU: "",
+    F64: "F64.show", FUU: "", MP: "mp.show", AR: "arr.show",
   };
   if (ty === "U32" && hex) return { ty: "Str", parts: ["u32.hex(", n, ")"] };
   return ty === "Str" ? n : ty === "FUU" ? { ty: "Str", parts: ["U32.show(app(", n, ", 12345))"] }
@@ -962,7 +1040,8 @@ export function prelude_for(text: string): string {
   const need = new Set<string>();
   const deps: Record<string, string[]> = {
     "showt": ["showlu", "u32.hex", "w.hex", "w.dig"], "showlu": ["u32.hex", "w.hex", "w.dig"],
-    "showmu": ["u32.hex", "w.hex", "w.dig"], "u64.of": ["w.ext"], "i64.of": ["w.ext"],
+    "showmu": ["u32.hex", "w.hex", "w.dig"], "mp.get": ["mp.snd"], "mp.has": ["mp.hsnd"],
+    "arr.get": ["arr.snd"], "arr.dup": ["arr.both", "arr.get", "arr.snd"], "u64.of": ["w.ext"], "i64.of": ["w.ext"],
     "u32.hex": ["w.hex", "w.dig"], "u64.show": ["w.hex", "w.dig"], "i64.show": ["w.hex", "w.dig"],
   };
   for (const k of Object.keys(PRELUDE_DEFS)) {

@@ -44,7 +44,7 @@ reject), emit its JS and C and normalize its `main`. The lanes:
   opinion. F64 is opaque to the normalizer: those programs compare JS
   against C.
 - js: `bun p.js`. c: `clang -O3`, as `bend -o` builds it.
-- san (`--san [K]`): the C again at -O1 with `-fsanitize=address,undefined`
+- san (`--san [K]`): the C again at -O0 with `-fsanitize=address,undefined`
   (every Kth program); a sanitizer report is a difference on its own.
 
 A difference is named by its signature (`c:out`, `js:exit`,

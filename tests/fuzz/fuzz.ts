@@ -57,7 +57,7 @@ const JOBS = Number(opt("--jobs") ?? Math.max(1, os.availableParallelism()));
 
 const SAN = ARGS.includes("--san");
 
-// --san K: every Kth program also runs sanitized (the build costs twice -O3's)
+// --san K: every Kth batch also runs sanitized (-O0: -O1 costs four times more)
 const SAN_EVERY = Math.max(1, Number(opt("--san") ?? 1) || 1);
 
 const CC = process.env.CC ?? "clang";
@@ -270,7 +270,7 @@ async function compiled(dir: string, on: (l: Lane) => boolean): Promise<Partial<
       }));
   }
   if (on("san")) {
-    jobs.push(sh(CC, ["-std=c11", "-O1", "-g", "-fno-omit-frame-pointer", "-fsanitize=address,undefined",
+    jobs.push(sh(CC, ["-std=c11", "-O0", "-fsanitize=address,undefined",
       path.join(dir, "p.c"), "-lpthread", "-lm", "-o", path.join(dir, "ps")], 120_000)
       .then(async (b) => {
         outs.san = b.code !== 0 ? "§build " + b.out.slice(0, 400) : ran(await sh(path.join(dir, "ps"), [], T_RUN * 3,
@@ -430,7 +430,14 @@ function edits(p: G.Prog): { name: string; go: () => () => void }[] {
     for (const k of n.parts) if (typeof k !== "string") node(k);
   };
   p.parts.forEach(node);
-  p.stmts.forEach((s) => node(s.e));
+  p.stmts.forEach((s) => {
+    node(s.e);
+    if (s.pick !== undefined) {
+      node(s.pick.c);
+      node(s.pick.b);
+      out.push({ name: "unpick", go: () => { const k = s.pick; delete s.pick; return () => { s.pick = k; }; } });
+    }
+  });
   p.lets.forEach((l) => l.v.forEach(node));
   p.defs.forEach(body);
   return out;
