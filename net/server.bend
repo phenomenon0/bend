@@ -34,6 +34,12 @@
 # A broken request (the reader refuses it) is a 400 that closes; nothing
 # after it on the connection is read. One connection's failure is its
 # own: each is its own computation, with its own socket and deadlines.
+#
+# A route may take its connection over (Sock, below; net/ws_server.bend
+# builds the WebSocket one): handed whether the request asked to switch
+# protocols, it answers a response as any route does, or the head that
+# switches it and what then runs on the socket, which is the
+# connection's last word from this loop.
 import Base
 import ../wire/reader.bend as Wr
 import ../wire/loop.bend as L
@@ -255,8 +261,26 @@ def flag(xs: List<String>, +name: String, +d: String) -> String:
 # method those routes hold, each once, in order; when none matches, a
 # 404. (LAWS.bend: route_first, against a reference spelled out there.)
 
+# whether a request asked to switch protocols, as the engine's reader
+# framed it (HTTP/1.1, Upgrade: websocket, Connection: upgrade, a
+# Sec-WebSocket-Key, no Sec-WebSocket-Version but 13), and its key
+type Ask is Data:
+  Ask{up: Bool, key: Bytes()}
+
+# what a route that may take the connection over answers: a response, or
+# the head that switches the connection and what runs on the socket
+# then, given the bytes that came after the request; it hands the
+# socket back, and the connection ends
+type Reply is Type:
+  Answer{resp: Http.Response}
+  Switch{head: Bytes(), run: Socket -> Bytes() -> IO(Socket)}
+
+def Ux(E: Data) -> Type:
+  @+env: E -> Ask -> Http.Request -> IO(Reply)
+
 type Route is Type:
   Route{methods: List<&2, Bytes()>, pat: Bytes(), h: Http.Request -> IO(Http.Response)}
+  Sock{pat: Bytes(), h: Ask -> Http.Request -> IO(Reply)}
 
 # what the choice reads of a route
 type Pat is Data:
@@ -534,49 +558,85 @@ def one.done(+cfg: Cfg, +head: Bool, +closing: Bool, +v10: Bool, resp: Http.Resp
   s: Socket, go: List<&2, L.Seg> -> Socket -> IO(Socket)) -> IO(Socket):
   one.then(cfg, closing, rev.onto(segs.of(head, closing, v10, resp), acc), s, go)
 
-def one.at(~E: Data, ~app: Hx(E), +cfg: Cfg, +ip: Bytes(), +env: E, +r: Eng.Req, +head: Bool, +v10: Bool, far: Bool,
-  acc: List<&2, L.Seg>, s: Socket, go: List<&2, L.Seg> -> Socket -> IO(Socket)) -> IO(Socket):
+# a switch: what waits and the head go out, then the socket is the
+# route's, with what came after the request
+def one.switched(sb: Socket & Bool, run: Socket -> Bytes() -> IO(Socket), rest: Bytes()) -> IO(Socket):
+  (s, ok) = sb
+  match ok:
+    case True{}:
+      run(s, rest)
+    case False{}:
+      IO.pure(Socket, s)
+
+def one.reply(+cfg: Cfg, +head: Bool, +closing: Bool, +v10: Bool, rp: Reply, acc: List<&2, L.Seg>, s: Socket,
+  rest: Bytes(), go: List<&2, L.Seg> -> Socket -> IO(Socket)) -> IO(Socket):
+  match rp:
+    case Answer{resp}:
+      one.done(cfg, head, closing, v10, resp, acc, s, go)
+    case Switch{hd, run}:
+      IO.bind(Socket & Bool, Socket, flush.segs(s, rev.onto(Con{L.Raw{hd}, acc}, Nil{}), cfg.send(cfg)),
+        sb => one.switched(sb, run, rest))
+
+def one.at(~E: Data, ~app: Ux(E), +cfg: Cfg, +ip: Bytes(), +env: E, +r: Eng.Req, +ask: Ask, +head: Bool, +v10: Bool,
+  far: Bool, acc: List<&2, L.Seg>, s: Socket, rest: Bytes(), go: List<&2, L.Seg> -> Socket -> IO(Socket)) -> IO(Socket):
   match far:
     case True{}:
       fin(cfg, Con{L.Raw{own(head, v10, 414)}, acc}, s)
     case False{}:
-      IO.bind(Http.Response, Socket, app(env, Http.req.of(ip, r)),
-        resp => one.done(cfg, head, Eng.req.close(r) || Eng.req.ws(r), v10, resp, acc, s, go))
+      IO.bind(Reply, Socket, app(env, ask, Http.req.of(ip, r)),
+        rp => one.reply(cfg, head, Eng.req.close(r) || Eng.req.ws(r), v10, rp, acc, s, rest, go))
 
-def one(~E: Data, ~app: Hx(E), +cfg: Cfg, +ip: Bytes(), +env: E, +r: Eng.Req, acc: List<&2, L.Seg>, s: Socket,
-  go: List<&2, L.Seg> -> Socket -> IO(Socket)) -> IO(Socket):
+def one(~E: Data, ~app: Ux(E), +cfg: Cfg, +ip: Bytes(), +env: E, +r: Eng.Req, acc: List<&2, L.Seg>, s: Socket,
+  rest: Bytes(), go: List<&2, L.Seg> -> Socket -> IO(Socket)) -> IO(Socket):
   match r:
-    case Eng.Req{meth, +path, body, close, ws, key, hd}:
-      one.at(~E, ~app, cfg, ip, env, r, hd.head(hd), hd.v10(hd), Eng.long(Eng.target.cap(), path), acc, s, go)
+    case Eng.Req{meth, +path, body, close, +ws, +key, hd}:
+      one.at(~E, ~app, cfg, ip, env, r, Ask{ws, key}, hd.head(hd), hd.v10(hd), Eng.long(Eng.target.cap(), path), acc, s,
+        rest, go)
 
 # a read's requests, oldest first, each answered in turn
-def took(~E: Data, ~app: Hx(E), +cfg: Cfg, +ip: Bytes(), +env: E, ts: List<&2, Eng.Req>, t: X.Tail, fresh: Bool,
-  t0: Maybe<&2, Nat>, cont: Bool, acc: List<&2, L.Seg>, s: Socket, more: More()) -> IO(Socket):
+def took(~E: Data, ~app: Ux(E), +cfg: Cfg, +ip: Bytes(), +env: E, ts: List<&2, Eng.Req>, t: X.Tail, fresh: Bool,
+  t0: Maybe<&2, Nat>, cont: Bool, acc: List<&2, L.Seg>, s: Socket, +up: Bytes(), more: More()) -> IO(Socket):
   match ts:
     case Nil{}:
       tail(cfg, t, fresh, t0, cont, acc, s, more)
     case Con{+r, rest}:
-      one(~E, ~app, cfg, ip, env, r, acc, s, acc2 => s2 => took(~E, ~app, cfg, ip, env, rest, t, True{}, None{}, False{}, acc2, s2, more))
+      one(~E, ~app, cfg, ip, env, r, acc, s, up,
+        acc2 => s2 => took(~E, ~app, cfg, ip, env, rest, t, True{}, None{}, False{}, acc2, s2, up, more))
 
-def scanned(~E: Data, ~app: Hx(E), +cfg: Cfg, +ip: Bytes(), +env: E, sd: X.Scanned, t0: Maybe<&2, Nat>, cont: Bool, s: Socket,
-  more: More()) -> IO(Socket):
+# after a request that asked to upgrade, the bytes of the read that came
+# after it (the engine's reader holds them; the scan does not hand them
+# on), read again from where the read began: only such a read pays
+def up.again(+bs: Bytes(), sc: X.Scan) -> Bytes():
+  match sc:
+    case X.Scan{p, n}:
+      Eng.p.rest(Eng.feed_buf(bs, p))
+
+def up.rest(+bs: Bytes(), sc: X.Scan, t: X.Tail) -> Bytes():
+  match t:
+    case X.TUp{}:
+      up.again(bs, sc)
+    case _:
+      ""
+
+def scanned(~E: Data, ~app: Ux(E), +cfg: Cfg, +ip: Bytes(), +env: E, sd: X.Scanned, t0: Maybe<&2, Nat>, cont: Bool, s: Socket,
+  +bs: Bytes(), sc: X.Scan, more: More()) -> IO(Socket):
   match sd:
-    case X.Scanned{ts, t}:
-      took(~E, ~app, cfg, ip, env, ts, t, False{}, t0, cont, Nil{}, s, more)
+    case X.Scanned{ts, +t}:
+      took(~E, ~app, cfg, ip, env, ts, t, False{}, t0, cont, Nil{}, s, up.rest(bs, sc, t), more)
 
-def got.bytes(~E: Data, ~app: Hx(E), +cfg: Cfg, +ip: Bytes(), +env: E, sc: X.Scan, t0: Maybe<&2, Nat>, cont: Bool, s: Socket,
+def got.bytes(~E: Data, ~app: Ux(E), +cfg: Cfg, +ip: Bytes(), +env: E, +sc: X.Scan, t0: Maybe<&2, Nat>, cont: Bool, s: Socket,
   empty: Bool, +bs: Bytes(), more: More()) -> IO(Socket):
   match empty:
     case True{}:
       IO.pure(Socket, s)
     case False{}:
-      scanned(~E, ~app, cfg, ip, env, scan(bs, sc), t0, cont, s, more)
+      scanned(~E, ~app, cfg, ip, env, scan(bs, sc), t0, cont, s, bs, sc, more)
 
 # what a read gave: a failure ends the connection, as does the peer's
 # FIN; silence ends it between messages when the idle time is spent or
 # a stop was asked, and within a message with a 408; bytes go through
 # the scan
-def got(~E: Data, ~app: Hx(E), +cfg: Cfg, +ip: Bytes(), +env: E, sc: X.Scan, t0: Maybe<&2, Nat>, cont: Bool, +il: U32,
+def got(~E: Data, ~app: Ux(E), +cfg: Cfg, +ip: Bytes(), +env: E, sc: X.Scan, t0: Maybe<&2, Nat>, cont: Bool, +il: U32,
   g: L.Got(Socket), more: More()) -> IO(Socket):
   (s, r) = g
   match r:
@@ -594,7 +654,7 @@ def got(~E: Data, ~app: Hx(E), +cfg: Cfg, +ip: Bytes(), +env: E, sc: X.Scan, t0:
 def chunk() -> U32:
   16384
 
-def wait.lim(~E: Data, ~app: Hx(E), +cfg: Cfg, +ip: Bytes(), +env: E, +p: Eng.P, +n: Nat, +t: Nat, cont: Bool, +il: U32,
+def wait.lim(~E: Data, ~app: Ux(E), +cfg: Cfg, +ip: Bytes(), +env: E, +p: Eng.P, +n: Nat, +t: Nat, cont: Bool, +il: U32,
   +now: Nat, +lim: Nat, s: Socket, live: Bool, more: More()) -> IO(Socket):
   match live:
     case True{}:
@@ -606,14 +666,14 @@ def wait.lim(~E: Data, ~app: Hx(E), +cfg: Cfg, +ip: Bytes(), +env: E, +p: Eng.P,
 
 # the message in progress has until its head's time from its start
 # while its head is being read, and its body's time once it is
-def wait.at(~E: Data, ~app: Hx(E), +cfg: Cfg, +ip: Bytes(), +env: E, sc: X.Scan, +t: Nat, cont: Bool, +il: U32, +now: Nat, s: Socket,
+def wait.at(~E: Data, ~app: Ux(E), +cfg: Cfg, +ip: Bytes(), +env: E, sc: X.Scan, +t: Nat, cont: Bool, +il: U32, +now: Nat, s: Socket,
   more: More()) -> IO(Socket):
   match sc:
     case X.Scan{+p, +n}:
       +lim = Nat.add(t, U32.to_nat(Bool.pick(U32, Eng.p.head(p), cfg.head(cfg), cfg.body(cfg))))
       wait.lim(~E, ~app, cfg, ip, env, p, n, t, cont, il, now, lim, s, Nat.is_lt(now, lim), more)
 
-def wait(~E: Data, ~app: Hx(E), +cfg: Cfg, +ip: Bytes(), +env: E, sc: X.Scan, t0: Maybe<&2, Nat>, cont: Bool, +il: U32, s: Socket,
+def wait(~E: Data, ~app: Ux(E), +cfg: Cfg, +ip: Bytes(), +env: E, sc: X.Scan, t0: Maybe<&2, Nat>, cont: Bool, +il: U32, s: Socket,
   more: More()) -> IO(Socket):
   match t0:
     case None{}:
@@ -623,7 +683,7 @@ def wait(~E: Data, ~app: Hx(E), +cfg: Cfg, +ip: Bytes(), +env: E, sc: X.Scan, t0
       IO.bind(Nat, Socket, IO.now(), now => wait.at(~E, ~app, cfg, ip, env, sc, t, cont, il, now, s, more))
 
 # one connection: at most k reads
-def conn(~E: Data, ~app: Hx(E), +cfg: Cfg, +ip: Bytes(), +env: E, k: Nat, sc: X.Scan, t0: Maybe<&2, Nat>, cont: Bool, il: U32,
+def conn(~E: Data, ~app: Ux(E), +cfg: Cfg, +ip: Bytes(), +env: E, k: Nat, sc: X.Scan, t0: Maybe<&2, Nat>, cont: Bool, il: U32,
   s: Socket) -> IO(Socket):
   match k:
     case 0n:
@@ -632,7 +692,7 @@ def conn(~E: Data, ~app: Hx(E), +cfg: Cfg, +ip: Bytes(), +env: E, k: Nat, sc: X.
       wait(~E, ~app, cfg, ip, env, sc, t0, cont, il, s,
         s2 => sc2 => t2 => c2 => il2 => conn(~E, ~app, cfg, ip, env, j, sc2, t2, c2, il2, s2))
 
-def go.at(~E: Data, ~app: Hx(E), +cfg: Cfg, +env: E, sa: Socket & String) -> IO(Socket):
+def go.at(~E: Data, ~app: Ux(E), +cfg: Cfg, +env: E, sa: Socket & String) -> IO(Socket):
   (s, ip) = sa
   conn(~E, ~app, cfg, ip, env, L.conn.fuel(), X.scan.new(), None{}, False{}, cfg.idle(cfg), s)
 
@@ -640,7 +700,7 @@ def go.at(~E: Data, ~app: Hx(E), +cfg: Cfg, +env: E, sa: Socket & String) -> IO(
 type Srv<-E: Data> is Data:
   Srv{cfg: Cfg, env: E}
 
-def go(~E: Data, ~app: Hx(E), +srv: Srv<E>, s: Socket) -> IO(Socket):
+def go(~E: Data, ~app: Ux(E), +srv: Srv<E>, s: Socket) -> IO(Socket):
   match srv:
     case Srv{+c, +e}:
       IO.bind(Socket & String, Socket, Peer.addr(s), sa => go.at(~E, ~app, c, e, sa))
@@ -805,23 +865,31 @@ def pick.go(pats: List<&2, Pat>, +m: Bytes(), +xs: List<&2, Bytes()>, +i: Nat, +
 def pick(pats: List<&2, Pat>, +m: Bytes(), +path: Bytes()) -> Pick:
   pick.go(pats, m, segs(path), 0n, Nil{})
 
-def unzip.put(p: Pat, h: Http.Request -> IO(Http.Response),
-  r: List<&2, Pat> & List<&1, Http.Request -> IO(Http.Response)>) ->
-  List<&2, Pat> & List<&1, Http.Request -> IO(Http.Response)>:
+# a handler, as one that may take the connection over: it never does
+def answer(io: IO(Http.Response)) -> IO(Reply):
+  IO.bind(Http.Response, Reply, io, resp => IO.pure(Reply, Answer{resp}))
+
+def Hr() -> Type:
+  Ask -> Http.Request -> IO(Reply)
+
+def unzip.put(p: Pat, h: Hr(), r: List<&2, Pat> & List<&1, Hr()>) -> List<&2, Pat> & List<&1, Hr()>:
   (ps, hs) = r
   (Con{p, ps}, Con{h, hs})
 
-# the routes' patterns, and their handlers in the same order
-def unzip(rs: List<&1, Route>) -> List<&2, Pat> & List<&1, Http.Request -> IO(Http.Response)>:
+# the routes' patterns, and their handlers in the same order; a Sock
+# route is a GET one (HEAD too, as any GET)
+def unzip(rs: List<&1, Route>) -> List<&2, Pat> & List<&1, Hr()>:
   match rs:
     case Nil{}:
       (Nil{}, Nil{})
     case Con{r, t}:
       match r:
         case Route{ms, pat, h}:
-          unzip.put(Pat{ms, pat}, h, unzip(t))
+          unzip.put(Pat{ms, pat}, a => q => answer(h(q)), unzip(t))
+        case Sock{pat, h}:
+          unzip.put(Pat{["GET", "HEAD"], pat}, h, unzip(t))
 
-def nth(i: Nat, hs: List<&1, Http.Request -> IO(Http.Response)>) -> Maybe<&1, Http.Request -> IO(Http.Response)>:
+def nth(i: Nat, hs: List<&1, Hr()>) -> Maybe<&1, Hr()>:
   match i hs:
     case _ Nil{}:
       None{}
@@ -844,29 +912,41 @@ def allow.text(ms: List<&2, Bytes()>) -> Bytes():
     case Con{x, t}:
       allow.go(t, x)
 
-def run.hit(m: Maybe<&1, Http.Request -> IO(Http.Response)>, r: Http.Request) -> IO(Http.Response):
+def run.hit(m: Maybe<&1, Hr()>, a: Ask, r: Http.Request) -> IO(Reply):
   match m:
     case Some{h}:
-      h(r)
+      h(a, r)
     case None{}:
-      Http.reply(Http.plain(500))
+      answer(Http.reply(Http.plain(500)))
 
-def run.pick(pk: Pick, hs: List<&1, Http.Request -> IO(Http.Response)>, r: Http.Request) -> IO(Http.Response):
+def run.pick(pk: Pick, hs: List<&1, Hr()>, a: Ask, r: Http.Request) -> IO(Reply):
   match pk:
     case Hit{i, ps}:
-      run.hit(nth(i, hs), Http.with.params(r, ps))
+      run.hit(nth(i, hs), a, Http.with.params(r, ps))
     case NoMethod{allow}:
-      Http.reply(Http.with.header(Http.plain(405), "allow", allow.text(allow)))
+      answer(Http.reply(Http.with.header(Http.plain(405), "allow", allow.text(allow))))
     case NoRoute{}:
-      Http.reply(Http.plain(404))
+      answer(Http.reply(Http.plain(404)))
 
-def run.split(pz: List<&2, Pat> & List<&1, Http.Request -> IO(Http.Response)>, +r: Http.Request) -> IO(Http.Response):
+def run.split(pz: List<&2, Pat> & List<&1, Hr()>, a: Ask, +r: Http.Request) -> IO(Reply):
   (pats, hs) = pz
-  run.pick(pick(pats, Http.method(r), Http.path(r)), hs, r)
+  run.pick(pick(pats, Http.method(r), Http.path(r)), hs, a, r)
 
-# the routes' answer to a request (a handler, given the routes)
+# the routes' answer to a request that may ask to switch protocols
+def route.ask(rs: List<&1, Route>, a: Ask, r: Http.Request) -> IO(Reply):
+  run.split(unzip(rs), a, r)
+
+def reply.resp(rp: Reply) -> IO(Http.Response):
+  match rp:
+    case Answer{resp}:
+      Http.reply(resp)
+    case Switch{hd, run}:
+      Http.reply(Http.plain(500))
+
+# the routes' answer to a request (a handler, given the routes); a Sock
+# route is told the request did not ask to switch
 def route(rs: List<&1, Route>, r: Http.Request) -> IO(Http.Response):
-  run.split(unzip(rs), r)
+  IO.bind(Reply, Http.Response, route.ask(rs, Ask{False{}, ""}, r), reply.resp)
 
 # Middleware
 # ==========
@@ -988,13 +1068,29 @@ def listened(+cfg: Cfg, r: Result<&1, &1, U32 & String, Listener>) -> IO(Listene
     case Fail{(code, msg)}:
       IO.die(Listener, 1, refused(cfg, msg))
 
-# serve app with cfg, until SIGTERM; env is handed to every call of
-# app (shared state: a channel, a configuration)
-def serve.with(~E: Data, ~app: Hx(E), +env: E, +cfg: Cfg) -> IO(Unit):
+# serve app with cfg, until SIGTERM; app is told whether each request
+# asked to switch protocols, and may take its connection over
+def serve.up(~E: Data, ~app: Ux(E), +env: E, +cfg: Cfg) -> IO(Unit):
   do IO<Unit>:
     l : Listener <- IO.bind(Result<&1, &1, U32 & String, Listener>, Listener, listen(cfg), r => listened(cfg, r))
     IO.print_err(banner(cfg))
     Fx.run(~Srv<E>, ~go(~E, ~app), ~srv.grace(~E), ~srv.conns(~E), "bend-net", Srv{cfg, env}, l)
+
+def lift(~E: Data, ~app: Hx(E), +env: E, a: Ask, r: Http.Request) -> IO(Reply):
+  answer(app(env, r))
+
+# serve app with cfg, until SIGTERM; env is handed to every call of
+# app (shared state: a channel, a configuration)
+def serve.with(~E: Data, ~app: Hx(E), +env: E, +cfg: Cfg) -> IO(Unit):
+  serve.up(~E, ~lift(~E, ~app), env, cfg)
+
+def routes.app(~E: Data, ~rs: @+env: E -> List<&1, Route>, +env: E, a: Ask, r: Http.Request) -> IO(Reply):
+  route.ask(rs(env), a, r)
+
+# serve the routes rs(env) with cfg, until SIGTERM: a Sock route among
+# them (net/ws_server.bend's ws) may take its connection over
+def serve.routes(~E: Data, ~rs: @+env: E -> List<&1, Route>, +env: E, +cfg: Cfg) -> IO(Unit):
+  serve.up(~E, ~routes.app(~E, ~rs), env, cfg)
 
 def unit.app(~app: Handler(), +u: Unit, r: Http.Request) -> IO(Http.Response):
   app(r)

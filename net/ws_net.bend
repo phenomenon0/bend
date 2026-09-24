@@ -14,6 +14,7 @@
 #   ESend ERecv EEof EClosed Closed
 #   EProto                   Protocol (the close code the connection failed with)
 #   ERand                    Io
+#   EPing                    Timeout (a server's keepalive went unanswered)
 #
 # (A ws:// or wss:// URL reads the same way through net/url.bend's
 # parse.ws, which the HTTP client's parse shares.)
@@ -52,3 +53,5 @@ def of(e: Ws.Err) -> Client.NetError:
       Client.Closed{}
     case Ws.ERand{c}:
       Client.Io{c, "no random bytes"}
+    case Ws.EPing{}:
+      Client.Timeout{}

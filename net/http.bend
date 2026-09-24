@@ -366,7 +366,7 @@ def statuses() -> List<&2, St>:
    St{408, "408", "Request Timeout"}, St{409, "409", "Conflict"}, St{410, "410", "Gone"},
    St{411, "411", "Length Required"}, St{412, "412", "Precondition Failed"}, St{413, "413", "Content Too Large"},
    St{414, "414", "URI Too Long"}, St{415, "415", "Unsupported Media Type"}, St{416, "416", "Range Not Satisfiable"},
-   St{422, "422", "Unprocessable Content"}, St{429, "429", "Too Many Requests"},
+   St{422, "422", "Unprocessable Content"}, St{426, "426", "Upgrade Required"}, St{429, "429", "Too Many Requests"},
    St{431, "431", "Request Header Fields Too Large"}, St{500, "500", "Internal Server Error"},
    St{501, "501", "Not Implemented"}, St{502, "502", "Bad Gateway"}, St{503, "503", "Service Unavailable"},
    St{504, "504", "Gateway Timeout"}]

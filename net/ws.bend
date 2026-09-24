@@ -35,6 +35,20 @@
 # (or drop) releases the socket. recv waits at most the options' recv_ms
 # (recv_for takes its own); a recv that times out leaves the connection
 # as it was.
+#
+# A Conn is either end. net/ws_server.bend makes the server's (served,
+# below): the same verbs and the same messages, with what a server does
+# differently -- every frame it sends unmasked (ws_frame.bend's s.frame),
+# every frame it reads masked (the Serv reader: an unmasked one fails
+# the connection with 1002), no wait for the peer's FIN after the
+# closing handshake (the server closes the TCP connection first, RFC
+# 6455 7.1.1) -- and two things only it does while a recv waits: after
+# ping ms with nothing from the client it sends a ping, and when pong ms
+# more bring nothing either the connection fails with 1011 (EPing); and
+# on SIGTERM it sends a close with 1001 (going away), once, and goes on
+# reading for the client's answer, which the recv hands over as Closed.
+# end is close that hands the (closed) connection back, which is how a
+# server's handler returns it.
 import Base
 import ../demos/io_http_engine/ws.bend as Ws
 import ../demos/io_http_engine/b64.bend as B64
@@ -120,7 +134,8 @@ def o.head(o: Opts) -> U32:
 # a deadline; the answer's head past its cap; the handshake refused
 # (why); a send or a read (code); the peer closed the TCP connection
 # without a close frame (1006); the connection failed with a code this
-# end sent (1002, 1007, 1009); the connection is closed; no random bytes
+# end sent (1002, 1007, 1009); the connection is closed; no random
+# bytes; (a server's) no answer to its keepalive ping (it sent 1011)
 type Err is Data:
   EUrl{}
   EDns{code: U32}
@@ -134,6 +149,7 @@ type Err is Data:
   EProto{code: U32}
   EClosed{}
   ERand{code: U32}
+  EPing{}
 
 def err.show(e: Err) -> String:
   match e:
@@ -161,54 +177,91 @@ def err.show(e: Err) -> String:
       "the connection is closed"
     case ERand{c}:
       "no random bytes (" ++ U32.show(c) ++ ")"
+    case EPing{}:
+      "the peer did not answer the keepalive ping (1011)"
 
 # The connection
 # ==============
 
+# Which end this is. A client masks what it sends and reads a server's
+# frames. A server sends its frames unmasked and reads a client's, and
+# keeps the connection alive: ping, the quiet ms after which it pings (0
+# for never); pong, the ms it then waits for any byte; send, a send's
+# deadline; seen, when the client last sent anything; pinged, whether a
+# ping is out and unanswered.
+type End is Data:
+  Client{}
+  Server{ping: U32, pong: U32, send: U32, seen: Nat, pinged: Bool}
+
 # rd: the frame reader; q: frames read and not yet handed over; a: the
 # assembler; o: the options; proto: the subprotocol agreed ("" for
 # none); sent: whether this end has sent its close; shut: 0 open, 1
-# closed by the closing handshake, 2 failed; peer: the server's close
-# code, once it came
+# closed by the closing handshake, 2 failed; peer: the other end's close
+# code, once it came; end: which end
 type St is Data:
-  St{rd: Ws.W, q: List<&2, Ws.Frm>, a: F.Asm, o: Opts, proto: Bytes(), sent: Bool, shut: U32, peer: U32}
+  St{rd: Ws.W, q: List<&2, Ws.Frm>, a: F.Asm, o: Opts, proto: Bytes(), sent: Bool, shut: U32, peer: U32, end: End}
 
 type Conn is Type:
   Conn{sock: Socket, st: St}
 
 def st.o(s: St) -> Opts:
   match s:
-    case St{rd, q, a, o, proto, sent, shut, peer}:
+    case St{rd, q, a, o, proto, sent, shut, peer, end}:
       o
 
 def st.proto(s: St) -> Bytes():
   match s:
-    case St{rd, q, a, o, proto, sent, shut, peer}:
+    case St{rd, q, a, o, proto, sent, shut, peer, end}:
       proto
 
 def st.sent(s: St) -> Bool:
   match s:
-    case St{rd, q, a, o, proto, sent, shut, peer}:
+    case St{rd, q, a, o, proto, sent, shut, peer, end}:
       sent
 
 def st.shut(s: St) -> U32:
   match s:
-    case St{rd, q, a, o, proto, sent, shut, peer}:
+    case St{rd, q, a, o, proto, sent, shut, peer, end}:
       shut
 
 def st.mark(s: St, +sent2: Bool, +shut2: U32) -> St:
   match s:
-    case St{rd, q, a, o, proto, sent, shut, peer}:
-      St{rd, q, a, o, proto, sent || sent2, U32.max(shut, shut2), peer}
+    case St{rd, q, a, o, proto, sent, shut, peer, end}:
+      St{rd, q, a, o, proto, sent || sent2, U32.max(shut, shut2), peer, end}
 
 def st.peer(s: St, +code: U32) -> St:
   match s:
-    case St{rd, q, a, o, proto, sent, shut, peer}:
-      St{rd, q, a, o, proto, sent, shut, code}
+    case St{rd, q, a, o, proto, sent, shut, peer, end}:
+      St{rd, q, a, o, proto, sent, shut, code, end}
+
+def st.end(s: St) -> End:
+  match s:
+    case St{rd, q, a, o, proto, sent, shut, peer, end}:
+      end
+
+def st.end.set(s: St, e: End) -> St:
+  match s:
+    case St{rd, q, a, o, proto, sent, shut, peer, end}:
+      St{rd, q, a, o, proto, sent, shut, peer, e}
+
+# something came from the client at now: no ping is out
+def end.seen(e: End, +now: Nat) -> End:
+  match e:
+    case Client{}:
+      Client{}
+    case Server{ping, pong, send, seen, pinged}:
+      Server{ping, pong, send, now, False{}}
+
+def end.pinged(e: End) -> End:
+  match e:
+    case Client{}:
+      Client{}
+    case Server{ping, pong, send, seen, pinged}:
+      Server{ping, pong, send, seen, True{}}
 
 def st.peer.of(s: St) -> U32:
   match s:
-    case St{rd, q, a, o, proto, sent, shut, peer}:
+    case St{rd, q, a, o, proto, sent, shut, peer, end}:
       peer
 
 def Out(A: Data) -> Type:
@@ -244,9 +297,19 @@ def send.keyed(sock: Socket, +st: St, op: U32, fin: Bool, +body: Bytes(), g: Res
       (code, msg) = e
       IO.pure(Out(Unit), (Conn{sock, st}, Fail{ERand{code}}))
 
+def send.by(sock: Socket, +st: St, op: U32, fin: Bool, +body: Bytes(), e: End) -> IO(Out(Unit)):
+  match e:
+    case Client{}:
+      IO.bind(Result<&1, &1, U32 & String, U32>, Out(Unit), IO.random_u32(),
+        g => send.keyed(sock, st, op, fin, body, g))
+    case Server{ping, pong, send, seen, pinged}:
+      IO.bind(Socket & Result<&1, &1, U32 & String, Unit>, Out(Unit),
+        TCP.send_buf_poll(sock, F.s.frame(op, fin, body), send), x => sent(st, x))
+
+# one frame out: a client's masked with a fresh key from the host's
+# entropy, a server's as it is
 def send.frame(sock: Socket, +st: St, op: U32, fin: Bool, +body: Bytes()) -> IO(Out(Unit)):
-  IO.bind(Result<&1, &1, U32 & String, U32>, Out(Unit), IO.random_u32(),
-    g => send.keyed(sock, st, op, fin, body, g))
+  send.by(sock, st, op, fin, body, st.end(st))
 
 def send.open(sock: Socket, +st: St, op: U32, +body: Bytes(), open: Bool) -> IO(Out(Unit)):
   match open:
@@ -313,39 +376,47 @@ def drain(k: Nat, sock: Socket, +ms: U32) -> IO(Socket):
 
 # the frames a read completed join the queue; a read that broke the
 # framing leaves its good frames first and the break after them
-def fed(tk: Ws.W & List<&2, Ws.Frm>, a: F.Asm, o: Opts, proto: Bytes(), sent: Bool, shut: U32, peer: U32) -> St:
+def fed(tk: Ws.W & List<&2, Ws.Frm>, a: F.Asm, o: Opts, proto: Bytes(), sent: Bool, shut: U32, peer: U32, end: End) -> St:
   (rd, fs) = tk
-  St{rd, fs, a, o, proto, sent, shut, peer}
+  St{rd, fs, a, o, proto, sent, shut, peer, end}
+
+# the reader at this end: a client's, or a server's (net/ws_server.bend)
+def role(+cap: U32, e: End) -> F.Role:
+  match e:
+    case Client{}:
+      F.Cli{cap}
+    case Server{ping, pong, send, seen, pinged}:
+      F.Serv{cap}
 
 def st.feed(s: St, bs: Bytes()) -> St:
   match s:
-    case St{rd, q, a, +o, proto, sent, shut, peer}:
-      fed(Ws.take(F.feed_buf(F.Cli{o.cap(o)}, bs, rd)), a, o, proto, sent, shut, peer)
+    case St{rd, q, a, +o, proto, sent, shut, peer, +end}:
+      fed(Ws.take(F.feed_buf(role(o.cap(o), end), bs, rd)), a, o, proto, sent, shut, peer, end)
 
 def st.pop(s: St) -> St & Maybe<&2, Ws.Frm>:
   match s:
-    case St{rd, q, a, o, proto, sent, shut, peer}:
+    case St{rd, q, a, o, proto, sent, shut, peer, end}:
       match q:
         case Nil{}:
-          (St{rd, Nil{}, a, o, proto, sent, shut, peer}, None{})
+          (St{rd, Nil{}, a, o, proto, sent, shut, peer, end}, None{})
         case Con{f, t}:
-          (St{rd, t, a, o, proto, sent, shut, peer}, Some{f})
+          (St{rd, t, a, o, proto, sent, shut, peer, end}, Some{f})
 
 def st.asm(s: St, f: Ws.Frm) -> St & F.Act:
   match s:
-    case St{rd, q, a, +o, proto, sent, shut, peer}:
+    case St{rd, q, a, +o, proto, sent, shut, peer, end}:
       +x = F.asm(o.cap(o), a, f)
-      (St{rd, q, F.ax.asm(x), o, proto, sent, shut, peer}, F.ax.act(x))
+      (St{rd, q, F.ax.asm(x), o, proto, sent, shut, peer, end}, F.ax.act(x))
 
 def st.dead.of(wb: Ws.W & Bool, q: List<&2, Ws.Frm>, a: F.Asm, o: Opts, proto: Bytes(), sent: Bool, shut: U32,
-  peer: U32) -> St & Bool:
+  peer: U32, end: End) -> St & Bool:
   (w, bad) = wb
-  (St{w, q, a, o, proto, sent, shut, peer}, bad)
+  (St{w, q, a, o, proto, sent, shut, peer, end}, bad)
 
 def st.dead(s: St) -> St & Bool:
   match s:
-    case St{rd, q, a, o, proto, sent, shut, peer}:
-      st.dead.of(Ws.dead(rd), q, a, o, proto, sent, shut, peer)
+    case St{rd, q, a, o, proto, sent, shut, peer, end}:
+      st.dead.of(Ws.dead(rd), q, a, o, proto, sent, shut, peer, end)
 
 def R(A: Data) -> Type:
   IO(Out(A))
@@ -367,11 +438,30 @@ def fail.go(sock: Socket, +st: St, +code: U32, e: Err, was: Bool) -> R(F.Msg):
 def fail(sock: Socket, +st: St, +code: U32, e: Err) -> R(F.Msg):
   fail.go(sock, st, code, e, st.sent(st))
 
+# a failure an act asked for: the close F.s.out says, if any
+def fail.w(sock: Socket, +st: St, e: Err, w: Maybe<&2, F.Wr>) -> R(F.Msg):
+  match w:
+    case Some{x}:
+      match x:
+        case F.WClose{+code}:
+          fail.go(sock, st, code, e, False{})
+        case F.WPong{b}:
+          fail.go(sock, st, 1002, e, True{})
+    case None{}:
+      fail.go(sock, st, 1002, e, True{})
+
 # the peer's close: answered with its code (unless this end sent its
 # close first, and this is the answer), then the TCP connection waited
 # out, and the close handed over
+def bye.wait(s: Socket, +ms: U32, e: End) -> IO(Socket):
+  match e:
+    case Client{}:
+      drain(64n, s, ms)
+    case Server{ping, pong, send, seen, pinged}:
+      IO.pure(Socket, s)
+
 def bye.out(+code: U32, reason: Bytes(), s: Socket, +st: St) -> R(F.Msg):
-  IO.bind(Socket, Out(F.Msg), drain(64n, s, o.close(st.o(st))),
+  IO.bind(Socket, Out(F.Msg), bye.wait(s, o.close(st.o(st)), st.end(st)),
     s2 => IO.pure(Out(F.Msg), (Conn{s2, st}, Done{F.Closed{code, F.utf8.dec(reason)}})))
 
 def bye.sent(+code: U32, reason: Bytes(), g: Out(Unit)) -> R(F.Msg):
@@ -380,14 +470,26 @@ def bye.sent(+code: U32, reason: Bytes(), g: Out(Unit)) -> R(F.Msg):
     case Conn{s, st}:
       bye.out(code, reason, s, st)
 
-def bye(sock: Socket, +st: St, +code: U32, reason: Bytes(), was: Bool) -> R(F.Msg):
+def bye.go(sock: Socket, +st: St, +code: U32, reason: Bytes(), +c: U32, was: Bool) -> R(F.Msg):
   match was:
     case True{}:
       bye.out(code, reason, sock, st.peer(st.mark(st, True{}, 1), code))
     case False{}:
       IO.bind(Out(Unit), Out(F.Msg),
-        send.frame(sock, st.peer(st.mark(st, True{}, 1), code), 8, True{}, F.close.body(code, "")),
+        send.frame(sock, st.peer(st.mark(st, True{}, 1), code), 8, True{}, F.close.body(c, "")),
         g => bye.sent(code, reason, g))
+
+# the close F.s.out says (the peer's code), if any
+def bye(sock: Socket, +st: St, +code: U32, reason: Bytes(), w: Maybe<&2, F.Wr>) -> R(F.Msg):
+  match w:
+    case Some{x}:
+      match x:
+        case F.WClose{+c}:
+          bye.go(sock, st, code, reason, c, False{})
+        case F.WPong{b}:
+          bye.go(sock, st, code, reason, code, True{})
+    case None{}:
+      bye.go(sock, st, code, reason, code, True{})
 
 def pong.sent(g: Out(Unit), again: Socket -> St -> R(F.Msg)) -> R(F.Msg):
   (c, r) = g
@@ -399,28 +501,36 @@ def pong.sent(g: Out(Unit), again: Socket -> St -> R(F.Msg)) -> R(F.Msg):
         case Fail{e}:
           IO.pure(Out(F.Msg), (Conn{s, st}, Fail{e}))
 
-# a ping is answered at once, with its payload; not after this end's
-# close
-def pong(sock: Socket, +st: St, +body: Bytes(), was: Bool, again: Socket -> St -> R(F.Msg)) -> R(F.Msg):
-  match was:
-    case True{}:
+# a ping is answered at once, with its payload, as F.s.out says (not
+# after this end's close)
+def pong(sock: Socket, +st: St, w: Maybe<&2, F.Wr>, again: Socket -> St -> R(F.Msg)) -> R(F.Msg):
+  match w:
+    case Some{x}:
+      match x:
+        case F.WPong{+body}:
+          IO.bind(Out(Unit), Out(F.Msg), send.frame(sock, st, 10, True{}, body), g => pong.sent(g, again))
+        case F.WClose{c}:
+          again(sock, st)
+    case None{}:
       again(sock, st)
-    case False{}:
-      IO.bind(Out(Unit), Out(F.Msg), send.frame(sock, st, 10, True{}, body), g => pong.sent(g, again))
 
-# what a frame asked of the connection, done
-def act(sock: Socket, +st: St, x: F.Act, again: Socket -> St -> R(F.Msg)) -> R(F.Msg):
+# what a frame asked of the connection, done: the frame written is
+# F.s.out's (ws_laws.bend's srv_close_once)
+def act.on(sock: Socket, +st: St, x: F.Act, w: Maybe<&2, F.Wr>, again: Socket -> St -> R(F.Msg)) -> R(F.Msg):
   match x:
     case F.Deliver{m}:
       IO.pure(Out(F.Msg), (Conn{sock, st}, Done{m}))
     case F.Pong{body}:
-      pong(sock, st, body, st.sent(st), again)
+      pong(sock, st, w, again)
     case F.Skip{}:
       again(sock, st)
     case F.Bye{+code, reason}:
-      bye(sock, st, code, reason, st.sent(st))
+      bye(sock, st, code, reason, w)
     case F.Refuse{+code}:
-      fail(sock, st, code, EProto{code})
+      fail.w(sock, st, EProto{code}, w)
+
+def act(sock: Socket, +st: St, +x: F.Act, again: Socket -> St -> R(F.Msg)) -> R(F.Msg):
+  act.on(sock, st, x, F.s.out(st.sent(st), x), again)
 
 def got.bytes(s: Socket, +st: St, bs: Bytes(), eof: Bool, again: Socket -> St -> R(F.Msg)) -> R(F.Msg):
   match eof:
@@ -443,6 +553,89 @@ def got(+st: St, g: Socket & Result<&1, &1, U32 & String, Maybe<&1, Bytes()>>, a
         case Some{+bs}:
           got.bytes(s, st, bs, String.is_empty(bs), again)
 
+# The server's wait, cut in slices of a second at most so a SIGTERM is
+# seen within one: bytes are fed (and the client counts as alive), a
+# slice with nothing goes round again (recv's deadline is checked each
+# turn), a failure or the FIN ends it.
+def srv.got(+st: St, +now: Nat, g: Socket & Result<&1, &1, U32 & String, Maybe<&1, Bytes()>>,
+  again: Socket -> St -> R(F.Msg)) -> R(F.Msg):
+  (s, r) = g
+  match r:
+    case Fail{e}:
+      (code, msg) = e
+      IO.pure(Out(F.Msg), (Conn{s, st.mark(st, False{}, 2)}, Fail{ERecv{code}}))
+    case Done{may}:
+      match may:
+        case None{}:
+          again(s, st)
+        case Some{+bs}:
+          got.bytes(s, st.end.set(st, end.seen(st.end(st), now)), bs, String.is_empty(bs), again)
+
+def srv.poll(sock: Socket, +st: St, +now: Nat, +ms: U32, again: Socket -> St -> R(F.Msg)) -> R(F.Msg):
+  IO.bind(Socket & Result<&1, &1, U32 & String, Maybe<&1, Bytes()>>, Out(F.Msg),
+    TCP.poll_buf(sock, 65536, ms), g => srv.got(st, now, g, again))
+
+def srv.pinged(g: Out(Unit), again: Socket -> St -> R(F.Msg)) -> R(F.Msg):
+  (c, r) = g
+  match c:
+    case Conn{s, +st}:
+      match r:
+        case Done{u}:
+          again(s, st.end.set(st, end.pinged(st.end(st))))
+        case Fail{e}:
+          IO.pure(Out(F.Msg), (Conn{s, st}, Fail{e}))
+
+def srv.bye(g: Out(Unit), again: Socket -> St -> R(F.Msg)) -> R(F.Msg):
+  (c, r) = g
+  match c:
+    case Conn{s, st}:
+      match r:
+        case Done{u}:
+          again(s, st)
+        case Fail{e}:
+          IO.pure(Out(F.Msg), (Conn{s, st}, Fail{e}))
+
+def slice() -> U32:
+  1000
+
+# the keepalive: dead, a ping out and pong ms past it with nothing (the
+# connection fails, 1011); due, ping ms of quiet (a ping goes out); else
+# a poll, until the first of recv's deadline, the next second, and the
+# keepalive's next moment
+def srv.keep(sock: Socket, +st: St, +until: Nat, +now: Nat, +next: Nat, dead: Bool, due: Bool,
+  again: Socket -> St -> R(F.Msg)) -> R(F.Msg):
+  match dead due:
+    case True{} _:
+      fail(sock, st, 1011, EPing{})
+    case False{} True{}:
+      IO.bind(Out(Unit), Out(F.Msg), send.frame(sock, st, 9, True{}, ""), g => srv.pinged(g, again))
+    case False{} False{}:
+      srv.poll(sock, st, now, U32.min(U32.min(left(until, now), slice()), left(next, now)), again)
+
+# on SIGTERM, once: a close with 1001 (going away) goes out, and the
+# wait goes on for the client's answer
+def srv.at(sock: Socket, +st: St, +until: Nat, +now: Nat, +ping: U32, +pong: U32, +seen: Nat, +pinged: Bool,
+  stop: Bool, again: Socket -> St -> R(F.Msg)) -> R(F.Msg):
+  match stop:
+    case True{}:
+      IO.bind(Out(Unit), Out(F.Msg), send.frame(sock, st.mark(st, True{}, 0), 8, True{}, F.close.body(1001, "going away")),
+        g => srv.bye(g, again))
+    case False{}:
+      +on = Bool.not(U32.is_zero(ping))
+      +due = Nat.add(seen, U32.to_nat(ping))
+      +dead = Nat.add(due, U32.to_nat(pong))
+      srv.keep(sock, st, until, now, Bool.pick(Nat, on, Bool.pick(Nat, pinged, dead, due), until),
+        on && pinged && Nat.is_le(dead, now), on && Bool.not(pinged) && Nat.is_le(due, now), again)
+
+def wait.by(sock: Socket, +st: St, +until: Nat, +now: Nat, e: End, again: Socket -> St -> R(F.Msg)) -> R(F.Msg):
+  match e:
+    case Client{}:
+      IO.bind(Socket & Result<&1, &1, U32 & String, Maybe<&1, Bytes()>>, Out(F.Msg),
+        TCP.poll_buf(sock, 65536, left(until, now)), g => got(st, g, again))
+    case Server{+ping, +pong, send, +seen, +pinged}:
+      IO.bind(Bool, Out(F.Msg), IO.signal_pending(15),
+        stop => srv.at(sock, st, until, now, ping, pong, seen, pinged, stop && Bool.not(st.sent(st)), again))
+
 # nothing queued: the framing broke (1002), or one read, waiting at
 # most the time left
 def wait(sock: Socket, +st: St, +until: Nat, +now: Nat, live: Bool, again: Socket -> St -> R(F.Msg)) -> R(F.Msg):
@@ -450,8 +643,7 @@ def wait(sock: Socket, +st: St, +until: Nat, +now: Nat, live: Bool, again: Socke
     case False{}:
       IO.pure(Out(F.Msg), (Conn{sock, st}, Fail{ETime{}}))
     case True{}:
-      IO.bind(Socket & Result<&1, &1, U32 & String, Maybe<&1, Bytes()>>, Out(F.Msg),
-        TCP.poll_buf(sock, 65536, left(until, now)), g => got(st, g, again))
+      wait.by(sock, st, until, now, st.end(st), again)
 
 def empty(sock: Socket, +st: St, +until: Nat, bad: Bool, again: Socket -> St -> R(F.Msg)) -> R(F.Msg):
   match bad:
@@ -515,18 +707,28 @@ def drop(c: Conn) -> IO(Unit):
     case Conn{s, st}:
       Socket.close(s)
 
+# the socket under a connection, let go of: a server hands it back to
+# the loop it came from, which closes it
+def socket(c: Conn) -> Socket:
+  match c:
+    case Conn{s, st}:
+      s
+
 def CR() -> Type:
   IO(Result<&2, &2, Err, U32>)
 
-def close.fail(c: Conn, e: Err) -> CR():
-  IO.bind(Unit, Result<&2, &2, Err, U32>, drop(c), u => IO.pure(Result<&2, &2, Err, U32>, Fail{e}))
+def EO() -> Type:
+  IO(Conn & Result<&2, &2, Err, U32>)
 
-def close.done(c: Conn, +code: U32) -> CR():
-  IO.bind(Unit, Result<&2, &2, Err, U32>, drop(c), u => IO.pure(Result<&2, &2, Err, U32>, Done{code}))
+def close.fail(c: Conn, e: Err) -> EO():
+  IO.pure(Conn & Result<&2, &2, Err, U32>, (c, Fail{e}))
+
+def close.done(c: Conn, +code: U32) -> EO():
+  IO.pure(Conn & Result<&2, &2, Err, U32>, (c, Done{code}))
 
 # after this end's close: the messages still coming are dropped until
-# the server's close, which ends it
-def close.next(g: Out(F.Msg), again: Conn -> CR()) -> CR():
+# the peer's close, which ends it
+def close.next(g: Out(F.Msg), again: Conn -> EO()) -> EO():
   (c, r) = g
   match r:
     case Fail{e}:
@@ -540,17 +742,17 @@ def close.next(g: Out(F.Msg), again: Conn -> CR()) -> CR():
         case F.Binary{b}:
           again(c)
 
-def close.loop(k: Nat, c: Conn, +until: Nat) -> CR():
+def close.loop(k: Nat, c: Conn, +until: Nat) -> EO():
   match k:
     case 0n:
       close.fail(c, ETime{})
     case 1n+j:
       match c:
         case Conn{s, st}:
-          IO.bind(Out(F.Msg), Result<&2, &2, Err, U32>, recv.go(big(), s, st, until),
+          IO.bind(Out(F.Msg), Conn & Result<&2, &2, Err, U32>, recv.go(big(), s, st, until),
             g => close.next(g, cc => close.loop(j, cc, until)))
 
-def close.sent(g: Out(Unit), +now: Nat) -> CR():
+def close.sent(g: Out(Unit), +now: Nat) -> EO():
   (c, r) = g
   match c:
     case Conn{s, +st}:
@@ -560,32 +762,55 @@ def close.sent(g: Out(Unit), +now: Nat) -> CR():
         case Done{u}:
           close.loop(big(), Conn{s, st}, Nat.add(now, U32.to_nat(o.close(st.o(st)))))
 
-def close.shut(c: Conn, +peer: U32, clean: Bool) -> CR():
+def close.shut(c: Conn, +peer: U32, clean: Bool) -> EO():
   match clean:
     case True{}:
       close.done(c, peer)
     case False{}:
       close.fail(c, EClosed{})
 
-def close.go(sock: Socket, +st: St, +code: U32, reason: String, +shut: U32, +now: Nat, open: Bool) -> CR():
+def close.go(sock: Socket, +st: St, +code: U32, reason: String, +shut: U32, +now: Nat, open: Bool) -> EO():
   match open:
     case True{}:
-      IO.bind(Out(Unit), Result<&2, &2, Err, U32>,
+      IO.bind(Out(Unit), Conn & Result<&2, &2, Err, U32>,
         send.frame(sock, st.mark(st, True{}, 0), 8, True{}, F.close.body(code, String.take(F.utf8.enc(reason), 123n))),
         g => close.sent(g, now))
     case False{}:
       close.shut(Conn{sock, st}, st.peer.of(st), U32.is_eq(shut, 1))
 
-# The closing handshake: a close with the code and the reason (cut to
-# the 123 bytes a close carries) goes out, what the server still sends
-# is dropped until its close, the TCP connection is waited out, all
-# under the options' close_ms, and the socket is released. The answer
-# is the server's close code; a connection the server closed first
-# answers its code at once, one that failed EClosed.
-def close(c: Conn, +code: U32, reason: String) -> CR():
+# The closing handshake, the connection handed back: a close with the
+# code and the reason (cut to the 123 bytes a close carries) goes out,
+# what the peer still sends is dropped until its close, all under the
+# options' close_ms (a client then waits out the TCP connection). The
+# answer is the peer's close code; a connection the peer closed first
+# answers its code at once, one that failed EClosed. A connection whose
+# close went out already (a server's on SIGTERM) only waits for the
+# answer.
+def end.wait(c: Conn, +now: Nat) -> EO():
+  match c:
+    case Conn{s, +st}:
+      close.loop(big(), Conn{s, st}, Nat.add(now, U32.to_nat(o.close(st.o(st)))))
+
+def end.at(sock: Socket, +st: St, +code: U32, reason: String, +now: Nat, sent: Bool) -> EO():
+  match sent:
+    case True{}:
+      end.wait(Conn{sock, st}, now)
+    case False{}:
+      close.go(sock, st, code, reason, st.shut(st), now, U32.is_zero(st.shut(st)))
+
+def end(c: Conn, +code: U32, reason: String) -> EO():
   match c:
     case Conn{sock, +st}:
-      IO.bind(Nat, Result<&2, &2, Err, U32>, IO.now(), +now => close.go(sock, st, code, reason, st.shut(st), now, U32.is_zero(st.shut(st))))
+      IO.bind(Nat, Conn & Result<&2, &2, Err, U32>, IO.now(),
+        +now => end.at(sock, st, code, reason, now, U32.is_zero(st.shut(st)) && st.sent(st)))
+
+def closed(g: Conn & Result<&2, &2, Err, U32>) -> CR():
+  (c, r) = g
+  IO.bind(Unit, Result<&2, &2, Err, U32>, drop(c), u => IO.pure(Result<&2, &2, Err, U32>, r))
+
+# The closing handshake, as end, and then the socket is released.
+def close(c: Conn, +code: U32, reason: String) -> CR():
+  IO.bind(Conn & Result<&2, &2, Err, U32>, Result<&2, &2, Err, U32>, end(c, code, reason), closed)
 
 # Opening
 # =======
@@ -598,7 +823,15 @@ def RC() -> Type:
   IO(Result<&2, &1, Err, Conn>)
 
 def st.new(+o: Opts, proto: Bytes(), rest: Bytes()) -> St:
-  st.feed(St{Ws.new(), Nil{}, F.Idle{}, o, proto, False{}, 0, 0}, rest)
+  st.feed(St{Ws.new(), Nil{}, F.Idle{}, o, proto, False{}, 0, 0, Client{}}, rest)
+
+# A server's end of a connection whose opening handshake is done
+# (net/ws_server.bend): the socket, the bytes that came after the
+# request (its first frames), the options (max_msg the cap, recv_ms and
+# close_ms the waits), the subprotocol agreed, the keepalive (ping,
+# pong), a send's deadline, and now.
+def served(s: Socket, rest: Bytes(), +o: Opts, proto: Bytes(), +ping: U32, +pong: U32, +send: U32, +now: Nat) -> Conn:
+  Conn{s, st.feed(St{Ws.new(), Nil{}, F.Idle{}, o, proto, False{}, 0, 0, Server{ping, pong, send, now, False{}}}, rest)}
 
 def open.fail(s: Socket, e: Err) -> RC():
   IO.bind(Unit, Result<&2, &1, Err, Conn>, Socket.close(s), u => IO.pure(Result<&2, &1, Err, Conn>, Fail{e}))

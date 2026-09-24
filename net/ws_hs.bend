@@ -514,3 +514,106 @@ def ok(r: Result<&2, &2, Hw, Bytes()>) -> Bool:
       True{}
     case Fail{w}:
       False{}
+
+# The server's end
+# ================
+#
+# RFC 6455 4.2 as net/ws_server.bend answers an opening request. The
+# engine's reader (demos/io_http_engine) has read the head already:
+# asked is whether it was an HTTP/1.1 request with Upgrade: websocket, a
+# Connection naming upgrade, a Sec-WebSocket-Key, and no
+# Sec-WebSocket-Version but 13 (the engine reads a missing one as 13);
+# key is the key as it came, trimmed. The request is answered:
+#
+#   not asked                  426 Upgrade Required (it may ask again)
+#   asked, not GET, or a key
+#   that is not sixteen bytes
+#   in base64                  400
+#   asked, GET, the key good   101, the Accept its key earns, and the
+#                              subprotocol chosen when it is one the
+#                              client offered; no extension, whatever
+#                              was offered (permessage-deflate is
+#                              declined by not naming it, RFC 7692 5)
+
+# A key is sixteen random bytes in base64: 22 characters of the alphabet
+# and "==", 24 in all (RFC 6455 4.1; the engine's key.ok).
+def key.b64(+c: U32) -> Bool:
+  (U32.is_le(65, c) && U32.is_le(c, 90)) || (U32.is_le(97, c) && U32.is_le(c, 122))
+    || (U32.is_le(48, c) && U32.is_le(c, 57)) || U32.is_eq(c, 43) || U32.is_eq(c, 47)
+
+def key.at(+i: U32, +c: U32) -> Bool:
+  (U32.is_lt(i, 22) && key.b64(c)) || (U32.is_le(22, i) && U32.is_eq(c, 61))
+
+def key.go(bs: Bytes(), +i: U32, ok: Bool) -> Bool:
+  match bs:
+    case SNil{}:
+      ok && U32.is_eq(i, 24)
+    case SCon{Chr{+c}, t}:
+      key.go(t, (i + 1 : U32), ok && key.at(i, c))
+
+def key.ok(key: Bytes()) -> Bool:
+  key.go(key, 0, True{})
+
+# the server's verdict: the 101's head, or the status that refuses
+type Sv is Data:
+  SOk{head: Bytes()}
+  SNo{status: U32}
+
+# the subprotocol the answer names: the one chosen, when the client
+# offered it; else none
+def s.chosen(+proto: Bytes(), offered: List<&2, Bytes()>) -> Bytes():
+  Bool.pick(Bytes(), has(offered, proto) && Bool.not(String.is_empty(proto)), proto, "")
+
+def s.proto.line(+p: Bytes()) -> Bytes():
+  Bool.pick(Bytes(), String.is_empty(p), "", "Sec-WebSocket-Protocol: " ++ p ++ "\r\n")
+
+# the 101 (RFC 6455 4.2.2 5): the status line, Upgrade, Connection, the
+# Accept, the subprotocol if one, and the blank line
+def s.head(+key: Bytes(), +p: Bytes()) -> Bytes():
+  "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: "
+    ++ expect(key) ++ "\r\n" ++ s.proto.line(p) ++ "\r\n"
+
+# the refusal, if any: none for a GET that asked with a good key; else
+# an ask that did not come is 426, and one that came broken (not a GET,
+# a key not a key) is 400
+def s.check.at(+asked: Bool, ok: Bool) -> Maybe<&2, U32>:
+  match ok:
+    case True{}:
+      None{}
+    case False{}:
+      Some{Bool.pick(U32, asked, 400, 426)}
+
+def s.check(+get: Bool, +asked: Bool, +key: Bytes()) -> Maybe<&2, U32>:
+  s.check.at(asked, get && asked && key.ok(key))
+
+def s.answer.at(+key: Bytes(), offered: List<&2, Bytes()>, +proto: Bytes(), no: Maybe<&2, U32>) -> Sv:
+  match no:
+    case Some{c}:
+      SNo{c}
+    case None{}:
+      SOk{s.head(key, s.chosen(proto, offered))}
+
+# The answer to an opening request: get is whether its method is GET,
+# asked and key what the engine read, offered the subprotocols it
+# offered, proto the one the handler chose ("" for none).
+def s.answer(+get: Bool, +asked: Bool, +key: Bytes(), offered: List<&2, Bytes()>, +proto: Bytes()) -> Sv:
+  s.answer.at(key, offered, proto, s.check(get, asked, key))
+
+# whether a verdict refuses, with 400 or 426
+def s.refused(v: Sv) -> Bool:
+  match v:
+    case SOk{h}:
+      False{}
+    case SNo{+c}:
+      U32.is_eq(c, 400) || U32.is_eq(c, 426)
+
+# the subprotocols a request offered: every Sec-WebSocket-Protocol
+# field's list (vs, the fields' values in order), in order, the empty
+# members dropped
+def s.offered(vs: List<&2, Bytes()>) -> List<&2, Bytes()>:
+  match vs:
+    case Nil{}:
+      Nil{}
+    case Con{v, t}:
+      List.append(&2, Bytes(), List.filter(~Bytes(), ~(x => Bool.not(String.is_empty(x))), List.reverse(&2, Bytes(), toks(v))),
+        s.offered(t))
