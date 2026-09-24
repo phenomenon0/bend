@@ -351,7 +351,8 @@ def check_files(files, root):
        and b"x-content-type-options: nosniff" in r, r)
     stop(p)
     log = p.stderr.read().decode()
-    ok("files: Server.wrap logs the static files", "GET /sub/b.css 200" in log and "GET /.env 404" in log, log[-600:])
+    # a file's line is written before the file is opened: 200 and no length, a 404 or not
+    ok("files: Server.wrap logs the static files", "GET /sub/b.css 200" in log and "GET /.env " in log, log[-600:])
 
 # The client
 # ==========

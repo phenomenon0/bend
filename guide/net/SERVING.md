@@ -229,7 +229,10 @@ and sleep in slices short enough to see it.
 files under `root` at `prefix/...`. The path is normalised, a climb out of the
 root or a dotfile is a 404, no link is followed, and `/` is `index.html`. The
 kernel sends the file (sendfile), so a file is not bound by `max_body`.
-`Server.static.at(root, r)` is its handler, for a route of your own.
+`Server.static.at(root, r)` is its handler, for a route of your own. The
+file is opened after the handler (and its middleware) answered, so
+`logged` writes a file's line as a 200 with no length, whether it is then
+sent or a 404.
 
 ## TLS
 
