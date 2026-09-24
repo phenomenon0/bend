@@ -113,7 +113,8 @@ static void serve(Conn* k) {
 }
 
 // the same body cap as main.bend's body.cap(): a length past it is
-// refused at the digit that crosses it
+// refused here at the digit that crosses it (main.bend refuses it where
+// the head ends; either way before a byte of the body)
 #define BODY_CAP 1048576u
 
 // the head's end: HTTP/1.1 carries one Host and HTTP/1.0 at most one; a

@@ -20,8 +20,13 @@
 # length counted one too many, a chunked body given a budget of its own,
 # a reader that keeps the body instead of handing it on, a read kept
 # whatever came after the body or those bytes not counted, a connection
-# that goes on before its body ended or without the bytes after it --
-# and net/PROOF.bend must refuse every one. Each runs in a scratch
+# that goes on before its body ended or without the bytes after it; a
+# stream route's head read by a reader that takes a bare LF for a line's
+# end, takes a folded line, or takes two lengths that disagree, and a
+# head judged wrong at its blank line (no framing taken for chunked, the
+# Hosts unchecked, a length one too many, the head taken at a field
+# line's CR, an upgrade that does not close) -- and net/PROOF.bend must
+# refuse every one. Each runs in a scratch
 # copy of the tree the proof imports, where bend-proxy's proof (which
 # net/'s uses: rr.h, u32.eq, the list lemmas, and scan_is_spec and
 # frames_agree through them) is replaced by its statements left open:
@@ -40,6 +45,7 @@ DIRS = ['net', 'wire', 'demos/io_http_engine', 'demos/io_proxy', 'power']
 H, S, C, U = 'net/http.bend', 'net/server.bend', 'net/client.bend', 'net/url.bend'
 A = 'net/addr.bend'
 B = 'net/stream.bend'
+E = 'demos/io_http_engine/main.bend'
 
 # (what, file, before, after)
 MUTANTS = [
@@ -198,6 +204,35 @@ MUTANTS = [
     '''        case R.Final{r, x}:
           Some{x}''', '''        case R.Final{r, x}:
           Some{""}'''),
+  ('a head reader that takes a bare LF for a line\'s end (stream_head)', E,
+    '''    case InLx{v} KLf{}:
+      P{Bad{}, pd, out}''', '''    case InLx{v} KLf{}:
+      P{Lin{}, pend.fld(pd, v), out}'''),
+  ('a head reader that takes a folded line as more of the value (stream_head)', E,
+    '''    case Lin{} KDg{}:
+      P{InN{one(c)}, pd, out}
+    case Lin{} _:''', '''    case Lin{} KDg{}:
+      P{InN{one(c)}, pd, out}
+    case Lin{} KSp{}:
+      P{InLx{""}, pend.nm(pd, "x-folded"), out}
+    case Lin{} _:'''),
+  ('a head reader that takes two lengths that disagree, the first kept (stream_head)', E,
+    '''step.clen.dup(Pend{meth, path, Has{w}, close, host, ws, fx, hx, nx}, out, U32.is_eq(v, w))''',
+    '''step.clen.dup(Pend{meth, path, Has{w}, close, host, ws, fx, hx, nx}, out, True{})'''),
+  ('a head with no framing taken for chunked (stream_head)', B,
+    '''    case True{} Eng.BdNone{}:
+      Some{FLen{0n}}''', '''    case True{} Eng.BdNone{}:
+      Some{FChunked{}}'''),
+  ('a stream route\'s Hosts unchecked (stream_head)', B,
+    '''  head.mk(ip, r, head.frame(ok, bd))''', '''  head.mk(ip, r, head.frame(True{}, bd))'''),
+  ('a streamed length one too many (stream_head)', B,
+    '''      Some{FLen{U32.to_nat(v)}}''', '''      Some{FLen{1n+U32.to_nat(v)}}'''),
+  ('a head taken at a field line\'s CR (stream_head)', B,
+    '''    case Eng.CrL{}:
+      Some{head.of(ip, pd)}''', '''    case Eng.CrM{}:
+      Some{head.of(ip, pd)}'''),
+  ('a streamed request that asked to upgrade not closing (stream_head)', B,
+    '''f, Server.hd.v10(hd), cl || ws, Server.hd.head(hd)}''', '''f, Server.hd.v10(hd), cl, Server.hd.head(hd)}'''),
 ]
 
 # bend-proxy's proof, as net/PROOF.bend uses it: its statements, open
