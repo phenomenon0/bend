@@ -4,10 +4,14 @@
 #
 # A request goes to its URL's origin over a pooled connection (at most 8
 # idle per origin, 32 origins, each probed before it is used again; wire/
-# pool.bend) or a new one: the name resolved (DNS.resolve), the
-# connection made under the connect deadline (TCP.connect_poll, or
+# pool.bend) or a new one: the name resolved to every address it has,
+# IPv6 and IPv4 (DNS.resolve_all), and the connection made to the first
+# of them that answers, in the resolver's order, the connect deadline
+# split among them (net/addr.bend's connect; TCP.connect_poll, or
 # TLS.connect with SNI, ALPN http/1.1 and the certificate verified
-# against the system's store or a pinned CA -- never not verified). The
+# against the system's store or a pinned CA -- never not verified; an
+# IP-literal's certificate is checked for its IP address and no SNI is
+# sent, RFC 6066 3). The
 # exchange is wire/client.bend's: the request out, the response read
 # through the reader resp_sim holds to RFC 9112 under a head cap, a body
 # cap and the exchange's deadline, refused rather than guessed at when it
@@ -36,6 +40,7 @@ import ../demos/io_proxy/core.bend as X
 import ../power/gzip.bend as G
 import ./http.bend as Http
 import ./url.bend as U
+import ./addr.bend as A
 
 # Errors
 # ======
@@ -712,47 +717,38 @@ def tls.err(+code: U32, msg: String) -> NetError:
   Bool.pick(NetError, U32.is_eq(code, 110) || U32.is_eq(code, 60), Timeout{},
     Bool.pick(NetError, U32.is_eq(code, 111) || U32.is_eq(code, 61), Refused{}, Tls{msg}))
 
-def dial.tcp(r: Result<&1, &1, U32 & String, Socket>) -> Result<&1, &1, NetError, Socket>:
-  match r:
-    case Done{s}:
-      Done{s}
-    case Fail{e}:
-      (+code, msg) = e
-      Fail{dial.err(code, msg)}
+def dial.fail(tls: Bool, +code: U32, msg: String) -> NetError:
+  match tls:
+    case True{}:
+      tls.err(code, msg)
+    case False{}:
+      dial.err(code, msg)
 
-def dial.tls(r: Result<&1, &1, U32 & String, Socket & String>) -> Result<&1, &1, NetError, Socket>:
-  match r:
+def dial.got(tls: Bool, g: A.Got()) -> Result<&1, &1, NetError, Socket>:
+  match g:
     case Done{sp}:
       (s, proto) = sp
       Done{s}
     case Fail{e}:
-      (+code, msg) = e
-      Fail{tls.err(code, msg)}
-
-def dial.on(tls: Bool, +o: Opts, addr: String, host: String, +port: U32) -> IO(Result<&1, &1, NetError, Socket>):
-  match tls:
-    case True{}:
-      IO.bind(Result<&1, &1, U32 & String, Socket & String>, Result<&1, &1, NetError, Socket>,
-        TLS.connect(addr, port, host, "http/1.1", opts.ca(o), opts.connect(o)),
-        r2 => IO.pure(Result<&1, &1, NetError, Socket>, dial.tls(r2)))
-    case False{}:
-      IO.bind(Result<&1, &1, U32 & String, Socket>, Result<&1, &1, NetError, Socket>,
-        TCP.connect_poll(addr, port, opts.connect(o)), r2 => IO.pure(Result<&1, &1, NetError, Socket>, dial.tcp(r2)))
-
-def dial.addr(+o: Opts, r: Result<&1, &1, U32 & String, String>, u: U.Url) -> IO(Result<&1, &1, NetError, Socket>):
-  match r:
-    case Fail{e}:
       (code, msg) = e
-      IO.pure(Result<&1, &1, NetError, Socket>, Fail{Dns{msg}})
-    case Done{addr}:
-      match u:
-        case U.Url{tls, host, port, t}:
-          dial.on(tls, o, addr, host, port)
+      Fail{dial.fail(tls, code, msg)}
 
-# a new connection to the URL's origin
-def dial(+o: Opts, +u: U.Url) -> IO(Result<&1, &1, NetError, Socket>):
-  IO.bind(Result<&1, &1, U32 & String, String>, Result<&1, &1, NetError, Socket>, DNS.resolve(U.url.host(u)),
-    r => dial.addr(o, r, u))
+def dial.res(tls: Bool, r: A.Dialed) -> Result<&1, &1, NetError, Socket>:
+  match r:
+    case A.NoName{code, msg}:
+      Fail{Dns{msg}}
+    case A.Tried{g}:
+      dial.got(tls, g)
+
+# a new connection to the URL's origin: to the first of its host's
+# addresses that answers (TLS: the certificate checked against the host,
+# an IP-literal's address without brackets)
+def dial(+o: Opts, u: U.Url) -> IO(Result<&1, &1, NetError, Socket>):
+  match u:
+    case U.Url{+tls, +host, port, t}:
+      IO.bind(A.Dialed, Result<&1, &1, NetError, Socket>,
+        A.connect(host, A.Dial{tls, port, A.bare(host), "http/1.1", opts.ca(o)}, opts.connect(o)),
+        r => IO.pure(Result<&1, &1, NetError, Socket>, dial.res(tls, r)))
 
 # One exchange on a connection made at born: the connection goes back
 # to the pool if the exchange left it fit (else it is closed); again

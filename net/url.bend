@@ -10,7 +10,9 @@
 # case; tabs and line ends anywhere dropped, and spaces and controls at
 # either end; a backslash read as a slash; no user or password (refused:
 # a URL is no place for them); the host a name of letters, digits, '-',
-# '_' and '.', lowercased, or a dotted address (IPv6 is refused); a port of
+# '_' and '.', lowercased, a dotted address, or an IPv6 address in
+# brackets (RFC 3986 3.2.2's IP-literal, kept bracketed and written as RFC
+# 5952 does: net/addr.bend; IPvFuture and zone IDs refused); a port of
 # 1 to 65535 digits' worth, the scheme's own when absent or empty; the
 # path's dot segments (and %2e) resolved, "/" when there is none; a byte
 # the path or query may not carry (a control, a space, ", <, >, `, {, }
@@ -18,6 +20,7 @@
 # parse and resolve to the vectors listed there.
 import Base
 import ../demos/io_http_engine/main.bend as Eng
+import ./addr.bend as A
 
 type Url is Data:
   Url{tls: Bool, host: Bytes(), port: U32, target: Bytes()}
@@ -45,7 +48,13 @@ def url.target(u: Url) -> Bytes():
 def dport(tls: Bool) -> U32:
   Bool.pick(U32, tls, 443, 80)
 
-# scheme://host[:port], the port only when it is not the scheme's
+# a URL's host as the resolver and the connect take it: an IP-literal's
+# address without its brackets
+def url.addr(+u: Url) -> Bytes():
+  A.bare(url.host(u))
+
+# scheme://host[:port], the port only when it is not the scheme's (the
+# Host field's value; an IP-literal keeps its brackets)
 def authority(+u: Url) -> Bytes():
   match u:
     case Url{+t, h, +p, g}:
@@ -276,25 +285,48 @@ def target.of(+rest: Bytes()) -> Bytes():
 type Parsed is Data:
   Parsed{url: Maybe<&2, Url>, why: Bytes()}
 
-def url.made(user: Bool, v6: Bool, port: Maybe<&2, U32>, +tls: Bool, +host: Bytes(), +rest: Bytes()) ->
+def url.made(user: Bool, port: Maybe<&2, U32>, +tls: Bool, +host: Bytes(), +rest: Bytes()) ->
   Result<&2, &2, Bytes(), Url>:
-  match user v6 port:
-    case True{} _ _:
+  match user port:
+    case True{} _:
       Fail{"credentials in a URL"}
-    case False{} True{} _:
-      Fail{"IPv6 addresses are not supported"}
-    case False{} False{} None{}:
+    case False{} None{}:
       Fail{"bad port"}
-    case False{} False{} Some{p}:
+    case False{} Some{p}:
       Bool.pick(Result<&2, &2, Bytes(), Url>, String.is_empty(host) || Bool.not(host.ok(host)), Fail{"bad host"},
         Done{Url{tls, host, p, target.of(rest)}})
 
+# an IP-literal's authority: "[" the address "]" (shut), then nothing or
+# ":" and the port
+def url.lit(user: Bool, shut: Bool, lit: Result<&2, &2, Bytes(), Bytes()>, port: Maybe<&2, U32>, +tls: Bool,
+  +rest: Bytes()) -> Result<&2, &2, Bytes(), Url>:
+  match user shut lit port:
+    case True{} _ _ _:
+      Fail{"credentials in a URL"}
+    case False{} False{} _ _:
+      Fail{"bad host"}
+    case False{} True{} Fail{m} _:
+      Fail{m}
+    case False{} True{} Done{h} None{}:
+      Fail{"bad port"}
+    case False{} True{} Done{h} Some{p}:
+      Done{Url{tls, h, p, target.of(rest)}}
+
+def url.host.at(v6: Bool, +tls: Bool, +auth: Bytes(), +rest: Bytes()) -> Result<&2, &2, Bytes(), Url>:
+  match v6:
+    case False{}:
+      +c = Bytes.find_byte(auth, 0n, 58)
+      url.made(Nat.is_lt(Bytes.find_byte(auth, 0n, 64), Bytes.len(auth)), port.of(tls, String.drop(auth, 1n+c)), tls,
+        lower.all(String.take(auth, c)), rest)
+    case True{}:
+      +e = Bytes.find_byte(auth, 0n, 93)
+      +after = String.drop(auth, 1n+e)
+      url.lit(Nat.is_lt(Bytes.find_byte(auth, 0n, 64), Bytes.len(auth)),
+        Nat.is_lt(e, Bytes.len(auth)) && (String.is_empty(after) || U32.is_eq(Bytes.get(after, 0n), 58)),
+        A.literal(String.take(String.drop(auth, 1n), Nat.sub(e, 1n))), port.of(tls, String.drop(after, 1n)), tls, rest)
+
 def url.auth(+tls: Bool, +auth: Bytes(), +rest: Bytes()) -> Result<&2, &2, Bytes(), Url>:
-  +c = Bytes.find_byte(auth, 0n, 58)
-  +host = lower.all(String.take(auth, c))
-  +ps = String.drop(auth, 1n+c)
-  url.made(Nat.is_lt(Bytes.find_byte(auth, 0n, 64), Bytes.len(auth)), U32.is_eq(Bytes.get(auth, 0n), 91),
-    port.of(tls, ps), tls, host, rest)
+  url.host.at(U32.is_eq(Bytes.get(auth, 0n), 91), tls, auth, rest)
 
 def url.after(+tls: Bool, +s: Bytes()) -> Result<&2, &2, Bytes(), Url>:
   +a = first3(s, 47, 63, 35)

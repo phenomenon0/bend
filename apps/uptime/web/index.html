@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>bend-uptime</title>
+<link rel="stylesheet" href="/app.css">
+<script src="/app.js" defer></script>
+</head>
+<body>
+<header>
+  <h1>bend-uptime</h1>
+  <span id="live" class="pill off">live: connecting</span>
+</header>
+<main>
+  <table>
+    <thead>
+      <tr><th>monitor</th><th>state</th><th>latency (last 60)</th><th>ms</th><th>code</th><th>24 h</th><th>last</th></tr>
+    </thead>
+    <tbody id="rows"></tbody>
+  </table>
+  <p id="empty" hidden>No monitors. POST one to /api/monitors.</p>
+</main>
+</body>
+</html>
