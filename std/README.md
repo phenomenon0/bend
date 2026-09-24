@@ -174,15 +174,16 @@ switch names. Each prints exactly `All terms check.`:
     python3 tests/std/deflate_mutants.py [--packed] [--bend canon/bend2/main.ts]   # 25 of 25 killed
 
 The scans' specification is `bytes_spec.bend`; each implementation proves
-its scans count what it says (`find_byte.is`, `find_any.is`). The CSV
-proof uses only those laws, `cut`, `to_list` and Base's `String`
-definitions; the deflate proofs use `get` as `byte(String.get(b, i))`,
-`len` as `len.go(b, 0n)` with `len.shift`, `push` as an append, and
-`lemmas.bend` (this repo's Base lemmas that canon's Base lacks, copied
-under lower-case names). So the proofs see a byte string as the `String`
-it is under both implementations, and nothing of packing, views or the
-natives: the one fact each implementation owes is its `.is` laws (and
-`len.shift`), and each proves them.
+its scans count what it says (`find_byte.is`, `find_any.is`), and that
+`cut` is Base's take and drop (`cut.is`). The CSV proof uses only those
+laws, `to_list` and Base's `String` definitions; the deflate proofs use
+`get` as `byte(String.get(b, i))`, `len` as `len.go(b, 0n)` with
+`len.shift`, `push` as an append, and `lemmas.bend` (this repo's Base
+lemmas that canon's Base lacks, copied under lower-case names). So the
+proofs see a byte string as the `String` it is under both
+implementations, and nothing of packing, views or the natives: what each
+implementation owes is its `.is` laws and `len.shift`, and each proves
+them.
 
 ## Checking it on released Bend
 
@@ -213,4 +214,8 @@ the JS runtime, and so does `-o F.js`, where the same readers do CSV at
 0.3 MB/s and JSON at 0.16 MB/s (UPSTREAM.md F10). Gzip there is correct but
 quadratic: inflate reads its window back by offset, and a list is walked to
 the offset (F09), so keep it to files of tens of kilobytes. CSV and JSON
-only read forward and are linear in every lane.
+only read forward and are linear in every lane. One more limit of
+released Bend's JS lane: Base's `String.take` recurses on the machine
+stack (F11), so `Csv.read` of one string holding a field past about 30 KB
+overflows it there (`read_file` and `fold_file` read 4 KB at a time and
+cut no more than that; the C lane takes any size).

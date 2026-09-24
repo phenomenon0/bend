@@ -457,8 +457,9 @@ stock runtime; these are what the port hit. Each reads REPRO on canon
   takes any count. `String.from_list`, `List.append` and every structural
   map over a list are the same. std/bytes_list.bend counts in
   accumulators where it can, but its `cut` is `String.take` (the CSV
-  proof unfolds it), so a CSV field past about 30 KB crashes canon's JS
-  lane.
+  proof states it so), so `Csv.read` of one string with a field past
+  about 30 KB crashes canon's JS lane (a file read in 4 KB chunks does
+  not: a cut is never longer than its chunk).
 
 ---
 
