@@ -2,7 +2,8 @@
 
 What it was like to write a real app on `net/` as a user: 1,292 lines of
 Bend in 171 defs, a foreign effect, 3 dashboard files and a check
-script. It works (13 / 13 checks native, 12 / 13 on the JS lane). The
+script. It works (13 / 13 checks native, 12 / 13 on the JS lane; 13 / 13 on both
+since the fixes noted under 1 to 3). The
 list is ranked by what it cost: wrong behaviour first, then hours, then
 annoyance. Each entry: what I tried, what happened, the workaround, and
 what should change.
@@ -31,6 +32,17 @@ parameter (`apply.kind`, `apply.some`, `hist.cut`, `wait.slice`, ...).
 `Bool.pick` a template (`~a`, `~b`) so only the chosen arm is built, and
 say in GUIDE.md that it is strict until then.
 
+**Fixed** in 5a4e4019 (and 2f49eddb). The compiled lanes (C, JS, and the
+interpreter's IO programs, which run as JS) lift a `Bool.pick` whose arms
+are not both cheap into a def of its own that matches on the condition,
+the helper written above, so only the chosen arm runs and the other's
+values drop with its match arm; the checker's view is unchanged (the `+`
+it asks for stays). A pure `main` in the interpreter was lazy already.
+`tests/base/bool_pick_lazy.bend` and `tests/io/bool_pick_lazy.bend` pick
+past a loop that never ends. The replay, 100,000 lines (11 MB), 4-core
+Linux box under a load of about 12: the `Bool.pick` line above 8.1 and
+8.5 s before, 2.3 and 2.1 s after; the `match` helper 2.2 s either way.
+
 ## 2. The JS lane ignores SIGTERM, for every net/ program
 
 **Tried.** `check.py --js`: `bun bend2/main.ts apps/uptime/main.bend -- ...`,
@@ -55,6 +67,16 @@ beside the sockets), or have `io_wait` yield to the event loop
 (`await`) between polls. `net/check.py` should run its SIGTERM case on
 the JS lane too.
 
+**Fixed** in ce884a5d. `effs/signal_pending.js` now catches the signal in
+C, as the C lane does: bun:ffi's `cc` builds a handler that counts, the
+first time a signal is asked for (`process.on` stays the fallback where
+cc cannot build). Nothing runs on the request path. `bun hello.js` exits
+0 in 0.8 s after SIGTERM with `bend-net: stopping` (was still running 10 s
+later); wrk on it (one connection, eight 8 s runs on a loaded box) gives
+a median of 322 us of server CPU a request before, 295 after, within the
+noise. `tests/io/signal_self.bend` sends the process its own signals
+mid-run. `check.py --js`: 13 / 13, SIGTERM exit 0 in 0.36 s.
+
 ## 3. No wall clock, no dates
 
 **Tried.** Every probe needs a timestamp that survives a restart, for
@@ -75,6 +97,14 @@ promise", so an ordinary app now carries runtime internals (`Term`,
 **Change.** `IO.wall() -> IO(Nat)` (ms since the epoch) in Base, beside
 `IO.now`. Also `Time.iso(ms) -> String` and `Time.parse_iso`. And say in
 GUIDE.md that `IO.now` is monotonic.
+
+**Fixed** in c8a52987. `IO.wall() -> IO(Nat)` (ms since the epoch) is in
+Base beside `IO.now`, which the guide now calls monotonic, and
+`bend2/time.bend` (`import ../../bend2/time.bend as Time`) has
+`Time.iso(secs)`, `Time.iso.ms(ms)`, `Time.http(secs)` (IMF-fixdate) and
+`Time.date` / `Time.day`, on the engine's proven calendar. `clock.c`,
+`clock.js` and `clock.bend` are gone; the app is no longer flagged for
+foreign code (`start.all`). No `Time.parse_iso` yet.
 
 ## 4. The match and let rules turn every branch into a def
 
@@ -334,7 +364,7 @@ and a paragraph in NETWORKING.md: "background work beside the server".
 - That `Client.fetch` has no per-request options (7).
 - That a `WsServer.serve.with` app cannot take the whole-app middleware
   shown in the same guide (5).
-- `Bool.pick` is strict (1), `IO.now` is monotonic (3), `List.map` is
+- `Bool.pick` is strict (1, now fixed), `IO.now` is monotonic (3, now said), `List.map` is
   `&1` only (11).
 - Where a file's own IO effects may live, and that an app with foreign
   code is flagged in every check: `All terms check, but 2 defs rely on
