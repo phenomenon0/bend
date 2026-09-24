@@ -412,6 +412,14 @@ def File.write_bytes(file: File, data: List<&2, U32>) ->
   import "./effs/file_write.c"
   import "./effs/file_write.js"
 
+# File.write_bytes from a Bytes: the block as it lies, no byte a cell,
+# every byte written (a Char past 255 is not a byte: EINVAL, nothing
+# written)
+def File.write_buf(file: File, data: Bytes()) ->
+  IO(File & Result<&1, &1, U32 & String, Unit>):
+  import "./effs/file_write.c"
+  import "./effs/file_write.js"
+
 def File.close(file: File) -> IO(Unit):
   import "./effs/file_close.c"
   import "./effs/file_close.js"
