@@ -91,7 +91,7 @@ allow(/^power\/[a-z0-9_]+\.bend$/, 64000);
 allow(/^wire\/[A-Za-z0-9_]+\.(bend|c|md|py)$/, 400000);
 allow(/^wire\/http1\/[A-Za-z0-9_]+\.(bend|py)$/, 400000);
 allow(/^net\/ws(_[a-z]+)?\.(bend|py)$/, 64000);
-allow(/^net\/(http|server|client|url|json|LAWS|PROOF)\.bend$/, 64000);
+allow(/^net\/(http|server|client|url|json|stream|LAWS|PROOF)\.bend$/, 64000);
 allow(/^net\/(check|mutants)\.py$/, 32000);
 allow("net/README.md", 8000);
 allow(/^net\/examples\/[a-z_]+\.bend$/, 16000);

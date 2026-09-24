@@ -37,6 +37,7 @@ import ../net/client.bend as Client
     net/url.bend      URLs: parse, parse.ws, resolve, origin
     net/json.bend     Json: JSON bodies on power/json_value.bend
     net/ws_net.bend   the WebSocket client's Ws.Err as a NetError
+    net/stream.bend   Stream: request bodies as streams, for uploads
 
 **Http.** `Request{method, path, query, headers, body, remote, params}`
 (`Http.method(r)`, `Http.header(r, "x-name")`, `Http.param(r, "id")`,
@@ -80,6 +81,25 @@ unless set), `~Server.recovered(~app)` (a handler answering
 over a handler's IO (`Server.logged.around(r, io)`) for handlers with an
 environment.
 
+**Stream.** `Stream.serve(~app, ~ups, cfg)` and `Stream.serve.with(~E,
+~app, ~ups, env, cfg)` serve `app` as Server does, and beside it a table
+of stream routes, `ups` (`Stream.post(pat, h)`, `Stream.put`,
+`Stream.on(methods, pat, h)`), whose handlers take the head and the body
+as a `Stream.Body`: `h : Http.Request -> Stream.Body -> IO(Stream.Body &
+Http.Response)`. `Stream.read(b)` answers `Stream.Out(Maybe<&2, Bytes()>)`,
+the body beside the next chunk, `None` at the end, or a `Stream.Err`
+(`ETime EBad ELarge EClosed EIo`); `Stream.to_file(b, path)` writes the
+rest to a file and answers its length. The socket is read only as the
+handler reads, 64 KiB at a time. `Stream.config(cfg)` changed by
+`Stream.set.max_stream` (1 GiB; 413) and `Stream.set.progress` (10 s a
+read; 408), or `Stream.args(xs, c)` (`--max-stream --progress-ms`, and
+Server's flags). A stream route is chosen by the request line, before a
+field is read; its head is read by `net/stream.bend` (a Content-Length of
+any size), its body by wire/http1's reader entered at the body. An
+`Expect: 100-continue` is answered at the handler's first read; what a
+handler leaves is drained up to 1 MiB, else the answer closes; a body
+that failed is answered by the server (400, 408, 413).
+
 **Client.** `Client.get(url)`, `Client.post(url, ctype, body)`,
 `Client.request(Client.Req{method, url, headers, body}, opts)`: each
 `IO(Result<NetError, Response>)` on a session of its own;
@@ -112,6 +132,9 @@ and `Json.f64` (an `F64`; NaN and infinities are null), `Json.get`,
 | a head, past the read it began in | 16 KiB (reads of 16 KiB) | 431, closed |
 | a target | 8 KiB | 414, closed |
 | a body | 1 MiB (the engine's cap, the most) | 413 before it is read |
+| a streamed body | 1 GiB (`max_stream`; chunked at most 256 MiB) | 413 |
+| a streamed body's read | 10 s (`progress`) | 408, closed |
+| a streamed body left unread | 1 MiB drained | answered, closed |
 | connections | 1024 | the next waits for a slot |
 | SIGTERM | listener closed, idle connections let go within a second | the process ends when the rest end, or after grace (5 s) |
 | client: connect (DNS aside) | 10 s | Timeout |
@@ -149,12 +172,25 @@ passes its export. `net/LAWS.bend`:
   did not close it and nothing came after it, for every peer.
 - `redirect_cap`, `redirect_creds`: a chain allowed k redirects sends at
   most k + 1 requests, and no credential to an origin but the first.
+- `stream_body`: the chunks a stream handler reads, joined in order and
+  put back in front of what the reader holds, read as wire/http1/spec.bend's
+  walk of RFC 9112 reads the body, entered where it begins (a length, or
+  chunked), for every cut of the stream into reads.
+- `stream_bounded`: after a read Stream.read keeps (Stream.fits), what the
+  Body holds, as LAWS.bend counts it (the chunk, the body bytes the reader
+  holds, the bytes after the body), is at most that read; the reader holds
+  no body byte (a read is at most 64 KiB).
+- `stream_next`: the connection goes on after a streamed request
+  (Stream.next) only once the RFC's framing says the body ended, with
+  exactly the bytes after it; else it closes. An undrained body is never
+  read as a request.
 - vectors: percent-encoding over every byte, the query, URLs and
   Locations, the router's patterns, the response check.
 
-`python3 net/mutants.py`: twenty broken servers and clients, each
-refused. Not proven: the IO loops (they call the functions the laws are
-about), the deadlines and limits (checked by `check.py`).
+`python3 net/mutants.py`: twenty-nine broken servers, streams and
+clients, each refused. Not proven: the IO loops (they call the functions
+the laws are about), the deadlines and limits, a stream route's head
+(checked by `check.py`).
 
 ## The examples
 
@@ -167,6 +203,7 @@ about), the deadlines and limits (checked by `check.py`).
     net/examples/tls_server.bend   a server over TLS
     net/examples/relay.bend        fetch JSON upstream on a pooled session, serve part of it
     net/examples/ws_chat.bend      a WebSocket chat client
+    net/examples/upload.bend       uploads to files, a body counted as it comes
 
 `guide/NETWORKING.md` (`bend guide networking`) walks through them.
 
@@ -178,13 +215,18 @@ certificate that does not load; and the client against Python peers: pooling,
 refused, DNS, the deadline, redirects (cap, 303, 307, credentials),
 gzip, the body cap, a field with a line end refused, TLS refused
 self-signed, trusted by `--ca`, the name checked, and the server over
-TLS.
+TLS; and streamed bodies: 100 MB by length and chunked, written to a file
+byte for byte with the server's peak RSS measured (about 6 MB; 1 GiB by
+hand, the same), the stream's cap, a stalled body, a handler that
+returns without reading (drained, or closed with no byte of it read as a
+request), 100-continue, and pipelining after a streamed body.
 
 On one thread, `wrk -t2 -c32`, hello answers about 40k requests a
 second where the engine's literal `/health` answers 58k; with the
 response written as a literal the loop matches the engine, so the
 difference is the checked writer (`respond_framed`'s).
 
-Not yet: streaming request and response bodies (wire/stream.bend has the
-machinery), bodies past 1 MiB, the server's Upgrade, a deadline on the
-handler itself.
+Not yet: streaming response bodies, a chunked streamed body past 256
+MiB, a stream route's request pipelined behind another in one read (read
+whole, under max_body), the server's Upgrade, a deadline on the handler
+itself.

@@ -562,6 +562,10 @@ def check_stream(upload_bin, tmp):
                       b"GET / HTTP/1.1\r\nHost: t\r\nConnection: close\r\n\r\n")
     ok("stream: pipelined after a streamed body, the next requests are read from the bytes after it",
        r.count(b"HTTP/1.1 ") == 3 and b"saved p1: 3 bytes" in r and b"2 bytes, 0 lines" in r and eof, r)
+    r, eof = raw(port, b"GET / HTTP/1.1\r\nHost: t\r\n\r\nPOST /count HTTP/1.1\r\nHost: t\r\nContent-Length: 6\r\n"
+                      b"Connection: close\r\n\r\nab\ncd\n")
+    ok("stream: a stream route's request pipelined behind another in one read is read whole, then streamed",
+       r.count(b"HTTP/1.1 200") == 2 and r.endswith(b"6 bytes, 2 lines\n") and eof, r)
     r, eof = raw(port, b"PUT /upload/x HTTP/1.1\r\nHost: t\r\nContent-Length: 1\r\nTransfer-Encoding: chunked\r\n\r\n0\r\n\r\n")
     ok("stream: a body framed two ways is a 400 that closes", r.startswith(b"HTTP/1.1 400") and eof, r)
     r, eof = raw(port, b"PUT /upload/x HTTP/1.1\r\nContent-Length: 1\r\n\r\nx")

@@ -886,12 +886,61 @@ def take2(z: R.P) -> {Wr.drain.b(R.P, R.take(Wr.drain.s(R.P, R.take(z)))) == "" 
         case R.Bad{}:
           {==}
 
+# what follows the body, as Stream.rest reads it and as the law spells it
+def after.eq(p: R.P) -> {Laws.spec.after(p) == Stream.rest(p) : Bytes()}:
+  match p:
+    case R.P{st, out}:
+      match st:
+        case R.Fin{r, x}:
+          {==}
+        case R.SVer{a, b}:
+          {==}
+        case R.SCode{v10, n, k}:
+          {==}
+        case R.SWhy{v10, code}:
+          {==}
+        case R.Eol{h}:
+          {==}
+        case R.Lin{h}:
+          {==}
+        case R.Nam{h, cl, te, co}:
+          {==}
+        case R.Oth{h}:
+          {==}
+        case R.Len0{h}:
+          {==}
+        case R.Len{h, n}:
+          {==}
+        case R.LenW{h, n}:
+          {==}
+        case R.Te0{h}:
+          {==}
+        case R.Te{h, m}:
+          {==}
+        case R.Conn{h, cl, ka, mc, mk}:
+          {==}
+        case R.Eoh{h}:
+          {==}
+        case R.Bod{h, more, got}:
+          {==}
+        case R.Chk{h, at, n, got, left}:
+          {==}
+        case R.Dat{h, more, got, left}:
+          {==}
+        case R.Clo{h, got, left}:
+          {==}
+        case R.Bad{}:
+          {==}
+
 def bd.at(q: R.P & Bytes(), +n: Nat, h: {Wr.drain.b(R.P, R.take(Wr.drain.s(R.P, q))) == "" : Bytes()},
   ok: {Stream.fits(Wr.drain.s(R.P, q), Wr.drain.b(R.P, q), n) == True{} : Bool}) ->
-  {Nat.is_le(Stream.kept(Wr.drain.s(R.P, q), Wr.drain.b(R.P, q)), n) == True{} : Bool}:
+  {Nat.is_le(Laws.spec.hold(Wr.drain.s(R.P, q), Wr.drain.b(R.P, q)), n) == True{} : Bool}:
   match q:
     case (+p, +x):
-      %Equal.sym(Bytes(), Wr.drain.b(R.P, R.take(p)), "", h) : {Nat.is_le(Nat.add(Bytes.len(x), Nat.add(Bytes.len(_), Bytes.len(Stream.rest(p)))), n) == True{} : Bool}
+      %Equal.sym(Bytes(), Wr.drain.b(R.P, R.take(p)), "", h) :
+        {Nat.is_le(Nat.add(Bytes.len(x), Nat.add(Bytes.len(_), Bytes.len(Laws.spec.after(p)))), n) == True{} : Bool}
+      %Equal.sym(Bytes(), Laws.spec.after(p), Stream.rest(p), after.eq(p)) :
+        {Nat.is_le(Nat.add(Bytes.len(x), Bytes.len(_)), n) == True{} : Bool}
       ok
 
 def Laws.stream_bounded(e, bs, p, ok):

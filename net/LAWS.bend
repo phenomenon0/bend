@@ -527,6 +527,20 @@ law stream_body:
   {R.look(R.give(Wr.drain.b(R.P, streamed(e, f, rs)), Wr.drain.s(R.P, streamed(e, f, rs)))) ==
     spec.body(e, f, Bytes.to_list(Bytes.concat(rs))) : R.Look}
 
+# what a reader holds, spelled out: the body bytes a take would hand on,
+# and the bytes that came after the body
+def spec.after(p: R.P) -> Bytes():
+  match p:
+    case R.P{st, out}:
+      match st:
+        case R.Fin{r, x}:
+          x
+        case _:
+          ""
+
+def spec.hold(+p: R.P, +x: Bytes()) -> Nat:
+  Nat.add(Bytes.len(x), Nat.add(Bytes.len(Wr.drain.b(R.P, R.take(p))), Bytes.len(spec.after(p))))
+
 # LAW: a streamed body costs one read. Whatever the reader's state and
 # whatever a read brings, once the read is kept (Stream.fits, which
 # Stream.read asks of every read, refusing the body otherwise) what the
@@ -542,7 +556,7 @@ law stream_bounded:
   for +p: R.P
   for ok: {Stream.fits(Wr.drain.s(R.P, Stream.step(e, bs, p)), Wr.drain.b(R.P, Stream.step(e, bs, p)),
     Bytes.len(bs)) == True{} : Bool}
-  {Nat.is_le(Stream.kept(Wr.drain.s(R.P, Stream.step(e, bs, p)), Wr.drain.b(R.P, Stream.step(e, bs, p))),
+  {Nat.is_le(spec.hold(Wr.drain.s(R.P, Stream.step(e, bs, p)), Wr.drain.b(R.P, Stream.step(e, bs, p))),
     Bytes.len(bs)) == True{} : Bool}
 
 # what the RFC says follows a body: the bytes after it once it ended;

@@ -77,7 +77,8 @@ answers it, over it: `--host`, `--port`, `--idle-ms`, `--head-ms`,
 given wins over `cfg`; a `Server.set` applied to what `args` answers wins over
 the flag. `Server.flag(xs, "--root", "www")` reads a flag of your own. Each
 reader takes the list whole, so ask `IO.args()` once for each. A `max_body`
-past 1 MiB is cut to 1 MiB, the engine's cap.
+past 1 MiB is cut to 1 MiB, the engine's cap. Larger bodies are streamed
+(Uploads, below).
 
 ### The Router
 
@@ -217,6 +218,54 @@ curl --cacert cert.pem https://localhost:8443/
 ALPN `http/1.1`. Every other default is the same. A certificate or key that
 cannot be loaded ends the program before it listens, with `TLS setup failed`
 and the file at fault.
+
+### Uploads
+
+A body past `max_body` is taken as a stream. `Stream.serve.with(~E, ~app,
+~uploads, env, cfg)` (`net/stream.bend`) serves `app` as `Server.serve.with`
+does, and a table of stream routes beside it. A stream route's handler gets the
+request's head and its body as a `Stream.Body`, and hands the body back beside
+its response:
+
+```python
+def uploads(+dir: Bytes()) -> List<Stream.Route>:
+  [Stream.on(["PUT", "POST"], "/upload/:name", r => b => upload(dir, r, b)),
+   Stream.post("/count", count),
+   Stream.post("/refuse", refuse)]
+```
+
+`Stream.to_file(b, path)` writes the rest of the body to a file, a read at a
+time, and answers how many bytes, as `Stream.Out(Nat)`: the body beside a
+`Result`, like a WebSocket's `Ws.Out`:
+
+```python
+# the file written: 201 with its size, or why the body stopped
+def saved(+name: Bytes(), g: Stream.Out(Nat)) -> IO(Stream.Body & Http.Response):
+  (b, r) = g
+  match r:
+    case Done{n}:
+      IO.pure(Stream.Body & Http.Response, (b, Http.text(201, Bytes.concat(["saved ", name, ": ", Nat.show(n), " bytes\n"]))))
+    case Fail{e}:
+      IO.pure(Stream.Body & Http.Response, (b, Http.text(400, Bytes.append(Stream.err.show(e), "\n"))))
+```
+
+`Stream.read(b)` answers the next chunk (`Some`, never empty), `None` at the
+end, or a `Stream.Err` (`ETime`, `EBad`, `ELarge`, `EClosed`, `EIo`). The socket
+is read only when the handler asks, at most 64 KiB at a time, so a slow handler
+slows the client down and the server holds one read. A 100 MB upload runs in
+about 6 MB of memory.
+
+`Stream.config(cfg)` wraps a server configuration. `Stream.set.max_stream`
+(1 GiB) caps a body: a longer Content-Length is a 413 before a byte is read,
+and a chunked body is cut there (a chunked body is at most 256 MiB).
+`Stream.set.progress` (10 s) is the time each read has to bring a byte, or
+408. `Stream.args` reads `--max-stream` and `--progress-ms`, and every
+`Server.args` flag. An `Expect: 100-continue` is answered at the handler's
+first read, so a handler that refuses without reading never asks for the body.
+When the handler returns, the server drains up to 1 MiB of what is left and
+the connection goes on. Past that, it answers and closes. A body that failed
+(malformed, too large, too slow) is answered by the server itself, whatever
+the handler said. The whole program is `net/examples/upload.bend`.
 
 ## Fetching
 
@@ -484,6 +533,9 @@ cannot hold a resource forever.
 | a head, past the read it began in | 16 KiB | 431, closed | a head is held in memory whole |
 | a target | 8 KiB | 414, closed | the same, for the request line |
 | a body | 1 MiB (the most) | 413, before it is read | a body is held in memory whole |
+| a streamed body | 1 GiB (`max_stream`; chunked, 256 MiB) | 413 | a stream route's body is read a chunk at a time |
+| a streamed body's reads | 10 s each (`progress`) | 408, closed | a body sent a byte a minute cannot hold a connection |
+| a body a stream handler left | 1 MiB drained | answered, closed | its bytes are never read as a request |
 | connections | 1024 | the next waits for a slot | each holds memory and a descriptor |
 | SIGTERM | listener closed; idle connections let go within a second | the rest end, or grace (5 s) is up | a deploy does not cut requests in flight |
 | client: connect (DNS aside) | 10 s | `Timeout` | a host that does not answer |
@@ -516,6 +568,12 @@ parsed under the budget you pass, at most 64 containers deep.
 - `redirect_cap`: a chain allowed k redirects sends at most k + 1 requests.
 - `redirect_creds`: credentials never go to an origin other than the first
   request's.
+- `stream_body`: the chunks a stream handler reads, joined, are the body RFC
+  9112's framing finds, however TCP cut the stream.
+- `stream_bounded`: between reads, a streamed body holds at most the last read.
+- `stream_next`: after a streamed request the connection goes on only once
+  the body has ended, with exactly the bytes after it. A body a handler did not
+  read is never read as the next request.
 - the vectors: percent-encoding round-trips every byte, and the query, URL,
   Location and route pattern readings match the tables listed there.
 
@@ -533,8 +591,9 @@ python3 net/check.py           # the examples, checked from outside against ever
 ```
 
 What is not proven: the IO loops themselves (they call the functions the laws
-are about), and the deadlines and limits. `net/check.py` checks those from
-outside.
+are about), the deadlines and limits, and a stream route's head, which
+`net/stream.bend` reads line by line with the engine's spec views.
+`net/check.py` checks those from outside.
 
 ## Speed
 
@@ -544,10 +603,12 @@ checked response writer that `respond_framed` is about (`net/README.md`).
 
 ## Not Built Yet
 
-- Streaming bodies. A request body and a response body are held whole.
-  `wire/stream.bend` has the machinery, and `demos/io_sink` uses it, but
-  `net/` does not yet.
-- Bodies past 1 MiB on the server. The engine's cap is the most.
+- Streaming response bodies. A response body is held whole, or sent from a
+  file by `Http.file`.
+- A stream route's request pipelined behind another in one read is read whole,
+  under `max_body`. Clients that do not pipeline are not affected.
+- A chunked streamed body past 256 MiB. The reader's budget stays under 2^28,
+  so a chunk's size never wraps. A Content-Length body can reach 4 GiB.
 - A server-side Upgrade, so no WebSocket server in `net/`. The client is
   there. The HTTP engine (`demos/io_http_engine`) has a `/ws` echo of its own.
 - A deadline on the handler itself. A handler that never answers holds its

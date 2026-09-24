@@ -1,6 +1,7 @@
 # bend-net: request bodies as streams.
 #
 #   Stream.serve(~app, ~uploads(), Stream.config(Server.config(8080)))
+#   Stream.serve.with(~E, ~app, ~uploads, env, cfg)
 #
 # A server that takes uploads: app answers every request as
 # Server.serve's does, its body whole, and uploads() is a table of
@@ -43,9 +44,10 @@
 # at most its max_head (408, 431). An Expect: 100-continue is answered
 # at the handler's first read of the socket, so a handler that refuses
 # without reading never asks for the body. When the handler returns, the
-# server drains what is left of the body, up to drain() (1 MiB) within
-# the progress time, and the connection goes on; past that it answers
-# and closes. A read that failed (the body refused, too large, too slow)
+# server drains what is left of the body, up to drain.cap() (1 MiB),
+# each read within the progress time, and the connection goes on; past
+# that it answers and closes (and when a 100 Continue is still owed, the
+# client sends no body: it answers and closes at once). A read that failed (the body refused, too large, too slow)
 # is answered by the server itself (400, 413, 408) whatever the handler
 # answered, and the connection closes.
 #
@@ -189,14 +191,6 @@ def rest(p: R.P) -> Bytes():
           x
         case _:
           ""
-
-# what a reader holds: the body bytes not taken, and the bytes after
-def held(+p: R.P) -> Nat:
-  Nat.add(Bytes.len(Wr.drain.b(R.P, R.take(p))), Bytes.len(rest(p)))
-
-# what a Body holds after a step: the chunk it hands on, and the reader
-def kept(+p: R.P, +x: Bytes()) -> Nat:
-  Nat.add(Bytes.len(x), held(p))
 
 # a step is kept only when the chunk and the bytes after the body are
 # no more than the n bytes the read brought (else the read is refused)
@@ -935,23 +929,31 @@ def too.big(f: Frame, +max: U32) -> Bool:
 def lim.check(+l: Lim) -> Lim:
   Bool.pick(Lim, lim.over(l), lim.failed(l, ELarge{}), l)
 
-def lim.new(+cfg: Cfg, +e: R.Ask, +cont: Bool, +got: Nat) -> Lim:
-  lim.check(Lim{e, cfg.prog(cfg), cont, got, U32.to_nat(cfg.max(cfg)), None{}})
+def lim.new(+cfg: Cfg, +e: R.Ask, +cont: Bool, +got: Nat, f0: Maybe<&2, Err>) -> Lim:
+  lim.check(Lim{e, cfg.prog(cfg), cont, got, U32.to_nat(cfg.max(cfg)), f0})
+
+# the first read refused: for the budget, or the grammar
+def first.fail(+e: R.Ask, +rest: Bytes(), +p0: R.P, bad: Bool) -> Maybe<&2, Err>:
+  match bad:
+    case True{}:
+      Some{refused.why(e, rest, p0)}
+    case False{}:
+      None{}
 
 def begin.body(~E: Data, ~ups: Ux(E), +cfg: Cfg, +env: E, +req: Http.Request, +v10: Bool, +closing: Bool, +head: Bool,
-  +e: R.Ask, +cont: Bool, ok: Bool, +p: R.P, +x: Bytes(), s: Socket, nx: Go()) -> IO(Socket):
+  +e: R.Ask, +cont: Bool, ok: Bool, +p: R.P, +x: Bytes(), f0: Maybe<&2, Err>, s: Socket, nx: Go()) -> IO(Socket):
   match ok:
     case False{}:
       own.fin(cfg, 400, s)
     case True{}:
-      IO.bind(Body & Http.Response, Socket, run(ups(env), req, Body{s, p, x, lim.new(cfg, e, cont, Bytes.len(x))}),
+      IO.bind(Body & Http.Response, Socket, run(ups(env), req, Body{s, p, x, lim.new(cfg, e, cont, Bytes.len(x), f0)}),
         bo => after(cfg, head, closing, v10, bo, nx))
 
 def begin.step(~E: Data, ~ups: Ux(E), +cfg: Cfg, +env: E, +req: Http.Request, +v10: Bool, +closing: Bool, +head: Bool,
-  +e: R.Ask, +cont: Bool, +rest: Bytes(), q: R.P & Bytes(), s: Socket, nx: Go()) -> IO(Socket):
+  +e: R.Ask, +cont: Bool, +rest: Bytes(), +p0: R.P, q: R.P & Bytes(), s: Socket, nx: Go()) -> IO(Socket):
   (+p, +x) = q
   begin.body(~E, ~ups, cfg, env, req, v10, closing, head, e, cont && String.is_empty(rest), fits(p, x, Bytes.len(rest)),
-    p, x, s, nx)
+    p, x, first.fail(e, rest, p0, refused(R.look(p))), s, nx)
 
 # a body announced past max_stream is a 413 before a byte of it is read;
 # else the bytes after the head are the body's first read, and the
@@ -963,7 +965,7 @@ def begin.at(~E: Data, ~ups: Ux(E), +cfg: Cfg, +env: E, +req: Http.Request, +f: 
       own.fin(cfg, 413, s)
     case False{}:
       +e = ask(cfg.max(cfg))
-      begin.step(~E, ~ups, cfg, env, req, v10, closing, head, e, cont, rest, step(e, rest, entry(e, f)), s, nx)
+      begin.step(~E, ~ups, cfg, env, req, v10, closing, head, e, cont, rest, entry(e, f), step(e, rest, entry(e, f)), s, nx)
 
 def begin(~E: Data, ~ups: Ux(E), +cfg: Cfg, +env: E, hd: Head, +rest: Bytes(), s: Socket, nx: Go()) -> IO(Socket):
   match hd:

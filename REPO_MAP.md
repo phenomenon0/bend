@@ -38,6 +38,7 @@ ordinary program.
       client.bend                  Client: get, post, request, sessions, NetError
       url.bend                     URLs: parse, resolve, origin
       json.bend                    Json: JSON bodies
+      stream.bend                  Stream: request bodies as streams (uploads), stream routes
       ws.bend                      Ws: the WebSocket client
       ws_net.bend                  a Ws.Err as a NetError
       ws_frame.bend, ws_hs.bend    the WebSocket client's frames and handshake
@@ -84,6 +85,7 @@ or to write a server for another protocol.
     net/examples/fetch.bend         a command-line client, like a small curl
     net/examples/relay.bend         fetch JSON upstream, keep some fields, serve them
     net/examples/ws_chat.bend       a WebSocket chat client
+    net/examples/upload.bend        uploads of any size to files, in bounded memory
 
 Each builds with `bend net/examples/NAME.bend -o NAME`. Its header says how to
 run it.

@@ -11,9 +11,9 @@
 # a streamed body read from past a read's first byte, a read dropped, a
 # length counted one too many, a chunked body given a budget of its own,
 # a reader that keeps the body instead of handing it on, a read kept
-# whatever came after the body, a connection that goes on before its
-# body ended or without the bytes after it -- and net/PROOF.bend must
-# refuse every one. Each runs in a scratch
+# whatever came after the body or those bytes not counted, a connection
+# that goes on before its body ended or without the bytes after it --
+# and net/PROOF.bend must refuse every one. Each runs in a scratch
 # copy of the tree the proof imports, where bend-proxy's proof (which
 # net/'s uses: rr.h, u32.eq, the list lemmas, and scan_is_spec and
 # frames_agree through them) is replaced by its statements left open:
@@ -125,8 +125,14 @@ MUTANTS = [
     '''      R.Bod{R.body.head(), q, ""}''', '''      R.Bod{R.body.head(), 1n+q, ""}'''),
   ('a chunked body given a budget of its own (stream_body)', B,
     '''R.Chk{R.body.head(), R.ASize0{}, 0, "", R.ask.cap(e)}''', '''R.Chk{R.body.head(), R.ASize0{}, 0, "", 268435455}'''),
-  ('the reader keeps the body instead of handing it on (stream_bounded)', B,
+  ('the reader keeps the body instead of handing it on (stream_body)', B,
     '''  R.take(R.feed_buf(e, bs, p))''', '''  (R.feed_buf(e, bs, p), "")'''),
+  ('the bytes after a body left out of what a Body holds (stream_bounded)', B,
+    '''        case R.Fin{r, x}:
+          x
+''', '''        case R.Fin{r, x}:
+          ""
+'''),
   ('a read kept whatever came after the body (stream_bounded)', B,
     '''  Nat.is_le(Nat.add(Bytes.len(x), Bytes.len(rest(p))), n)''', '''  Nat.is_le(Bytes.len(x), n)'''),
   ('the connection goes on before the body ended (stream_next)', B,
