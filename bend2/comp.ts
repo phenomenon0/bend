@@ -9154,8 +9154,33 @@ function io_push(fun, arg, fresh) {
   io.live += fresh ? 1 : 0;
 }
 
+// A waiter on the clock alone sits in io.heap, a min-heap on its deadline
+// (the earlier park breaks a tie), so a sleeper costs a pass nothing.
+function io_heap_lt(a, b) {
+  return a.at < b.at || a.at === b.at && a.n < b.n;
+}
+
+function io_heap_pop(h) {
+  const top = h[0], w = h.pop();
+  let i = 0;
+  for (let c = 1; c < h.length; c = 2 * i + 1) {
+    c += c + 1 < h.length && io_heap_lt(h[c + 1], h[c]) ? 1 : 0;
+    if (!io_heap_lt(h[c], w)) {
+      break;
+    }
+    h[i] = h[c];
+    i = c;
+  }
+  if (h.length > 0) {
+    h[i] = w;
+  }
+  return top;
+}
+
 function io_wait(io) {
-  const soon = io.waits.reduce((m, w) => Math.min(m, w.at ?? m), Infinity);
+  const h = io.heap;
+  const soon = io.waits.reduce((m, w) => Math.min(m, w.at ?? m),
+    h.length > 0 ? h[0].at : Infinity);
   const ms = soon === Infinity ? -1
     : Math.max(0, Math.ceil(soon - performance.now()));
   const fds = io.waits.filter((w) => w.fd !== undefined);
@@ -9180,6 +9205,9 @@ function io_wait(io) {
     }
     return !ready;
   });
+  while (h.length > 0 && h[0].at <= now) {
+    io_push(io_wake, io_heap_pop(h), false);
+  }
 }
 
 // Resume k with more's value; undefined means re-parked.
@@ -9191,11 +9219,21 @@ function io_wake(w) {
 // Park for read/write (out) or deadline at (performance.now()).
 // Undefined fd/at disables that source.
 function io_park_on(fd, out, k, more, at) {
-  globalThis.BEND_IO.waits.push({ fd, out, k, more, at });
+  const io = globalThis.BEND_IO;
+  const w = { fd, out, k, more, at, n: io.n++ };
+  if (fd !== undefined) {
+    io.waits.push(w);
+    return;
+  }
+  let i = io.heap.push(w) - 1;
+  for (; i > 0 && io_heap_lt(w, io.heap[i - 1 >> 1]); i = i - 1 >> 1) {
+    io.heap[i] = io.heap[i - 1 >> 1];
+  }
+  io.heap[i] = w;
 }
 
 function io_run(m) {
-  const io = { runs: [], live: 0, waits: [] };
+  const io = { runs: [], live: 0, waits: [], heap: [], n: 0 };
   globalThis.BEND_IO = io;
   try {
     io_push(run_loop(m()), (x) => ({ $: "Emit", value: x }), true);
@@ -9204,7 +9242,7 @@ function io_run(m) {
         if (io.live === 0) {
           return 0;
         }
-        if (io.waits.length === 0) {
+        if (io.waits.length + io.heap.length === 0) {
           io_errs("bend: deadlock: every computation waits on a channel");
           return 1;
         }
