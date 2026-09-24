@@ -428,9 +428,9 @@ stock runtime; these are what the port hit. Each reads REPRO on canon
   millisecond, and four times that for twice the bytes. A scanner that
   only reads forward can keep a cursor (std/bytes_list.bend's `Buf`), but
   a decoder that reads back by offset cannot: std/gzip.bend inflates
-  30 KB in 16 s on canon (C lane), where this repo's packed bytes do
-  1 MB in 0.4 s. Array is O(1), but it is linear (`Type`) and power of
-  two, so it cannot be the byte string inside a `Data` state or a
+  30 KB in 11 CPU seconds on canon (C lane), where this repo's packed
+  bytes do 1 MB in 0.23 s. Array is O(1), but it is linear (`Type`) and
+  power of two, so it cannot be the byte string inside a `Data` state or a
   `String` value. Suggest a `Bytes` type: a packed block with get, len,
   slice and push, `Data`, what this repo's `File.read_buf` and
   `TCP.recv_buf` hand back.

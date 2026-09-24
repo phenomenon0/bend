@@ -204,9 +204,9 @@ held to CPython's first. C lane, one thread:
 
 | | released Bend (canon `95317d95`), list | this repo, list | this repo, packed |
 |---|---|---|---|
-| CSV, 10 MB (`tests/power/bench/csv/gen.py`) | 8.2 MB/s | 8.5 MB/s | PACKED_CSV |
-| JSON, 26 MB (json-iterator's `large-file.json`, GitHub events) | 3.2 MB/s | 1.1 MB/s | PACKED_JSON |
-| gunzip, 30 KB out | 2.7 KB/s | 7.7 KB/s | PACKED_GZ |
+| CSV, 10 MB (`tests/power/bench/csv/gen.py`) | 8.2 MB/s | 8.5 MB/s | 23 MB/s |
+| JSON, 26 MB (json-iterator's `large-file.json`, GitHub events) | 3.2 MB/s | 1.1 MB/s | 23 MB/s |
+| gunzip, 30 KB out | 2.7 KB/s | 7.7 KB/s | 3.2 MB/s (1 MB out: 4.4 MB/s) |
 
 On released Bend, compile to C for speed: `bend F.bend` runs an IO main on
 the JS runtime, and so does `-o F.js`, where the same readers do CSV at
