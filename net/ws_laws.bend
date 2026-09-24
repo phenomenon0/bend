@@ -302,6 +302,35 @@ law url_vectors:
      None{}, None{}, None{}, None{}, None{}, None{}, None{}]
     : List<&2, Maybe<&2, H.Url>>}
 
+# LAW: IP-literal URLs (RFC 3986 3.2.2): the IPv6 address kept in its
+# brackets and written as RFC 5952 does (net/addr.bend); refused: a
+# bracket not closed, a byte after it that is not ':', a zone ID (RFC
+# 6874), a port of 0.
+law url_v6_vectors:
+  {[H.url.parse("ws://[::1]/"), H.url.parse("wss://[0:0:0:0:0:0:0:1]:9001/a?b"), H.url.parse("ws://[2001:DB8::1]:80"),
+    H.url.parse("ws://[::ffff:127.0.0.1]:81/"), H.url.parse("ws://[::1"), H.url.parse("ws://[::1]x/"),
+    H.url.parse("ws://[fe80::1%25eth0]/"), H.url.parse("ws://[::1]:0/"), H.url.parse("ws://[1.2.3.4]/")] ==
+    [Some{H.Url{False{}, "[::1]", 80, "/"}}, Some{H.Url{True{}, "[::1]", 9001, "/a?b"}},
+     Some{H.Url{False{}, "[2001:db8::1]", 80, "/"}}, Some{H.Url{False{}, "[::ffff:127.0.0.1]", 81, "/"}},
+     None{}, None{}, None{}, None{}, None{}]
+    : List<&2, Maybe<&2, H.Url>>}
+
+def v6.req(m: Maybe<&2, H.Url>) -> Bytes():
+  match m:
+    case Some{u}:
+      H.request(u, "dGhlIHNhbXBsZSBub25jZQ==", Nil{})
+    case None{}:
+      ""
+
+# LAW: the opening request to an IP-literal: its Host field is the
+# address in its brackets, canonical, the port when it is not the
+# scheme's (RFC 6455 4.1, RFC 9110 7.2).
+law hs_request_v6:
+  {[v6.req(H.url.parse("ws://[0:0::1]:9001/chat")), v6.req(H.url.parse("wss://[2001:DB8::1]/"))] ==
+    ["GET /chat HTTP/1.1\r\nHost: [::1]:9001\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n",
+     "GET / HTTP/1.1\r\nHost: [2001:db8::1]\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n"]
+    : List<&2, Bytes()>}
+
 # The server's end
 # ================
 #

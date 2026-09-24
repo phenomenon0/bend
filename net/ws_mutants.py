@@ -12,7 +12,8 @@
 # scratch, a close answered twice or written after, a ping not answered,
 # the key or the method not checked, a 200 for a request that did not
 # ask, the Accept or Connection: Upgrade wrong, a subprotocol not
-# offered named -- and net/ws_proof.bend must refuse every one. Each
+# offered named; an IP-literal URL's brackets dropped or its port
+# ignored -- and net/ws_proof.bend must refuse every one. Each
 # runs in a scratch copy of what the proof imports, and the copy is
 # checked clean first.
 #
@@ -22,7 +23,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
-FILES = ['net/ws_frame.bend', 'net/ws_hs.bend', 'net/ws_laws.bend', 'net/ws_proof.bend',
+FILES = ['net/ws_frame.bend', 'net/ws_hs.bend', 'net/addr.bend', 'net/ws_laws.bend', 'net/ws_proof.bend',
   'demos/io_http_engine/ws.bend', 'demos/io_http_engine/sha1.bend', 'demos/io_http_engine/b64.bend',
   'wire/reader.bend']
 
@@ -160,6 +161,12 @@ MUTANTS = [
   ('a subprotocol the client did not offer is named', H,
     '''  Bool.pick(Bytes(), has(offered, proto) && Bool.not(String.is_empty(proto)), proto, "")''',
     '''  Bool.pick(Bytes(), Bool.not(String.is_empty(proto)), proto, "")'''),
+  ("an IP-literal's brackets dropped from the URL and the Host field", H,
+    '''    case Done{h} True{}:
+      url.make(tls, h, path,''', '''    case Done{h} True{}:
+      url.make(tls, A.bare(h), path,'''),
+  ("the port after an IP-literal ignored", H,
+    '''Bool.pick(Maybe<&2, String>, String.is_empty(a), None{}, Some{String.drop(a, 1n)})''', '''None{}'''),
 ]
 
 

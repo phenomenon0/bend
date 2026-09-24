@@ -9,6 +9,13 @@
 # a route that does not match; a pool that takes back a connection its
 # response closed; a redirect that keeps credentials, forgets a cookie,
 # or sends once more past its cap; percent-escapes and URLs read wrong;
+# an IPv6 address written with a "::" for one group, the last of equal
+# runs compressed, in uppercase, with leading zeros, mapped IPv4 in hex,
+# or read with a "::" for no group, a dotted part with a leading zero or
+# not at the end, a group of five digits; an IP-literal kept without its
+# brackets or as written, a zone ID not told apart, a byte after the
+# bracket ignored, a Host field or an origin (the pool's key) without
+# the brackets;
 # a streamed body read from past a read's first byte, a read dropped, a
 # length counted one too many, a chunked body given a budget of its own,
 # a reader that keeps the body instead of handing it on, a read kept
@@ -31,6 +38,7 @@ ROOT = os.path.dirname(HERE)
 DIRS = ['net', 'wire', 'demos/io_http_engine', 'demos/io_proxy', 'power']
 
 H, S, C, U = 'net/http.bend', 'net/server.bend', 'net/client.bend', 'net/url.bend'
+A = 'net/addr.bend'
 B = 'net/stream.bend'
 
 # (what, file, before, after)
@@ -125,8 +133,42 @@ MUTANTS = [
     '''  Bytes.append(esc.go(False{}, dots(Bool.pick(Bytes(), String.is_empty(path), "/", path)), ""),''',
     '''  Bytes.append(esc.go(False{}, Bool.pick(Bytes(), String.is_empty(path), "/", path), ""),'''),
   ('a user and password in a URL taken (url_vectors)', U,
-    '''  url.made(Nat.is_lt(Bytes.find_byte(auth, 0n, 64), Bytes.len(auth)), U32.is_eq(Bytes.get(auth, 0n), 91),''',
-    '''  url.made(False{}, U32.is_eq(Bytes.get(auth, 0n), 91),'''),
+    '''      url.made(Nat.is_lt(Bytes.find_byte(auth, 0n, 64), Bytes.len(auth)), port.of(''',
+    '''      url.made(False{}, port.of('''),
+  ('a lone zero group written as "::" (ip6_vectors)', A,
+    '''  Bool.pick(Bytes(), Nat.is_lt(bl, 2n), join(gs),''', '''  Bool.pick(Bytes(), Nat.is_lt(bl, 1n), join(gs),'''),
+  ('the last of equal zero runs written as "::" (ip6_vectors)', A,
+    '''      +end = Nat.is_lt(bl, cl) && Bool.not(z)''', '''      +end = Nat.is_le(bl, cl) && Bool.not(z)'''),
+  ('an address written in uppercase (ip6_vectors)', A,
+    '''(v + 87 : U32)''', '''(v + 55 : U32)'''),
+  ('a group written with its leading zeros (ip6_vectors)', A,
+    '''  Bool.pick(Bytes(), U32.is_le(4096, g), Bytes.from_list(''', '''  Bool.pick(Bytes(), True{}, Bytes.from_list('''),
+  ('an IPv4-mapped address written in hex (ip6_vectors)', A,
+    '''String.eq(join(List.take(&2, U32, gs, 6n)), "0:0:0:0:0:ffff")''', '''False{}'''),
+  ('a "::" read as no group at all (ip6_vectors)', A,
+    '''Nat.is_le(n, 7n)''', '''Nat.is_le(n, 8n)'''),
+  ('a dotted part with a leading zero read (ip6_vectors)', A,
+    '''
+    && (Nat.is_eq(n, 1n) || Bool.not(U32.is_eq(Bytes.get(s, 0n), 48))), octet.max''', ''', octet.max'''),
+  ('a dotted part read before a "::" (ip6_vectors)', A,
+    '''side.cons(one(tail && List.is_empty''', '''side.cons(one(List.is_empty'''),
+  ('a group of five digits read (ip6_vectors)', A,
+    '''Nat.is_le(Bytes.len(s), 4n)''', '''Nat.is_le(Bytes.len(s), 5n)'''),
+  ('an IP-literal kept without its brackets (literal_vectors, host_vectors, origin_vectors)', A,
+    '''      Done{Bytes.concat(["[", show(gs), "]"])}''', '''      Done{show(gs)}'''),
+  ('an IP-literal kept as written, not read (literal_vectors, origin_vectors)', U,
+    '''A.literal(String.take(String.drop(auth, 1n), Nat.sub(e, 1n)))''',
+    '''Done{Bytes.concat(["[", String.take(String.drop(auth, 1n), Nat.sub(e, 1n)), "]"])}'''),
+  ('a zone ID not told apart (literal_vectors)', A,
+    '''Nat.is_lt(Bytes.find_byte(s, 0n, 37), Bytes.len(s)), parse(s))''', '''False{}, parse(s))'''),
+  ('a byte after an IP-literal\'s bracket ignored (literal_vectors)', U,
+    '''(String.is_empty(after) || U32.is_eq(Bytes.get(after, 0n), 58))''', '''True{}'''),
+  ('the Host field without the brackets (host_vectors)', U,
+    '''U32.is_eq(p, dport(t)), h, Bytes.concat([h, ":", U32.show(p)]))''',
+    '''U32.is_eq(p, dport(t)), A.bare(h), Bytes.concat([A.bare(h), ":", U32.show(p)]))'''),
+  ('the origin, the pool\'s key, without the brackets (origin_vectors)', U,
+    '''Bool.pick(Bytes(), t, "https://", "http://"), h, ":", U32.show(p)])''',
+    '''Bool.pick(Bytes(), t, "https://", "http://"), A.bare(h), ":", U32.show(p)])'''),
   ('a streamed body read from past each read\'s first byte (stream_body)', B,
     '''  R.take(R.feed_buf(e, bs, p))''', '''  R.take(R.feed_buf(e, String.drop(bs, 1n), p))'''),
   ('a read of a streamed body dropped (stream_body)', B,

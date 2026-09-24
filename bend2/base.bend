@@ -452,7 +452,9 @@ def TLS.listen_alpn(port: U32, cert: String, key: String, names: String) ->
   import "./effs/tls_listen_alpn.js"
 
 # TCP.listen, TCP.listen_shared and TLS.listen bound to one address, a
-# dotted IPv4 one ("127.0.0.1": this machine alone); they bind 0.0.0.0
+# dotted IPv4 one ("127.0.0.1": this machine alone) or an IPv6 one ("::1";
+# "::" every interface, IPv4's too where the system allows); they bind
+# 0.0.0.0
 def TCP.listen_on(host: String, port: U32) -> IO(Result<&1, &1, U32 & String, Listener>):
   import "./effs/tcp_listen.c"
   import "./effs/tcp_listen.js"
@@ -486,8 +488,8 @@ def TCP.connect(host: String, port: U32) ->
   import "./effs/tcp_connect.c"
   import "./effs/tcp_connect.js"
 
-# TCP.connect with a deadline: host a dotted IPv4 address (DNS.resolve
-# turns a name into one). Contract (wire/world.bend, cx.ok): to a peer
+# TCP.connect with a deadline: host a dotted IPv4 address or an IPv6 one
+# (DNS.resolve and DNS.resolve_all turn a name into them). Contract (wire/world.bend, cx.ok): to a peer
 # that accepts, Done within ms; to a port nothing listens on, Fail with
 # ECONNREFUSED; to one that never answers, Fail with ETIMEDOUT (110 on
 # Linux, 60 on macOS) after at least ms, and never later than the loop's
@@ -514,12 +516,21 @@ def DNS.resolve(name: String) -> IO(Result<&1, &1, U32 & String, String>):
   import "./effs/dns_resolve.c"
   import "./effs/dns_resolve.js"
 
+# Every address the system's resolver has for a name, IPv6 and IPv4, in
+# the order it answers them (RFC 6724's, the order to try them in), each
+# once, at most 16, joined by commas ("::1,127.0.0.1"); IPv6 ones as RFC
+# 5952 writes them; a literal is its own answer; none is ENOENT.
+def DNS.resolve_all(name: String) -> IO(Result<&1, &1, U32 & String, String>):
+  import "./effs/dns_resolve_all.c"
+  import "./effs/dns_resolve_all.js"
+
 # TLS.connect(addr, port, name, alpn, ca, ms): TCP.connect_poll and a
 # TLS client handshake under the one deadline; the socket then carries
 # the session through the byte effects, as TLS.listen's do. The peer's
 # chain is verified against the system's store (ca "") or the file ca
 # names (a pin), and its certificate against name (a host name, sent as
-# SNI too, or an address); alpn is offered comma-separated ("" for
+# SNI too, or an address, IPv4 or IPv6 without brackets, checked against
+# the certificate's IP addresses and never sent as SNI); alpn is offered comma-separated ("" for
 # none), and the answer carries the protocol chosen ("" for none). A
 # close without close_notify reads as a failure, never as a FIN.
 # Contract (wire/world.bend, tx.ok's sibling cx.ok, and tls.ok): Done

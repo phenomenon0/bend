@@ -37,7 +37,11 @@ passes it as a template, so it compiles into the connection loop as a direct
 call. Each connection is its own computation, with its own socket and
 deadlines, so one connection's failure is its own. The server listens on every
 IPv4 interface (`0.0.0.0`) unless `Server.set.host` or `--host` names one, and
-says where on stderr.
+says where on stderr. The address may be IPv6: `--host ::1` is this machine
+alone, and `--host ::` every interface of both families (IPv4's too, where the
+system allows it). The banner then brackets it, `http://[::1]:8080`, and a
+request's `Http.remote` is the peer's address in RFC 5952's text (`::1`), an
+IPv4 peer of a `::` listener dotted.
 
 ## Serving
 
@@ -306,6 +310,22 @@ a `U32`), `ca` and `gzip` change one each:
 `Client.with.ca(o, file)` trusts only the CAs in that PEM file instead of the
 system's store. TLS is always verified, and the name is checked against the
 certificate. There is no option to turn that off.
+
+### Addresses and IPv6
+
+A host is a name, a dotted address, or an IPv6 address in brackets:
+`http://[::1]:8080/`. The brackets stay: the URL is written back with the
+address as RFC 5952 writes it (`[0:0::1]` is `[::1]`), the `Host` field is
+`[::1]:8080`, and the pool keys the origin by it, so every spelling of one
+address is one origin. A zone ID (`[fe80::1%25eth0]`) is refused. A name is
+resolved to every address it has, IPv6 and IPv4, and they are tried one after
+another in the order the system's resolver gives them (`getaddrinfo`, which
+sorts by RFC 6724), each with an equal share of what is left of the connect
+deadline; the first that connects is used, and when none does the last one's
+error is the answer. An address with no route, such as IPv6 on a machine
+without it, fails at once and costs nothing. Over TLS, a certificate for an
+IP address is checked against its IP SANs, and no SNI is sent for one (RFC
+6066). A WebSocket URL reads the same way: `ws://[::1]:8765/room`.
 
 ### Errors
 
@@ -607,7 +627,7 @@ cannot hold a resource forever.
 | a body a stream handler left | 1 MiB drained | answered, closed | its bytes are never read as a request |
 | connections | 1024 | the next waits for a slot | each holds memory and a descriptor |
 | SIGTERM | listener closed; idle connections let go within a second | the rest end, or grace (5 s) is up | a deploy does not cut requests in flight |
-| client: connect (DNS aside) | 10 s | `Timeout` | a host that does not answer |
+| client: connect (DNS aside; shared among a name's addresses) | 10 s | `Timeout` | a host that does not answer |
 | client: an exchange | 30 s | `Timeout` | a server that answers slowly, or never |
 | client: a response's head, body | 64 KiB, 10 MiB | `TooLarge` | a response is held in memory whole |
 | client: redirects | 10 | `TooManyRedirects` | a redirect loop ends |
@@ -624,7 +644,7 @@ cannot hold a resource forever.
 A few rules are not numbers. A malformed request is a 400 that closes, and
 nothing after it on the connection is read. A response the server cannot write
 safely (a field with a line end in it, a 1xx) goes out as a 500. A URL with a
-user or password in it is refused, and so is an IPv6 address. A JSON body is
+user or password in it is refused, and so is an IPv6 zone ID. A JSON body is
 parsed under the budget you pass, at most 64 containers deep.
 
 ## What the Laws Guarantee
@@ -649,7 +669,10 @@ parsed under the budget you pass, at most 64 containers deep.
   the body has ended, with exactly the bytes after it. A body a handler did not
   read is never read as the next request.
 - the vectors: percent-encoding round-trips every byte, and the query, URL,
-  Location and route pattern readings match the tables listed there.
+  Location and route pattern readings match the tables listed there. IPv6
+  text reads as RFC 4291 writes it and is written as RFC 5952 says; an
+  IP-literal URL (RFC 3986) reads back as itself, its `Host` field and its
+  origin (the pool's key) carry the address bracketed and canonical.
 
 `net/ws_laws.bend` states the WebSocket client's and server's, and
 `net/ws_proof.bend` proves them: every frame a client sends is masked and every
@@ -693,4 +716,6 @@ checked response writer that `respond_framed` is about (`net/README.md`).
   connection.
 - HTTP/2 in `net/`. `demos/io_http2` is an HTTP/2 server of its own, not
   behind `Server.serve`.
-- IPv6. The server binds an IPv4 address, and the client refuses an IPv6 one.
+- Happy Eyeballs (RFC 8305). A name's addresses are tried one after another,
+  never raced, so an address that silently drops packets costs its share of
+  the connect deadline before the next is tried. IPv6 zone IDs are refused.

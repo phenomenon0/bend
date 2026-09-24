@@ -1,7 +1,8 @@
 // TCP
 // ===
 
-// The socket is non-blocking for life. The connect's outcome is w->code:
+// TCP.connect(host, port): host a dotted IPv4 address or an IPv6 one
+// ("::1"). The socket is non-blocking for life. The connect's outcome is w->code:
 // EINPROGRESS parked the computation until the socket was writable, and
 // then SO_ERROR says how it ended.
 static Term tcp_connect_more(Env e, IoWork* w) {
@@ -20,12 +21,13 @@ static Term tcp_connect_more(Env e, IoWork* w) {
 }
 
 Term tcp_connect_run(Env e, Term* f, IoWork* w) {
-  struct sockaddr_in at;
+  struct sockaddr_storage at;
+  socklen_t               len = 0;
   w->data = io_cstr(e, f[0], &w->size);
   int fd  = -1;
   errno   = EINVAL;
-  if (!io_nul(w->data, w->size) && io_sys_addr(w->data, (u32)f[1], &at) == 0) {
-    fd = socket(AF_INET, SOCK_STREAM, 0);
+  if (!io_nul(w->data, w->size) && io_sys_sa(w->data, (u32)f[1], &at, &len) >= 0) {
+    fd = socket(at.ss_family, SOCK_STREAM, 0);
   }
   if (fd >= 0 && fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) | O_NONBLOCK) < 0) {
     close(fd);
@@ -33,7 +35,7 @@ Term tcp_connect_run(Env e, Term* f, IoWork* w) {
   }
   io_fd_fresh(fd);
   w->made = fd;
-  io_sys_end(w, fd < 0 ? fd : connect(fd, (struct sockaddr*)&at, sizeof(at)));
+  io_sys_end(w, fd < 0 ? fd : connect(fd, (struct sockaddr*)&at, len));
   return w->code == EINPROGRESS
     ? io_wait_on(w, fd, POLLOUT, 0, tcp_connect_more) : tcp_connect_more(e, w);
 }
