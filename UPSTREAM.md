@@ -57,6 +57,7 @@ repro for each and the branch that fixes it, if any.
 | F08 | a library cannot use a name Base has (type Event, constructor Emit), nor a def named after its own file | LIMITATION | check | low | none | upstream/base_name.bend, self_prefix.bend |
 | F09 | Base's only bytes are a String, a list: a read by offset walks, so decoders that index (inflate) are quadratic | LIMITATION | all | med | none (ours: the packed Bytes natives) | upstream/string_index.bend |
 | F10 | the JS lane walks a String 10-20x slower than the C lane | PERF | js, interp for IO mains | med | none | upstream/js_string_scan.bend |
+| F11 | Base's String.take recurses on the JS stack: 40000 chars overflow it | BUG | js, interp for IO mains | med | none | upstream/js_deep_take.bend |
 
 Verified on canon `95317d95`: every U/F row above reads REPRO except
 U05, U07, U09, U12, U13 (FIXED: not on canon), U06p (a pure main's pick
@@ -403,11 +404,11 @@ Not upstream: the rest of FRICTION.md is about our `net/` (middleware,
 `Client.fetch` timeouts, `Json.num`, flags, the Hub), and its SIGTERM
 items are U07 and U12 below.
 
-## F08-F10. From porting std/ to canon
+## F08-F11. From porting std/ to canon
 
 `std/` (CSV, JSON, text, dates, gzip) was written to run on canon's
 stock runtime; these are what the port hit. Each reads REPRO on canon
-`95317d95`; F08 and F10 were measured, F09 is Base's shape.
+`95317d95` (F11 in the lanes it names); F09 is Base's shape.
 
 - **F08 Base's names, and a file's own, are taken.** A library that
   declares `type Event` with a constructor `Emit`, reached only through
@@ -440,6 +441,16 @@ stock runtime; these are what the port hit. Each reads REPRO on canon
   characters in 576 ms in JS and 68 ms in C. std/csv.bend reads
   0.34 MB/s in canon's JS lane and 7.3 MB/s in its C lane; a 26 MB JSON
   document does not finish in five minutes in JS (C: 8.7 s).
+- **F11 deep recursion in the JS lane.** `String.take` (`base.bend:1903`)
+  builds `SCon{h, String.take(t, p)}`, a call a char, and the JS lane and
+  the interpreter (for an IO main) run it on the machine stack:
+  `upstream/js_deep_take.bend` takes 40000 chars and dies with "bend:
+  memory fault (machine stack overflow?)"; 20000 pass, and the C lane
+  takes any count. `String.from_list`, `List.append` and every structural
+  map over a list are the same. std/bytes_list.bend counts in
+  accumulators where it can, but its `cut` is `String.take` (the CSV
+  proof unfolds it), so a CSV field past about 30 KB crashes canon's JS
+  lane.
 
 ---
 

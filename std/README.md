@@ -19,6 +19,12 @@ import what you need by path:
 | `bytes.bend` | the byte interface everything above is written against, plus `read_file` and `write_file` |
 | `reader.bend` | the reader kit: a byte machine fed any split of its input, and the laws every such reader gets |
 
+The rest are the machinery: `bytes_list.bend` and `bytes_packed.bend` (the
+two implementations of `bytes.bend`), `bytes_spec.bend`, `bitset.bend`
+(JSON's container stack), `lemmas.bend`, and the laws and proofs
+(`csv_spec`, `csv_laws`, `csv_proof`, `deflate_laws`, `inflate_proof`,
+`deflate_proof`).
+
 Everything works on byte strings: a `String` whose every `Char` is below
 256, which is what a file read hands back. Text you print is code points
 (`IO.print` writes each `Char` as UTF-8), so decode bytes before you print
@@ -33,8 +39,9 @@ writes `./std/csv.bend`). Every snippet below is copied from its example
 file, and every example runs on released Bend in the interpreter, the JS
 lane and the C lane (`tests/std/readme.py` checks both):
 
-    bend std/examples/csv_rows.bend                  # interpreted
-    bend std/examples/csv_rows.bend -o rows && ./rows  # compiled to C
+    bend std/examples/csv_rows.bend                         # interpreted
+    bend std/examples/csv_rows.bend -o rows && ./rows         # compiled to C
+    bend std/examples/csv_rows.bend -o rows.js && bun rows.js # compiled to JS
 
 ### Read a CSV file into rows
 
@@ -153,18 +160,29 @@ scan pays a cell a byte); a writer (`Out`, `out.add`, `out.push`,
 The proofs check against the interface, so they hold of whichever file the
 switch names. Each prints exactly `All terms check.`:
 
-    bend std/csv_proof.bend       # csv: fast path = byte machine, chunking, RFC 4180 spec, round trip
+    bend std/csv_proof.bend       # csv's 9 laws: the fast path is the byte machine, chunking
+                                  # never changes a read, the reader is RFC 4180's grammar, round trip
+    bend std/deflate_proof.bend   # deflate and gzip's 23 laws: chunking, the fast inflate is the
+                                  # bit machine, CRC-32, the code tables, the cap, back references,
+                                  # stored and fixed-code streams read back (minutes, not seconds)
     bend std/reader.bend          # the reader kit's laws (feed_split, bad_feeds, reads_is, drain_reads)
     bend std/json_value.bend      # closed laws: round trip, canonical text, RFC 8259 refusals, limits
     bend std/time.bend            # calendar vectors: leap days, 2100, the last U32 second, iso.read
     bend std/text.bend            # UTF-8 round trip, encode's bytes, U+FFFD, split and replace
     bend std/bytes_packed.bend    # (ours only) Base's scans count what bytes_spec.bend says
-    python3 tests/std/csv_mutants.py [--packed] [--bend canon/bend2/main.ts]   # 11 of 11 killed
+    python3 tests/std/csv_mutants.py [--packed] [--bend canon/bend2/main.ts]       # 11 of 11 killed
+    python3 tests/std/deflate_mutants.py [--packed] [--bend canon/bend2/main.ts]   # 25 of 25 killed
 
 The scans' specification is `bytes_spec.bend`; each implementation proves
-its scans count what it says (`find_byte.is`, `find_any.is`), and the CSV
+its scans count what it says (`find_byte.is`, `find_any.is`). The CSV
 proof uses only those laws, `cut`, `to_list` and Base's `String`
-definitions, never how bytes are stored.
+definitions; the deflate proofs use `get` as `byte(String.get(b, i))`,
+`len` as `len.go(b, 0n)` with `len.shift`, `push` as an append, and
+`lemmas.bend` (this repo's Base lemmas that canon's Base lacks, copied
+under lower-case names). So the proofs see a byte string as the `String`
+it is under both implementations, and nothing of packing, views or the
+natives: the one fact each implementation owes is its `.is` laws (and
+`len.shift`), and each proves them.
 
 ## Speed
 

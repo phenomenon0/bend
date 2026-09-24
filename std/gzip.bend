@@ -1,4 +1,4 @@
-# Gzip: RFC 1952 around power/deflate.bend's raw streams, both ways.
+# Gzip: RFC 1952 around std/deflate.bend's raw streams, both ways.
 #
 # gunzip is a byte machine (G, kind Data) over the member's parts: the
 # ten fixed bytes, FEXTRA's length and bytes, FNAME and FCOMMENT to
@@ -12,7 +12,7 @@
 #   BadMethod   CM other than 8 (deflate)
 #   BadFlags    a reserved FLG bit (RFC 1952 2.3.1.2: must refuse)
 #   BadHcrc     FHCRC's 16 bits against the header's CRC-32
-#   Inflate     the deflate stream, as power/deflate.bend refuses it,
+#   Inflate     the deflate stream, as std/deflate.bend refuses it,
 #               TooBig among them: the cap counts every member's bytes
 #   BadCrc      the trailer's CRC-32 against the member's bytes
 #   BadSize     ISIZE against the member's length mod 2^32

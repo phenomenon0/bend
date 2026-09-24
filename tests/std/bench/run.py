@@ -7,7 +7,7 @@
 # runs, in CPU seconds (the C lane on one thread).
 #
 #   python3 tests/std/bench/run.py [--bend path/to/bend2/main.ts] [--packed]
-#     [--mb 10] [--json FILE] [--gz 30000] [--lanes c,js]
+#     [--mb 10] [--json FILE | --events 20000] [--gz 30000] [--lanes c,js]
 #
 # --bend runs another checkout's compiler (released Bend's, say) over a copy
 # of this std/; --packed switches the copy's std/bytes.bend to
@@ -36,6 +36,7 @@ def arg(name, default):
 BEND = arg("--bend", os.path.join(ROOT, "bend2", "main.ts"))
 MB = int(arg("--mb", "10"))
 GZ = int(arg("--gz", "30000"))
+EVENTS = int(arg("--events", "20000"))
 LANES = arg("--lanes", "c").split(",")
 
 
@@ -86,7 +87,7 @@ def main():
   jpath = arg("--json", None)
   if jpath is None:
     jpath = os.path.join(work, "events.json")
-    json.dump(events(20000), open(jpath, "w"))
+    json.dump(events(EVENTS), open(jpath, "w"))
   doc = json.load(open(jpath, encoding="utf-8"))
   first = json.dumps(doc[0]["actor"]["login"], ensure_ascii=False)
   want_json = "%d items, %d PushEvent, first login %s" % (len(doc),
@@ -103,8 +104,9 @@ def main():
   for name, prog, path, want in benches:
     for lane in LANES:
       out = os.path.join(work, prog + (".js" if lane == "js" else ""))
-      subprocess.run(["bun", BEND, os.path.join("tests", "std", "bench", prog + ".bend"), "-o", out],
-        cwd=work, check=True, env=env, capture_output=True)
+      b = subprocess.run(["bun", BEND, os.path.join("tests", "std", "bench", prog + ".bend"), "-o", out],
+        cwd=work, env=env, capture_output=True, text=True)
+      assert b.returncode == 0, (prog, lane, b.stdout + b.stderr)
       cmd = (["bun", out] if lane == "js" else [out, "--threads", "1"]) + [path]
       sec, got = median_run(cmd)
       assert got == want, (name, lane, got, want)

@@ -1,7 +1,9 @@
-# The proofs of power/csv_laws.bend.
+# The proofs of std/csv_laws.bend, against std/bytes.bend's interface:
+# the finds by their .is laws (bytes_spec.bend), cut, to_list and Base's
+# String; so they hold of bytes_list.bend and of bytes_packed.bend.
 #
 # feed_split, bad_feeds, feed_buf_is_feed, feed_buf_split and the reads'
-# walk are the reader kit's laws (wire/reader.bend), proven once there
+# walk are the reader kit's laws (std/reader.bend), proven once there
 # for every reader and instantiated here at Csv.step. What is csv's own
 # is the kit's obligation for the block walk, lem.adv: every move lands
 # where stepping its bytes one at a time does. One byte is one step; a

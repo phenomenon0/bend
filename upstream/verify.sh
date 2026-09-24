@@ -311,6 +311,7 @@ if want F09; then
     say F09 - REPRO "Base's bytes are a String: String.get walks i cells"
   fi
 fi
+want F11 && lanes F11 js_deep_take 30 'stack overflow|RangeError' "interp js c"
 # F10: the same String walk in the JS lane and the C lane, timed
 if want F10; then
   build js_string_scan "$HERE/js_string_scan.bend"

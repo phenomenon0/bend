@@ -1,4 +1,5 @@
-# The proofs of power/deflate_laws.bend.
+# The proofs of std/deflate_laws.bend, against std/bytes.bend's interface
+# (get is byte(String.get), len is len.go, and len.shift) and lemmas.bend.
 import Base
 import ./bytes.bend as By
 import ./lemmas.bend as Lm
@@ -12,7 +13,7 @@ import ./inflate_proof.bend as IP
 # =========
 #
 # The inflate machine and the gunzip machine are byte-step readers; the
-# reader kit (wire/reader.bend) proves chunking once for every such
+# reader kit (std/reader.bend) proves chunking once for every such
 # reader, and a one-byte move needs no obligation but the kit's own.
 
 def Laws.inflate_split(a, b, st):

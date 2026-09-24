@@ -1,4 +1,6 @@
-# Deflate: RFC 1951 both ways, over Base's String.
+# Deflate: RFC 1951 both ways, over std/bytes.bend (power/deflate.bend,
+# ported: on released Bend its reads by offset walk a list, so inflate is
+# quadratic there; this repo's packed bytes read in one load).
 #
 # Inflate is a bit machine: one step per bit, the whole state one value
 # (St, kind Data), a byte fed as its eight bits low first (step). So a
@@ -1133,7 +1135,7 @@ def step(st: St, +c: U32) -> St:
   bstep(bstep(bstep(bstep(bstep(bstep(bstep(bstep(st, bit(c, 0n)), bit(c, 1n)), bit(c, 2n)),
     bit(c, 3n)), bit(c, 4n)), bit(c, 5n)), bit(c, 6n)), bit(c, 7n))
 
-# the step as the reader kit (wire/reader.bend) takes it: nothing beside
+# the step as the reader kit (std/reader.bend) takes it: nothing beside
 # the state
 def wstep(e: Unit, st: St, c: U32) -> St:
   step(st, c)

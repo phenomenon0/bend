@@ -1,5 +1,6 @@
 # Csv: RFC 4180 and the common dialect knobs, as a streaming reader over
-# Base's String and a minimal-quoting writer.
+# byte strings and a minimal-quoting writer (power/csv.bend over
+# std/bytes.bend, so it runs on released Bend too).
 #
 # The reader is a byte-at-a-time machine (step), so a read may end
 # anywhere -- inside a quoted field, between the CR and the LF of a line
@@ -388,7 +389,7 @@ def step(+d: Dialect, p: P, +c: U32) -> P:
     case P{m, fl, cur, out, w, pos}:
       step.at(d, m, cls(d, c), c, fl, cur, out, w, pos)
 
-# The walk is the reader kit's (wire/reader.bend): the step as the kit
+# The walk is the reader kit's (std/reader.bend): the step as the kit
 # takes it, the dialect beside the state, and feed over it. The state
 # that comes out is the state to feed the next read, so a document
 # split anywhere reads as the document whole; the kit proves it once

@@ -1,6 +1,6 @@
-# The laws of power/deflate.bend and power/gzip.bend. They are stated
+# The laws of std/deflate.bend and std/gzip.bend. They are stated
 # here and proved in deflate_proof.bend; `bun bend2/main.ts
-# power/deflate_proof.bend` is the gate, and prints "All terms check."
+# std/deflate_proof.bend` is the gate, and prints "All terms check."
 # only when every one of them holds.
 import Base
 import ./bytes.bend as By

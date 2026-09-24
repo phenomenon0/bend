@@ -1,8 +1,10 @@
-# JsonValue: JSON as a value, over json.bend's event stream. parse builds the
-# tree the tokenizer's events describe; show writes one back in canonical form;
-# get and at read into it. The tree holds Base's String -- a number is its
-# lexeme and a string with no escape in it is its span, both views of the
-# input, so a parse copies only the strings it has to unescape.
+# JsonValue: JSON as a value, over json.bend's event stream (power/json_value
+# over std/, with to_nat, to_f32 and the readers over Maybe in place of
+# to_f64 and to_i64: released Bend has no F64 or I64). parse builds the
+# tree the tokenizer's events describe; show writes one back in canonical
+# form; get, at and path read into it. The tree holds byte strings -- a
+# number is its lexeme and a string is its UTF-8 bytes; on this repo's
+# packed bytes a string with no escape in it is a view of the input.
 #
 #   type Json is Data:
 #     Null{} | Flag{b: Bool} | Num{text: String} | Str{s: String}
@@ -34,7 +36,7 @@
 # That is CPython's json.dumps(ensure_ascii=False, separators=(",", ":")) for
 # every string, byte for byte.
 #
-# The laws (tests/power/json_value.bend pins each on every lane):
+# The laws (tests/std/json_value.bend pins each on every lane):
 #   round trip  parse(show(j)) == Done{j} for every j whose strings are UTF-8
 #               and whose numbers are JSON numbers, and show(parse(t)) is t
 #               for every canonical t -- held over a seeded corpus built in Bend

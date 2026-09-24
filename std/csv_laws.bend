@@ -1,5 +1,5 @@
-# The laws of power/csv.bend. They are stated here and proved in
-# csv_proof.bend; `bun bend2/main.ts power/csv_proof.bend` is the gate,
+# The laws of std/csv.bend. They are stated here and proved in
+# csv_proof.bend; `bun bend2/main.ts std/csv_proof.bend` is the gate,
 # and prints "All terms check." only when every one of them holds.
 #
 # Three things a streaming reader of a byte-at-a-time grammar has to
@@ -8,7 +8,7 @@
 #                   the same (feed_split, feed_buf_split), and the walk
 #                   that cuts runs from a read is the byte machine
 #                   (feed_buf_is_feed); these, and bad_feeds, are the
-#                   reader kit's laws (wire/reader.bend) at Csv.step;
+#                   reader kit's laws (std/reader.bend) at Csv.step;
 #   the grammar  -- for every dialect and every input the reader agrees
 #                   with csv_spec.bend, the whole-input reading of RFC
 #                   4180's ABNF (csv_sim), over one read and over any
@@ -93,7 +93,7 @@ law csv_sim_buf:
 
 # ... and for a document however its reads were cut: the reader fed
 # each read in turn reads what the grammar reads of them all, joined.
-# (the reader kit's walk over a list of reads, wire/reader.bend)
+# (the reader kit's walk over a list of reads, std/reader.bend)
 def reads(+d: Csv.Dialect, rs: List<&2, String>, p: Csv.P) -> Csv.P:
   Wr.reads(~Csv.Dialect, ~Csv.P, ~Csv.wstep, ~Csv.wadv, d, rs, p)
 

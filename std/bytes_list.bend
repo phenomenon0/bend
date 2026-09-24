@@ -4,11 +4,12 @@
 # Char is below 256, as Base's Bytes() is on our runtime; here nothing is
 # packed, so a byte is a cell and a read at i walks i cells.
 #
-# The definitions a proof unfolds (find_byte.go, find_any.go, span.go,
-# get, cut, to_list, from_list) are word for word the bodies our Base
-# gives its Bytes natives, so a law proved over them is proved of both
-# implementations. The random-access reader (Buf, at, take) is where the
-# two differ: here it is a cursor that remembers where the last read
+# The definitions a proof unfolds (get, len.go, cut, push, to_list,
+# from_list) are word for word the bodies this repo's Base gives its Bytes
+# natives, and the scans (find_byte, find_any, span) are loops proved to
+# count what bytes_spec.bend says, so a law proved over the interface
+# holds here too. The random-access reader (Buf, at, take) is where the
+# two differ most: here it is a cursor that remembers where the last read
 # landed, so a scan that only moves forward walks each cell once.
 import Base
 import ./bytes_spec.bend as Sp
@@ -265,10 +266,38 @@ def head(b: Buf()) -> Buf() & U32:
 def at(b: Buf(), +i: U32) -> Buf() & U32:
   head(seek(b, U32.to_nat(i)))
 
+# Loops for the JS lane: Base's String.take and a structural to_list
+# recurse once a char, and canon's JS lane overflows its stack near 30000
+# (UPSTREAM.md F11); these count in an accumulator instead.
+
+# the chars of acc (newest first) in front of s
+def rev(acc: List<&2, Char>, s: String) -> String:
+  match acc:
+    case Nil{}:
+      s
+    case Con{c, t}:
+      rev(t, SCon{c, s})
+
+def take.go(s: String, n: Nat, acc: List<&2, Char>) -> String:
+  match s n:
+    case SNil{} _:
+      rev(acc, SNil{})
+    case SCon{h, t} 0n:
+      rev(acc, SNil{})
+    case SCon{h, t} 1n+p:
+      take.go(t, p, Con{h, acc})
+
+def list.go(s: String, acc: List<&2, U32>) -> List<&2, U32>:
+  match s:
+    case SNil{}:
+      List.reverse(&2, U32, acc)
+    case SCon{Chr{c}, t}:
+      list.go(t, Con{c, acc})
+
 def take.fin(+n: Nat, b: Buf()) -> Buf() & String:
   match b:
     case Cur{whole, +rest, pos, m}:
-      (Cur{whole, rest, pos, m}, String.take(rest, n))
+      (Cur{whole, rest, pos, m}, take.go(rest, n, Nil{}))
 
 # the n bytes from at, as a string of their own
 def take(b: Buf(), +at: U32, +n: U32) -> Buf() & String:
@@ -299,7 +328,7 @@ def chunk_size() -> U32:
   4096
 
 def write(file: File, data: String) -> IO(File & Result<&1, &1, U32 & String, Unit>):
-  File.write_bytes(file, to_list(data))
+  File.write_bytes(file, list.go(data, Nil{}))
 
 # The writer
 # ==========

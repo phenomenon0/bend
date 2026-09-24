@@ -1,6 +1,8 @@
-# Json: JSON as an event stream. next() hands back one token per call and a
-# span into the caller's own Bytes -- never a tree, never a copy of the
-# document. A 200 MB log costs the parser one Bytes and a 256-bit stack, and a
+# Json: JSON as an event stream (power/json.bend over std/bytes.bend's
+# reader; its Event is Evt and its Emit is Yield, as canon's Base has the
+# other two). next() hands back one token per call and a span into the
+# caller's own bytes -- never a tree, never a copy of the document. A
+# 200 MB log costs the parser one buffer and a 256-bit stack, and a
 # consumer that wants three fields never materialises the rest.
 #
 # The state is one value: cursor, depth, a Bitset holding the kind of every open
