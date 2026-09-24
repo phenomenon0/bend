@@ -31,7 +31,12 @@ lines its run must print, and the gates run on the mini cluster.
                         check and a release, on a localhost hub
     gates/_run.ts       the four gates with --gate
     demos/              one dir per demo
-    guide/              GUIDE.md
+    net/                the networking library: HTTP server and client, JSON,
+                        a WebSocket client; its laws, mutants and examples
+    wire/               bend-wire, the loops, readers and pool net/ is built on
+    guide/              GUIDE.md, and the extras SHADERS.md, EFFECTS.md and
+                        NETWORKING.md (`bend guide networking`)
+    REPO_MAP.md         this map in more words, and the networking stack whole
     paper/              BendTT.pdf, BendRT.pdf
     media/              the film and the charts
     .github/            ISSUE_TEMPLATE/bug.yml, the bug report form, and

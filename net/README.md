@@ -145,8 +145,15 @@ about), the deadlines and limits (checked by `check.py`).
     net/examples/json_api.bend     a JSON API over a router, a channel as its store
     net/examples/file_server.bend  files under a root, the browser's headers
     net/examples/fetch.bend        a command-line client
+    net/examples/greet.bend        a query, a handler that can fail, middleware, a config in code
+    net/examples/notes_client.bend json_api's client: JSON out and in, NetError by kind
+    net/examples/tls_server.bend   a server over TLS
+    net/examples/relay.bend        fetch JSON upstream on a pooled session, serve part of it
+    net/examples/ws_chat.bend      a WebSocket chat client
 
-`python3 net/check.py` builds them and checks, from outside: framing,
+`guide/NETWORKING.md` (`bend guide networking`) walks through them.
+
+`python3 net/check.py` builds the first four and checks, from outside: framing,
 pipelining, HEAD, keep-alive, HTTP/1.0, 400/408/413/414/431, the idle,
 head and body timeouts, the connection limit, 100-continue, SIGTERM,
 404/405, JSON and files; and the client against Python peers: pooling,
