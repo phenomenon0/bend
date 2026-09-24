@@ -281,6 +281,26 @@ def TCP.listen(port: U32) -> IO(Result<&1, &1, U32 & String, Listener>):
   import "./effs/tcp_listen.c"
   import "./effs/tcp_listen.js"
 
+# TCP.listen on the one dotted IPv4 address named (127.0.0.1 for this
+# machine alone); a host that is not one is EINVAL, never 0.0.0.0.
+def TCP.listen_on(host: String, port: U32) ->
+  IO(Result<&1, &1, U32 & String, Listener>):
+  import "./effs/tcp_listen.c"
+  import "./effs/tcp_listen.js"
+
+# TCP.listen with SO_REUSEPORT: several processes may listen on one port
+# and the kernel deals the connections out among them, which is how a
+# single-threaded server takes more than one core. TCP.listen keeps
+# refusing a port already taken.
+def TCP.listen_shared(port: U32) -> IO(Result<&1, &1, U32 & String, Listener>):
+  import "./effs/tcp_listen.c"
+  import "./effs/tcp_listen.js"
+
+def TCP.listen_shared_on(host: String, port: U32) ->
+  IO(Result<&1, &1, U32 & String, Listener>):
+  import "./effs/tcp_listen.c"
+  import "./effs/tcp_listen.js"
+
 def TCP.accept(listener: Listener) ->
   IO(Listener & Result<&1, &1, U32 & String, Socket>):
   import "./effs/tcp_accept.c"
