@@ -232,7 +232,7 @@ connection takes are the spec's reassembly of the input, for every cut
 of it into reads), `srv_close_once` and `srv_close_after` (at most one
 close written, none after this end's own), and vectors.
 
-`python3 net/mutants.py`: thirty-seven broken servers, streams, stream
+`python3 net/mutants.py`: forty broken servers, streams, stream
 heads (a bare LF, a folded line, two lengths that disagree, a head judged
 wrong) and clients, each refused; `python3 net/ws_mutants.py`: the WebSocket
 ones. Not proven: the IO loops (they call the functions the laws are about,
