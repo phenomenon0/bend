@@ -362,7 +362,7 @@ const OPERATIONS: Record<string, Intr> = Object.setPrototypeOf({
     JS: "($0 < $1 ? $1 : $0)",
   },
   nat_show: { C: "str_show_u64(e, (u64)($0))", JS: "String($0)" },
-  u32_show: { C: "str_show_u64(e, (u64)(u32)($0))", JS: "String($0)" },
+  u32_show: { C: "str_show_u64(e, (u64)(u32)($0))", JS: "String($0 >>> 0)" },
   nat_divmod: {
     C:    ["($1 == 0 ? 0 : $0 / $1)", "($1 == 0 ? $0 : $0 % $1)"],
     call: true,
