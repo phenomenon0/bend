@@ -10,7 +10,16 @@ every frame masked, and the close code each violation calls for; and,
 with --autobahn, the Autobahn test suite's fuzzing server (docker),
 every client case but compression's (12.*, 13.*), with the pass rate.
 
-    python3 net/ws_check.py ./wsc ./httpd 8860 [--autobahn]   # ports 8860-8864
+With --server ECHO (net/examples/ws_echo.bend built), the server too
+(net/ws_server.bend): the opening handshake and its refusals (426, 400,
+405, 403 for an Origin not allowed), each frame a client may not send
+failed with its close code, once, and the TCP connection closed, every
+frame the server writes unmasked, fragments, pings, the message cap,
+the keepalive, SIGTERM's 1001; against a raw client, net/ws_cli.bend
+and Python's websockets; and with --autobahn, the fuzzing client
+against it, every case but compression's.
+
+    python3 net/ws_check.py ./wsc ./httpd 8860 [--server ./echo] [--autobahn]   # ports 8860-8868
 """
 import asyncio, base64, hashlib, json, os, socket, struct, subprocess, sys, tempfile, threading, time
 
@@ -354,6 +363,296 @@ def autobahn(port):
         subprocess.run(["docker", "rm", "-f", name], capture_output=True)
 
 
+
+# The server (net/ws_server.bend)
+# ===============================
+#
+# net/examples/ws_echo.bend, driven by a raw client here (to send what
+# no library will: unmasked frames, reserved bits, long pings, broken
+# UTF-8, bad close codes, handshakes asked wrong, and to check what the
+# server writes: every frame unmasked, the close each violation calls
+# for, once), by net/ws_cli.bend, by Python's websockets, and with
+# --autobahn by the Autobahn test suite's fuzzing client (docker), every
+# case but compression's (12.*, 13.*).
+
+KEY = "dGhlIHNhbXBsZSBub25jZQ=="
+
+
+def srv_open(port, path="/echo", key=KEY, ver="13", method="GET", http="HTTP/1.1", extra="", early=b"",
+             up=True):
+    """a raw opening request: the status, the head's fields, the socket, what came after the head"""
+    s = socket.create_connection(("127.0.0.1", port), 3)
+    h = "%s %s %s\r\nHost: 127.0.0.1\r\n" % (method, path, http)
+    if up:
+        h += "Upgrade: websocket\r\nConnection: Upgrade\r\n"
+    if key is not None:
+        h += "Sec-WebSocket-Key: %s\r\n" % key
+    if ver is not None:
+        h += "Sec-WebSocket-Version: %s\r\n" % ver
+    s.sendall((h + extra + "\r\n").encode() + early)
+    b = b""
+    s.settimeout(3)
+    while b"\r\n\r\n" not in b:
+        c = s.recv(65536)
+        if not c:
+            break
+        b += c
+    head, _, rest = b.partition(b"\r\n\r\n")
+    lines = head.decode("latin-1").split("\r\n")
+    status = int(lines[0].split()[1]) if len(lines[0].split()) > 1 else 0
+    fields = {}
+    for l in lines[1:]:
+        n, _, v = l.partition(":")
+        fields.setdefault(n.strip().lower(), []).append(v.strip())
+    return status, fields, s, rest
+
+
+class Buf:
+    """a socket with what came before it, read as frames"""
+    def __init__(self, s, rest):
+        self.s, self.b = s, rest
+
+    def need(self, n):
+        while len(self.b) < n:
+            c = self.s.recv(65536)
+            if not c:
+                raise EOFError
+            self.b += c
+        out, self.b = self.b[:n], self.b[n:]
+        return out
+
+    def frame(self):
+        b0, b1 = self.need(2)
+        n = b1 & 127
+        if n == 126:
+            n = struct.unpack("!H", self.need(2))[0]
+        elif n == 127:
+            n = struct.unpack("!Q", self.need(8))[0]
+        masked = bool(b1 & 0x80)
+        key = self.need(4) if masked else b"\0\0\0\0"
+        data = bytes(c ^ key[i % 4] for i, c in enumerate(self.need(n)))
+        return b0 & 15, masked, data, b0 & 0x80
+
+    def frames(self, secs=3):
+        """every frame until the close, and whether the TCP connection ended after it"""
+        out, eof = [], False
+        self.s.settimeout(secs)
+        try:
+            while True:
+                f = self.frame()
+                out.append(f)
+                if f[0] == 8:
+                    break
+            try:
+                eof = self.s.recv(1) == b""
+            except OSError:
+                eof = False
+        except (EOFError, OSError):
+            eof = True
+        return out, eof
+
+
+def M(op, payload=b"", fin=True, rsv=0, ln=None):
+    return frame(op, payload, fin, rsv, b"\x37\xfa\x21\x3d", ln)
+
+
+def srv_case(name, port, send, want, early=False):
+    """frames sent after (or with) the handshake; the frames the server writes back, and the close"""
+    try:
+        st, fs, s, rest = srv_open(port, early=send if early else b"")
+        if not early:
+            s.sendall(send)
+        got, eof = Buf(s, rest).frames()
+        s.close()
+    except OSError as e:
+        check(name, False, repr(e))
+        return []
+    ok = st == 101 and [(op, d) for op, m, d, fin in got] == want and not any(m for op, m, d, fin in got)
+    ok = ok and (eof or not want or want[-1][0] != 8)
+    check(name, ok, "status %d, frames %s, eof %s" % (st, [(op, m, d[:40]) for op, m, d, fin in got], eof))
+    return got
+
+
+def close(code, reason=b""):
+    return struct.pack("!H", code) + reason
+
+
+def server_checks(echo):
+    E, S, T = P + 5, P + 6, P + 7
+    procs.append(subprocess.Popen([echo, "--port", str(E), "--host", "127.0.0.1"], stdout=subprocess.DEVNULL,
+                                  stderr=subprocess.DEVNULL))
+    procs.append(subprocess.Popen([echo, "--port", str(S), "--host", "127.0.0.1", "--max-msg", "1000",
+                                   "--ping-ms", "300", "--pong-ms", "300", "--origin", "https://ok.example"],
+                                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL))
+    for port in (E, S):
+        up(port)
+
+    # the opening handshake (RFC 6455 4.2.2): the RFC's own key, a
+    # subprotocol chosen from those offered, permessage-deflate declined
+    st, fs, s, rest = srv_open(E, extra="Sec-WebSocket-Protocol: chat, echo\r\n"
+                               "Sec-WebSocket-Extensions: permessage-deflate; client_max_window_bits\r\n")
+    s.close()
+    check("srv.hs.101", st == 101 and fs.get("sec-websocket-accept") == ["s3pPLMBiTxaQ9kYGzzhZRbK+xOo="]
+          and fs.get("upgrade", [""])[0].lower() == "websocket" and "upgrade" in fs.get("connection", [""])[0].lower()
+          and fs.get("sec-websocket-protocol") == ["echo"] and "sec-websocket-extensions" not in fs, str((st, fs)))
+    st, fs, s, rest = srv_open(E, extra="Sec-WebSocket-Protocol: superchat\r\n")
+    s.close()
+    check("srv.hs.proto_not_offered", st == 101 and "sec-websocket-protocol" not in fs, str((st, fs)))
+    # a plain GET is told to upgrade, and the connection goes on
+    st, fs, s, rest = srv_open(E, up=False, key=None, ver=None)
+    s.sendall(b"GET / HTTP/1.1\r\nHost: x\r\n\r\n")
+    s.settimeout(3)
+    more = rest
+    try:
+        while b"200 OK" not in more:
+            c = s.recv(4096)
+            if not c:
+                break
+            more += c
+    except OSError:
+        pass
+    s.close()
+    check("srv.hs.426", st == 426 and fs.get("sec-websocket-version") == ["13"] and b"200 OK" in more, str((st, fs)))
+    for name, kw, want in [("srv.hs.version", dict(ver="8"), 426), ("srv.hs.no_key", dict(key=None), 426),
+                           ("srv.hs.bad_key", dict(key="abc"), 400), ("srv.hs.key_no_pad", dict(key="dGhlIHNhbXBsZSBub25jZQAA"), 400),
+                           ("srv.hs.http10", dict(http="HTTP/1.0"), 426), ("srv.hs.post", dict(method="POST"), 405),
+                           ("srv.hs.no_route", dict(path="/nope"), 404)]:
+        st, fs, s, rest = srv_open(E, **kw)
+        s.close()
+        check(name, st == want, str((st, fs)))
+    st, fs, s, rest = srv_open(S, extra="Origin: https://evil.example\r\n")
+    s.close()
+    check("srv.origin.refused", st == 403, str(st))
+    st, fs, s, rest = srv_open(S, extra="Origin: https://ok.example\r\n")
+    s.close()
+    check("srv.origin.allowed", st == 101, str(st))
+
+    # frames: echoed, unmasked; each violation failed with its code, once, and the TCP connection closed
+    srv_case("srv.echo", E, M(1, "héllo".encode()) + M(2, bytes(300)) + M(8, close(1000)),
+             [(1, "héllo".encode()), (2, bytes(300)), (8, close(1000))])
+    srv_case("srv.early", E, M(1, b"early") + M(8, close(1000)), [(1, b"early"), (8, close(1000))], early=True)
+    srv_case("srv.ping", E, M(9, b"are you there") + M(8, close(1000)), [(10, b"are you there"), (8, close(1000))])
+    srv_case("srv.frag", E, M(1, "hé".encode()[:2], fin=False) + M(9, b"between") + M(0, "hé".encode()[2:] + b"llo")
+             + M(8, close(1000)), [(10, b"between"), (1, "héllo".encode()), (8, close(1000))])
+    srv_case("srv.close_echoed", E, M(8, close(4001, b"bye")) + M(9, b"after"), [(8, close(4001))])
+    srv_case("srv.close_empty", E, M(8), [(8, b"")])
+    for name, send, code in [("unmasked", frame(1, b"Hello"), 1002), ("rsv1", M(1, b"x", rsv=0x40), 1002),
+                             ("opcode", M(3), 1002), ("ctl_long", M(9, bytes(126)), 1002),
+                             ("ctl_frag", M(9, b"x", fin=False), 1002), ("orphan", M(0, b"x"), 1002),
+                             ("interleave", M(1, b"a", fin=False) + M(1, b"b"), 1002),
+                             ("utf8", M(1, b"\xc0\xaf"), 1007), ("close1005", M(8, close(1005)), 1002),
+                             ("close1", M(8, b"\x03"), 1002), ("close_utf8", M(8, close(1000, b"\xff")), 1007),
+                             ("len16", M(2, b"x" * 5, ln=5)[:1] + bytes([0x80 | 126, 0, 5]) + b"\x37\xfa\x21\x3d" + b"x" * 5, 1002)]:
+        srv_case("srv." + name, E, send, [(8, close(code))])
+    srv_case("srv.big", S, M(2, bytes(2000)), [(8, close(1009))])
+    srv_case("srv.big_frags", S, M(2, bytes(600), fin=False) + M(0, bytes(600)), [(8, close(1009))])
+    srv_case("srv.at_cap", S, M(2, bytes(1000)) + M(8, close(1000)), [(2, bytes(1000)), (8, close(1000))])
+
+    # the keepalive: a silent client is pinged after 300 ms, and dropped with 1011 300 ms later
+    st, fs, s, rest = srv_open(S)
+    t0 = time.time()
+    got, eof = Buf(s, rest).frames(secs=5)
+    dt = time.time() - t0
+    s.close()
+    check("srv.keepalive.drop", st == 101 and [op for op, m, d, fin in got] == [9, 8] and got[-1][2] == close(1011)
+          and eof and 0.5 < dt < 2.5, "%s %s %.2fs" % ([(op, d) for op, m, d, fin in got], eof, dt))
+    # our own client (net/ws_cli.bend) against the echo, and past the keepalive: it answers pings
+    expect("srv.wsc.echo", ["open", "sent text", "text 5 hello", "sent binary", "binary 70000 sum 3980416790",
+                            "sent ping", "sent text", "text 9 héllo € \U0001d11e", "close answered 1000"],
+           "ws://127.0.0.1:%d/echo" % E, "t:hello", "r", "b:70000", "r", "p:hi", "t:héllo € \U0001d11e", "r")
+    expect("srv.wsc.proto", ["open", "sent text", "text 1 x", "close answered 1000"],
+           "ws://127.0.0.1:%d/echo" % E, "--proto", "echo", "t:x", "r")
+    expect("srv.wsc.too_big", ["open", "sent binary", "closed 1009", "close answered 1009"],
+           "ws://127.0.0.1:%d/echo" % S, "b:2000", "r")
+
+    try:
+        import websockets
+        from websockets.asyncio.client import connect
+    except ImportError:
+        print("SKIP srv.lib: pip install websockets")
+        return
+
+    async def lib():
+        out = {}
+        async with connect("ws://127.0.0.1:%d/echo" % E, subprotocols=["echo"], max_size=1 << 24) as ws:
+            out["proto"] = ws.subprotocol
+            out["ext"] = ws.response.headers.get("Sec-WebSocket-Extensions")
+            await ws.send("wörld")
+            out["text"] = await ws.recv()
+            await ws.send(bytes(range(256)) * 4096)
+            out["big"] = len(await ws.recv())
+            await ws.send(["frag", "mented ", "wörld"])
+            out["frag"] = await ws.recv()
+            pong = await ws.ping(b"lib")
+            await asyncio.wait_for(pong, 3)
+            out["pong"] = True
+        out["close"] = ws.close_code
+        async with connect("ws://127.0.0.1:%d/echo" % S) as ws:
+            await asyncio.sleep(1.5)
+            await ws.send("still here")
+            out["alive"] = await ws.recv()
+        return out
+
+    try:
+        out = asyncio.run(lib())
+    except Exception as e:
+        out = {"error": repr(e)}
+    check("srv.lib", out.get("proto") == "echo" and out.get("ext") is None and out.get("text") == "wörld"
+          and out.get("big") == 1 << 20 and out.get("frag") == "fragmented wörld" and out.get("pong")
+          and out.get("close") == 1000 and out.get("alive") == "still here", str(out))
+
+    # SIGTERM: the connection hears 1001, and the server ends
+    procs.append(subprocess.Popen([echo, "--port", str(T), "--host", "127.0.0.1"], stdout=subprocess.DEVNULL,
+                                  stderr=subprocess.DEVNULL))
+    up(T)
+
+    async def term():
+        async with connect("ws://127.0.0.1:%d/echo" % T) as ws:
+            await ws.send("x")
+            await ws.recv()
+            procs[-1].send_signal(15)
+            try:
+                await asyncio.wait_for(ws.recv(), 5)
+            except websockets.ConnectionClosed:
+                pass
+        return ws.close_code
+
+    try:
+        code = asyncio.run(term())
+        ended = procs[-1].wait(8)
+    except Exception as e:
+        code, ended = repr(e), None
+    check("srv.sigterm.1001", code == 1001 and ended == 0, "code %s, exit %s" % (code, ended))
+
+
+def server_autobahn(echo, port):
+    procs.append(subprocess.Popen([echo, "--port", str(port), "--host", "127.0.0.1", "--max-msg", "67108864"],
+                                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL))
+    up(port)
+    d = tempfile.mkdtemp()
+    os.makedirs(d + "/reports")
+    json.dump({"outdir": "/reports", "servers": [{"agent": "bend", "url": "ws://127.0.0.1:%d/echo" % port}],
+               "cases": ["*"], "exclude-cases": ["12.*", "13.*"], "exclude-agent-cases": {}},
+              open(d + "/fc.json", "w"))
+    name = "bend-ws-autobahn-srv-%d" % port
+    subprocess.run(["docker", "rm", "-f", name], capture_output=True)
+    try:
+        r = subprocess.run(["docker", "run", "--name", name, "--network", "host", "-v", d + ":/config",
+                            "-v", d + "/reports:/reports", "crossbario/autobahn-testsuite", "wstest", "-m",
+                            "fuzzingclient", "-s", "/config/fc.json"], capture_output=True, text=True, timeout=3000)
+        if r.returncode != 0 or not os.path.exists(d + "/reports/index.json"):
+            print("SKIP autobahn server: the fuzzing client did not run", r.stderr.strip()[-300:])
+            return
+        res = json.load(open(d + "/reports/index.json"))["bend"]
+        good = [k for k, v in res.items() if v["behavior"] in ("OK", "NON-STRICT", "INFORMATIONAL")
+                and v["behaviorClose"] in ("OK", "INFORMATIONAL")]
+        strict = [k for k, v in res.items() if v["behavior"] == "OK" and v["behaviorClose"] == "OK"]
+        print("autobahn server: %d / %d cases pass (%d strictly OK); failing: %s; not strict: %s" % (
+            len(good), len(res), len(strict), sorted(set(res) - set(good)), sorted(set(res) - set(strict))))
+        check("autobahn.server.all", len(good) == len(res) and len(res) > 0)
+    finally:
+        subprocess.run(["docker", "rm", "-f", name], capture_output=True)
+
 def main():
     tmp = tempfile.mkdtemp()
     os.makedirs(tmp + "/www")
@@ -439,8 +738,14 @@ def main():
         expect("lib.close", ["open", "closed 4000 done here", "close answered 4000"], L + "/close", "r")
         expect("lib.big", ["open", "binary 1048576 sum", "close answered 1000"], L + "/big", "r")
 
-    if "--autobahn" in sys.argv:
+    if "--autobahn" in sys.argv and "--server-only" not in sys.argv:
         autobahn(P + 4)
+
+    if "--server" in sys.argv:
+        echo = os.path.realpath(sys.argv[sys.argv.index("--server") + 1])
+        server_checks(echo)
+        if "--autobahn" in sys.argv:
+            server_autobahn(echo, P + 8)
 
     ls.close()
     for p in procs:

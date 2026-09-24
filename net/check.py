@@ -21,6 +21,10 @@ cap, and a pooled connection reused only when its response allows;
 and streamed bodies (upload): 100 MB by length and chunked in bounded
 memory, the stream's cap (413), a stalled body (408), a handler that
 returns without reading, 100-continue, pipelining after a streamed body.
+WebSockets on the server: chat_server's room with two ws_chat clients
+(its broadcast), its page beside it, its 426 and 400, the 101's Accept
+and subprotocol, SIGTERM's 1001, and ws_echo from Python's websockets
+(net/ws_check.py --server checks the rest).
 Every Bend snippet in guide/NETWORKING.md must be in a file under net/,
 word for word. Prints PASS/FAIL per case and exits 1 on any failure.
 """
@@ -578,6 +582,74 @@ def check_stream(upload_bin, tmp):
     ok("stream: a chunked body past --max-stream is a 413 that closes", r.startswith(b"HTTP/1.1 413") and eof, r)
     stop(p)
 
+# WebSockets on the server
+# ========================
+
+def chat(chat_bin, port, name, *says, wait=1500):
+    return subprocess.Popen([chat_bin, "ws://127.0.0.1:%d/room" % port, name, *says, "--wait-ms", str(wait)],
+                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+
+def check_ws(room, chat_bin, echo):
+    """chat_server and ws_chat together: a room, its broadcast, its page, its refusals, SIGTERM's 1001;
+    ws_echo from Python's websockets when it is installed (net/ws_check.py --server has the rest)"""
+    port = PORT + 10
+    p = start([room, "--port", str(port)], port)
+    r = get(port, "/")
+    ok("ws: the chat server serves its page beside the room", b" 200 " in r.split(b"\r\n", 1)[0] and b"WebSocket" in r, r[:200])
+    r = get(port, "/room")
+    ok("ws: a GET at the room that does not ask to upgrade is a 426 naming version 13",
+       b" 426 " in r.split(b"\r\n", 1)[0] and b"sec-websocket-version: 13" in r.lower(), r[:300])
+    r = raw(port, b"GET /room HTTP/1.1\r\nHost: t\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
+            b"Sec-WebSocket-Key: short\r\nSec-WebSocket-Version: 13\r\n\r\n")[0]
+    ok("ws: a key that is not sixteen bytes in base64 is a 400", b" 400 " in r.split(b"\r\n", 1)[0], r[:200])
+    r = raw(port, b"GET /room HTTP/1.1\r\nHost: t\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
+            b"Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n"
+            b"Sec-WebSocket-Protocol: x, chat\r\nSec-WebSocket-Extensions: permessage-deflate\r\n\r\n", wait=0.5)[0]
+    h = head_of(r).lower()
+    ok("ws: the 101 carries the RFC's Accept, the subprotocol offered, no extension",
+       h.startswith("http/1.1 101") and "sec-websocket-accept: s3pplmbitxaq9kygzzhzrbk+xoo=" in h
+       and "sec-websocket-protocol: chat" in h and "extension" not in h, h)
+    ada = chat(chat_bin, port, "ada", wait=2500)
+    time.sleep(0.5)
+    bob = chat(chat_bin, port, "bob", "hi all", "second", wait=1000)
+    b_out = bob.communicate(timeout=20)[0]
+    a_out = ada.communicate(timeout=20)[0]
+    ok("ws: a room broadcasts: what bob says, ada hears, in order",
+       a_out.split("\n")[:2] == ["< bob: hi all", "< bob: second"] and "left the room (1000)" in a_out, a_out)
+    ok("ws: and the sender hears itself", b_out.split("\n")[:2] == ["< bob: hi all", "< bob: second"], b_out)
+    # SIGTERM: a member hears 1001, and the server ends
+    cy = chat(chat_bin, port, "cy", wait=8000)
+    time.sleep(0.5)
+    p.send_signal(signal.SIGTERM)
+    c_out = cy.communicate(timeout=20)[0]
+    try:
+        code = p.wait(10)
+    except subprocess.TimeoutExpired:
+        code = None
+    ok("ws: SIGTERM closes the room with 1001, and the server ends", "closed the room: 1001" in c_out and code == 0,
+       (c_out, code))
+    try:
+        import asyncio, websockets
+        from websockets.asyncio.client import connect
+    except ImportError:
+        print("SKIP ws: the echo from Python (pip install websockets)")
+        return
+    port = PORT + 11
+    start([echo, "--port", str(port)], port)
+
+    async def talk():
+        async with connect("ws://127.0.0.1:%d/echo" % port, subprotocols=["echo"]) as ws:
+            await ws.send("héllo")
+            t = await ws.recv()
+            await ws.send(bytes(70000))
+            b = await ws.recv()
+            return ws.subprotocol, t, len(b)
+    try:
+        got = asyncio.run(talk())
+    except Exception as e:
+        got = repr(e)
+    ok("ws: the echo, from Python's websockets", got == ("echo", "héllo", 70000), got)
+
 def check_guide():
     """every Bend snippet in guide/NETWORKING.md is in a file under net/, word for word"""
     srcs = []
@@ -612,6 +684,7 @@ def main():
         check_listen(hello, tmp)
         check_client(fetch_bin, hello, tmp)
         check_stream(bins["upload"], tmp)
+        check_ws(bins["chat_server"], bins["ws_chat"], bins["ws_echo"])
     finally:
         for p in PROCS:
             stop(p)

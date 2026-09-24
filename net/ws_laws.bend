@@ -1,10 +1,12 @@
-# The laws of the WebSocket client (net/ws.bend and its parts). The
-# human states them; ws_proof.bend proves them, and
+# The laws of the WebSocket client and server (net/ws.bend, net/ws_server.bend
+# and their parts). The human states them; ws_proof.bend proves them, and
 # `bend net/ws_proof.bend` is the gate.
 import Base
 import ../demos/io_http_engine/ws.bend as Ws
 import ./ws_frame.bend as F
 import ./ws_hs.bend as H
+import ../demos/io_http_engine/sha1.bend as Sha1
+import ../demos/io_http_engine/b64.bend as B64
 
 # The reader, at either end
 # =========================
@@ -299,3 +301,153 @@ law url_vectors:
      Some{H.Url{False{}, "127.0.0.1", 9001, "/runCase?case=1&agent=bend"}}, Some{H.Url{True{}, "h", 443, "/?x"}},
      None{}, None{}, None{}, None{}, None{}, None{}, None{}]
     : List<&2, Maybe<&2, H.Url>>}
+
+# The server's end
+# ================
+#
+# net/ws_server.bend's connections: the Serv reader, the frames a server
+# writes, the session a handler sees, the closing, and the opening
+# handshake.
+
+# LAW: an unmasked frame from the client breaks the framing at its
+# length byte, whatever its opcode and length (RFC 6455 5.1: the server
+# fails the connection, with 1002).
+law srv_unmasked_refused:
+  for +cap: U32
+  for +op: U32
+  for +out: List<&2, Ws.Frm>
+  for +b: U32
+  for h: {U32.and(b, 128) == 0 : U32}
+  {F.step(F.Serv{cap}, Ws.W{Ws.Len{op}, out}, b) == Ws.W{Ws.Bad{}, out} : Ws.W}
+
+# LAW: no frame the server writes is masked: its second byte's mask bit
+# is clear, whatever its opcode, payload and FIN.
+law srv_frame_unmasked:
+  for +op: U32
+  for +fin: Bool
+  for +p: Bytes()
+  {U32.and(Bytes.get(F.s.frame(op, fin, p), 1n), 128) == 0 : U32}
+
+# LAW: RFC 6455 5.7's unmasked "Hello" and the head of its 256-byte
+# binary, byte for byte; and a client reads the server's frames back: a
+# text, the same in two fragments, a ping.
+law srv_frame_rfc:
+  {(Bytes.to_list(F.s.frame(1, True{}, "Hello")),
+    Bytes.to_list(String.take(F.s.frame(2, True{}, String.repeat("b", 256n)), 4n)),
+    F.session(65536, Bytes.concat([F.s.frame(1, True{}, "Hello"), F.s.frame(1, False{}, "Hel"),
+      F.s.frame(0, True{}, "lo"), F.s.frame(9, True{}, "hi")]))) ==
+    ([129, 5, 72, 101, 108, 108, 111], [130, 126, 1, 0],
+     [F.Deliver{F.Text{"Hello"}}, F.Skip{}, F.Deliver{F.Text{"Hello"}}, F.Pong{"hi"}])
+    : List<&2, U32> & List<&2, U32> & List<&2, F.Act>}
+
+# LAW: what the handler receives does not depend on how the input was
+# cut into reads. For every cap and every list of reads, the acts the
+# connection takes reading them one by one (each fed to the reader from
+# where the last left it, its frames assembled with the assembler as
+# the last left it, the framing checked at the end) are the spec's: the
+# frames of the whole input, reassembled in one go, and a 1002 if the
+# framing broke.
+law srv_reads:
+  for +cap: U32
+  for +rs: List<&2, Bytes()>
+  {F.s.reads(cap, rs) == F.s.session(cap, Bytes.concat(rs)) : List<&2, F.Act>}
+
+# LAW: the session a server reads, on RFC 6455 5.7's masked frames: a
+# text "Hello" (key 37 fa 21 3d), the same in two masked fragments with
+# a masked ping between them, an empty masked binary; an unmasked
+# "Hello" is 1002, and so is a reserved bit; a message past the cap is
+# 1009, on the length and on the fragments joined; text not UTF-8 is
+# 1007; a close is read with its code.
+law srv_session_rfc:
+  {[F.s.session(65536, Bytes.concat([F.c.frame(1, True{}, "Hello", 939139389), F.c.frame(1, False{}, "Hel", 1),
+      F.c.frame(9, True{}, "", 2), F.c.frame(0, True{}, "lo", 3), F.c.frame(2, True{}, "", 4)])),
+    F.s.session(65536, Bytes.from_list([129, 5, 72, 101, 108, 108, 111])),
+    F.s.session(65536, Bytes.concat([Bytes.from_list([193]), String.drop(F.c.frame(1, True{}, "", 5), 1n)])),
+    F.s.session(4, F.c.frame(2, True{}, "12345", 6)),
+    F.s.session(4, Bytes.concat([F.c.frame(2, False{}, "123", 7), F.c.frame(0, True{}, "45", 8)])),
+    F.s.session(65536, F.c.frame(1, True{}, Bytes.from_list([192, 175]), 9)),
+    F.s.session(65536, F.c.frame(8, True{}, Bytes.from_list([3, 232, 98, 121, 101]), 10))] ==
+    [[F.Deliver{F.Text{"Hello"}}, F.Skip{}, F.Pong{""}, F.Deliver{F.Text{"Hello"}}, F.Deliver{F.Binary{""}}],
+     [F.Refuse{1002}], [F.Refuse{1002}], [F.Refuse{1009}, F.Refuse{1002}], [F.Skip{}, F.Refuse{1009}],
+     [F.Refuse{1007}], [F.Bye{1000, "bye"}]]
+    : List<&2, List<&2, F.Act>>}
+
+# LAW: the client's close is answered once. Whatever the acts, the
+# server writes at most one close frame, and none once its own close
+# went out (the handler closed first, or SIGTERM's 1001): the peer's
+# close is then the answer, not a thing to answer.
+law srv_close_once:
+  for +sent: Bool
+  for +xs: List<&2, F.Act>
+  {Nat.is_le(F.closes(F.s.writes(sent, xs)), 1n) == True{} : Bool}
+
+law srv_close_after:
+  for +xs: List<&2, F.Act>
+  {F.closes(F.s.writes(True{}, xs)) == 0n : Nat}
+
+# LAW: a client's close is answered with its code, and nothing is
+# written after it: a ping behind it gets no pong.
+law srv_close_vector:
+  {F.s.writes(False{}, [F.Pong{"a"}, F.Bye{1000, "bye"}, F.Pong{"b"}, F.Refuse{1002}]) ==
+    [F.WPong{"a"}, F.WClose{1000}] : List<&2, F.Wr>}
+
+# LAW: the opening handshake (RFC 6455 4.2.2). Every request that asked
+# well -- a GET that asked to upgrade with a key of sixteen bytes in
+# base64 -- is answered with the 101: its status line, Upgrade:
+# websocket, Connection: Upgrade, the Accept that is the base64 of the
+# SHA-1 of the key joined to the GUID, the subprotocol line for the one
+# chosen (srv_hs_proto: one the client offered, or none), the blank
+# line.
+law srv_hs_valid:
+  for +key: Bytes()
+  for +offered: List<&2, Bytes()>
+  for +proto: Bytes()
+  for h: {H.key.ok(key) == True{} : Bool}
+  {H.s.answer(True{}, True{}, key, offered, proto) ==
+    H.SOk{"HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: "
+      ++ Bytes.from_list(B64.enc(Sha1.hash(List.append(&2, U32, Bytes.to_list(key),
+        Ws.ascii("258EAFA5-E914-47DA-95CA-C5AB0DC85B11"))))) ++ "\r\n"
+      ++ H.s.proto.line(H.s.chosen(proto, offered)) ++ "\r\n"} : H.Sv}
+
+# LAW: the answer never names a subprotocol the client did not offer.
+law srv_hs_proto:
+  for +proto: Bytes()
+  for +offered: List<&2, Bytes()>
+  for h: {H.has(offered, proto) == False{} : Bool}
+  {H.s.chosen(proto, offered) == "" : Bytes()}
+
+# LAW: every other request is refused, with 400 or 426.
+law srv_hs_refused:
+  for +get: Bool
+  for +asked: Bool
+  for +key: Bytes()
+  for +offered: List<&2, Bytes()>
+  for +proto: Bytes()
+  for h: {get && asked && H.key.ok(key) == False{} : Bool}
+  {H.s.refused(H.s.answer(get, asked, key, offered, proto)) == True{} : Bool}
+
+# LAW: RFC 6455 1.3's example, as the server answers it and the client
+# (ws_hs.bend's judge) reads that answer back; and the refusals: not
+# asked, 426; a POST, a key cut short, a key with no padding, a key with
+# a byte out of the alphabet, 400; a subprotocol not offered, left out.
+law srv_hs_vectors:
+  {[H.s.answer(True{}, True{}, "dGhlIHNhbXBsZSBub25jZQ==", ["superchat", "chat"], "chat"),
+    H.s.answer(True{}, False{}, "dGhlIHNhbXBsZSBub25jZQ==", [], ""),
+    H.s.answer(False{}, True{}, "dGhlIHNhbXBsZSBub25jZQ==", [], ""),
+    H.s.answer(True{}, True{}, "dGhlIHNhbXBsZSBub25jZQ=", [], ""),
+    H.s.answer(True{}, True{}, "dGhlIHNhbXBsZSBub25jZQAA", [], ""),
+    H.s.answer(True{}, True{}, "dGhlIHNhbXBsZSBub25jZ!==", [], ""),
+    H.s.answer(True{}, True{}, "dGhlIHNhbXBsZSBub25jZQ==", ["chat"], "superchat")] ==
+    [H.SOk{"HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo=\r\nSec-WebSocket-Protocol: chat\r\n\r\n"},
+     H.SNo{426}, H.SNo{400}, H.SNo{400}, H.SNo{400}, H.SNo{400},
+     H.SOk{"HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo=\r\n\r\n"}]
+    : List<&2, H.Sv>}
+
+law srv_hs_client_reads:
+  {H.answer("dGhlIHNhbXBsZSBub25jZQ==", ["superchat", "chat"],
+    "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo=\r\nSec-WebSocket-Protocol: chat")
+    == Done{"chat"} : Result<&2, &2, H.Hw, Bytes()>}
+
+# LAW: the subprotocols a request offered, from every field, in order.
+law srv_offered:
+  {H.s.offered(["chat, superchat", " v2.bend ", ""]) == ["chat", "superchat", "v2.bend"] : List<&2, Bytes()>}

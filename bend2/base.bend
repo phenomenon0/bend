@@ -287,6 +287,12 @@ def IO.signal_pending(sig: U32) -> IO(Bool):
   import "./effs/signal_pending.c"
   import "./effs/signal_pending.js"
 
+# whether the signal has arrived at all since it was first caught (by
+# either ask): nothing clears it, so every computation hears it
+def IO.signal_seen(sig: U32) -> IO(Bool):
+  import "./effs/signal_pending.c"
+  import "./effs/signal_pending.js"
+
 def Chan.new(-A: Type, room: U32) -> IO(Chan(A)):
   import "./effs/chan_new.c"
   import "./effs/chan_new.js"

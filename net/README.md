@@ -36,6 +36,8 @@ import ../net/client.bend as Client
     net/client.bend   Client: get, post, request, sessions (pooled), NetError
     net/url.bend      URLs: parse, parse.ws, resolve, origin
     net/json.bend     Json: JSON bodies on power/json_value.bend
+    net/ws.bend       Ws: a WebSocket connection, either end: connect, send, recv, close
+    net/ws_server.bend WsServer: WebSocket routes, accept/refuse, options, the Hub
     net/ws_net.bend   the WebSocket client's Ws.Err as a NetError
     net/stream.bend   Stream: request bodies as streams, for uploads
 
@@ -72,7 +74,11 @@ Router: `Server.route(routes, req)` over `[Server.get(pat, h),
 Server.post(...), put, patch, delete, Server.on(methods, pat, h),
 Server.static(prefix, root)]`, patterns of literals, `:name` and a last
 `*`; no match is a 404, a path with other methods a 405 with `Allow`,
-and GET answers HEAD. Middleware is Handler -> Handler as a template:
+and GET answers HEAD. `Server.serve.routes(~E, ~rs, env, cfg)` serves the
+routes `rs(env)` directly, and then a `Server.Sock` route (a GET one;
+`WsServer.ws` makes them) may take its connection over: it is told
+whether the request asked to switch protocols, and answers a response
+or the head that switches it and what runs on the socket. Middleware is Handler -> Handler as a template:
 `~Server.logged(~app)` (a line per request on stderr),
 `~Server.secured(~app)` (nosniff, DENY, no-referrer, CSP 'self', each
 unless set), `~Server.recovered(~app)` (a handler answering
@@ -115,6 +121,22 @@ value that holds a handle is affine: `Ws.connect` answers `Result<&2,
 &1, Ws.Err, Ws.Conn>`. A command line is what `IO.args()` answers,
 `List<String>`, and every flag reader takes it as it is.
 
+**WebSockets.** `Ws.connect(url, Ws.opts())` is a client's connection;
+`WsServer.ws(pat, h)` is a route (beside `Server.get` and the rest, served by
+`WsServer.serve(~routes, cfg)` or `WsServer.serve.with(~E, ~routes, env, cfg)`,
+which is `Server.serve.routes`) whose `h: Http.Request -> IO(WsServer.Take)`
+answers `WsServer.accept(proto, run)` or `WsServer.refuse(resp)`, and `run:
+Ws.Conn -> IO(Ws.Conn)` gets a server's connection. Either end has the same
+verbs and messages: `Ws.send_text/send_bytes/ping` (`Ws.Out(Unit)`),
+`Ws.recv/recv_for` (`Ws.Out(F.Msg)`: `Text{s}`, `Binary{b}`, `Closed{code,
+reason}`), `Ws.protocol`, `Ws.end(c, code, reason)` (the closing handshake,
+the connection handed back), `Ws.close` (the same, then released).
+`WsServer.choose(r, ours)` picks a subprotocol the client offered;
+`WsServer.ws.with(o, pat, h)` takes `WsServer.opts()` changed by
+`opts.max_msg/keepalive(ping, pong)/timeouts(recv, close, send)/origins`.
+A `WsServer.Hub` is a room: `hub.new`, `join`, `leave`, `publish`, `inbox`,
+`relay`.
+
 **Json.** `Json.respond(status, j)`, `Json.body(req, budget)`,
 `Json.of(resp, budget)` (`Result<J.Why, J.Json>`), `Json.obj/kv/arr/
 str/yes/no/null`, numbers by `Json.num` (a `U32`), `Json.i64` (an `I64`)
@@ -143,6 +165,11 @@ and `Json.f64` (an `F64`; NaN and infinities are null), `Json.get`,
 | client: redirects | 10 | TooManyRedirects |
 | client: idle connections | 8 an origin, 32 origins, 4 s, 60 s old | closed |
 | client: TLS | verified (system store, or `ca`), name checked | Tls |
+| WebSocket server: a message | 1 MiB | 1009 |
+| WebSocket server: quiet, then the ping unanswered | 20 s, 20 s | a ping, then 1011 |
+| WebSocket server: a recv, the closing handshake, a send | 60 s, 5 s, 10 s | ETime, closed |
+| WebSocket server: SIGTERM | 1001 on each recv | the client's answer, or grace |
+| WebSocket server: a Hub inbox | 1024 messages | the newest dropped |
 
 A malformed request is a 400 that closes, and nothing after it on the
 connection is read. The client sends a request again only when a pooled
@@ -187,10 +214,21 @@ passes its export. `net/LAWS.bend`:
 - vectors: percent-encoding over every byte, the query, URLs and
   Locations, the router's patterns, the response check.
 
+`bend net/ws_proof.bend` is the WebSocket gate (`net/ws_laws.bend`): the
+client's laws, and the server's -- `srv_hs_valid` (every request that
+asked well gets RFC 6455 4.2.2's 101, the Accept its key earns),
+`srv_hs_refused` (every other a 400 or 426), `srv_hs_proto` (no
+subprotocol the client did not offer), `srv_frame_unmasked` (no frame the
+server writes is masked), `srv_unmasked_refused` (an unmasked client
+frame breaks the framing: 1002), `srv_reads` (the acts a handler's
+connection takes are the spec's reassembly of the input, for every cut
+of it into reads), `srv_close_once` and `srv_close_after` (at most one
+close written, none after this end's own), and vectors.
+
 `python3 net/mutants.py`: twenty-nine broken servers, streams and
-clients, each refused. Not proven: the IO loops (they call the functions
-the laws are about), the deadlines and limits, a stream route's head
-(checked by `check.py`).
+clients, each refused; `python3 net/ws_mutants.py`: the WebSocket ones. Not
+proven: the IO loops (they call the functions the laws are about), the
+deadlines and limits, a stream route's head (checked by `check.py`).
 
 ## The examples
 
@@ -204,6 +242,8 @@ the laws are about), the deadlines and limits, a stream route's head
     net/examples/relay.bend        fetch JSON upstream on a pooled session, serve part of it
     net/examples/ws_chat.bend      a WebSocket chat client
     net/examples/upload.bend       uploads to files, a body counted as it comes
+    net/examples/chat_server.bend  its room: a WebSocket route, a Hub, broadcast
+    net/examples/ws_echo.bend      a WebSocket echo (the one Autobahn runs against)
 
 `guide/NETWORKING.md` (`bend guide networking`) walks through them.
 
@@ -219,7 +259,12 @@ TLS; and streamed bodies: 100 MB by length and chunked, written to a file
 byte for byte with the server's peak RSS measured (about 6 MB; 1 GiB by
 hand, the same), the stream's cap, a stalled body, a handler that
 returns without reading (drained, or closed with no byte of it read as a
-request), 100-continue, and pipelining after a streamed body.
+request), 100-continue, and pipelining after a streamed body;
+and WebSockets on the server: the chat room's broadcast between two
+ws_chat clients, its 426, 400 and 101, SIGTERM's 1001.
+`python3 net/ws_check.py ./wsc ./httpd PORT --server ./echo --autobahn`
+checks both ends against a raw peer, Python's websockets and the Autobahn
+suite (301 / 301 cases each way, compression's excluded).
 
 On one thread, `wrk -t2 -c32`, hello answers about 40k requests a
 second where the engine's literal `/health` answers 58k; with the
@@ -228,5 +273,5 @@ difference is the checked writer (`respond_framed`'s).
 
 Not yet: streaming response bodies, a chunked streamed body past 256
 MiB, a stream route's request pipelined behind another in one read (read
-whole, under max_body), the server's Upgrade, a deadline on the handler
-itself.
+whole, under max_body), a deadline on the handler itself, WebSocket
+compression (permessage-deflate is declined).

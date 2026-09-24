@@ -33,10 +33,14 @@ import ../demos/io_http_engine/sha1.bend as Sha1
 # ==========
 
 # Srv: a server's end, the engine's reader. Cli: a client's, with the
-# most payload a frame may carry.
+# most payload a frame may carry. Serv: a server's end as net/ws_server
+# runs it: every frame masked (an unmasked one breaks the framing, and
+# the connection fails with 1002), fragments and continuations as Cli
+# reads them, and the payload capped as Cli caps it.
 type Role is Data:
   Srv{}
   Cli{cap: U32}
+  Serv{cap: U32}
 
 # the marker a Cli frame past its cap is handed out as, just before the
 # reader breaks: the connection fails with 1009, not 1002
@@ -63,6 +67,9 @@ def g.op(r: Role, +b: U32) -> Ws.Fs:
     case Srv{}:
       Ws.step.op(b)
     case Cli{cap}:
+      c.op.go(U32.and(b, 15), U32.is_zero(U32.and(b, 112)) && c.known(U32.and(b, 15)),
+        U32.is_eq(U32.and(b, 128), 128))
+    case Serv{cap}:
       c.op.go(U32.and(b, 15), U32.is_zero(U32.and(b, 112)) && c.known(U32.and(b, 15)),
         U32.is_eq(U32.and(b, 128), 128))
 
@@ -117,12 +124,51 @@ def c.len.go(
     case False{} False{}:
       c.len.on(cap, op, n, U32.is_eq(n, 126), U32.is_eq(n, 127), out)
 
+# at the server's end (Serv) the payload's length is followed by the
+# mask: a frame whose length is known goes on to its four mask bytes (the
+# engine's Msk, which unmasks the payload as the engine's reader does),
+# or is marked too big
+def s.fits(op: U32, +n: U32, out: List<&2, Ws.Frm>, big: Bool) -> Ws.W:
+  match big:
+    case True{}:
+      c.big(out)
+    case False{}:
+      Ws.W{Ws.Msk{op, n, 4, 0}, out}
+
+def s.len.on(
+  +cap: U32, op: U32, +n: U32, two: Bool, eight: Bool, out: List<&2, Ws.Frm>
+) -> Ws.W:
+  match two eight:
+    case True{} _:
+      Ws.W{Ws.Ext{op, 2, 0, 126}, out}
+    case False{} True{}:
+      Ws.W{Ws.Ext{op, 8, 0, 65536}, out}
+    case False{} False{}:
+      s.fits(op, n, out, U32.is_lt(cap, n))
+
+# the second byte at the server's end: a client's frame is always
+# masked (RFC 6455 5.1: an unmasked one fails the connection, 1002), and
+# a control frame carries at most 125 bytes
+def s.len.go(
+  +cap: U32, op: U32, +n: U32, masked: Bool, long_ctl: Bool, out: List<&2, Ws.Frm>
+) -> Ws.W:
+  match masked long_ctl:
+    case False{} _:
+      Ws.W{Ws.Bad{}, out}
+    case True{} True{}:
+      Ws.W{Ws.Bad{}, out}
+    case True{} False{}:
+      s.len.on(cap, op, n, U32.is_eq(n, 126), U32.is_eq(n, 127), out)
+
 def g.len(r: Role, +op: U32, +b: U32, out: List<&2, Ws.Frm>) -> Ws.W:
   match r:
     case Srv{}:
       Ws.W{Ws.step.len(op, b), out}
     case Cli{+cap}:
       c.len.go(cap, op, U32.and(b, 127), U32.is_eq(U32.and(b, 128), 128),
+        c.ctl(op) && U32.is_lt(125, U32.and(b, 127)), out)
+    case Serv{+cap}:
+      s.len.go(cap, op, U32.and(b, 127), U32.is_eq(U32.and(b, 128), 128),
         c.ctl(op) && U32.is_lt(125, U32.and(b, 127)), out)
 
 # the extended length, big-endian. A length past the cap is marked too
@@ -149,6 +195,27 @@ def c.ext.on(
   c.ext.go(op, left, len2, min, U32.is_lt(cap, len2) || U32.is_lt(16777215, len),
     U32.is_zero(left), U32.is_lt(len2, min), out)
 
+# the extended length at the server's end: as Cli's, then the mask
+def s.ext.go(
+  op: U32, left: U32, +len2: U32, min: U32, big: Bool, done: Bool, short: Bool,
+  out: List<&2, Ws.Frm>
+) -> Ws.W:
+  match big done short:
+    case True{} _ _:
+      c.big(out)
+    case False{} True{} True{}:
+      Ws.W{Ws.Bad{}, out}
+    case False{} True{} False{}:
+      Ws.W{Ws.Msk{op, len2, 4, 0}, out}
+    case False{} False{} _:
+      Ws.W{Ws.Ext{op, left, len2, min}, out}
+
+def s.ext.on(
+  +cap: U32, op: U32, +left: U32, +len: U32, +len2: U32, +min: U32, out: List<&2, Ws.Frm>
+) -> Ws.W:
+  s.ext.go(op, left, len2, min, U32.is_lt(cap, len2) || U32.is_lt(16777215, len),
+    U32.is_zero(left), U32.is_lt(len2, min), out)
+
 def g.ext(
   r: Role, op: U32, need: U32, +len: U32, min: U32, b: U32, out: List<&2, Ws.Frm>
 ) -> Ws.W:
@@ -157,6 +224,8 @@ def g.ext(
       Ws.W{Ws.step.ext(op, need, len, min, b), out}
     case Cli{+cap}:
       c.ext.on(cap, op, (need - 1 : U32), len, ((len * 256 : U32) + b : U32), min, out)
+    case Serv{+cap}:
+      s.ext.on(cap, op, (need - 1 : U32), len, ((len * 256 : U32) + b : U32), min, out)
 
 def g.at(r: Role, st: Ws.Fs, out: List<&2, Ws.Frm>, b: U32) -> Ws.W:
   match st:
@@ -228,6 +297,19 @@ def c.head(op: U32, fin: Bool, +n: U32, +m: U32) -> Bytes():
 # a client sends is masked (RFC 6455 5.1), each with a key of its own.
 def c.frame(op: U32, fin: Bool, +p: Bytes(), +m: U32) -> Bytes():
   Bytes.append(c.head(op, fin, U32.from_nat(Bytes.len(p)), m), mask(p, m))
+
+# Writing (the server's frames)
+# =======
+
+# a server frame's head: FIN and the opcode; the length, its mask bit
+# clear (the low seven bits kept, and only they); the extended length
+def s.head(op: U32, fin: Bool, +n: U32) -> Bytes():
+  Bytes.from_list(Con{U32.or(Bool.pick(U32, fin, 128, 0), op), Con{U32.and(len7(n), 127), len.ext(n)}})
+
+# a server frame: the head, then the payload as it is. No frame a server
+# sends is masked (RFC 6455 5.1; ws_laws.bend's srv_unmasked).
+def s.frame(op: U32, fin: Bool, +p: Bytes()) -> Bytes():
+  Bytes.append(s.head(op, fin, U32.from_nat(Bytes.len(p))), p)
 
 def code.bytes(+code: U32) -> Bytes():
   Bytes.from_list([Sha1.byte(Sha1.sr(8n, code)), Sha1.byte(code)])
@@ -542,3 +624,143 @@ def acts.of(+cap: U32, tk: Ws.W & List<&2, Ws.Frm>) -> List<&2, Act>:
 # every frame's act in turn, and a 1002 at the end if the framing broke
 def session(+cap: U32, bs: Bytes()) -> List<&2, Act>:
   acts.of(cap, Ws.take(feed_buf(Cli{cap}, bs, Ws.new())))
+
+# The server's session, pure
+# ==========================
+#
+# What a server's connection hands its handler, and what it writes back
+# on its own, as functions of the bytes the client sent. The spec reads
+# the input whole: the frames of all of it at the server's end (Serv),
+# each through the assembler in turn, and a 1002 at the end when the
+# framing broke. The connection reads it as it arrives: each read fed to
+# the reader from where the last left it, the frames it completed taken
+# and assembled with the assembler as the last read left it, and the
+# framing checked once they are all handed over (net/ws.bend's st.feed,
+# turn and empty). ws_laws.bend's srv_reads: the two are the same acts,
+# however the input is cut into reads.
+
+# the acts of frames in turn, and the assembler after them
+type AR is Data:
+  AR{acts: List<&2, Act>, asm: Asm}
+
+def acts.push(x: Act, r: AR) -> AR:
+  match r:
+    case AR{xs, a}:
+      AR{Con{x, xs}, a}
+
+def acts.run(+cap: U32, fs: List<&2, Ws.Frm>, a: Asm) -> AR:
+  match fs:
+    case Nil{}:
+      AR{Nil{}, a}
+    case Con{f, t}:
+      +q = asm(cap, a, f)
+      acts.push(ax.act(q), acts.run(cap, t, ax.asm(q)))
+
+# a 1002 when the framing broke
+def s.bad(w: Ws.W) -> List<&2, Act>:
+  match w:
+    case Ws.W{st, out}:
+      match st:
+        case Ws.Bad{}:
+          [Refuse{1002}]
+        case _:
+          []
+
+def s.fin(r: AR, w: Ws.W) -> List<&2, Act>:
+  match r:
+    case AR{xs, a}:
+      List.append(&2, Act, xs, s.bad(w))
+
+# from a reader and an assembler: the frames it holds, then the rest
+def s.tail(+cap: U32, tk: Ws.W & List<&2, Ws.Frm>, a: Asm) -> List<&2, Act>:
+  (w, fs) = tk
+  s.fin(acts.run(cap, fs, a), w)
+
+# the spec: the input whole
+def s.session(+cap: U32, bs: Bytes()) -> List<&2, Act>:
+  s.tail(cap, Ws.take(feed_buf(Serv{cap}, bs, Ws.new())), Idle{})
+
+def s.took.run(r: AR, w: Ws.W, go: Ws.W -> Asm -> List<&2, Act>) -> List<&2, Act>:
+  match r:
+    case AR{xs, a}:
+      List.append(&2, Act, xs, go(w, a))
+
+def s.took(+cap: U32, tk: Ws.W & List<&2, Ws.Frm>, a: Asm, go: Ws.W -> Asm -> List<&2, Act>) -> List<&2, Act>:
+  (w, fs) = tk
+  s.took.run(acts.run(cap, fs, a), w, go)
+
+def s.reads.go(+cap: U32, rs: List<&2, Bytes()>, w: Ws.W, a: Asm) -> List<&2, Act>:
+  match rs:
+    case Nil{}:
+      s.bad(w)
+    case Con{r, t}:
+      s.took(cap, Ws.take(feed_buf(Serv{cap}, r, w)), a, w2 => a2 => s.reads.go(cap, t, w2, a2))
+
+# the connection: the input as the reads it came in
+def s.reads(+cap: U32, rs: List<&2, Bytes()>) -> List<&2, Act>:
+  s.reads.go(cap, rs, Ws.new(), Idle{})
+
+# What a connection writes on its own for an act (s.out; net/ws.bend's
+# act writes exactly it): a pong for a ping, and for the peer's close or
+# a failure the close frame, with the peer's code or the failure's --
+# and nothing at all once this end's close went out (the handler closed
+# first, or the server's 1001 on SIGTERM): no pong after a close (RFC
+# 6455 5.5.1), and the peer's close is then the answer, not a thing to
+# answer. The peer's close and a failure end the connection (s.stops).
+type Wr is Data:
+  WPong{body: Bytes()}
+  WClose{code: U32}
+
+def s.out(+sent: Bool, x: Act) -> Maybe<&2, Wr>:
+  match sent:
+    case True{}:
+      None{}
+    case False{}:
+      match x:
+        case Deliver{m}:
+          None{}
+        case Pong{body}:
+          Some{WPong{body}}
+        case Skip{}:
+          None{}
+        case Bye{code, reason}:
+          Some{WClose{code}}
+        case Refuse{code}:
+          Some{WClose{code}}
+
+def s.stops(x: Act) -> Bool:
+  match x:
+    case Bye{code, reason}:
+      True{}
+    case Refuse{code}:
+      True{}
+    case _:
+      False{}
+
+def s.put(w: Maybe<&2, Wr>, rest: List<&2, Wr>) -> List<&2, Wr>:
+  match w:
+    case None{}:
+      rest
+    case Some{x}:
+      Con{x, rest}
+
+# what the connection writes for the acts, in turn, until one ends it;
+# sent is whether this end's close went out already
+def s.writes(+sent: Bool, xs: List<&2, Act>) -> List<&2, Wr>:
+  match xs:
+    case Nil{}:
+      []
+    case Con{+x, t}:
+      s.put(s.out(sent, x), Bool.pick(List<&2, Wr>, s.stops(x), [], s.writes(sent, t)))
+
+# how many close frames
+def closes(ws: List<&2, Wr>) -> Nat:
+  match ws:
+    case Nil{}:
+      0n
+    case Con{w, t}:
+      match w:
+        case WPong{b}:
+          closes(t)
+        case WClose{c}:
+          1n+closes(t)
