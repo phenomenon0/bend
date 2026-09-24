@@ -24,7 +24,13 @@ returns without reading, 100-continue, pipelining after a streamed body.
 WebSockets on the server: chat_server's room with two ws_chat clients
 (its broadcast), its page beside it, its 426 and 400, the 101's Accept
 and subprotocol, SIGTERM's 1001, and ws_echo from Python's websockets
-(net/ws_check.py --server checks the rest).
+(net/ws_check.py --server checks the rest). IPv6, where the machine has a
+loopback for it (else said and skipped): the server on ::1 (its banner
+[::1]:port, the request's remote ::1) and on :: (IPv4 too), over TLS;
+the client to http://[::1]:port/ (Host [::1]:port, pooled), to a name
+with both families whichever one listens, over TLS to an IP-literal
+(its IP SAN checked, one without refused, no SNI sent); a WebSocket
+room on ::1 through ws://[::1]:port/ (its Host bracketed).
 Every Bend snippet in guide/NETWORKING.md must be in a file under net/,
 word for word. Prints PASS/FAIL per case and exits 1 on any failure.
 """
@@ -279,10 +285,11 @@ def check_files(files, root):
 
 class Peer:
     """a Python HTTP/1.1 peer on its own thread: routes by path, counts connections"""
-    def __init__(self, port, tls=None):
+    def __init__(self, port, tls=None, host="127.0.0.1"):
         self.port, self.conns, self.seen = port, 0, []
-        self.sock = socket.socket(); self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        self.sock.bind(("127.0.0.1", port)); self.sock.listen(64)
+        self.sock = socket.socket(socket.AF_INET6 if ":" in host else socket.AF_INET)
+        self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self.sock.bind((host, port)); self.sock.listen(64)
         self.tls = tls
         threading.Thread(target=self.loop, daemon=True).start()
 
@@ -650,6 +657,189 @@ def check_ws(room, chat_bin, echo):
         got = repr(e)
     ok("ws: the echo, from Python's websockets", got == ("echo", "héllo", 70000), got)
 
+# IPv6
+# ====
+
+def v6_loopback():
+    try:
+        s = socket.socket(socket.AF_INET6)
+        s.bind(("::1", 0))
+        s.close()
+        return True
+    except OSError:
+        return False
+
+def up6(port, tries=100):
+    for _ in range(tries):
+        try:
+            socket.create_connection(("::1", port), timeout=0.2).close()
+            return True
+        except OSError:
+            time.sleep(0.05)
+    return False
+
+def start6(args, port):
+    p = subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+    PROCS.append(p)
+    if not up6(port):
+        sys.exit("never listened on ::1: " + " ".join(args))
+    return p
+
+def get_at(host, port, path, ctx=None):
+    """a GET over host (either family), the Host field [::1]:port or host:port; the response's bytes"""
+    s = socket.create_connection((host, port), timeout=5)
+    if ctx:
+        s = ctx.wrap_socket(s, server_hostname=host)
+    s.sendall(("GET %s HTTP/1.1\r\nHost: t\r\nConnection: close\r\n\r\n" % path).encode())
+    out = b""
+    try:
+        while True:
+            b = s.recv(65536)
+            if not b:
+                break
+            out += b
+    except (socket.timeout, ssl.SSLError, ConnectionResetError):
+        pass
+    s.close()
+    return out
+
+def refused_at(host, port):
+    try:
+        socket.create_connection((host, port), timeout=1).close()
+        return False
+    except OSError:
+        return True
+
+def dual_name():
+    """a name the resolver answers with both ::1 and 127.0.0.1, if there is one"""
+    for name in ("localhost", "dual.v6.test"):
+        try:
+            got = {a[4][0] for a in socket.getaddrinfo(name, 80, type=socket.SOCK_STREAM)}
+        except OSError:
+            continue
+        if "::1" in got and "127.0.0.1" in got:
+            return name
+    return None
+
+def check_v6(hello, fetch_bin, tls_bin, room, chat_bin, tmp):
+    if not v6_loopback():
+        print("SKIP v6: this machine has no IPv6 loopback (::1 does not bind)")
+        return
+    # the server on ::1: reached there and not over IPv4, its banner bracketed
+    port = PORT + 20
+    p = start6([hello, "--port", str(port), "--host", "::1"], port)
+    r = get_at("::1", port, "/")
+    ok("v6: --host ::1 binds ::1", r.startswith(b"HTTP/1.1 200") and r.endswith(b"Hello, world!\n"), r)
+    ok("v6: a server on ::1 is not reached over 127.0.0.1", refused_at("127.0.0.1", port))
+    stop(p)
+    log = p.stderr.read().decode()
+    ok("v6: the banner names [::1]:port", ("listening on http://[::1]:%d" % port) in log, log)
+    # on ::, both families (IPV6_V6ONLY off)
+    port = PORT + 21
+    p = start6([hello, "--port", str(port), "--host", "::"], port)
+    r6, r4 = get_at("::1", port, "/"), get_at("127.0.0.1", port, "/")
+    ok("v6: --host :: takes IPv6 and IPv4 both", r6.endswith(b"Hello, world!\n") and r4.endswith(b"Hello, world!\n"),
+       (r6, r4))
+    stop(p)
+    log = p.stderr.read().decode()
+    ok("v6: the banner names [::]:port", ("listening on http://[::]:%d" % port) in log, log)
+    # a certificate for ::1 and 127.0.0.1 by IP SAN, and one for localhost only
+    cert, key = os.path.join(tmp, "ip-cert.pem"), os.path.join(tmp, "ip-key.pem")
+    subprocess.run(["openssl", "req", "-x509", "-newkey", "rsa:2048", "-keyout", key, "-out", cert, "-days", "2", "-nodes",
+                    "-subj", "/CN=bend-net ip", "-addext", "subjectAltName=IP:::1,IP:127.0.0.1"],
+                   capture_output=True, check=True)
+    dcert, dkey = os.path.join(tmp, "dns-cert.pem"), os.path.join(tmp, "dns-key.pem")
+    subprocess.run(["openssl", "req", "-x509", "-newkey", "rsa:2048", "-keyout", dkey, "-out", dcert, "-days", "2",
+                    "-nodes", "-subj", "/CN=localhost", "-addext", "subjectAltName=DNS:localhost"],
+                   capture_output=True, check=True)
+    cli = ssl.create_default_context(cafile=cert)
+    # the TLS server on ::1 and on ::, its request's remote each time
+    port = PORT + 22
+    p = start6([tls_bin, "--port", str(port), "--host", "::1", "--tls-cert", cert, "--tls-key", key], port)
+    r = get_at("::1", port, "/", cli)
+    ok("v6: the server over TLS on ::1, its IP SAN verified by Python; the remote is ::1",
+       r.startswith(b"HTTP/1.1 200") and r.endswith(b"Hello over TLS, ::1\n"), r)
+    c, out, err = fetch(fetch_bin, "--ca", cert, "https://[::1]:%d/" % port)
+    ok("v6: the server over TLS on ::1, fetched by the client at https://[::1]:port/",
+       c == 0 and out == "Hello over TLS, ::1\n", (c, out, err))
+    stop(p)
+    port = PORT + 23
+    p = start6([tls_bin, "--port", str(port), "--host", "::", "--tls-cert", cert, "--tls-key", key], port)
+    r = get_at("127.0.0.1", port, "/", cli)
+    ok("v6: an IPv4 peer of a :: listener is its dotted address", r.endswith(b"Hello over TLS, 127.0.0.1\n"), r)
+    stop(p)
+    # the client to an IP-literal: the Host field bracketed, the pool keyed by it
+    port = PORT + 24
+    peer = Peer(port, host="::1")
+    c, out, err = fetch(fetch_bin, "--twice", "http://[::1]:%d/conn" % port)
+    ok("v6: the client fetches http://[::1]:port/, twice on one pooled connection",
+       c == 0 and out == "conn 1conn 1", (c, out, err))
+    hosts = [hs.get("host") for (_, _, hs, _) in peer.seen]
+    ok("v6: its Host field is [::1]:port", hosts == ["[::1]:%d" % port] * 2, hosts)
+    c, out, err = fetch(fetch_bin, "http://[::1]:%d/conn" % (PORT + 25))
+    ok("v6: a refused connection to [::1] is Refused", c == 1 and "connection refused" in err, (c, err))
+    c, out, err = fetch(fetch_bin, "http://[fe80::1%%25lo]:%d/" % port)
+    ok("v6: a zone ID is a bad URL", c == 1 and "bad url" in err and "zone" in err, (c, err))
+    # a name with both families: whichever listens is reached
+    name = dual_name()
+    if name is None:
+        print("SKIP v6: no name resolves to both ::1 and 127.0.0.1 here (localhost has one family)")
+    else:
+        c, out, err = fetch(fetch_bin, "http://%s:%d/conn" % (name, port))
+        ok("v6: %s reaches a peer on ::1 only (its AAAA)" % name, c == 0 and out.startswith("conn"), (c, out, err))
+        port4 = PORT + 26
+        Peer(port4)
+        c, out, err = fetch(fetch_bin, "http://%s:%d/conn" % (name, port4))
+        ok("v6: %s reaches a peer on 127.0.0.1 only (its A, after the other)" % name,
+           c == 0 and out.startswith("conn"), (c, out, err))
+    # TLS to an IP-literal: the IP SAN checked, no SNI sent
+    names = []
+    tctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER); tctx.load_cert_chain(cert, key)
+    tctx.sni_callback = lambda s, n, c: names.append(n)
+    tport = PORT + 27
+    Peer(tport, tls=tctx, host="::1")
+    c, out, err = fetch(fetch_bin, "--ca", cert, "https://[::1]:%d/conn" % tport)
+    ok("v6: TLS to https://[::1]:port/ verifies the certificate's IP SAN", c == 0 and out.startswith("conn"), (c, out, err))
+    ok("v6: and sends no SNI for the address (RFC 6066 3)", names == [None], names)
+    dctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER); dctx.load_cert_chain(dcert, dkey)
+    dport = PORT + 28
+    Peer(dport, tls=dctx, host="::1")
+    c, out, err = fetch(fetch_bin, "--ca", dcert, "https://[::1]:%d/conn" % dport)
+    ok("v6: a certificate with no IP SAN for ::1 is refused", c == 1 and "tls:" in err, (c, err))
+    # a WebSocket room on ::1, through ws://[::1]:port/
+    port = PORT + 29
+    p = start6([room, "--port", str(port), "--host", "::1"], port)
+    url = "ws://[::1]:%d/room" % port
+    ada = subprocess.Popen([chat_bin, url, "ada", "--wait-ms", "2500"], stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                           text=True)
+    time.sleep(0.5)
+    bob = subprocess.Popen([chat_bin, url, "bob", "over six", "--wait-ms", "1000"], stdout=subprocess.PIPE,
+                           stderr=subprocess.STDOUT, text=True)
+    b_out, a_out = bob.communicate(timeout=20)[0], ada.communicate(timeout=20)[0]
+    ok("v6: ws://[::1]:port/: a room on ::1 broadcasts", a_out.split("\n")[:1] == ["< bob: over six"]
+       and b_out.split("\n")[:1] == ["< bob: over six"], (a_out, b_out))
+    stop(p)
+    # the WebSocket client's Host field, as a raw listener on ::1 reads it
+    port = PORT + 30
+    ls = socket.socket(socket.AF_INET6); ls.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    ls.bind(("::1", port)); ls.listen(4); ls.settimeout(10)
+    w = subprocess.Popen([chat_bin, "ws://[::1]:%d/x" % port, "cy", "--wait-ms", "200"], stdout=subprocess.PIPE,
+                         stderr=subprocess.STDOUT, text=True)
+    head = b""
+    try:
+        c, _ = ls.accept(); c.settimeout(5)
+        while b"\r\n\r\n" not in head:
+            b = c.recv(4096)
+            if not b:
+                break
+            head += b
+        c.close()
+    except OSError:
+        pass
+    ls.close()
+    w.communicate(timeout=20)
+    ok("v6: the WebSocket client's Host field is [::1]:port", ("\r\nHost: [::1]:%d\r\n" % port).encode() in head, head)
+
 def check_guide():
     """every Bend snippet in guide/NETWORKING.md is in a file under net/, word for word"""
     srcs = []
@@ -685,6 +875,7 @@ def main():
         check_client(fetch_bin, hello, tmp)
         check_stream(bins["upload"], tmp)
         check_ws(bins["chat_server"], bins["ws_chat"], bins["ws_echo"])
+        check_v6(hello, fetch_bin, bins["tls_server"], bins["chat_server"], bins["ws_chat"], tmp)
     finally:
         for p in PROCS:
             stop(p)

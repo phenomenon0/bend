@@ -110,6 +110,27 @@ def Laws.url_vectors():
 def Laws.resolve_vectors():
   {==}
 
+# IPv6: the text, the IP-literals, the Host field and the origin, by
+# computation
+
+def Laws.ip6_vectors():
+  {==}
+
+def Laws.ip6_round_trip():
+  {==}
+
+def Laws.literal_vectors():
+  {==}
+
+def Laws.literal_round_trip():
+  {==}
+
+def Laws.host_vectors():
+  {==}
+
+def Laws.origin_vectors():
+  {==}
+
 # The pool
 # ========
 

@@ -47,8 +47,10 @@ import ../wire/effects.bend as Fx
 import ../demos/io_http_engine/main.bend as Eng
 import ../demos/io_proxy/core.bend as X
 import ./http.bend as Http
+import ./addr.bend as A
 
-# The peer's address (bend-proxy's effect)
+# The peer's address (bend-proxy's effect): dotted for IPv4, RFC 5952's
+# text for IPv6, an IPv4 peer of a dual-stack listener dotted
 def Peer.addr(s: Socket) -> IO(Socket & String):
   import "../demos/io_proxy/peer.c"
   import "../demos/io_proxy/peer.js"
@@ -130,7 +132,8 @@ def cfg.shared(c: Cfg) -> Bool:
       shared
 
 # the address to listen on, a dotted IPv4 one ("127.0.0.1" for this
-# machine alone)
+# machine alone) or an IPv6 one, with or without brackets ("::1" for this
+# machine alone; "::" every interface, IPv4's too where the system allows)
 def set.host(c: Cfg, h: String) -> Cfg:
   match c:
     case Cfg{host, port, idle, head, body, send, mh, mb, conns, grace, cert, key, shared}:
@@ -1048,11 +1051,11 @@ def srv.conns(~E: Data, s: Srv<E>) -> U32:
 def listen.at(plain: Bool, shared: Bool, +cfg: Cfg) -> IO(Result<&1, &1, U32 & String, Listener>):
   match plain shared:
     case False{} _:
-      TLS.listen_on(cfg.host(cfg), cfg.port(cfg), cfg.cert(cfg), cfg.key(cfg))
+      TLS.listen_on(A.bare(cfg.host(cfg)), cfg.port(cfg), cfg.cert(cfg), cfg.key(cfg))
     case True{} True{}:
-      TCP.listen_shared_on(cfg.host(cfg), cfg.port(cfg))
+      TCP.listen_shared_on(A.bare(cfg.host(cfg)), cfg.port(cfg))
     case True{} False{}:
-      TCP.listen_on(cfg.host(cfg), cfg.port(cfg))
+      TCP.listen_on(A.bare(cfg.host(cfg)), cfg.port(cfg))
 
 def listen(+cfg: Cfg) -> IO(Result<&1, &1, U32 & String, Listener>):
   listen.at(String.is_empty(cfg.cert(cfg)), cfg.shared(cfg), cfg)
@@ -1060,14 +1063,18 @@ def listen(+cfg: Cfg) -> IO(Result<&1, &1, U32 & String, Listener>):
 def scheme(+cfg: Cfg) -> String:
   Bool.pick(String, String.is_empty(cfg.cert(cfg)), "http", "https")
 
+# host:port as a URL writes it, an IPv6 address in brackets ([::1]:8080)
+def hostport(+cfg: Cfg) -> String:
+  A.bracket(cfg.host(cfg)) ++ ":" ++ U32.show(cfg.port(cfg))
+
 def banner(+cfg: Cfg) -> String:
-  "bend-net: listening on " ++ scheme(cfg) ++ "://" ++ cfg.host(cfg) ++ ":" ++ U32.show(cfg.port(cfg))
+  "bend-net: listening on " ++ scheme(cfg) ++ "://" ++ hostport(cfg)
 
 # why the server could not start: for TLS, the files it was given (a
 # missing or unreadable file, or a key not the certificate's)
 def refused(+cfg: Cfg, +msg: String) -> String:
   Bool.pick(String, String.is_empty(cfg.cert(cfg)),
-    "bend-net: cannot listen on " ++ cfg.host(cfg) ++ ":" ++ U32.show(cfg.port(cfg)) ++ ": " ++ msg,
+    "bend-net: cannot listen on " ++ hostport(cfg) ++ ": " ++ msg,
     "bend-net: TLS setup failed (certificate " ++ cfg.cert(cfg) ++ ", key " ++ cfg.key(cfg) ++ "): " ++ msg)
 
 def listened(+cfg: Cfg, r: Result<&1, &1, U32 & String, Listener>) -> IO(Listener):

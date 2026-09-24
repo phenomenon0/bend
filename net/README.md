@@ -35,6 +35,7 @@ import ../net/client.bend as Client
     net/server.bend   Server: serve, the configuration, the router, middleware
     net/client.bend   Client: get, post, request, sessions (pooled), NetError
     net/url.bend      URLs: parse, parse.ws, resolve, origin
+    net/addr.bend     Addr: IPv6 text (RFC 4291 read, RFC 5952 written), IP-literals, connect
     net/json.bend     Json: JSON bodies on power/json_value.bend
     net/ws.bend       Ws: a WebSocket connection, either end: connect, send, recv, close
     net/ws_server.bend WsServer: WebSocket routes, accept/refuse, options, the Hub
@@ -67,8 +68,10 @@ command line (`xs` is `IO.args()`) by `Server.args(xs, cfg)` (`--host
 --grace-ms --tls-cert --tls-key --shared`; `Server.flag(xs, name, d)`
 reads one of your own). Precedence: a flag given wins over `cfg`, and a
 `set.*` applied to what `args` answers wins over the flag. The server
-binds `host` (0.0.0.0, every IPv4 interface, by default) and says so on
-stderr; a certificate or key that does not load ends it with `TLS setup
+binds `host` (0.0.0.0, every IPv4 interface, by default; a dotted
+address; an IPv6 one, `::1` or `::`, IPV6_V6ONLY off so `::` takes IPv4
+too) and says so on stderr (`http://[::1]:8080`); a request's remote is
+its peer's address, IPv6 in RFC 5952's text; a certificate or key that does not load ends it with `TLS setup
 failed` and the file.
 Router: `Server.route(routes, req)` over `[Server.get(pat, h),
 Server.post(...), put, patch, delete, Server.on(methods, pat, h),
@@ -212,7 +215,12 @@ passes its export. `net/LAWS.bend`:
   exactly the bytes after it; else it closes. An undrained body is never
   read as a request.
 - vectors: percent-encoding over every byte, the query, URLs and
-  Locations, the router's patterns, the response check.
+  Locations, the router's patterns, the response check; IPv6's text
+  (`ip6_vectors`: RFC 5952 section 4's examples and RFC 4291 2.2's forms,
+  and what is not an address; `ip6_round_trip`), IP-literal URLs
+  (`literal_vectors`, RFC 3986 3.2.2 and RFC 2732's examples, zone IDs
+  refused; `literal_round_trip`), the Host field of a request to one
+  (`host_vectors`) and its origin, the pool's key (`origin_vectors`).
 
 `bend net/ws_proof.bend` is the WebSocket gate (`net/ws_laws.bend`): the
 client's laws, and the server's -- `srv_hs_valid` (every request that
@@ -225,8 +233,8 @@ connection takes are the spec's reassembly of the input, for every cut
 of it into reads), `srv_close_once` and `srv_close_after` (at most one
 close written, none after this end's own), and vectors.
 
-`python3 net/mutants.py`: twenty-nine broken servers, streams and
-clients, each refused; `python3 net/ws_mutants.py`: the WebSocket ones. Not
+`python3 net/mutants.py`: forty-seven broken servers, streams, clients,
+URLs and IPv6 texts, each refused; `python3 net/ws_mutants.py`: the WebSocket ones. Not
 proven: the IO loops (they call the functions the laws are about), the
 deadlines and limits, a stream route's head (checked by `check.py`).
 
@@ -261,7 +269,11 @@ hand, the same), the stream's cap, a stalled body, a handler that
 returns without reading (drained, or closed with no byte of it read as a
 request), 100-continue, and pipelining after a streamed body;
 and WebSockets on the server: the chat room's broadcast between two
-ws_chat clients, its 426, 400 and 101, SIGTERM's 1001.
+ws_chat clients, its 426, 400 and 101, SIGTERM's 1001; and IPv6, where
+the machine has a loopback for it: the server on ::1 and on :: (its
+banner, the remote, over TLS), the client to http://[::1]:port/ (Host,
+pool), a name with both families, TLS to an IP-literal (IP SAN, no SNI),
+a WebSocket room through ws://[::1]:port/.
 `python3 net/ws_check.py ./wsc ./httpd PORT --server ./echo --autobahn`
 checks both ends against a raw peer, Python's websockets and the Autobahn
 suite (301 / 301 cases each way, compression's excluded).
@@ -271,7 +283,8 @@ second where the engine's literal `/health` answers 58k; with the
 response written as a literal the loop matches the engine, so the
 difference is the checked writer (`respond_framed`'s).
 
-Not yet: streaming response bodies, a chunked streamed body past 256
+Not yet: Happy Eyeballs (a name's addresses are tried in turn, never
+raced), IPv6 zone IDs, streaming response bodies, a chunked streamed body past 256
 MiB, a stream route's request pipelined behind another in one read (read
 whole, under max_body), a deadline on the handler itself, WebSocket
 compression (permessage-deflate is declined).
