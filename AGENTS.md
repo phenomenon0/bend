@@ -20,6 +20,8 @@ lines its run must print, and the gates run on the mini cluster.
                         page's and the film's numbers), gen_gifs.ts (the images)
     bench/runtime/      one dir per bench: main.bend and its twins (C, TS, Lean)
     bench/checker/      one dir per bench: main.bend and its rivals
+    bench/net/          netperf.py: the HTTP stack's instructions and syscalls
+                        per request (callgrind, strace), against _pin_/
     bench/*/_pin_/      the pins, one file per hardware: apple_m4 the gate's,
                         apple_m4_max the record
     tests/<ns>/         the tests by namespace, with their foreign .c/.js

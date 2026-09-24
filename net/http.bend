@@ -17,6 +17,8 @@ import Base
 import ../wire/reader.bend as Wr
 import ../demos/io_http_engine/main.bend as Eng
 import ../demos/io_proxy/core.bend as X
+import ../wire/http1/resp.bend as R
+import ../wire/http1/spec.bend as RS
 
 # Headers
 # =======
@@ -146,14 +148,28 @@ def is.method(r: Request, m: Bytes()) -> Bool:
 # Host, and every one it does not act on), each value trimmed of the
 # whitespace at its ends (RFC 9110 5.5: none of it is the value), the
 # body, and the peer's address.
+#
+# A value whose first and last bytes are no blank is its own trim (the
+# engine's reader hands its values trimmed), so only one that starts or
+# ends with one is walked (PROOF.bend's trim.fast.eq: X.trim either way).
+def trim.at(edge: Bool, +v: Bytes()) -> Bytes():
+  match edge:
+    case True{}:
+      X.trim(v)
+    case False{}:
+      v
+
+def trim.fast(+v: Bytes()) -> Bytes():
+  trim.at(X.ows(Bytes.get(v, 0n)) || X.ows(Bytes.get(v, Nat.sub(Bytes.len(v), 1n))), v)
+
 def fields.of(fs: List<&2, Wr.Field>) -> List<&2, Header>:
   match fs:
     case Nil{}:
       Nil{}
     case Con{f, t}:
       match f:
-        case Wr.Field{n, v}:
-          Con{Header{n, X.trim(v)}, fields.of(t)}
+        case Wr.Field{n, +v}:
+          Con{Header{n, trim.fast(v)}, fields.of(t)}
 
 def target.at(+t: Bytes(), +i: Nat) -> Bytes() & Bytes():
   (String.take(t, i), String.drop(t, 1n+i))
@@ -389,8 +405,15 @@ def st.find(ts: List<&2, St>, +c: U32) -> Maybe<&2, St>:
           st.hit(U32.is_eq(k, c), St{k, cd, why}, u => st.find(r, c))
 
 # the three digits and the reason of a status
+def st.of.at(m: Maybe<&2, St>, +c: U32) -> St:
+  match m:
+    case Some{t}:
+      t
+    case None{}:
+      St{c, U32.show(c), "Status"}
+
 def st.of(+c: U32) -> St:
-  Maybe.default(&2, St, st.find(statuses(), c), St{c, U32.show(c), "Status"})
+  st.of.at(st.find(statuses(), c), c)
 
 def st.why(t: St) -> Bytes():
   match t:
@@ -523,11 +546,64 @@ def st.in(ts: List<&2, St>, +c: U32, +cd: Bytes(), +why: Bytes()) -> Bool:
         case St{k, tc, tw}:
           st.in.at(U32.is_eq(k, c), cd, why, tc, tw, u => st.in(r, c, cd, why))
 
+# The length, as rok.len checks it, in one walk of its bytes where they
+# lie: RS.len.view reads the value after "content-length:" -- its blanks,
+# then its digits, then its blanks -- from a list spanned twice over; lv.ows
+# reads the same bytes to the same verdict (PROOF.bend's len.fast.eq, for
+# every value), a digit at a time.
+def lv.num(+e: R.Ask, +acc: U32, +x: U32) -> U32:
+  Bool.pick(U32, U32.is_lt(R.ask.cap(e), acc), acc, (acc * 10 + (x - 48) : U32))
+
+def lv.dig.at(ok: Bool, +acc: U32, +k: R.Cls, +x: U32, v: Bytes(), more: RS.FLine) -> RS.FLine:
+  match ok:
+    case True{}:
+      more
+    case False{}:
+      RS.len.digits(acc, RS.SAt{k, x, Bytes.to_list(v)})
+
+def lv.dig(+e: R.Ask, s: Bytes(), +acc: U32) -> RS.FLine:
+  match s:
+    case SNil{}:
+      RS.len.digits(acc, RS.SEnd{})
+    case SCon{Chr{+x}, +v}:
+      +k = R.cls(x)
+      lv.dig.at(RS.allows(RS.TDig{}, k), acc, k, x, v, lv.dig(e, v, lv.num(e, acc, x)))
+
+def lv.stop(+e: R.Ask, k: R.Cls, +x: U32, v: Bytes()) -> RS.FLine:
+  match k:
+    case R.KDg{}:
+      lv.dig(e, v, lv.num(e, 0, x))
+    case _:
+      RS.FBad{}
+
+def lv.ows.at(ok: Bool, +e: R.Ask, +k: R.Cls, +x: U32, v: Bytes(), more: RS.FLine) -> RS.FLine:
+  match ok:
+    case True{}:
+      more
+    case False{}:
+      lv.stop(e, k, x, v)
+
+def lv.ows(+e: R.Ask, s: Bytes()) -> RS.FLine:
+  match s:
+    case SNil{}:
+      RS.FVal{RS.VLen0{}}
+    case SCon{Chr{+x}, +v}:
+      +k = R.cls(x)
+      lv.ows.at(RS.allows(RS.TOws{}, k), e, k, x, v, lv.ows(e, v))
+
+def len.fast(+head: Bool, +bodyless: Bool, clen: Bytes(), +body: Bytes()) -> Bool:
+  match clen:
+    case SNil{}:
+      bodyless
+    case SCon{c, t}:
+      +d : Bytes() = SCon{c, t}
+      X.rok.all(RS.TVal{}, d) && X.rok.len.at(lv.ows(X.rask(head), d), bodyless, body)
+
 def enc.fast(+head: Bool, +code: U32, h: X.RHead, +body: Bytes()) -> Bool:
   match h:
     case X.RHead{+cd, +why, +fs, +hl}:
       st.in(statuses(), code, cd, why) && fields.fast(fs)
-        && X.rok.len(head, X.rbodyless(head, code), X.rclen(head, X.rbodyless(head, code), hl, body), body)
+        && len.fast(head, X.rbodyless(head, code), X.rclen(head, X.rbodyless(head, code), hl, body), body)
 
 def enc.check.at(f: Bool, +head: Bool, +code: U32, +h: X.RHead, +body: Bytes()) -> Bool:
   match f:

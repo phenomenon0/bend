@@ -167,6 +167,110 @@ def agree.of(f: PL.PScanned, g: Spec.Frames, h: PL.Agrees(f, g)) ->
       (e1, e2) = h
       e1
 
+# A value with no blank at either end is its own trim: the fast path
+# of the adapter hands the value as it is exactly when the trim would.
+def or.false(+a: Bool, +b: Bool, h: {Bool.or(a, b) == False{} : Bool}) -> {a == False{} : Bool}:
+  match a:
+    case True{}:
+      Bool.no({True{} == False{} : Bool}, Equal.sym(Bool, True{}, False{}, h))
+    case False{}:
+      {==}
+
+def or.false_r(+a: Bool, +b: Bool, h: {Bool.or(a, b) == False{} : Bool}) -> {b == False{} : Bool}:
+  match a:
+    case True{}:
+      Bool.no({b == False{} : Bool}, Equal.sym(Bool, True{}, False{}, h))
+    case False{}:
+      h
+
+def sub.zero(+a: Nat) -> {Nat.sub(a, 0n) == a : Nat}:
+  match a:
+    case 0n:
+      {==}
+    case 1n+p:
+      {==}
+
+def take.all(+s: Bytes()) -> {String.take(s, String.length.go(s, 0n)) == s : Bytes()}:
+  match s:
+    case SNil{}:
+      {==}
+    case SCon{+h, +t}:
+      %Equal.sym(Nat, String.length.go(t, 1n), 1n+String.length.go(t, 0n), Bytes.len.shift(t, 0n)) :
+        {String.take(SCon{h, t}, _) == SCon{h, t} : Bytes()}
+      %Equal.sym(Bytes(), String.take(t, String.length.go(t, 0n)), t, take.all(t)) :
+        {SCon{h, _} == SCon{h, t} : Bytes()}
+      {==}
+
+def lead.keep(+x: Bytes(), +c: U32) -> {X.trim.lead(x, False{}, c) == SCon{Chr{c}, x} : Bytes()}:
+  match x:
+    case SNil{}:
+      {==}
+    case SCon{+h, +t}:
+      match h:
+        case Chr{+d}:
+          {==}
+
+def end.keep(+k: Nat, +s: Bytes()) -> {X.trim.end(k, s, False{}) == 1n+k : Nat}:
+  match k:
+    case 0n:
+      {==}
+    case 1n+p:
+      {==}
+
+# the last byte's index, one less than the length
+def last.at(+t: Bytes()) -> {Nat.sub(String.length.go(t, 1n), 1n) == String.length.go(t, 0n) : Nat}:
+  %Equal.sym(Nat, String.length.go(t, 1n), 1n+String.length.go(t, 0n), Bytes.len.shift(t, 0n)) :
+    {Nat.sub(_, 1n) == String.length.go(t, 0n) : Nat}
+  sub.zero(String.length.go(t, 0n))
+
+def last.ok(+t: Bytes(), +c: U32,
+  h1: {X.ows(Bytes.get(SCon{Chr{c}, t}, Nat.sub(String.length.go(t, 1n), 1n))) == False{} : Bool}) ->
+  {X.ows(Bytes.get(SCon{Chr{c}, t}, String.length.go(t, 0n))) == False{} : Bool}:
+  %last.at(t) : {X.ows(Bytes.get(SCon{Chr{c}, t}, _)) == False{} : Bool}
+  h1
+
+def trim.cut.none(+t: Bytes(), +c: U32,
+  h1: {X.ows(Bytes.get(SCon{Chr{c}, t}, String.length.go(t, 0n))) == False{} : Bool}) ->
+  {X.trim.cut(String.length.go(t, 1n), SCon{Chr{c}, t}) == SCon{Chr{c}, t} : Bytes()}:
+  %Equal.sym(Nat, String.length.go(t, 1n), 1n+String.length.go(t, 0n), Bytes.len.shift(t, 0n)) :
+    {X.trim.cut(_, SCon{Chr{c}, t}) == SCon{Chr{c}, t} : Bytes()}
+  %Equal.sym(Bool, X.ows(Bytes.get(SCon{Chr{c}, t}, String.length.go(t, 0n))), False{}, h1) :
+    {String.take(SCon{Chr{c}, t}, X.trim.end(String.length.go(t, 0n), SCon{Chr{c}, t}, _)) == SCon{Chr{c}, t} : Bytes()}
+  %Equal.sym(Nat, X.trim.end(String.length.go(t, 0n), SCon{Chr{c}, t}, False{}), 1n+String.length.go(t, 0n),
+      end.keep(String.length.go(t, 0n), SCon{Chr{c}, t})) :
+    {String.take(SCon{Chr{c}, t}, _) == SCon{Chr{c}, t} : Bytes()}
+  %Equal.sym(Bytes(), String.take(t, String.length.go(t, 0n)), t, take.all(t)) :
+    {SCon{Chr{c}, _} == SCon{Chr{c}, t} : Bytes()}
+  {==}
+
+def trim.none(+v: Bytes(), h0: {X.ows(Bytes.get(v, 0n)) == False{} : Bool},
+  h1: {X.ows(Bytes.get(v, Nat.sub(Bytes.len(v), 1n))) == False{} : Bool}) -> {X.trim(v) == v : Bytes()}:
+  match v:
+    case SNil{}:
+      {==}
+    case SCon{+h, +t}:
+      match h:
+        case Chr{+c}:
+          %Equal.sym(Bool, X.ows(c), False{}, h0) :
+            {X.trim.cut(Bytes.len(X.trim.lead(t, _, c)), X.trim.lead(t, _, c)) == SCon{Chr{c}, t} : Bytes()}
+          %Equal.sym(Bytes(), X.trim.lead(t, False{}, c), SCon{Chr{c}, t}, lead.keep(t, c)) :
+            {X.trim.cut(Bytes.len(_), _) == SCon{Chr{c}, t} : Bytes()}
+          trim.cut.none(t, c, last.ok(t, c, h1))
+
+def tf.at(+e: Bool, +v: Bytes(),
+  +h: {Bool.or(X.ows(Bytes.get(v, 0n)), X.ows(Bytes.get(v, Nat.sub(Bytes.len(v), 1n)))) == e : Bool}) ->
+  {Http.trim.at(e, v) == X.trim(v) : Bytes()}:
+  match e:
+    case True{}:
+      {==}
+    case False{}:
+      +a = X.ows(Bytes.get(v, 0n))
+      +b = X.ows(Bytes.get(v, Nat.sub(Bytes.len(v), 1n)))
+      Equal.sym(Bytes(), X.trim(v), v, trim.none(v, or.false(a, b, h), or.false_r(a, b, h)))
+
+def trim.fast.eq(+v: Bytes()) -> {Http.trim.fast(v) == X.trim(v) : Bytes()}:
+  tf.at(Bool.or(X.ows(Bytes.get(v, 0n)), X.ows(Bytes.get(v, Nat.sub(Bytes.len(v), 1n)))), v, {==})
+
 def fields.eq(fs: List<&2, Wr.Field>) -> {Http.fields.of(fs) == Laws.spec.fields(fs) : List<&2, Http.Header>}:
   match fs:
     case Nil{}:
@@ -174,6 +278,9 @@ def fields.eq(fs: List<&2, Wr.Field>) -> {Http.fields.of(fs) == Laws.spec.fields
     case Con{f, t}:
       match f:
         case Wr.Field{+n, +v}:
+          %Equal.sym(Bytes(), Http.trim.fast(v), X.trim(v), trim.fast.eq(v)) :
+            {Con{Http.Header{n, _}, Http.fields.of(t)} == Con{Http.Header{n, X.trim(v)}, Laws.spec.fields(t)} :
+              List<&2, Http.Header>}
           Equal.cong(List<&2, Http.Header>, List<&2, Http.Header>, xs => Con{Http.Header{n, X.trim(v)}, xs},
             Http.fields.of(t), Laws.spec.fields(t), fields.eq(t))
 
@@ -333,6 +440,160 @@ def fields.sound(fs: List<&2, Wr.Field>, +h: {Http.fields.fast(fs) == True{} : B
               val.sound(v, Bool.and_r(Http.known.has(n, Http.known()), X.all.in(v, 32, 127), hnv))),
             fields.sound(t, Bool.and_r(Bool.and(Http.known.has(n, Http.known()), X.all.in(v, 32, 127)), Http.fields.fast(t), h)))
 
+# The length's walk reads what RS.len.view reads. lv.g is len.run with
+# the digits' value started at acc: a digit pushed onto a span is one
+# step of the value, a blank pushed onto one changes nothing len.view
+# reads, and each walk, a byte at a time, is the spec's over the list.
+def lv.g(+e: R.Ask, sp: RS.Span, +acc: U32) -> RS.FLine:
+  match sp:
+    case RS.Span{d, s}:
+      RS.len.digits(RS.len.num.go(e, d, acc), s)
+
+def lv.push(+e: R.Ask, +x: U32, sp: RS.Span, +acc: U32) ->
+  {lv.g(e, RS.span.push(x, sp), acc) == lv.g(e, sp, Http.lv.num(e, acc, x)) : RS.FLine}:
+  match sp:
+    case RS.Span{d, s}:
+      {==}
+
+def lv.run(+e: R.Ask, sp: RS.Span) -> {RS.len.run(e, sp) == lv.g(e, sp, 0) : RS.FLine}:
+  match sp:
+    case RS.Span{d, s}:
+      {==}
+
+def lv.dig.step(+b: Bool, +e: R.Ask, +x: U32, +w: Bytes(), +acc: U32,
+  ih: {Http.lv.dig(e, w, Http.lv.num(e, acc, x)) ==
+    lv.g(e, RS.span(RS.TDig{}, Bytes.to_list(w)), Http.lv.num(e, acc, x)) : RS.FLine}) ->
+  {Http.lv.dig.at(b, acc, R.cls(x), x, w, Http.lv.dig(e, w, Http.lv.num(e, acc, x))) ==
+    lv.g(e, RS.span.pick(b, R.cls(x), x, Bytes.to_list(w), RS.span(RS.TDig{}, Bytes.to_list(w))), acc) : RS.FLine}:
+  match b:
+    case True{}:
+      Equal.trans(RS.FLine, Http.lv.dig(e, w, Http.lv.num(e, acc, x)),
+        lv.g(e, RS.span(RS.TDig{}, Bytes.to_list(w)), Http.lv.num(e, acc, x)),
+        lv.g(e, RS.span.push(x, RS.span(RS.TDig{}, Bytes.to_list(w))), acc), ih,
+        Equal.sym(RS.FLine, lv.g(e, RS.span.push(x, RS.span(RS.TDig{}, Bytes.to_list(w))), acc),
+          lv.g(e, RS.span(RS.TDig{}, Bytes.to_list(w)), Http.lv.num(e, acc, x)),
+          lv.push(e, x, RS.span(RS.TDig{}, Bytes.to_list(w)), acc)))
+    case False{}:
+      {==}
+
+def lv.dig.eq(+e: R.Ask, +v: Bytes(), +acc: U32) ->
+  {Http.lv.dig(e, v, acc) == lv.g(e, RS.span(RS.TDig{}, Bytes.to_list(v)), acc) : RS.FLine}:
+  match v:
+    case SNil{}:
+      {==}
+    case SCon{+h, +w}:
+      match h:
+        case Chr{+x}:
+          lv.dig.step(RS.allows(RS.TDig{}, R.cls(x)), e, x, w, acc, lv.dig.eq(e, w, Http.lv.num(e, acc, x)))
+
+def lv.vpush(+e: R.Ask, +x: U32, sp: RS.Span) -> {RS.len.view(e, RS.span.push(x, sp)) == RS.len.view(e, sp) : RS.FLine}:
+  match sp:
+    case RS.Span{r, s}:
+      match s:
+        case RS.SEnd{}:
+          {==}
+        case RS.SAt{k, c, rest}:
+          match k:
+            case R.KSp{}:
+              {==}
+            case R.KHt{}:
+              {==}
+            case R.KCr{}:
+              {==}
+            case R.KLf{}:
+              {==}
+            case R.KCo{}:
+              {==}
+            case R.KCm{}:
+              {==}
+            case R.KDg{}:
+              {==}
+            case R.KTk{}:
+              {==}
+            case R.KVc{}:
+              {==}
+            case R.KCt{}:
+              {==}
+
+def lv.stop.eq(+e: R.Ask, +k: R.Cls, +x: U32, +w: Bytes()) ->
+  {Http.lv.stop(e, k, x, w) == RS.len.view(e, RS.Span{Nil{}, RS.SAt{k, x, Bytes.to_list(w)}}) : RS.FLine}:
+  match k:
+    case R.KDg{}:
+      +sp = RS.span(RS.TDig{}, Bytes.to_list(w))
+      Equal.trans(RS.FLine, Http.lv.dig(e, w, Http.lv.num(e, 0, x)), lv.g(e, sp, Http.lv.num(e, 0, x)),
+        RS.len.run(e, RS.span.push(x, sp)), lv.dig.eq(e, w, Http.lv.num(e, 0, x)),
+        Equal.trans(RS.FLine, lv.g(e, sp, Http.lv.num(e, 0, x)), lv.g(e, RS.span.push(x, sp), 0),
+          RS.len.run(e, RS.span.push(x, sp)),
+          Equal.sym(RS.FLine, lv.g(e, RS.span.push(x, sp), 0), lv.g(e, sp, Http.lv.num(e, 0, x)), lv.push(e, x, sp, 0)),
+          Equal.sym(RS.FLine, RS.len.run(e, RS.span.push(x, sp)), lv.g(e, RS.span.push(x, sp), 0),
+            lv.run(e, RS.span.push(x, sp)))))
+    case R.KSp{}:
+      {==}
+    case R.KHt{}:
+      {==}
+    case R.KCr{}:
+      {==}
+    case R.KLf{}:
+      {==}
+    case R.KCo{}:
+      {==}
+    case R.KCm{}:
+      {==}
+    case R.KTk{}:
+      {==}
+    case R.KVc{}:
+      {==}
+    case R.KCt{}:
+      {==}
+
+def lv.ows.step(+b: Bool, +e: R.Ask, +x: U32, +w: Bytes(),
+  ih: {Http.lv.ows(e, w) == RS.len.view(e, RS.span(RS.TOws{}, Bytes.to_list(w))) : RS.FLine}) ->
+  {Http.lv.ows.at(b, e, R.cls(x), x, w, Http.lv.ows(e, w)) ==
+    RS.len.view(e, RS.span.pick(b, R.cls(x), x, Bytes.to_list(w), RS.span(RS.TOws{}, Bytes.to_list(w)))) : RS.FLine}:
+  match b:
+    case True{}:
+      Equal.trans(RS.FLine, Http.lv.ows(e, w), RS.len.view(e, RS.span(RS.TOws{}, Bytes.to_list(w))),
+        RS.len.view(e, RS.span.push(x, RS.span(RS.TOws{}, Bytes.to_list(w)))), ih,
+        Equal.sym(RS.FLine, RS.len.view(e, RS.span.push(x, RS.span(RS.TOws{}, Bytes.to_list(w)))),
+          RS.len.view(e, RS.span(RS.TOws{}, Bytes.to_list(w))), lv.vpush(e, x, RS.span(RS.TOws{}, Bytes.to_list(w)))))
+    case False{}:
+      lv.stop.eq(e, R.cls(x), x, w)
+
+def lv.ows.eq(+e: R.Ask, +v: Bytes()) ->
+  {Http.lv.ows(e, v) == RS.len.view(e, RS.span(RS.TOws{}, Bytes.to_list(v))) : RS.FLine}:
+  match v:
+    case SNil{}:
+      {==}
+    case SCon{+h, +w}:
+      match h:
+        case Chr{+x}:
+          lv.ows.step(RS.allows(RS.TOws{}, R.cls(x)), e, x, w, lv.ows.eq(e, w))
+
+# the length's walk is rok.len, for every value
+def len.fast.eq(+head: Bool, +bl: Bool, +clen: Bytes(), +body: Bytes()) ->
+  {Http.len.fast(head, bl, clen, body) == X.rok.len(head, bl, clen, body) : Bool}:
+  match clen:
+    case SNil{}:
+      {==}
+    case SCon{+c, +t}:
+      match c:
+        case Chr{+x}:
+          +d : Bytes() = SCon{Chr{x}, t}
+          +sp = RS.span(RS.TOws{}, Bytes.to_list(d))
+          %Equal.sym(RS.FLine, RS.len.view(X.rask(head), RS.span.push(32, sp)), RS.len.view(X.rask(head), sp),
+              lv.vpush(X.rask(head), 32, sp)) :
+            {Bool.and(X.rok.all(RS.TVal{}, d), X.rok.len.at(Http.lv.ows(X.rask(head), d), bl, body)) ==
+              Bool.and(X.rok.all(RS.TVal{}, d), X.rok.len.at(_, bl, body)) : Bool}
+          %lv.ows.eq(X.rask(head), d) :
+            {Bool.and(X.rok.all(RS.TVal{}, d), X.rok.len.at(Http.lv.ows(X.rask(head), d), bl, body)) ==
+              Bool.and(X.rok.all(RS.TVal{}, d), X.rok.len.at(_, bl, body)) : Bool}
+          {==}
+
+def len.sound(+head: Bool, +bl: Bool, +cl: Bytes(), +body: Bytes(),
+  h: {Http.len.fast(head, bl, cl, body) == True{} : Bool}) -> {X.rok.len(head, bl, cl, body) == True{} : Bool}:
+  %len.fast.eq(head, bl, cl, body) : {_ == True{} : Bool}
+  h
+
 # fast.sound: the fast check passes only where rvalid does
 def fast.sound(+head: Bool, +code: U32, h: X.RHead, +body: Bytes(), +f: {Http.enc.fast(head, code, h, body) == True{} : Bool}) ->
   {X.rvalid(head, code, X.rsp.fin(head, code, h, body)) == True{} : Bool}:
@@ -342,13 +603,14 @@ def fast.sound(+head: Bool, +code: U32, h: X.RHead, +body: Bytes(), +f: {Http.en
       +cl = X.rclen(head, bl, hl, body)
       +a = Http.st.in(Http.statuses(), code, cd, why)
       +b = Http.fields.fast(fs)
-      +c = X.rok.len(head, bl, cl, body)
+      +c = Http.len.fast(head, bl, cl, body)
       +ab = Bool.and_l(Bool.and(a, b), c, f)
-      tt(Bool.and(Bool.and(X.rok.code(cd, code), X.rok.all(RS.TVal{}, why)), X.rok.fields(fs)), c,
+      tt(Bool.and(Bool.and(X.rok.code(cd, code), X.rok.all(RS.TVal{}, why)), X.rok.fields(fs)),
+        X.rok.len(head, bl, cl, body),
         tt(Bool.and(X.rok.code(cd, code), X.rok.all(RS.TVal{}, why)), X.rok.fields(fs),
           st.sound(Http.statuses(), code, cd, why, st.known(), Bool.and_l(a, b, ab)),
           fields.sound(fs, Bool.and_r(a, b, ab))),
-        Bool.and_r(Bool.and(a, b), c, f))
+        len.sound(head, bl, cl, body, Bool.and_r(Bool.and(a, b), c, f)))
 
 def check.at(fv: Bool, +head: Bool, +code: U32, +h: X.RHead, +body: Bytes(),
   ef: {Http.enc.fast(head, code, h, body) == fv : Bool},

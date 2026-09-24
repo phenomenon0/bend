@@ -21,7 +21,8 @@ this file says the same in more words, and maps the networking stack in full.
     tests/<ns>/         the tests; each ends in the `#|` lines its run prints
     bench/              the runtime and checker benchmarks; bench/proxy is a
                         framing harness that compares a Bend proxy with nginx
-                        and HAProxy
+                        and HAProxy; bench/net counts what a request costs the
+                        engine, net/ and bend-h2 (instructions, syscalls)
     demos/              one program per directory
     gates/              the repo's own checks (tests, perf, the file allow list)
     paper/, media/      the papers and the charts

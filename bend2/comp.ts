@@ -361,6 +361,8 @@ const OPERATIONS: Record<string, Intr> = Object.setPrototypeOf({
     C:  "($0 < $1 ? $1 : $0)",
     JS: "($0 < $1 ? $1 : $0)",
   },
+  nat_show: { C: "str_show_u64(e, (u64)($0))", JS: "String($0)" },
+  u32_show: { C: "str_show_u64(e, (u64)(u32)($0))", JS: "String($0 >>> 0)" },
   nat_divmod: {
     C:    ["($1 == 0 ? 0 : $0 / $1)", "($1 == 0 ? $0 : $0 % $1)"],
     call: true,
@@ -391,7 +393,7 @@ const OPERATIONS: Record<string, Intr> = Object.setPrototypeOf({
   string_cmp: { C: ["$0", "$1", "str_order_peek(e, $0, $1)"], JS: "str_cmp($0, $1)" },
   ...tpl_ops("string_", "order join repeat partition",
     "str_$o_take(e, $0, $1)", "str_$o($0, $1)"),
-  string_eq: { C: "(str_order_take(e, $0, $1) == 1)", JS: "($0 === $1)" },
+  string_eq: { C: "str_eq_take(e, $0, $1)", JS: "($0 === $1)" },
   ...tpl_ops("string_", "is_lt:< is_le:<= is_gt:> is_ge:>=",
     "(str_order_take(e, $0, $1) $o 1)",
     '(({LT: 0, EQ: 1, GT: 2})[str_order($0, $1).$] $o 1)'),
@@ -5289,6 +5291,16 @@ INLINE void str_copy_cells(Env e, StrParts dst, u32 at, StrParts src) {
   u32 poll = 0;
   Loc from = term_peek(e, src.data), to = term_peek(e, dst.data);
   u32 sn = str_nar(src), dn = str_nar(dst);
+#if !DEVICE
+  // cells of one width are laid out alike (1, 2 or 4 bytes, the low
+  // byte first): the copy is one block move
+  if (sn == dn) {
+    u32 w = 4u >> sn;
+    memmove((u8*)(e.mem + to) + (u64)(dst.off + at) * w,
+      (const u8*)(e.mem + from) + (u64)src.off * w, (u64)src.len * w);
+    return;
+  }
+#endif
   for (u32 i = 0; i < src.len; i++) {
     if (err_spun(e.mem, &poll)) { return; }
     str_cell_put(e.mem, to, dn, dst.off + at + i,
@@ -5516,6 +5528,30 @@ INLINE Nat str_length_take(Env e, Term s) {
 INLINE Term str_append_take(Env e, Term a, Term b) {
   StrParts q = str_peek(e, b);
   if (!q.len) { term_sink(e, b); return a; }
+  // The building loop's case, as str_push_take reads it: the one owner of
+  // a descriptor holding the one count of a heap payload with room for b,
+  // in cells as wide as b's or wider, copies b's cells in and bumps the
+  // length; no descriptor is taken, reserved or viewed again.
+  if (!term_triv(a) && term_rfc(a)) {
+    u64 cell = e.mem[term_loc(a)];
+    Loc l = cell >> 24;
+    Term d = e.mem[l];
+    u64 ol = e.mem[l + 1];
+    if ((cell & RFC_CNT) == 1 && (u32)ol && term_rfc(d)) {
+      u64 dc = e.mem[term_loc(d)];
+      Loc dl = dc >> 24;
+      u32 nar = (u32)(term_aux(d) >> 5) & 3, at = (u32)(ol >> 32) + (u32)ol;
+      if ((dc & RFC_CNT) == 1 && dl >= HEAP_OFF && str_nar(q) >= nar
+          && (u64)at + q.len <= str_cap(d)) {
+        a32_acq(a32_at(e.mem, term_loc(d)));
+        StrParts p = {d, 0, at, 0};
+        str_copy_cells(e, p, at, q);
+        e.mem[l + 1] = ol + q.len;
+        term_sink(e, b);
+        return a;
+      }
+    }
+  }
   if (!str_peek(e, a).len) { term_sink(e, a); return b; }
   StrParts p = str_reserve(e, str_take(e, a), q.len, false, str_nar(q));
   if (!err_seen(e.mem)) {
@@ -5523,6 +5559,20 @@ INLINE Term str_append_take(Env e, Term a, Term b) {
     p.len += q.len;
   }
   term_sink(e, b);
+  return str_view_owned(e, p);
+}
+
+// Nat.show and U32.show: the decimal digits, most significant first,
+// "0" for zero, in one payload of byte cells (the Bend definitions'
+// digit-at-a-time prepends, each a view and a count, made at once)
+INLINE Term str_show_u64(Env e, u64 v) {
+  u32 d[20];
+  u32 n = 0;
+  do { d[n++] = 48 + (u32)(v % 10); v /= 10; } while (v != 0);
+  StrParts p = str_alloc(e, n, 2);
+  if (!err_seen(e.mem) && p.data) {
+    for (u32 i = 0; i < n; i++) { str_put(e, p, i, d[n - 1 - i]); }
+  }
   return str_view_owned(e, p);
 }
 
@@ -5580,6 +5630,14 @@ INLINE u32 str_order_peek(Env e, Term a, Term b) {
   StrParts p = str_peek(e, a), q = str_peek(e, b);
   u32 poll = 0, n = p.len < q.len ? p.len : q.len;
   Loc pl = term_peek(e, p.data), ql = term_peek(e, q.data);
+#if !DEVICE
+  // byte cells on both sides order as their bytes do, unsigned
+  if (n && str_nar(p) == 2 && str_nar(q) == 2) {
+    int c = memcmp((const u8*)(e.mem + pl) + p.off, (const u8*)(e.mem + ql) + q.off, n);
+    if (c != 0) { return c < 0 ? 0 : 2; }
+    n = 0;
+  }
+#endif
   for (u32 i = 0; i < n; i++) {
     if (err_spun(e.mem, &poll)) { return 1; }
     u32 x = str_cell(e.mem, pl, str_nar(p), p.off + i);
@@ -5595,11 +5653,25 @@ INLINE u32 str_order_take(Env e, Term a, Term b) {
   return c;
 }
 
+// String.eq: two lengths that differ answer before a cell is read
+INLINE bool str_eq_take(Env e, Term a, Term b) {
+  bool eq = str_peek(e, a).len == str_peek(e, b).len && str_order_peek(e, a, b) == 1;
+  term_sink(e, a); term_sink(e, b);
+  return eq;
+}
+
 INLINE bool str_edge_take(Env e, Term s, Term sub, bool end) {
   StrParts p = str_peek(e, s), q = str_peek(e, sub);
   bool ok = q.len <= p.len;
   u32 off = ok && end ? p.len - q.len : 0, poll = 0;
   Loc pl = term_peek(e, p.data), ql = term_peek(e, q.data);
+#if !DEVICE
+  if (ok && q.len && str_nar(p) == 2 && str_nar(q) == 2) {
+    ok = memcmp((const u8*)(e.mem + pl) + p.off + off, (const u8*)(e.mem + ql) + q.off, q.len) == 0;
+    term_sink(e, s); term_sink(e, sub);
+    return ok;
+  }
+#endif
   for (u32 i = 0; ok && i < q.len; i++) {
     if (err_spun(e.mem, &poll)) { ok = false; break; }
     ok = str_cell(e.mem, pl, str_nar(p), p.off + off + i)
@@ -5825,6 +5897,25 @@ INLINE u64 str_search_take(Env e, Term s, Term needle, u32 mode) {
   StrParts p = str_peek(e, s), q = str_peek(e, needle);
   u64 out = mode == 2 ? 0 : STR_ABSENT;
   if (!q.len) { out = mode == 0 ? 0 : (u64)p.len + (mode == 2); }
+#if !DEVICE
+  // The first hit of a short needle in byte cells, as a head is searched
+  // for "\r\n\r\n" or a field's name: memchr to each candidate for the
+  // needle's first byte, then one compare. A needle this short bounds
+  // the compares at 32 a byte; a longer one keeps the prefix table's
+  // linear walk.
+  else if (mode == 0 && q.len <= 32 && str_nar(p) == 2 && str_nar(q) == 2) {
+    const u8* h = (const u8*)(e.mem + term_peek(e, p.data)) + p.off;
+    const u8* n = (const u8*)(e.mem + term_peek(e, q.data)) + q.off;
+    if (q.len <= p.len) {
+      const u8* at = h;
+      const u8* end = h + (p.len - q.len) + 1;
+      while (at < end && (at = (const u8*)memchr(at, n[0], (size_t)(end - at))) != NULL) {
+        if (memcmp(at, n, q.len) == 0) { out = (u64)(at - h); break; }
+        at++;
+      }
+    }
+  }
+#endif
   else {
     StrSearch k = str_search_open(e, p, q);
     u32 at;

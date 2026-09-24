@@ -479,6 +479,15 @@ def tail.go(+cfg: Cfg, big: Bool, over: Bool, +ask: Bool, fresh: Bool, t0: Maybe
         flush.segs(s, rev.onto(tail.cont(ask, acc), Nil{}), cfg.send(cfg)),
         sb => next(sb, s2 => tail.clock(cfg, mid, fresh, t0, cont || ask, s2, X.Scan{p, n}, more)))
 
+# whether to tell a body to come: only a body awaited and not yet told
+# is looked for an Expect (the fields are walked for no other read)
+def tail.ask(wait: Bool, +p: Eng.P) -> Bool:
+  match wait:
+    case True{}:
+      expects(p)
+    case False{}:
+      False{}
+
 # After a read's requests: a tail refused is a 400; after an upgrade
 # request (answered, and closing) nothing; waiting, a head past its cap
 # is a 431, a body announced past its cap a 413, and a body asked to be
@@ -488,8 +497,8 @@ def tail.wait(+cfg: Cfg, fresh: Bool, t0: Maybe<&2, Nat>, +cont: Bool, acc: List
   +n: Nat, more: More()) -> IO(Socket):
   +big = Eng.p.head(p) && Nat.is_lt(U32.to_nat(cfg.max_head(cfg)), n)
   +over = Nat.is_lt(U32.to_nat(cfg.max_body(cfg)), body.need(p))
-  +ask = Eng.p.body(p) && Bool.not(cont) && expects(p)
-  tail.go(cfg, big, over, ask, fresh, t0, cont, acc, s, p, n, more)
+  tail.go(cfg, big, over, tail.ask(Eng.p.body(p) && Bool.not(cont), p), fresh, t0, cont, acc, s, p, n,
+    more)
 
 def tail(+cfg: Cfg, t: X.Tail, fresh: Bool, t0: Maybe<&2, Nat>, cont: Bool, acc: List<&2, L.Seg>, s: Socket,
   more: More()) -> IO(Socket):
