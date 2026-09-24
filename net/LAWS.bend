@@ -35,6 +35,15 @@
 #                   once the framing says it ended, with exactly the
 #                   bytes after it: an undrained body is never read as a
 #                   request
+#   pour_chunked    a response written as it is made, its length unknown,
+#                   read back by wire/http1's spec, is one final response
+#                   whose body is the writes joined, closing as the server
+#                   closes, nothing after it (or the 500)
+#   pour_length     and with a declared length the writes come to, the same
+#   pour_capped     a declared length is never written past
+#   pour_quiet      after a failure, nothing more is written
+#   pour_bounded    a write goes out as itself and at most 120 bytes of
+#                   framing: nothing of a body is held between writes
 #
 # and the vectors: percent-encoding's round trip over every byte, the
 # query, URLs and Locations as the URL standard reads them (and where

@@ -268,6 +268,41 @@ the connection goes on. Past that, it answers and closes. A body that failed
 (malformed, too large, too slow) is answered by the server itself, whatever
 the handler said. The whole program is `net/examples/upload.bend`.
 
+### Exports and Event Streams
+
+A body too large to hold, or one that never ends, is written as it is made. A
+`Stream.get(pat, h)` route (GET and HEAD, beside `Server.get` in
+`Server.serve.routes`) answers `Stream.whole(resp)`, `Stream.pour(status,
+fields, run)` (chunked) or `Stream.pour.len(status, fields, n, run)` (a
+Content-Length). The producer `run` gets a `Stream.Sink` and hands it back:
+
+```python
+# GET /export.csv, /export.ndjson
+def export(+json: Bool, r: Http.Request) -> IO(Stream.Reply):
+  +n = arg(r, "rows", 100n)
+  IO.pure(Stream.Reply, Stream.pour(200,
+    [Http.Header{"content-type", Bool.pick(Bytes(), json, "application/x-ndjson", "text/csv")}],
+    k => rows(n, json, 0n, n, k)))
+```
+
+`Stream.write(k, bytes)` returns once the bytes are on the socket, so a client
+that stops reading stops the producer; it answers the Sink beside `Done` or a
+`Stream.Err`: `EClosed` (the client left), `ETime` (a send stalled past 10 s),
+`ELarge` (past the declared length: nothing of it sent, and the connection
+closes), `ENone` (HEAD, 204, 304: the head goes alone). After a failure every
+write answers it and sends nothing. A 1 GB export runs in about 5 MB.
+`Stream.events(~S, ~next, s, every, fields)` is an event stream: `next(s,
+every)` answers `Stream.event(name, data)`, `Stream.idle()` (a keepalive goes
+out) or `Stream.over()`:
+
+```python
+def started(+keep: U32, +n: Nat, +ms: Nat, +now: Nat) -> IO(Stream.Reply):
+  +left = Bool.pick(Nat, Nat.is_eq(n, 0n), U32.to_nat(4294967295), n)
+  IO.pure(Stream.Reply, Stream.events(~Tk, ~next, Tk{0n, left, now, ms}, keep, []))
+```
+
+The whole programs are `net/examples/export.bend` and `net/examples/events.bend`.
+
 ## Fetching
 
 ### One Request
@@ -605,6 +640,7 @@ cannot hold a resource forever.
 | a streamed body | 1 GiB (`max_stream`; chunked, 256 MiB) | 413 | a stream route's body is read a chunk at a time |
 | a streamed body's reads | 10 s each (`progress`) | 408, closed | a body sent a byte a minute cannot hold a connection |
 | a body a stream handler left | 1 MiB drained | answered, closed | its bytes are never read as a request |
+| a streamed response's writes | each send within 10 s (`send`) | `ETime`, closed | a client that stops reading cannot hold a producer |
 | connections | 1024 | the next waits for a slot | each holds memory and a descriptor |
 | SIGTERM | listener closed; idle connections let go within a second | the rest end, or grace (5 s) is up | a deploy does not cut requests in flight |
 | client: connect (DNS aside) | 10 s | `Timeout` | a host that does not answer |
@@ -648,6 +684,14 @@ parsed under the budget you pass, at most 64 containers deep.
 - `stream_next`: after a streamed request the connection goes on only once
   the body has ended, with exactly the bytes after it. A body a handler did not
   read is never read as the next request.
+- `pour_chunked`: a response written as it is made, its length unknown, reads
+  back as exactly one response, its body the producer's writes joined, and
+  nothing after it; `pour_length`: the same with a declared length the writes
+  come to.
+- `pour_capped`: a declared length is never written past.
+- `pour_quiet`: after a failure nothing more is written.
+- `pour_bounded`: a write goes out as itself and at most 120 bytes of framing,
+  so a connection holds one write, however long the body.
 - the vectors: percent-encoding round-trips every byte, and the query, URL,
   Location and route pattern readings match the tables listed there.
 
@@ -681,8 +725,10 @@ checked response writer that `respond_framed` is about (`net/README.md`).
 
 ## Not Built Yet
 
-- Streaming response bodies. A response body is held whole, or sent from a
-  file by `Http.file`.
+- A client that reads a response body as it comes, so a relay can stream a
+  big upstream body end to end. `Client` holds a response whole (10 MiB at most).
+- A streamed response on a stream route (an upload's answer) or to a method
+  but GET.
 - A stream route's request pipelined behind another in one read is read whole,
   under `max_body`. Clients that do not pipeline are not affected.
 - A chunked streamed body past 256 MiB. The reader's budget stays under 2^28,

@@ -39,7 +39,8 @@ import ../net/client.bend as Client
     net/ws.bend       Ws: a WebSocket connection, either end: connect, send, recv, close
     net/ws_server.bend WsServer: WebSocket routes, accept/refuse, options, the Hub
     net/ws_net.bend   the WebSocket client's Ws.Err as a NetError
-    net/stream.bend   Stream: request bodies as streams, for uploads
+    net/stream.bend   Stream: request bodies as streams (uploads), and response
+                      bodies written as they are made (exports, event streams)
 
 **Http.** `Request{method, path, query, headers, body, remote, params}`
 (`Http.method(r)`, `Http.header(r, "x-name")`, `Http.param(r, "id")`,
@@ -106,6 +107,26 @@ any size), its body by wire/http1's reader entered at the body. An
 handler leaves is drained up to 1 MiB, else the answer closes; a body
 that failed is answered by the server (400, 408, 413).
 
+A response body is written as it is made on a route `Stream.get(pat, h)`
+(GET, and HEAD; beside `Server.get` and the rest in `Server.serve.routes`),
+whose `h : Http.Request -> IO(Stream.Reply)` answers `Stream.whole(resp)`,
+`Stream.pour(status, fields, run)` (the length unknown: chunked; to
+HTTP/1.0, to the close) or `Stream.pour.len(status, fields, n, run)` (a
+Content-Length), and `run : Stream.Sink -> IO(Stream.Sink)` is the
+producer. `Stream.write(k, bytes)` answers `Stream.Wrote()`, the Sink
+beside `Done` or a `Stream.Err`: it returns once the bytes are on the
+socket (each send within the server's send time, else `ETime`), so a
+client that stops reading stops the producer; a client gone is
+`EClosed`; a write past a declared length is refused whole (`ELarge`); to
+HEAD (and for 204, 304) the head goes alone and a write is `ENone`; after
+a failure every write answers it and sends nothing. The server writes
+the head before `run`, and the end after it; the connection goes on when
+the body ended as framed (a declared length short or long closes it).
+`Stream.events(~S, ~next, s, every, fields)` is an event stream
+(text/event-stream): `next(s, every)` answers `Stream.event(name, data)`,
+`Stream.idle()` (a keepalive comment goes out) or `Stream.over()`; it
+ends at over, when the client leaves, or at SIGTERM.
+
 **Client.** `Client.get(url)`, `Client.post(url, ctype, body)`,
 `Client.request(Client.Req{method, url, headers, body}, opts)`: each
 `IO(Result<NetError, Response>)` on a session of its own;
@@ -157,6 +178,7 @@ and `Json.f64` (an `F64`; NaN and infinities are null), `Json.get`,
 | a streamed body | 1 GiB (`max_stream`; chunked at most 256 MiB) | 413 |
 | a streamed body's read | 10 s (`progress`) | 408, closed |
 | a streamed body left unread | 1 MiB drained | answered, closed |
+| a streamed response's write | each send within 10 s (`send`) | `ETime`, closed |
 | connections | 1024 | the next waits for a slot |
 | SIGTERM | listener closed, idle connections let go within a second | the process ends when the rest end, or after grace (5 s) |
 | client: connect (DNS aside) | 10 s | Timeout |
@@ -211,6 +233,21 @@ passes its export. `net/LAWS.bend`:
   (Stream.next) only once the RFC's framing says the body ended, with
   exactly the bytes after it; else it closes. An undrained body is never
   read as a request.
+- `pour_chunked`: a response whose body is written as it is made, its
+  length unknown, read by wire/http1's spec, is exactly one final
+  response: the handler's status, its body the writes joined in order
+  (none for 204, 304), closing as the server decided, nothing after; or
+  the 500 when its head fails the check. For every list of writes (each
+  as `Stream.write` cuts them, at most 16 KiB) whose chunks the reader's
+  budget covers (`fits`: 256 MiB for wire's client; curl has none).
+- `pour_length`: the same for a declared length whose writes come to it,
+  to any request (HTTP/1.0 or not, closing or not).
+- `pour_capped`: a declared length is never written past, whatever the
+  writes: a write that would pass it goes out not at all.
+- `pour_quiet`: after a failure no write sends a byte, nor does the end.
+- `pour_bounded`: what goes out for a write is at most the write and 120
+  bytes of framing; the writer keeps no byte of a write between writes,
+  so a connection holds one write, however long the body.
 - vectors: percent-encoding over every byte, the query, URLs and
   Locations, the router's patterns, the response check.
 
@@ -225,8 +262,8 @@ connection takes are the spec's reassembly of the input, for every cut
 of it into reads), `srv_close_once` and `srv_close_after` (at most one
 close written, none after this end's own), and vectors.
 
-`python3 net/mutants.py`: twenty-nine broken servers, streams and
-clients, each refused; `python3 net/ws_mutants.py`: the WebSocket ones. Not
+`python3 net/mutants.py`: forty-four broken servers, streams, writers
+and clients, each refused; `python3 net/ws_mutants.py`: the WebSocket ones. Not
 proven: the IO loops (they call the functions the laws are about), the
 deadlines and limits, a stream route's head (checked by `check.py`).
 
@@ -244,6 +281,8 @@ deadlines and limits, a stream route's head (checked by `check.py`).
     net/examples/upload.bend       uploads to files, a body counted as it comes
     net/examples/chat_server.bend  its room: a WebSocket route, a Hub, broadcast
     net/examples/ws_echo.bend      a WebSocket echo (the one Autobahn runs against)
+    net/examples/export.bend       exports of any size: CSV, NDJSON, bytes, a declared length
+    net/examples/events.bend       server-sent events with keepalives, and the page that listens
 
 `guide/NETWORKING.md` (`bend guide networking`) walks through them.
 
@@ -260,6 +299,10 @@ byte for byte with the server's peak RSS measured (about 6 MB; 1 GiB by
 hand, the same), the stream's cap, a stalled body, a handler that
 returns without reading (drained, or closed with no byte of it read as a
 request), 100-continue, and pipelining after a streamed body;
+and streamed responses: chunked, 1 GB byte for byte in about 5 MB of
+memory (about 200 MB/s on one core), a declared length exact, short and
+long, HEAD, HTTP/1.0 to the close, a client gone mid-body (the producer
+told within a send), server-sent events with `curl -N`;
 and WebSockets on the server: the chat room's broadcast between two
 ws_chat clients, its 426, 400 and 101, SIGTERM's 1001.
 `python3 net/ws_check.py ./wsc ./httpd PORT --server ./echo --autobahn`
@@ -271,7 +314,10 @@ second where the engine's literal `/health` answers 58k; with the
 response written as a literal the loop matches the engine, so the
 difference is the checked writer (`respond_framed`'s).
 
-Not yet: streaming response bodies, a chunked streamed body past 256
-MiB, a stream route's request pipelined behind another in one read (read
-whole, under max_body), a deadline on the handler itself, WebSocket
-compression (permessage-deflate is declined).
+Not yet: a client that reads a response body as it comes (so a relay
+streams end to end; wire/client.bend's fetch.stream has the loop), a
+streamed response on a stream route (an upload's answer) or to methods
+but GET, a chunked streamed body past 256 MiB, a stream route's request
+pipelined behind another in one read (read whole, under max_body), a
+deadline on the handler itself, WebSocket compression
+(permessage-deflate is declined).

@@ -622,6 +622,9 @@ def check_pour(export, events, tmp):
     ok("pour: a body of unknown length is chunked (Stream.pour), the rows written a block at a time",
        b"transfer-encoding: chunked" in h and b"content-length" not in h.lower() and fin
        and rows == b"0,user0,0\n1,user1,2\n2,user2,4\n", r)
+    r, eof = raw(port, b"GET /export.csv?rows=1 HTTP/1.1\r\nHost: t\r\n\r\nGET / HTTP/1.1\r\nHost: t\r\nConnection: close\r\n\r\n")
+    ok("pour: after a chunked body the connection goes on (a pipelined request answered)",
+       r.count(b"HTTP/1.1 200") == 2 and b"\r\n0\r\n\r\nHTTP/1.1 200" in r and eof, r)
     r = get(port, "/export.ndjson?rows=2")
     ok("pour: NDJSON, the same way", dechunk(r.partition(b"\r\n\r\n")[2])[0] ==
        b'{"id":0,"name":"user0","score":0}\n{"id":1,"name":"user1","score":2}\n', r)

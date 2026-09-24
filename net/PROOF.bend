@@ -17,7 +17,9 @@
 # the request about to go carried along; follow's request is clean
 # because it keeps the credentials only for the first origin. The
 # streamed bodies' laws lean on wire/http1's: drain_reads, reads_split,
-# feed_buf_is_feed, and walk.lem, the simulation resp_sim is made of.
+# feed_buf_is_feed, and walk.lem, the simulation resp_sim is made of. The
+# laws of response bodies written as they are made lean on bend-proxy's
+# head lemmas and walk the spec over the chunks themselves.
 import Base
 import ../wire/reader.bend as Wr
 import ../wire/client.bend as C
@@ -1207,3 +1209,1521 @@ def bd.at(q: R.P & Bytes(), +n: Nat, h: {Wr.drain.b(R.P, R.take(Wr.drain.s(R.P, 
 
 def Laws.stream_bounded(e, bs, p, ok):
   bd.at(Stream.step(e, bs, p), Bytes.len(bs), take2(R.feed_buf(e, bs, p)), ok)
+
+# Response bodies, written as they are made
+# =========================================
+#
+# pour_chunked walks wire/http1's spec over what Stream.poured writes. The
+# head is bend-proxy's (rser.list, rline.st, rfields.walk, rconn: the
+# handler's fields change nothing) with one field more, the
+# Transfer-Encoding, read here (te.line), and the blank line then frames
+# the body chunked (te.end). The body is the writes in turn (bw), each
+# cut by Stream.chunks.go from 2^14 down (cg, by induction on the bit:
+# a chunk that fits is read as its data by pw -- its size line's digits
+# by dw, each paid for, what the line says by the table tab, its data by
+# dd -- and what is left is under the next bit, rest.lt), and the last
+# chunk ends it (last). The budget is the one the law takes (Laws.fits),
+# spent as the spec spends it. pour_length is bend-proxy's rmain over the
+# head with the length, once rvalid's length is seen to read the body
+# only by its length (len.ok) and the writes to go out as they are
+# (emits.len). The 204, the 304 and the 500 are rmain and rr.h over a
+# body the writer never sends (emits.none, pour_quiet). pour_capped and
+# pour_bounded are arithmetic on the writer's counts: a length never
+# passed (cap), and a chunk's framing at most eight bytes (hl, bnd).
+
+def Laws.pour_vectors():
+  {==}
+
+def Laws.fits_vectors():
+  {==}
+
+# pour_quiet: a failed writer emits nothing, and its end is nothing
+def quiet.end(m: Stream.Mode, e: Stream.Err) -> {Pair.fst(Bytes(), Bool, Stream.close(Stream.Sent{m, Some{e}})) == "" : Bytes()}:
+  match m:
+    case Stream.MChunked{}:
+      {==}
+    case Stream.MLen{l}:
+      {==}
+    case Stream.MRaw{}:
+      {==}
+    case Stream.MNone{}:
+      {==}
+
+def Laws.pour_quiet(m, e, ws):
+  match ws:
+    case Nil{}:
+      quiet.end(m, e)
+    case Con{x, t}:
+      Laws.pour_quiet(m, e, t)
+
+# Lists, bytes, numbers
+# ---------------------
+
+# the walk over two parts: the second from where the first left it
+def po.wapp(+e: R.Ask, xs: List<&2, U32>, -ys: List<&2, U32>, w: RS.W) ->
+  {RS.walk(e, List.append(&2, U32, xs, ys), w) == RS.walk(e, ys, RS.walk(e, xs, w)) : RS.W}:
+  match xs:
+    case Nil{}:
+      {==}
+    case Con{+c, t}:
+      po.wapp(e, t, ys, RS.next(e, w, c))
+
+def po.wb(+e: R.Ask, +a: Bytes(), +b: Bytes(), +w: RS.W) ->
+  {RS.walk(e, Bytes.to_list(Bytes.append(a, b)), w) == RS.walk(e, Bytes.to_list(b), RS.walk(e, Bytes.to_list(a), w)) : RS.W}:
+  %Equal.sym(List<&2, U32>, Bytes.to_list(Bytes.append(a, b)), List.append(&2, U32, Bytes.to_list(a), Bytes.to_list(b)),
+    Bytes.to_list_append(a, b)) : {RS.walk(e, _, w) == RS.walk(e, Bytes.to_list(b), RS.walk(e, Bytes.to_list(a), w)) : RS.W}
+  po.wapp(e, Bytes.to_list(a), Bytes.to_list(b), w)
+
+def po.blen(+c: Char, +t: Bytes()) -> {Bytes.len(SCon{c, t}) == 1n+Bytes.len(t) : Nat}:
+  Bytes.len.shift(t, 0n)
+
+def po.sub0(+a: Nat) -> {Nat.sub(a, 0n) == a : Nat}:
+  match a:
+    case 0n:
+      {==}
+    case 1n+p:
+      {==}
+
+# a take of no more than there is has what it asked for
+def po.take.len(x: Bytes(), s: Nat, h: {Nat.is_le(s, Bytes.len(x)) == True{} : Bool}) ->
+  {Bytes.len(String.take(x, s)) == s : Nat}:
+  match x s:
+    case SNil{} 0n:
+      {==}
+    case SNil{} 1n+q:
+      Bool.no({Bytes.len(String.take(SNil{}, 1n+q)) == 1n+q : Nat}, h)
+    case SCon{c, t} 0n:
+      {==}
+    case SCon{+c, +t} 1n+(+q):
+      +hq = Equal.trans(Bool, Nat.is_le(q, Bytes.len(t)), Nat.is_le(1n+q, Bytes.len(SCon{c, t})), True{},
+        Equal.cong(Nat, Bool, y => Nat.is_le(1n+q, y), 1n+Bytes.len(t), Bytes.len(SCon{c, t}),
+          Equal.sym(Nat, Bytes.len(SCon{c, t}), 1n+Bytes.len(t), po.blen(c, t))), h)
+      %Equal.sym(Nat, Bytes.len(SCon{c, String.take(t, q)}), 1n+Bytes.len(String.take(t, q)), po.blen(c, String.take(t, q))) :
+        {_ == 1n+q : Nat}
+      Equal.cong(Nat, Nat, y => 1n+y, Bytes.len(String.take(t, q)), q, po.take.len(t, q, hq))
+
+def po.drop.len(x: Bytes(), s: Nat) -> {Bytes.len(String.drop(x, s)) == Nat.sub(Bytes.len(x), s) : Nat}:
+  match x s:
+    case SNil{} 0n:
+      {==}
+    case SNil{} 1n+q:
+      {==}
+    case SCon{+c, +t} 0n:
+      Equal.sym(Nat, Nat.sub(Bytes.len(SCon{c, t}), 0n), Bytes.len(SCon{c, t}), po.sub0(Bytes.len(SCon{c, t})))
+    case SCon{+c, +t} 1n+(+q):
+      %Equal.sym(Nat, Bytes.len(SCon{c, t}), 1n+Bytes.len(t), po.blen(c, t)) :
+        {Bytes.len(String.drop(t, q)) == Nat.sub(_, 1n+q) : Nat}
+      po.drop.len(t, q)
+
+# a take and the drop after it are the whole
+def po.split(x: Bytes(), s: Nat) ->
+  {Bytes.to_list(x) == List.append(&2, U32, Bytes.to_list(String.take(x, s)), Bytes.to_list(String.drop(x, s))) :
+    List<&2, U32>}:
+  match x s:
+    case SNil{} 0n:
+      {==}
+    case SNil{} 1n+q:
+      {==}
+    case SCon{c, t} 0n:
+      {==}
+    case SCon{Chr{+c}, +t} 1n+(+q):
+      Equal.cong(List<&2, U32>, List<&2, U32>, ys => Con{c, ys}, Bytes.to_list(t),
+        List.append(&2, U32, Bytes.to_list(String.take(t, q)), Bytes.to_list(String.drop(t, q))), po.split(t, q))
+
+def po.add.succ(a: Nat, +b: Nat) -> {Nat.add(a, 1n+b) == 1n+Nat.add(a, b) : Nat}:
+  match a:
+    case 0n:
+      {==}
+    case 1n+p:
+      Equal.cong(Nat, Nat, y => 1n+y, Nat.add(p, 1n+b), 1n+Nat.add(p, b), po.add.succ(p, b))
+
+def po.double.add(s: Nat) -> {Nat.double(s) == Nat.add(s, s) : Nat}:
+  match s:
+    case 0n:
+      {==}
+    case 1n+(+p):
+      %Equal.sym(Nat, Nat.add(p, 1n+p), 1n+Nat.add(p, p), po.add.succ(p, p)) : {2n+Nat.double(p) == 1n+_ : Nat}
+      Equal.cong(Nat, Nat, y => 2n+y, Nat.double(p), Nat.add(p, p), po.double.add(p))
+
+def po.sub.add(s: Nat, n: Nat, h: {Nat.is_le(s, n) == True{} : Bool}) -> {Nat.add(s, Nat.sub(n, s)) == n : Nat}:
+  match s n:
+    case 0n 0n:
+      {==}
+    case 0n 1n+q:
+      {==}
+    case 1n+p 0n:
+      Bool.no({Nat.add(1n+p, Nat.sub(0n, 1n+p)) == 0n : Nat}, h)
+    case 1n+(+p) 1n+(+q):
+      Equal.cong(Nat, Nat, y => 1n+y, Nat.add(p, Nat.sub(q, p)), q, po.sub.add(p, q, h))
+
+def po.lt.cancel(s: Nat, +r: Nat, +t: Nat) -> {Nat.is_lt(Nat.add(s, r), Nat.add(s, t)) == Nat.is_lt(r, t) : Bool}:
+  match s:
+    case 0n:
+      {==}
+    case 1n+p:
+      po.lt.cancel(p, r, t)
+
+# what is left after a chunk of s, of fewer than 2s bytes, is fewer than s
+def po.rest.lt(+s: Nat, +n: Nat, le: {Nat.is_le(s, n) == True{} : Bool},
+  lt: {Nat.is_lt(n, Nat.add(s, s)) == True{} : Bool}) -> {Nat.is_lt(Nat.sub(n, s), s) == True{} : Bool}:
+  %po.lt.cancel(s, Nat.sub(n, s), s) : {_ == True{} : Bool}
+  %Equal.sym(Nat, Nat.add(s, Nat.sub(n, s)), n, po.sub.add(s, n, le)) : {Nat.is_lt(_, Nat.add(s, s)) == True{} : Bool}
+  lt
+
+# The chunks, read back
+# ---------------------
+
+# where a size line's digits leave the grammar: in the size, once one came
+def po.dig.at(ds: List<&2, U32>, at: R.At) -> R.At:
+  match ds:
+    case Nil{}:
+      at
+    case Con{c, t}:
+      po.dig.at(t, R.ASize{})
+
+def po.dw.go(g: R.Go, +t: List<&2, U32>, +n: U32, +left: U32, +e: R.Ask, +h: R.Head, +got: List<&2, U32>,
+  +o: List<&2, U32>, +ok: {Laws.dig.step(g, n, left, n2 => l2 => Laws.dig.ok(t, R.ASize{}, n2, l2)) == True{} : Bool},
+  ih: @+n2: U32 -> @+l2: U32 -> {Laws.dig.ok(t, R.ASize{}, n2, l2) == True{} : Bool} ->
+    {RS.walk(e, t, RS.W{RS.MChunk{h, R.ASize{}, n2, got, l2}, o}) ==
+      RS.W{RS.MChunk{h, po.dig.at(t, R.ASize{}), Laws.dig.val(t, R.ASize{}, n2), got, Laws.dig.left(t, l2)}, o} : RS.W}) ->
+  {RS.walk(e, t, RS.W{RS.chunk.go(g, h, n, got, left), o}) ==
+    RS.W{RS.MChunk{h, po.dig.at(t, R.ASize{}), Laws.dig.val.step(g, n, n2 => Laws.dig.val(t, R.ASize{}, n2)), got,
+      Laws.dig.left(t, (left - 1 : U32))}, o} : RS.W}:
+  match g:
+    case R.GDigit{+d}:
+      +n2 : U32 = (n * 16 + d : U32)
+      +a = Bool.not(U32.is_le(left, n2))
+      +b = Laws.dig.ok(t, R.ASize{}, n2, (left - 1 : U32))
+      +hle = Bool.not_true(U32.is_le(left, n2), Bool.and_l(a, b, ok))
+      %Equal.sym(Bool, U32.is_le(left, n2), False{}, hle) :
+        {RS.walk(e, t, RS.W{RS.chunk.paid(_, h, R.ASize{}, n2, got, left), o}) ==
+          RS.W{RS.MChunk{h, po.dig.at(t, R.ASize{}), Laws.dig.val(t, R.ASize{}, n2), got, Laws.dig.left(t, (left - 1 : U32))}, o} :
+          RS.W}
+      ih(n2, (left - 1 : U32), Bool.and_r(a, b, ok))
+    case R.GBad{}:
+      Bool.no({RS.walk(e, t, RS.W{RS.chunk.go(R.GBad{}, h, n, got, left), o}) ==
+        RS.W{RS.MChunk{h, po.dig.at(t, R.ASize{}), n, got, Laws.dig.left(t, (left - 1 : U32))}, o} : RS.W}, ok)
+    case R.GTo{at, paid}:
+      Bool.no({RS.walk(e, t, RS.W{RS.chunk.go(R.GTo{at, paid}, h, n, got, left), o}) ==
+        RS.W{RS.MChunk{h, po.dig.at(t, R.ASize{}), n, got, Laws.dig.left(t, (left - 1 : U32))}, o} : RS.W}, ok)
+    case R.GLine{}:
+      Bool.no({RS.walk(e, t, RS.W{RS.chunk.go(R.GLine{}, h, n, got, left), o}) ==
+        RS.W{RS.MChunk{h, po.dig.at(t, R.ASize{}), n, got, Laws.dig.left(t, (left - 1 : U32))}, o} : RS.W}, ok)
+    case R.GDone{}:
+      Bool.no({RS.walk(e, t, RS.W{RS.chunk.go(R.GDone{}, h, n, got, left), o}) ==
+        RS.W{RS.MChunk{h, po.dig.at(t, R.ASize{}), n, got, Laws.dig.left(t, (left - 1 : U32))}, o} : RS.W}, ok)
+
+# LEMMA: a size line's digits, each paid for, are read as their size, the
+# budget spent a digit each
+def po.dw(ds: List<&2, U32>, at: R.At, +n: U32, +left: U32, +e: R.Ask, +h: R.Head, +got: List<&2, U32>,
+  +o: List<&2, U32>, ok: {Laws.dig.ok(ds, at, n, left) == True{} : Bool}) ->
+  {RS.walk(e, ds, RS.W{RS.MChunk{h, at, n, got, left}, o}) ==
+    RS.W{RS.MChunk{h, po.dig.at(ds, at), Laws.dig.val(ds, at, n), got, Laws.dig.left(ds, left)}, o} : RS.W}:
+  match ds:
+    case Nil{}:
+      {==}
+    case Con{+c, +t}:
+      po.dw.go(R.chunk.step(at, R.xk.of(R.cls(c), c)), t, n, left, e, h, got, o, ok,
+        n2 => l2 => k => po.dw(t, R.ASize{}, n2, l2, e, h, got, o, k))
+
+# LEMMA: a chunk's data is counted off to its last byte, and its CR LF is
+# next
+def po.dd(t: Bytes(), +c: U32, +e: R.Ask, +h: R.Head, +got: List<&2, U32>, +left: U32, +o: List<&2, U32>) ->
+  {RS.walk(e, Con{c, Bytes.to_list(t)}, RS.W{RS.MData{h, Bytes.len(t), got, left}, o}) ==
+    RS.W{RS.MChunk{h, R.ADataCr{}, 0, List.append(&2, U32, got, Con{c, Bytes.to_list(t)}), left}, o} : RS.W}:
+  match t:
+    case SNil{}:
+      {==}
+    case SCon{Chr{+c2}, +t2}:
+      %Equal.sym(Nat, Bytes.len(SCon{Chr{c2}, t2}), 1n+Bytes.len(t2), po.blen(Chr{c2}, t2)) :
+        {RS.walk(e, Con{c, Con{c2, Bytes.to_list(t2)}}, RS.W{RS.MData{h, _, got, left}, o}) ==
+          RS.W{RS.MChunk{h, R.ADataCr{}, 0, List.append(&2, U32, got, Con{c, Con{c2, Bytes.to_list(t2)}}), left}, o} : RS.W}
+      %PP.app.assoc(U32, got, Con{c, Nil{}}, Con{c2, Bytes.to_list(t2)}) :
+        {RS.walk(e, Con{c2, Bytes.to_list(t2)}, RS.W{RS.MData{h, Bytes.len(t2), RS.snoc(got, c), left}, o}) ==
+          RS.W{RS.MChunk{h, R.ADataCr{}, 0, _, left}, o} : RS.W}
+      po.dd(t2, c2, e, h, RS.snoc(got, c), left, o)
+
+
+# the bound a write cut from 2^j down is under: 2^(j+1)
+def po.lim(j: Nat) -> Nat:
+  Stream.nth.size(j, [2n, 4n, 8n, 16n, 32n, 64n, 128n, 256n, 512n, 1024n, 2048n, 4096n, 8192n, 16384n, 32768n])
+
+def po.lim.pred(j: Nat) -> Nat:
+  match j:
+    case 0n:
+      1n
+    case 1n+i:
+      po.lim(i)
+
+# what the fifteen size lines say, each: read to the size, not zero, the
+# chunk's size
+def po.Tab(+j: Nat) -> Type:
+  {po.dig.at(Laws.chunk.ds(j), R.ASize0{}) == R.ASize{} : R.At} &
+    {U32.is_zero(Laws.dig.val(Laws.chunk.ds(j), R.ASize0{}, 0)) == False{} : Bool} &
+    {Nat.is_eq(U32.to_nat(Laws.dig.val(Laws.chunk.ds(j), R.ASize0{}, 0)), Stream.chunk.size(j)) == True{} : Bool} &
+    {Nat.is_eq(Stream.chunk.size(j), 0n) == False{} : Bool} &
+    {Nat.is_eq(po.lim(j), Nat.add(Stream.chunk.size(j), Stream.chunk.size(j))) == True{} : Bool} &
+    {Nat.is_eq(po.lim.pred(j), Stream.chunk.size(j)) == True{} : Bool}
+
+def po.tab(j: Nat, hj: {Nat.is_le(j, 14n) == True{} : Bool}) -> po.Tab(j):
+  match j:
+    case 0n:
+      ({==}, ({==}, ({==}, ({==}, ({==}, {==})))))
+    case 1n+j1:
+      match j1:
+        case 0n:
+          ({==}, ({==}, ({==}, ({==}, ({==}, {==})))))
+        case 1n+j2:
+          match j2:
+            case 0n:
+              ({==}, ({==}, ({==}, ({==}, ({==}, {==})))))
+            case 1n+j3:
+              match j3:
+                case 0n:
+                  ({==}, ({==}, ({==}, ({==}, ({==}, {==})))))
+                case 1n+j4:
+                  match j4:
+                    case 0n:
+                      ({==}, ({==}, ({==}, ({==}, ({==}, {==})))))
+                    case 1n+j5:
+                      match j5:
+                        case 0n:
+                          ({==}, ({==}, ({==}, ({==}, ({==}, {==})))))
+                        case 1n+j6:
+                          match j6:
+                            case 0n:
+                              ({==}, ({==}, ({==}, ({==}, ({==}, {==})))))
+                            case 1n+j7:
+                              match j7:
+                                case 0n:
+                                  ({==}, ({==}, ({==}, ({==}, ({==}, {==})))))
+                                case 1n+j8:
+                                  match j8:
+                                    case 0n:
+                                      ({==}, ({==}, ({==}, ({==}, ({==}, {==})))))
+                                    case 1n+j9:
+                                      match j9:
+                                        case 0n:
+                                          ({==}, ({==}, ({==}, ({==}, ({==}, {==})))))
+                                        case 1n+j10:
+                                          match j10:
+                                            case 0n:
+                                              ({==}, ({==}, ({==}, ({==}, ({==}, {==})))))
+                                            case 1n+j11:
+                                              match j11:
+                                                case 0n:
+                                                  ({==}, ({==}, ({==}, ({==}, ({==}, {==})))))
+                                                case 1n+j12:
+                                                  match j12:
+                                                    case 0n:
+                                                      ({==}, ({==}, ({==}, ({==}, ({==}, {==})))))
+                                                    case 1n+j13:
+                                                      match j13:
+                                                        case 0n:
+                                                          ({==}, ({==}, ({==}, ({==}, ({==}, {==})))))
+                                                        case 1n+j14:
+                                                          match j14:
+                                                            case 0n:
+                                                              ({==}, ({==}, ({==}, ({==}, ({==}, {==})))))
+                                                            case 1n+j15:
+                                                              Bool.no(po.Tab(1n+1n+1n+1n+1n+1n+1n+1n+1n+1n+1n+1n+1n+1n+1n+j15), hj)
+
+def po.nat.eq(a: Nat, b: Nat, h: {Nat.is_eq(a, b) == True{} : Bool}) -> {a == b : Nat}:
+  match a b:
+    case 0n 0n:
+      {==}
+    case 0n 1n+q:
+      Bool.no({0n == 1n+q : Nat}, h)
+    case 1n+p 0n:
+      Bool.no({1n+p == 0n : Nat}, h)
+    case 1n+p 1n+q:
+      Equal.cong(Nat, Nat, x => 1n+x, p, q, po.nat.eq(p, q, h))
+
+def po.t5(+j: Nat, tab: po.Tab(j)) -> {Nat.is_eq(po.lim(j), Nat.add(Stream.chunk.size(j), Stream.chunk.size(j))) == True{} : Bool}:
+  (a, r) = tab
+  (b, r2) = r
+  (c, r3) = r2
+  (d, r4) = r3
+  (f, g) = r4
+  f
+
+def po.t6(+j: Nat, tab: po.Tab(j)) -> {Nat.is_eq(po.lim.pred(j), Stream.chunk.size(j)) == True{} : Bool}:
+  (a, r) = tab
+  (b, r2) = r
+  (c, r3) = r2
+  (d, r4) = r3
+  (f, g) = r4
+  g
+
+# LEMMA: a chunk -- its size line, CR LF, its data, CR LF -- is read as
+# its data, the budget spent on its line and its data
+def po.pw(+j: Nat, +c: U32, +t: Bytes(), +r: Bytes(), +e: R.Ask, +h: R.Head, +got: List<&2, U32>, +left: U32,
+  +o: List<&2, U32>, tab: po.Tab(j), hp: {Bytes.len(SCon{Chr{c}, t}) == Stream.chunk.size(j) : Nat},
+  ok: {Laws.chunk.ok(j, left) == True{} : Bool}) ->
+  {RS.walk(e, Bytes.to_list(Bytes.append(Stream.chunk.hex(j), Bytes.append("\r\n", Bytes.append(SCon{Chr{c}, t},
+    Bytes.append("\r\n", r))))), RS.W{RS.MChunk{h, R.ASize0{}, 0, got, left}, o}) ==
+    RS.walk(e, Bytes.to_list(r), RS.W{RS.MChunk{h, R.ASize0{}, 0, List.append(&2, U32, got, Bytes.to_list(SCon{Chr{c}, t})),
+      Laws.chunk.left(j, left)}, o}) : RS.W}:
+  (t1, tr) = tab
+  (t2, tr2) = tr
+  (t3, tr3) = tr2
+  (t4, tr4) = tr3
+  (t5, t6) = tr4
+  +ds = Laws.chunk.ds(j)
+  +v = Laws.dig.val(ds, R.ASize0{}, 0)
+  +l1 = Laws.dig.left(ds, left)
+  +w0 : RS.W = RS.W{RS.MChunk{h, R.ASize0{}, 0, got, left}, o}
+  +p : Bytes() = SCon{Chr{c}, t}
+  +b3 = Bytes.append("\r\n", r)
+  +b2 = Bytes.append(p, b3)
+  +b1 = Bytes.append("\r\n", b2)
+  +rhs = RS.walk(e, Bytes.to_list(r), RS.W{RS.MChunk{h, R.ASize0{}, 0, List.append(&2, U32, got, Bytes.to_list(p)),
+    Laws.chunk.left(j, left)}, o})
+  %Equal.sym(RS.W, RS.walk(e, Bytes.to_list(Bytes.append(Stream.chunk.hex(j), b1)), w0),
+    RS.walk(e, Bytes.to_list(b1), RS.walk(e, Bytes.to_list(Stream.chunk.hex(j)), w0)), po.wb(e, Stream.chunk.hex(j), b1, w0)) :
+    {_ == rhs : RS.W}
+  %Equal.sym(RS.W, RS.walk(e, ds, w0), RS.W{RS.MChunk{h, po.dig.at(ds, R.ASize0{}), v, got, l1}, o},
+    po.dw(ds, R.ASize0{}, 0, left, e, h, got, o, ok)) :
+    {RS.walk(e, Bytes.to_list(b1), _) == rhs : RS.W}
+  %Equal.sym(R.At, po.dig.at(ds, R.ASize0{}), R.ASize{}, t1) :
+    {RS.walk(e, Bytes.to_list(b1), RS.W{RS.MChunk{h, _, v, got, l1}, o}) == rhs : RS.W}
+  +w1 : RS.W = RS.W{RS.MChunk{h, R.ASize{}, v, got, l1}, o}
+  %Equal.sym(RS.W, RS.walk(e, Bytes.to_list(b1), w1), RS.walk(e, Bytes.to_list(b2), RS.walk(e, Bytes.to_list("\r\n"), w1)),
+    po.wb(e, "\r\n", b2, w1)) :
+    {_ == rhs : RS.W}
+  %Equal.sym(Bool, U32.is_zero(v), False{}, t2) :
+    {RS.walk(e, Bytes.to_list(b2), RS.W{RS.chunk.line(_, h, v, got, l1), o}) == rhs : RS.W}
+  %Equal.sym(Nat, U32.to_nat(v), Stream.chunk.size(j), po.nat.eq(U32.to_nat(v), Stream.chunk.size(j), t3)) :
+    {RS.walk(e, Bytes.to_list(b2), RS.W{RS.MData{h, Nat.sub(_, 1n), got, (l1 - v : U32)}, o}) == rhs : RS.W}
+  %hp :
+    {RS.walk(e, Bytes.to_list(b2), RS.W{RS.MData{h, Nat.sub(_, 1n), got, (l1 - v : U32)}, o}) == rhs : RS.W}
+  +w2 : RS.W = RS.W{RS.MData{h, Nat.sub(Bytes.len(p), 1n), got, (l1 - v : U32)}, o}
+  %Equal.sym(RS.W, RS.walk(e, Bytes.to_list(b2), w2), RS.walk(e, Bytes.to_list(b3), RS.walk(e, Bytes.to_list(p), w2)),
+    po.wb(e, p, b3, w2)) :
+    {_ == rhs : RS.W}
+  %Equal.sym(Nat, Bytes.len(p), 1n+Bytes.len(t), po.blen(Chr{c}, t)) :
+    {RS.walk(e, Bytes.to_list(b3), RS.walk(e, Bytes.to_list(p), RS.W{RS.MData{h, Nat.sub(_, 1n), got, (l1 - v : U32)}, o})) == rhs :
+      RS.W}
+  %Equal.sym(Nat, Nat.sub(Bytes.len(t), 0n), Bytes.len(t), po.sub0(Bytes.len(t))) :
+    {RS.walk(e, Bytes.to_list(b3), RS.walk(e, Bytes.to_list(p), RS.W{RS.MData{h, _, got, (l1 - v : U32)}, o})) == rhs : RS.W}
+  %Equal.sym(RS.W, RS.walk(e, Con{c, Bytes.to_list(t)}, RS.W{RS.MData{h, Bytes.len(t), got, (l1 - v : U32)}, o}),
+    RS.W{RS.MChunk{h, R.ADataCr{}, 0, List.append(&2, U32, got, Con{c, Bytes.to_list(t)}), (l1 - v : U32)}, o},
+    po.dd(t, c, e, h, got, (l1 - v : U32), o)) :
+    {RS.walk(e, Bytes.to_list(b3), _) == rhs : RS.W}
+  +w3 : RS.W = RS.W{RS.MChunk{h, R.ADataCr{}, 0, List.append(&2, U32, got, Con{c, Bytes.to_list(t)}), (l1 - v : U32)}, o}
+  %Equal.sym(RS.W, RS.walk(e, Bytes.to_list(b3), w3), RS.walk(e, Bytes.to_list(r), RS.walk(e, Bytes.to_list("\r\n"), w3)),
+    po.wb(e, "\r\n", r, w3)) :
+    {_ == rhs : RS.W}
+  {==}
+
+def po.ge.le(a: Nat, b: Nat) -> {Nat.is_ge(a, b) == Nat.is_le(b, a) : Bool}:
+  match a b:
+    case 0n 0n:
+      {==}
+    case 0n 1n+q:
+      {==}
+    case 1n+p 0n:
+      {==}
+    case 1n+p 1n+q:
+      po.ge.le(p, q)
+
+def po.ge.not(a: Nat, b: Nat) -> {Bool.not(Nat.is_ge(a, b)) == Nat.is_lt(a, b) : Bool}:
+  match a b:
+    case 0n 0n:
+      {==}
+    case 0n 1n+q:
+      {==}
+    case 1n+p 0n:
+      {==}
+    case 1n+p 1n+q:
+      po.ge.not(p, q)
+
+def po.lt0(n: Nat) -> {Nat.is_lt(n, 0n) == False{} : Bool}:
+  match n:
+    case 0n:
+      {==}
+    case 1n+p:
+      {==}
+
+
+def po.W5(+h: R.Head, +g: List<&2, U32>, +l: U32, +o: List<&2, U32>) -> RS.W:
+  RS.W{RS.MChunk{h, R.ASize0{}, 0, g, l}, o}
+
+def po.and.r(a: Bool, -b: Bool, e: {Bool.and(a, b) == True{} : Bool}) -> {b == True{} : Bool}:
+  match a:
+    case True{}:
+      e
+    case False{}:
+      Bool.no({b == True{} : Bool}, e)
+
+# what the chunks of a write hand on, and what they leave
+def po.IH(-j: Nat, +e: R.Ask, +h: R.Head, +o: List<&2, U32>, -go: Bytes() -> Bytes(), -okgo: Nat -> U32 -> Bool,
+  -lgo: Nat -> U32 -> U32) -> Type:
+  @+y: Bytes() -> @+l: U32 -> @+g: List<&2, U32> -> {okgo(Bytes.len(y), l) == True{} : Bool} ->
+    {Nat.is_lt(Bytes.len(y), Stream.chunk.size(j)) == True{} : Bool} ->
+    {RS.walk(e, Bytes.to_list(go(y)), RS.W{RS.MChunk{h, R.ASize0{}, 0, g, l}, o}) ==
+      RS.W{RS.MChunk{h, R.ASize0{}, 0, List.append(&2, U32, g, Bytes.to_list(y)), lgo(Bytes.len(y), l)}, o} : RS.W}
+
+# a chunk that fits: its bytes (p, the take), read, then the rest's
+def po.ca.p(p: Bytes(), +j: Nat, +x: Bytes(), +e: R.Ask, +h: R.Head, +got: List<&2, U32>, +left: U32, +o: List<&2, U32>,
+  go: Bytes() -> Bytes(), -okgo: Nat -> U32 -> Bool, -lgo: Nat -> U32 -> U32, +hj: {Nat.is_le(j, 14n) == True{} : Bool},
+  +ep: {String.take(x, Stream.chunk.size(j)) == p : Bytes()},
+  +fit0: {Nat.is_ge(Bytes.len(x), Stream.chunk.size(j)) == True{} : Bool},
+  +inv: {Nat.is_lt(Bytes.len(x), po.lim(j)) == True{} : Bool},
+  +ok: {Laws.ok.at(True{}, j, Bytes.len(x), left, okgo) == True{} : Bool}, ih: po.IH(j, e, h, o, go, okgo, lgo),
+  tab: po.Tab(j), +h5: {Nat.is_eq(po.lim(j), Nat.add(Stream.chunk.size(j), Stream.chunk.size(j))) == True{} : Bool}) ->
+  {RS.walk(e, Bytes.to_list(Stream.chunks.at(True{}, j, x, go)), RS.W{RS.MChunk{h, R.ASize0{}, 0, got, left}, o}) ==
+    RS.W{RS.MChunk{h, R.ASize0{}, 0, List.append(&2, U32, got, Bytes.to_list(x)), Laws.left.at(True{}, j, Bytes.len(x), left, lgo)},
+      o} : RS.W}:
+  match p:
+    case SNil{}:
+      (t1, tr) = tab
+      (t2, tr2) = tr
+      (t3, tr3) = tr2
+      (t4, tr4) = tr3
+      (t5, t6) = tr4
+      +s = Stream.chunk.size(j)
+      +fit = Equal.trans(Bool, Nat.is_le(Stream.chunk.size(j), Bytes.len(x)), Nat.is_ge(Bytes.len(x), Stream.chunk.size(j)), True{}, Equal.sym(Bool, Nat.is_ge(Bytes.len(x), Stream.chunk.size(j)), Nat.is_le(Stream.chunk.size(j), Bytes.len(x)), po.ge.le(Bytes.len(x), Stream.chunk.size(j))), fit0)
+      +lp = po.take.len(x, s, fit)
+      +z = Equal.trans(Nat, 0n, Bytes.len(String.take(x, s)), s,
+        Equal.cong(Bytes(), Nat, b => Bytes.len(b), SNil{}, String.take(x, s), Equal.sym(Bytes(), String.take(x, s), SNil{}, ep)), lp)
+      Bool.no({RS.walk(e, Bytes.to_list(Stream.chunks.at(True{}, j, x, go)), RS.W{RS.MChunk{h, R.ASize0{}, 0, got, left}, o}) ==
+        RS.W{RS.MChunk{h, R.ASize0{}, 0, List.append(&2, U32, got, Bytes.to_list(x)), Laws.left.at(True{}, j, Bytes.len(x), left, lgo)},
+          o} : RS.W},
+        Equal.sym(Bool, True{}, False{}, Equal.trans(Bool, True{}, Nat.is_eq(s, 0n), False{},
+          Equal.cong(Nat, Bool, y => Nat.is_eq(y, 0n), 0n, s, z), t4)))
+    case SCon{Chr{+c}, +t}:
+      +s = Stream.chunk.size(j)
+      +fit = Equal.trans(Bool, Nat.is_le(Stream.chunk.size(j), Bytes.len(x)), Nat.is_ge(Bytes.len(x), Stream.chunk.size(j)), True{}, Equal.sym(Bool, Nat.is_ge(Bytes.len(x), Stream.chunk.size(j)), Nat.is_le(Stream.chunk.size(j), Bytes.len(x)), po.ge.le(Bytes.len(x), Stream.chunk.size(j))), fit0)
+      +lp = po.take.len(x, s, fit)
+      +pc : Bytes() = SCon{Chr{c}, t}
+      +d = String.drop(x, s)
+      +cl = Laws.chunk.left(j, left)
+      +a = Laws.chunk.ok(j, left)
+      +hp = Equal.trans(Nat, Bytes.len(pc), Bytes.len(String.take(x, s)), s,
+        Equal.cong(Bytes(), Nat, q => Bytes.len(q), pc, String.take(x, s), Equal.sym(Bytes(), String.take(x, s), pc, ep)), lp)
+      +okr = Equal.trans(Bool, okgo(Bytes.len(d), cl), okgo(Nat.sub(Bytes.len(x), s), cl), True{},
+        Equal.cong(Nat, Bool, n => okgo(n, cl), Bytes.len(d), Nat.sub(Bytes.len(x), s), po.drop.len(x, s)),
+        po.and.r(a, okgo(Nat.sub(Bytes.len(x), s), cl), ok))
+      +invr = Equal.trans(Bool, Nat.is_lt(Bytes.len(d), s), Nat.is_lt(Nat.sub(Bytes.len(x), s), s), True{},
+        Equal.cong(Nat, Bool, n => Nat.is_lt(n, s), Bytes.len(d), Nat.sub(Bytes.len(x), s), po.drop.len(x, s)),
+        po.rest.lt(s, Bytes.len(x), fit, Equal.trans(Bool, Nat.is_lt(Bytes.len(x), Nat.add(s, s)), Nat.is_lt(Bytes.len(x), po.lim(j)),
+          True{}, Equal.cong(Nat, Bool, m => Nat.is_lt(Bytes.len(x), m), Nat.add(s, s), po.lim(j),
+            Equal.sym(Nat, po.lim(j), Nat.add(s, s), po.nat.eq(po.lim(j), Nat.add(s, s), h5))), inv)))
+      +g1 = List.append(&2, U32, got, Bytes.to_list(pc))
+      %Equal.sym(Bytes(), String.take(x, s), pc, ep) :
+        {RS.walk(e, Bytes.to_list(Bytes.append(Stream.chunk.hex(j), Bytes.append("\r\n", Bytes.append(_, Bytes.append("\r\n",
+          go(d)))))), po.W5(h, got, left, o)) ==
+          po.W5(h, List.append(&2, U32, got, Bytes.to_list(x)), lgo(Nat.sub(Bytes.len(x), s), cl), o) : RS.W}
+      %Equal.sym(RS.W, RS.walk(e, Bytes.to_list(Bytes.append(Stream.chunk.hex(j), Bytes.append("\r\n", Bytes.append(pc,
+          Bytes.append("\r\n", go(d)))))), po.W5(h, got, left, o)),
+        RS.walk(e, Bytes.to_list(go(d)), po.W5(h, g1, cl, o)),
+        po.pw(j, c, t, go(d), e, h, got, left, o, tab, hp, Bool.and_l(a, okgo(Nat.sub(Bytes.len(x), s), cl), ok))) :
+        {_ == po.W5(h, List.append(&2, U32, got, Bytes.to_list(x)), lgo(Nat.sub(Bytes.len(x), s), cl), o) : RS.W}
+      %Equal.sym(RS.W, RS.walk(e, Bytes.to_list(go(d)), po.W5(h, g1, cl, o)),
+        po.W5(h, List.append(&2, U32, g1, Bytes.to_list(d)), lgo(Bytes.len(d), cl), o),
+        ih(d, cl, g1, okr, invr)) :
+        {_ == po.W5(h, List.append(&2, U32, got, Bytes.to_list(x)), lgo(Nat.sub(Bytes.len(x), s), cl), o) : RS.W}
+      %Equal.sym(List<&2, U32>, List.append(&2, U32, g1, Bytes.to_list(d)),
+        List.append(&2, U32, got, List.append(&2, U32, Bytes.to_list(pc), Bytes.to_list(d))),
+        PP.app.assoc(U32, got, Bytes.to_list(pc), Bytes.to_list(d))) :
+        {po.W5(h, _, lgo(Bytes.len(d), cl), o) ==
+          po.W5(h, List.append(&2, U32, got, Bytes.to_list(x)), lgo(Nat.sub(Bytes.len(x), s), cl), o) : RS.W}
+      %Equal.trans(List<&2, U32>, Bytes.to_list(x), List.append(&2, U32, Bytes.to_list(String.take(x, s)), Bytes.to_list(d)),
+        List.append(&2, U32, Bytes.to_list(pc), Bytes.to_list(d)), po.split(x, s),
+        Equal.cong(Bytes(), List<&2, U32>, q => List.append(&2, U32, Bytes.to_list(q), Bytes.to_list(d)), String.take(x, s), pc,
+          ep)) :
+        {po.W5(h, List.append(&2, U32, got, _), lgo(Bytes.len(d), cl), o) ==
+          po.W5(h, List.append(&2, U32, got, Bytes.to_list(x)), lgo(Nat.sub(Bytes.len(x), s), cl), o) : RS.W}
+      %Equal.sym(Nat, Bytes.len(d), Nat.sub(Bytes.len(x), s), po.drop.len(x, s)) :
+        {po.W5(h, List.append(&2, U32, got, Bytes.to_list(x)), lgo(_, cl), o) ==
+          po.W5(h, List.append(&2, U32, got, Bytes.to_list(x)), lgo(Nat.sub(Bytes.len(x), s), cl), o) : RS.W}
+      {==}
+
+# a chunk of 2^j at the front of x, if one fits, then the rest
+def po.ca(fit: Bool, +j: Nat, +x: Bytes(), +e: R.Ask, +h: R.Head, +got: List<&2, U32>, +left: U32, +o: List<&2, U32>,
+  go: Bytes() -> Bytes(), -okgo: Nat -> U32 -> Bool, -lgo: Nat -> U32 -> U32, +hj: {Nat.is_le(j, 14n) == True{} : Bool},
+  +ef: {Nat.is_ge(Bytes.len(x), Stream.chunk.size(j)) == fit : Bool},
+  +inv: {Nat.is_lt(Bytes.len(x), po.lim(j)) == True{} : Bool},
+  +ok: {Laws.ok.at(fit, j, Bytes.len(x), left, okgo) == True{} : Bool}, ih: po.IH(j, e, h, o, go, okgo, lgo)) ->
+  {RS.walk(e, Bytes.to_list(Stream.chunks.at(fit, j, x, go)), RS.W{RS.MChunk{h, R.ASize0{}, 0, got, left}, o}) ==
+    RS.W{RS.MChunk{h, R.ASize0{}, 0, List.append(&2, U32, got, Bytes.to_list(x)), Laws.left.at(fit, j, Bytes.len(x), left, lgo)},
+      o} : RS.W}:
+  match fit:
+    case True{}:
+      po.ca.p(String.take(x, Stream.chunk.size(j)), j, x, e, h, got, left, o, go, okgo, lgo, hj, {==}, ef, inv, ok, ih,
+        po.tab(j, hj), po.t5(j, po.tab(j, hj)))
+    case False{}:
+      +s = Stream.chunk.size(j)
+      ih(x, left, got, ok, Equal.trans(Bool, Nat.is_lt(Bytes.len(x), s), Bool.not(Nat.is_ge(Bytes.len(x), s)), True{},
+        Equal.sym(Bool, Bool.not(Nat.is_ge(Bytes.len(x), s)), Nat.is_lt(Bytes.len(x), s), po.ge.not(Bytes.len(x), s)),
+        Equal.cong(Bool, Bool, q => Bool.not(q), Nat.is_ge(Bytes.len(x), s), False{}, ef)))
+
+# the last bit: what is left of a write under one byte is nothing
+def po.cg0(y: Bytes(), +e: R.Ask, +h: R.Head, +g: List<&2, U32>, +l: U32, +o: List<&2, U32>,
+  iv: {Nat.is_lt(Bytes.len(y), Stream.chunk.size(0n)) == True{} : Bool}) ->
+  {RS.walk(e, Bytes.to_list(""), RS.W{RS.MChunk{h, R.ASize0{}, 0, g, l}, o}) ==
+    RS.W{RS.MChunk{h, R.ASize0{}, 0, List.append(&2, U32, g, Bytes.to_list(y)), l}, o} : RS.W}:
+  match y:
+    case SNil{}:
+      Equal.cong(List<&2, U32>, RS.W, q => RS.W{RS.MChunk{h, R.ASize0{}, 0, q, l}, o}, g, List.append(&2, U32, g, Nil{}),
+        Equal.sym(List<&2, U32>, List.append(&2, U32, g, Nil{}), g, PP.app.nil(U32, g)))
+    case SCon{+c, +t}:
+      Bool.no({RS.walk(e, Bytes.to_list(""), RS.W{RS.MChunk{h, R.ASize0{}, 0, g, l}, o}) ==
+        RS.W{RS.MChunk{h, R.ASize0{}, 0, List.append(&2, U32, g, Bytes.to_list(SCon{c, t})), l}, o} : RS.W},
+        Equal.trans(Bool, False{}, Nat.is_lt(Bytes.len(t), 0n), True{}, Equal.sym(Bool, Nat.is_lt(Bytes.len(t), 0n), False{},
+          po.lt0(Bytes.len(t))),
+          Equal.trans(Bool, Nat.is_lt(1n+Bytes.len(t), 1n), Nat.is_lt(Bytes.len(SCon{c, t}), 1n), True{},
+            Equal.cong(Nat, Bool, n => Nat.is_lt(n, 1n), 1n+Bytes.len(t), Bytes.len(SCon{c, t}),
+              Equal.sym(Nat, Bytes.len(SCon{c, t}), 1n+Bytes.len(t), po.blen(c, t))), iv)))
+
+# LEMMA: a write of fewer than 2^(j+1) bytes, cut into chunks from 2^j
+# down, each paid for, is read back as itself
+def po.cg(j: Nat, +x: Bytes(), +e: R.Ask, +h: R.Head, +got: List<&2, U32>, +left: U32, +o: List<&2, U32>,
+  +hj: {Nat.is_le(j, 14n) == True{} : Bool},
+  +inv: {Nat.is_lt(Bytes.len(x), po.lim(j)) == True{} : Bool},
+  +ok: {Laws.ok.go(j, Bytes.len(x), left) == True{} : Bool}) ->
+  {RS.walk(e, Bytes.to_list(Stream.chunks.go(j, x)), RS.W{RS.MChunk{h, R.ASize0{}, 0, got, left}, o}) ==
+    RS.W{RS.MChunk{h, R.ASize0{}, 0, List.append(&2, U32, got, Bytes.to_list(x)), Laws.left.go(j, Bytes.len(x), left)}, o} :
+    RS.W}:
+  match j:
+    case 0n:
+      po.ca(Nat.is_ge(Bytes.len(x), Stream.chunk.size(0n)), 0n, x, e, h, got, left, o, t => "", n2 => l => True{},
+        n2 => l => l, hj, {==}, inv, ok, y => l => g => k => iv => po.cg0(y, e, h, g, l, o, iv))
+    case 1n+(+i):
+      po.ca(Nat.is_ge(Bytes.len(x), Stream.chunk.size(1n+i)), 1n+i, x, e, h, got, left, o, t => Stream.chunks.go(i, t),
+        n2 => l => Laws.ok.go(i, n2, l), n2 => l => Laws.left.go(i, n2, l), hj, {==}, inv, ok,
+        y => l => g => k => iv => po.cg(i, y, e, h, g, l, o, Nat.is_le_trans(i, 13n, 14n, hj, {==}),
+          Equal.trans(Bool, Nat.is_lt(Bytes.len(y), po.lim(i)), Nat.is_lt(Bytes.len(y), Stream.chunk.size(1n+i)), True{},
+            Equal.cong(Nat, Bool, m => Nat.is_lt(Bytes.len(y), m), po.lim(i), Stream.chunk.size(1n+i),
+              po.nat.eq(po.lim(i), Stream.chunk.size(1n+i), po.t6(1n+i, po.tab(1n+i, hj)))), iv), k))
+
+def po.le.up(r: Nat, +y: Nat, h: {Nat.is_le(r, y) == True{} : Bool}) -> {Nat.is_le(r, 1n+y) == True{} : Bool}:
+  match r y:
+    case 0n _:
+      {==}
+    case 1n+p 0n:
+      Bool.no({Nat.is_le(1n+p, 1n) == True{} : Bool}, h)
+    case 1n+p 1n+q:
+      po.le.up(p, q, h)
+
+def po.le.dbl(q: Nat) -> {Nat.is_le(q, Nat.double(q)) == True{} : Bool}:
+  match q:
+    case 0n:
+      {==}
+    case 1n+(+r):
+      po.le.up(r, Nat.double(r), po.le.dbl(r))
+
+# n at most s, s not zero: n under twice s
+def po.lt.dbl(n: Nat, s: Nat, h: {Nat.is_le(n, s) == True{} : Bool}, hs: {Nat.is_eq(s, 0n) == False{} : Bool}) ->
+  {Nat.is_lt(n, Nat.double(s)) == True{} : Bool}:
+  match n s:
+    case 0n 0n:
+      Bool.no({Nat.is_lt(0n, Nat.double(0n)) == True{} : Bool}, Equal.sym(Bool, True{}, False{}, hs))
+    case 0n 1n+q:
+      {==}
+    case 1n+p 0n:
+      Bool.no({Nat.is_lt(1n+p, Nat.double(0n)) == True{} : Bool}, h)
+    case 1n+(+p) 1n+(+q):
+      Equal.trans(Bool, Nat.is_lt(p, 1n+Nat.double(q)), Nat.is_le(p, Nat.double(q)), True{}, Nat.lt_succ(p, Nat.double(q)),
+        Nat.is_le_trans(p, q, Nat.double(q), h, po.le.dbl(q)))
+
+def po.nz14() -> {Nat.is_eq(Stream.chunk.size(14n), 0n) == False{} : Bool}:
+  {==}
+
+# a write Stream.emit takes whole is under the bound its cutting needs
+def po.lim14(+n: Nat, h: {Nat.is_le(n, 16384n) == True{} : Bool}) -> {Nat.is_lt(n, po.lim(14n)) == True{} : Bool}:
+  Nat.is_lt_le_trans(n, 16385n, po.lim(14n), Equal.trans(Bool, Nat.is_lt(n, 16385n), Nat.is_le(n, 16384n), True{},
+    Nat.lt_succ(n, 16384n), h), {==})
+
+# LEMMA: the last chunk, its digit paid for, ends the body
+def po.last(+e: R.Ask, +h: R.Head, +got: List<&2, U32>, +left: U32, +o: List<&2, U32>,
+  ok: {Laws.dig.ok([48], R.ASize0{}, 0, left) == True{} : Bool}) ->
+  {RS.walk(e, Bytes.to_list(Stream.chunk.last()), po.W5(h, got, left, o)) ==
+    RS.W{RS.MDone{RS.resp(h, got, False{}), Nil{}}, o} : RS.W}:
+  %Equal.sym(RS.W, RS.walk(e, List.append(&2, U32, [48], Bytes.to_list("\r\n\r\n")), po.W5(h, got, left, o)),
+    RS.walk(e, Bytes.to_list("\r\n\r\n"), RS.walk(e, [48], po.W5(h, got, left, o))),
+    po.wapp(e, [48], Bytes.to_list("\r\n\r\n"), po.W5(h, got, left, o))) :
+    {_ == RS.W{RS.MDone{RS.resp(h, got, False{}), Nil{}}, o} : RS.W}
+  %Equal.sym(RS.W, RS.walk(e, [48], po.W5(h, got, left, o)),
+    RS.W{RS.MChunk{h, po.dig.at([48], R.ASize0{}), Laws.dig.val([48], R.ASize0{}, 0), got, Laws.dig.left([48], left)}, o},
+    po.dw([48], R.ASize0{}, 0, left, e, h, got, o, ok)) :
+    {RS.walk(e, Bytes.to_list("\r\n\r\n"), _) == RS.W{RS.MDone{RS.resp(h, got, False{}), Nil{}}, o} : RS.W}
+  {==}
+
+# LEMMA: a chunked body of small writes, each paid for, is read back as
+# the writes joined, and it ends
+def po.bw(ws: List<&2, Bytes()>, +e: R.Ask, +h: R.Head, +got: List<&2, U32>, +left: U32, +o: List<&2, U32>,
+  +sm: {Laws.small(ws) == True{} : Bool}, +fit: {Laws.fits(ws, left) == True{} : Bool}) ->
+  {RS.walk(e, Bytes.to_list(Stream.emits(ws, Stream.Sent{Stream.MChunked{}, None{}})), po.W5(h, got, left, o)) ==
+    RS.W{RS.MDone{RS.resp(h, List.append(&2, U32, got, Bytes.to_list(Bytes.concat(ws))), False{}), Nil{}}, o} : RS.W}:
+  match ws:
+    case Nil{}:
+      %Equal.sym(List<&2, U32>, List.append(&2, U32, got, Nil{}), got, PP.app.nil(U32, got)) :
+        {RS.walk(e, Bytes.to_list(Stream.chunk.last()), po.W5(h, got, left, o)) ==
+          RS.W{RS.MDone{RS.resp(h, _, False{}), Nil{}}, o} : RS.W}
+      po.last(e, h, got, left, o, fit)
+    case Con{+x, +t}:
+      +rest = Stream.emits(t, Stream.Sent{Stream.MChunked{}, None{}})
+      +g2 = List.append(&2, U32, got, Bytes.to_list(x))
+      +tgt : RS.W = RS.W{RS.MDone{RS.resp(h, List.append(&2, U32, got, Bytes.to_list(Bytes.concat(Con{x, t}))), False{}), Nil{}}, o}
+      %Equal.sym(Bool, Nat.is_le(Bytes.len(x), Stream.emit.max()), True{}, Bool.and_l(Nat.is_le(Bytes.len(x), Stream.emit.max()), Laws.small(t), sm)) :
+        {RS.walk(e, Bytes.to_list(Stream.emits.on(Stream.emit.chunked(_, x), s2 => Stream.emits(t, s2))), po.W5(h, got, left, o)) ==
+          tgt : RS.W}
+      %Equal.sym(RS.W, RS.walk(e, Bytes.to_list(Bytes.append(Stream.chunks(x), rest)), po.W5(h, got, left, o)),
+        RS.walk(e, Bytes.to_list(rest), RS.walk(e, Bytes.to_list(Stream.chunks(x)), po.W5(h, got, left, o))),
+        po.wb(e, Stream.chunks(x), rest, po.W5(h, got, left, o))) :
+        {_ == tgt : RS.W}
+      %Equal.sym(RS.W, RS.walk(e, Bytes.to_list(Stream.chunks(x)), po.W5(h, got, left, o)), po.W5(h, g2, Laws.left.go(14n, Bytes.len(x), left), o),
+        po.cg(14n, x, e, h, got, left, o, {==}, po.lim14(Bytes.len(x), Bool.and_l(Nat.is_le(Bytes.len(x), Stream.emit.max()),
+          Laws.small(t), sm)), Bool.and_l(Laws.ok.go(14n, Bytes.len(x), left), Laws.fits(t, Laws.left.go(14n, Bytes.len(x), left)), fit))) :
+        {RS.walk(e, Bytes.to_list(rest), _) == tgt : RS.W}
+      %Equal.sym(RS.W, RS.walk(e, Bytes.to_list(rest), po.W5(h, g2, Laws.left.go(14n, Bytes.len(x), left), o)),
+        RS.W{RS.MDone{RS.resp(h, List.append(&2, U32, g2, Bytes.to_list(Bytes.concat(t))), False{}), Nil{}}, o},
+        po.bw(t, e, h, g2, Laws.left.go(14n, Bytes.len(x), left), o, po.and.r(Nat.is_le(Bytes.len(x), Stream.emit.max()), Laws.small(t), sm), po.and.r(Laws.ok.go(14n, Bytes.len(x), left), Laws.fits(t, Laws.left.go(14n, Bytes.len(x), left)), fit))) :
+        {_ == tgt : RS.W}
+      %Equal.sym(List<&2, U32>, List.append(&2, U32, List.append(&2, U32, got, Bytes.to_list(x)), Bytes.to_list(Bytes.concat(t))),
+        List.append(&2, U32, got, List.append(&2, U32, Bytes.to_list(x), Bytes.to_list(Bytes.concat(t)))),
+        PP.app.assoc(U32, got, Bytes.to_list(x), Bytes.to_list(Bytes.concat(t)))) :
+        {RS.W{RS.MDone{RS.resp(h, _, False{}), Nil{}}, o} == tgt : RS.W}
+      %Bytes.to_list_append(x, Bytes.concat(t)) :
+        {RS.W{RS.MDone{RS.resp(h, List.append(&2, U32, got, _), False{}), Nil{}}, o} == tgt : RS.W}
+      {==}
+
+# The head of a chunked response
+# ------------------------------
+
+def po.split3(a: Bool, b: Bool, -c: Bool, h: {(a && b && c) == True{} : Bool}) ->
+  {a == True{} : Bool} & {b == True{} : Bool} & {c == True{} : Bool}:
+  match a b:
+    case True{} True{}:
+      ({==}, ({==}, h))
+    case False{} _:
+      Bool.no({False{} == True{} : Bool} & {b == True{} : Bool} & {c == True{} : Bool}, h)
+    case True{} False{}:
+      Bool.no({True{} == True{} : Bool} & {False{} == True{} : Bool} & {c == True{} : Bool}, h)
+
+def po.split5(a: Bool, b: Bool, c: Bool, d: Bool, -f: Bool, h: {(a && b && c && d && f) == True{} : Bool}) ->
+  {a == True{} : Bool} & {b == True{} : Bool} & {c == True{} : Bool} & {d == True{} : Bool} & {f == True{} : Bool}:
+  match a b c d:
+    case True{} True{} True{} True{}:
+      ({==}, ({==}, ({==}, ({==}, h))))
+    case False{} _ _ _:
+      Bool.no({False{} == True{} : Bool} & {b == True{} : Bool} & {c == True{} : Bool} & {d == True{} : Bool} &
+        {f == True{} : Bool}, h)
+    case True{} False{} _ _:
+      Bool.no({True{} == True{} : Bool} & {False{} == True{} : Bool} & {c == True{} : Bool} & {d == True{} : Bool} &
+        {f == True{} : Bool}, h)
+    case True{} True{} False{} _:
+      Bool.no({True{} == True{} : Bool} & {True{} == True{} : Bool} & {False{} == True{} : Bool} & {d == True{} : Bool} &
+        {f == True{} : Bool}, h)
+    case True{} True{} True{} False{}:
+      Bool.no({True{} == True{} : Bool} & {True{} == True{} : Bool} & {True{} == True{} : Bool} & {False{} == True{} : Bool} &
+        {f == True{} : Bool}, h)
+
+def po.and4(a: Bool, b: Bool, c: Bool, -d: Bool, ha: {a == True{} : Bool}, hb: {b == True{} : Bool},
+  hc: {c == True{} : Bool}, hd: {d == True{} : Bool}) -> {(a && b && c && d) == True{} : Bool}:
+  match a b c:
+    case True{} True{} True{}:
+      hd
+    case False{} _ _:
+      Bool.no({(False{} && b && c && d) == True{} : Bool}, ha)
+    case True{} False{} _:
+      Bool.no({(True{} && False{} && c && d) == True{} : Bool}, hb)
+    case True{} True{} False{}:
+      Bool.no({(True{} && True{} && False{} && d) == True{} : Bool}, hc)
+
+def po.not.true(b: Bool, h: {Bool.not(b) == True{} : Bool}) -> {b == False{} : Bool}:
+  match b:
+    case True{}:
+      Bool.no({True{} == False{} : Bool}, h)
+    case False{}:
+      {==}
+
+def po.bapp.nil(a: Bytes()) -> {Bytes.append(a, "") == a : Bytes()}:
+  match a:
+    case SNil{}:
+      {==}
+    case SCon{+c, +t}:
+      Equal.cong(Bytes(), Bytes(), y => SCon{c, y}, Bytes.append(t, ""), t, po.bapp.nil(t))
+
+# the 500 passes rvalid, to HEAD and to anything else
+def po.e500.ok(head: Bool) -> {X.rvalid(head, 500, X.rsp.fin(head, 500, Http.e500.head(), Http.e500.body())) == True{} : Bool}:
+  match head:
+    case True{}:
+      {==}
+    case False{}:
+      {==}
+
+# a writer with no body sends nothing, whatever is written
+def po.emits.none(ws: List<&2, Bytes()>) -> {Stream.emits(ws, Stream.Sent{Stream.MNone{}, None{}}) == "" : Bytes()}:
+  match ws:
+    case Nil{}:
+      {==}
+    case Con{x, t}:
+      Laws.pour_quiet(Stream.MNone{}, Stream.ENone{}, t)
+
+# the head a chunked response's fields leave: HTTP/1.1, the code, no
+# length, chunked
+def po.H1(+code: U32) -> R.Head:
+  R.Head{False{}, code, None{}, True{}, False{}, False{}}
+
+# the Transfer-Encoding line is read as chunked
+def po.te.line(+code: U32, +rest: List<&2, U32>) ->
+  {RS.walk(X.rask(False{}), List.append(&2, U32, PP.FLl(Wr.Field{"transfer-encoding", "chunked"}), Con{13, Con{10, rest}}),
+    RS.W{RS.MField{R.head.new(False{}, code), Nil{}}, Nil{}}) ==
+    RS.walk(X.rask(False{}), rest, RS.W{RS.MField{po.H1(code), Nil{}}, Nil{}}) : RS.W}:
+  {==}
+
+# with a code of 200 or more, not 204 or 304, and chunked: the framing is
+# chunked
+def po.rfr.te(+code: U32, +cl: Bool, +ka: Bool, hlt: {U32.is_lt(code, 200) == False{} : Bool},
+  hnb: {(U32.is_eq(code, 204) || U32.is_eq(code, 304)) == False{} : Bool}) ->
+  {RS.framing(X.rask(False{}), R.Head{False{}, code, None{}, True{}, cl, ka}) == R.FChunked{} : R.Frame}:
+  Equal.trans(R.Frame, RS.framing(X.rask(False{}), R.Head{False{}, code, None{}, True{}, cl, ka}),
+    RS.frame.pick(U32.is_eq(code, 204) || U32.is_eq(code, 304), R.FNone{}, R.FChunked{}), R.FChunked{},
+    Equal.cong(Bool, R.Frame, b => RS.frame.pick(b && Bool.not(U32.is_eq(code, 101)), R.FNext{},
+      RS.frame.pick(False{} || b || U32.is_eq(code, 204) || U32.is_eq(code, 304), R.FNone{}, R.FChunked{})),
+      U32.is_lt(code, 200), False{}, hlt),
+    Equal.cong(Bool, R.Frame, b => RS.frame.pick(b, R.FNone{}, R.FChunked{}), U32.is_eq(code, 204) || U32.is_eq(code, 304),
+      False{}, hnb))
+
+def po.te.end.at(+code: U32, +cl: Bool, +ka: Bool, +rest: List<&2, U32>, hlt: {U32.is_lt(code, 200) == False{} : Bool},
+  hnb: {(U32.is_eq(code, 204) || U32.is_eq(code, 304)) == False{} : Bool}) ->
+  {RS.walk(X.rask(False{}), Con{13, Con{10, rest}}, RS.W{RS.MField{R.Head{False{}, code, None{}, True{}, cl, ka}, Nil{}}, Nil{}}) ==
+    RS.walk(X.rask(False{}), rest, po.W5(R.Head{False{}, code, None{}, True{}, cl, ka}, Nil{}, 268435455, Nil{})) : RS.W}:
+  Equal.cong(R.Frame, RS.W, f => RS.walk(X.rask(False{}), rest, RS.head.at(X.rask(False{}), f,
+    R.Head{False{}, code, None{}, True{}, cl, ka}, Nil{})), RS.framing(X.rask(False{}), R.Head{False{}, code, None{}, True{}, cl, ka}),
+    R.FChunked{}, po.rfr.te(code, cl, ka, hlt, hnb))
+
+# the blank line: the body is chunked, from its first byte
+def po.te.end(closing: Bool, +code: U32, +rest: List<&2, U32>, hlt: {U32.is_lt(code, 200) == False{} : Bool},
+  hnb: {(U32.is_eq(code, 204) || U32.is_eq(code, 304)) == False{} : Bool}) ->
+  {RS.walk(X.rask(False{}), Con{13, Con{10, rest}}, RS.W{RS.MField{PP.rhc(po.H1(code), closing, False{}), Nil{}}, Nil{}}) ==
+    RS.walk(X.rask(False{}), rest, po.W5(PP.rhc(po.H1(code), closing, False{}), Nil{}, 268435455, Nil{})) : RS.W}:
+  match closing:
+    case True{}:
+      po.te.end.at(code, True{}, False{}, rest, hlt, hnb)
+    case False{}:
+      po.te.end.at(code, False{}, False{}, rest, hlt, hnb)
+
+# the response read: the code, HTTP/1.1, closing as the server closes
+def po.resp.te(closing: Bool, +code: U32, +got: List<&2, U32>, h101: {U32.is_eq(code, 101) == False{} : Bool}) ->
+  {RS.resp(PP.rhc(po.H1(code), closing, False{}), got, False{}) == R.Resp{code, False{}, closing, Bytes.from_list(got)} : R.Resp}:
+  match closing:
+    case True{}:
+      {==}
+    case False{}:
+      Equal.cong(Bool, R.Resp, b => R.Resp{code, False{}, False{} || (False{} && Bool.not(False{})) || b || False{},
+        Bytes.from_list(got)}, U32.is_eq(code, 101), False{}, h101)
+
+# what rok.code says, taken apart
+def po.C5(+cd: Bytes(), +code: U32) -> Type:
+  {X.rok.all(RS.TDig{}, cd) == True{} : Bool} & {RS.code.whole(Bytes.to_list(cd)) == True{} : Bool} &
+    {U32.is_eq(RS.num(Bytes.to_list(cd)), code) == True{} : Bool} & {Bool.not(U32.is_lt(code, 200)) == True{} : Bool} &
+    {Bool.not(U32.is_eq(code, 101)) == True{} : Bool}
+
+def po.c5(+cd: Bytes(), +code: U32, h: {X.rok.code(cd, code) == True{} : Bool}) -> po.C5(cd, code):
+  po.split5(X.rok.all(RS.TDig{}, cd), RS.code.whole(Bytes.to_list(cd)), U32.is_eq(RS.num(Bytes.to_list(cd)), code),
+    Bool.not(U32.is_lt(code, 200)), Bool.not(U32.is_eq(code, 101)), h)
+
+# LEMMA: a chunked response whose head passed the check, sent, is read
+# back to its end: the handler's status, the writes joined
+def po.walk.te(+cd: Bytes(), +why: Bytes(), +fs: List<&2, Wr.Field>, +closing: Bool, +code: U32, +ws: List<&2, Bytes()>,
+  sm: {Laws.small(ws) == True{} : Bool}, fit: {Laws.fits(ws, R.ask.cap(X.rask(False{}))) == True{} : Bool},
+  sp: po.C5(cd, code), +s2: {X.rok.all(RS.TVal{}, why) == True{} : Bool},
+  s3: {X.rok.fields(fs) == True{} : Bool}, +enb: {(U32.is_eq(code, 204) || U32.is_eq(code, 304)) == False{} : Bool}) ->
+  {RS.walk(X.rask(False{}), Bytes.to_list(X.rser(X.Rsp{cd, why, List.append(&2, Wr.Field, fs, Stream.te()), "",
+    Stream.emits(ws, Stream.Sent{Stream.MChunked{}, None{}}), False{}}, X.conn.val(closing, False{}))), RS.w.new()) ==
+    RS.W{RS.MDone{R.Resp{code, False{}, closing, Bytes.concat(ws)}, Nil{}}, Nil{}} : RS.W}:
+  (ad, k1) = sp
+  (cw, k2) = k1
+  (heq, k3) = k2
+  (nlt, n101) = k3
+  +e = X.rask(False{})
+  +conn = X.conn.val(closing, False{})
+  +b = Stream.emits(ws, Stream.Sent{Stream.MChunked{}, None{}})
+  +fs2 = List.append(&2, Wr.Field, fs, Stream.te())
+  +t2 : List<&2, U32> = Con{13, Con{10, Bytes.to_list(b)}}
+  +rest1 = List.append(&2, U32, PP.FLSl(X.rall(fs2, "", conn)), t2)
+  +rc = X.rconf(conn)
+  +tef : Wr.Field = Wr.Field{"transfer-encoding", "chunked"}
+  +r5 = List.append(&2, U32, PP.FLSl(Con{tef, rc}), t2)
+  +r7 = List.append(&2, U32, PP.FLSl(rc), t2)
+  +hn = R.head.new(False{}, code)
+  +h2 = PP.rhc(po.H1(code), closing, False{})
+  +tgt : RS.W = RS.W{RS.MDone{R.Resp{code, False{}, closing, Bytes.concat(ws)}, Nil{}}, Nil{}}
+  %Equal.sym(List<&2, U32>, Bytes.to_list(X.rser(X.Rsp{cd, why, fs2, "", b, False{}}, conn)),
+    PP.RSERl(cd, why, fs2, "", conn, Bool.pick(Bytes(), False{}, "", b)), PP.rser.list(cd, why, fs2, "", conn, b, False{})) :
+    {RS.walk(e, _, RS.w.new()) == tgt : RS.W}
+  %Equal.sym(RS.W, RS.walk(e, List.append(&2, U32, PP.SLl(cd, why), Con{13, Con{10, rest1}}), RS.W{RS.MStatus{Nil{}}, Nil{}}),
+    RS.walk(e, rest1, RS.W{RS.MField{R.head.new(False{}, RS.num(Bytes.to_list(cd))), Nil{}}, Nil{}}),
+    PP.rline.st(cd, why, rest1, e, Nil{}, ad, cw, s2)) :
+    {_ == tgt : RS.W}
+  %Equal.sym(U32, RS.num(Bytes.to_list(cd)), code, PP.u32.eq(RS.num(Bytes.to_list(cd)), code, heq)) :
+    {RS.walk(e, rest1, RS.W{RS.MField{R.head.new(False{}, _), Nil{}}, Nil{}}) == tgt : RS.W}
+  %Equal.sym(List<&2, U32>, rest1, List.append(&2, U32, PP.FLSl(fs), r5),
+    Equal.trans(List<&2, U32>, rest1, List.append(&2, U32, List.append(&2, U32, PP.FLSl(fs), PP.FLSl(Con{tef, rc})), t2),
+      List.append(&2, U32, PP.FLSl(fs), r5),
+      Equal.trans(List<&2, U32>, rest1, List.append(&2, U32, PP.FLSl(List.append(&2, Wr.Field, fs, Con{tef, rc})), t2),
+        List.append(&2, U32, List.append(&2, U32, PP.FLSl(fs), PP.FLSl(Con{tef, rc})), t2),
+        Equal.cong(List<&2, Wr.Field>, List<&2, U32>, q => List.append(&2, U32, PP.FLSl(q), t2), List.append(&2, Wr.Field, fs2, rc),
+          List.append(&2, Wr.Field, fs, Con{tef, rc}), PP.app.assoc(Wr.Field, fs, Stream.te(), rc)),
+        Equal.cong(List<&2, U32>, List<&2, U32>, q => List.append(&2, U32, q, t2),
+          PP.FLSl(List.append(&2, Wr.Field, fs, Con{tef, rc})), List.append(&2, U32, PP.FLSl(fs), PP.FLSl(Con{tef, rc})),
+          PP.fls.app(fs, Con{tef, rc}))),
+      PP.app.assoc(U32, PP.FLSl(fs), PP.FLSl(Con{tef, rc}), t2))) :
+    {RS.walk(e, _, RS.W{RS.MField{hn, Nil{}}, Nil{}}) == tgt : RS.W}
+  %Equal.sym(RS.W, RS.walk(e, List.append(&2, U32, PP.FLSl(fs), r5), RS.W{RS.MField{hn, Nil{}}, Nil{}}),
+    RS.walk(e, r5, RS.W{RS.MField{hn, Nil{}}, Nil{}}), PP.rfields.walk(fs, r5, hn, e, Nil{}, s3)) :
+    {_ == tgt : RS.W}
+  %Equal.sym(List<&2, U32>, r5, List.append(&2, U32, PP.FLl(tef), Con{13, Con{10, r7}}),
+    PP.app.assoc(U32, PP.FLl(tef), Con{13, Con{10, PP.FLSl(rc)}}, t2)) :
+    {RS.walk(e, _, RS.W{RS.MField{hn, Nil{}}, Nil{}}) == tgt : RS.W}
+  %Equal.sym(RS.W, RS.walk(e, List.append(&2, U32, PP.FLl(tef), Con{13, Con{10, r7}}), RS.W{RS.MField{hn, Nil{}}, Nil{}}),
+    RS.walk(e, r7, RS.W{RS.MField{po.H1(code), Nil{}}, Nil{}}), po.te.line(code, r7)) :
+    {_ == tgt : RS.W}
+  %Equal.sym(RS.W, RS.walk(e, r7, RS.W{RS.MField{po.H1(code), Nil{}}, Nil{}}),
+    RS.walk(e, t2, RS.W{RS.MField{h2, Nil{}}, Nil{}}), PP.rconn(closing, False{}, po.H1(code), t2, e, Nil{})) :
+    {_ == tgt : RS.W}
+  %Equal.sym(RS.W, RS.walk(e, t2, RS.W{RS.MField{h2, Nil{}}, Nil{}}),
+    RS.walk(e, Bytes.to_list(b), po.W5(h2, Nil{}, 268435455, Nil{})),
+    po.te.end(closing, code, Bytes.to_list(b), po.not.true(U32.is_lt(code, 200), nlt), enb)) :
+    {_ == tgt : RS.W}
+  %Equal.sym(RS.W, RS.walk(e, Bytes.to_list(b), po.W5(h2, Nil{}, 268435455, Nil{})),
+    RS.W{RS.MDone{RS.resp(h2, List.append(&2, U32, Nil{}, Bytes.to_list(Bytes.concat(ws))), False{}), Nil{}}, Nil{}},
+    po.bw(ws, e, h2, Nil{}, 268435455, Nil{}, sm, fit)) :
+    {_ == tgt : RS.W}
+  %Equal.sym(R.Resp, RS.resp(h2, Bytes.to_list(Bytes.concat(ws)), False{}),
+    R.Resp{code, False{}, closing, Bytes.from_list(Bytes.to_list(Bytes.concat(ws)))},
+    po.resp.te(closing, code, Bytes.to_list(Bytes.concat(ws)), po.not.true(U32.is_eq(code, 101), n101))) :
+    {RS.W{RS.MDone{_, Nil{}}, Nil{}} == tgt : RS.W}
+  %Equal.sym(Bytes(), Bytes.from_list(Bytes.to_list(Bytes.concat(ws))), Bytes.concat(ws), PP.bytes.rt(Bytes.concat(ws))) :
+    {RS.W{RS.MDone{R.Resp{code, False{}, closing, _}, Nil{}}, Nil{}} == tgt : RS.W}
+  {==}
+
+# pour_chunked
+# ------------
+
+def po.R500(+closing: Bool) -> Bytes():
+  X.reply(Some{X.rsp.fin(False{}, 500, Http.e500.head(), Http.e500.body())}, False{}, closing, False{})
+
+# a head that failed the check: the 500, and nothing after it
+def po.pc500(+closing: Bool, +code: U32, +ws: List<&2, Bytes()>) ->
+  {RS.response(X.rask(False{}), Bytes.to_list(Bytes.append(po.R500(closing),
+    Stream.emits(ws, Stream.Sent{Stream.MNone{}, Some{Stream.EBad{}}})))) ==
+    Laws.sent(False{}, closing, code, False{}, Bytes.concat(ws)) : R.Look}:
+  %Equal.sym(Bytes(), Stream.emits(ws, Stream.Sent{Stream.MNone{}, Some{Stream.EBad{}}}), "",
+    Laws.pour_quiet(Stream.MNone{}, Stream.EBad{}, ws)) :
+    {RS.response(X.rask(False{}), Bytes.to_list(Bytes.append(po.R500(closing), _))) ==
+      Laws.sent(False{}, closing, code, False{}, Bytes.concat(ws)) : R.Look}
+  %Equal.sym(Bytes(), Bytes.append(po.R500(closing), ""), po.R500(closing), po.bapp.nil(po.R500(closing))) :
+    {RS.response(X.rask(False{}), Bytes.to_list(_)) == Laws.sent(False{}, closing, code, False{}, Bytes.concat(ws)) : R.Look}
+  PP.rr.h(Http.e500.head(), False{}, 500, Http.e500.body(), closing, False{}, po.e500.ok(False{}))
+
+def po.C3(+cd: Bytes(), +code: U32, +why: Bytes(), fs: List<&2, Wr.Field>) -> Type:
+  {X.rok.code(cd, code) == True{} : Bool} & {X.rok.all(RS.TVal{}, why) == True{} : Bool} & {X.rok.fields(fs) == True{} : Bool}
+
+# a 204 or 304: the head alone
+def po.pc.nb(+cd: Bytes(), +why: Bytes(), +fs: List<&2, Wr.Field>, +closing: Bool, +code: U32, +ws: List<&2, Bytes()>,
+  sp: po.C3(cd, code, why, fs), +enb: {(U32.is_eq(code, 204) || U32.is_eq(code, 304)) == True{} : Bool}) ->
+  {RS.response(X.rask(False{}), Bytes.to_list(Bytes.append(Stream.rhd.bytes(cd, why, fs, "", X.conn.val(closing, False{})),
+    Stream.emits(ws, Stream.Sent{Stream.MNone{}, None{}})))) ==
+    Laws.sent(False{}, closing, code, True{}, Bytes.concat(ws)) : R.Look}:
+  (s1, k) = sp
+  (s2, s3) = k
+  +hb = Stream.rhd.bytes(cd, why, fs, "", X.conn.val(closing, False{}))
+  +rbl = X.rbodyless(False{}, code)
+  %Equal.sym(Bytes(), Stream.emits(ws, Stream.Sent{Stream.MNone{}, None{}}), "", po.emits.none(ws)) :
+    {RS.response(X.rask(False{}), Bytes.to_list(Bytes.append(hb, _))) ==
+      Laws.sent(False{}, closing, code, True{}, Bytes.concat(ws)) : R.Look}
+  %Equal.cong(Bool, Bytes(), b => Bytes.append(hb, Bool.pick(Bytes(), b, "", "")), rbl, True{}, enb) :
+    {RS.response(X.rask(False{}), Bytes.to_list(_)) == Laws.sent(False{}, closing, code, True{}, Bytes.concat(ws)) : R.Look}
+  Equal.trans(R.Look, RS.response(X.rask(False{}), Bytes.to_list(X.rser(X.Rsp{cd, why, fs, "", "", rbl}, X.conn.val(closing, False{})))),
+    R.Look{Nil{}, R.Final{R.Resp{code, False{}, closing, ""}, ""}}, Laws.sent(False{}, closing, code, True{}, Bytes.concat(ws)),
+    Equal.trans(R.Look, RS.response(X.rask(False{}), Bytes.to_list(X.rser(X.Rsp{cd, why, fs, "", "", rbl}, X.conn.val(closing, False{})))),
+      RS.finish(X.rask(False{}), RS.W{RS.MDone{R.Resp{code, False{}, closing, Bool.pick(Bytes(), rbl, "", "")}, Nil{}}, Nil{}}),
+      R.Look{Nil{}, R.Final{R.Resp{code, False{}, closing, ""}, ""}},
+      Equal.cong(RS.W, R.Look, w => RS.finish(X.rask(False{}), w),
+        RS.walk(X.rask(False{}), Bytes.to_list(X.rser(X.Rsp{cd, why, fs, "", "", rbl}, X.conn.val(closing, False{}))), RS.w.new()),
+        RS.W{RS.MDone{R.Resp{code, False{}, closing, Bool.pick(Bytes(), rbl, "", "")}, Nil{}}, Nil{}},
+        PP.rmain(cd, why, fs, "", False{}, code, "", closing, False{},
+          po.and4(X.rok.code(cd, code), X.rok.all(RS.TVal{}, why), X.rok.fields(fs), X.rok.len(False{}, rbl, "", ""), s1, s2, s3, enb))),
+      Equal.cong(Bool, R.Look, b => R.Look{Nil{}, R.Final{R.Resp{code, False{}, closing, Bool.pick(Bytes(), b, "", "")}, ""}}, rbl,
+        True{}, enb)),
+    Equal.sym(R.Look, Laws.sent(False{}, closing, code, True{}, Bytes.concat(ws)), R.Look{Nil{}, R.Final{R.Resp{code, False{}, closing, ""}, ""}},
+      Equal.cong(Bool, R.Look, b => R.Look{Nil{}, R.Final{R.Resp{code, False{}, closing, Bool.pick(Bytes(), b, "", Bytes.concat(ws))}, ""}},
+        rbl, True{}, enb)))
+
+# chunked: the head, the writes, the last chunk
+def po.pc.te(+cd: Bytes(), +why: Bytes(), +fs: List<&2, Wr.Field>, +closing: Bool, +code: U32, +ws: List<&2, Bytes()>,
+  sm: {Laws.small(ws) == True{} : Bool}, fit: {Laws.fits(ws, R.ask.cap(X.rask(False{}))) == True{} : Bool},
+  sp: po.C3(cd, code, why, fs), +enb: {(U32.is_eq(code, 204) || U32.is_eq(code, 304)) == False{} : Bool}) ->
+  {RS.response(X.rask(False{}), Bytes.to_list(Bytes.append(Stream.rhd.bytes(cd, why, List.append(&2, Wr.Field, fs, Stream.te()), "",
+    X.conn.val(closing, False{})), Stream.emits(ws, Stream.Sent{Stream.MChunked{}, None{}})))) ==
+    Laws.sent(False{}, closing, code, True{}, Bytes.concat(ws)) : R.Look}:
+  (s1, k) = sp
+  (s2, s3) = k
+  +fs2 = List.append(&2, Wr.Field, fs, Stream.te())
+  +b = Stream.emits(ws, Stream.Sent{Stream.MChunked{}, None{}})
+  Equal.trans(R.Look, RS.finish(X.rask(False{}), RS.walk(X.rask(False{}), Bytes.to_list(X.rser(X.Rsp{cd, why, fs2, "", b, False{}},
+      X.conn.val(closing, False{}))), RS.w.new())),
+    R.Look{Nil{}, R.Final{R.Resp{code, False{}, closing, Bytes.concat(ws)}, ""}}, Laws.sent(False{}, closing, code, True{}, Bytes.concat(ws)),
+    Equal.cong(RS.W, R.Look, w => RS.finish(X.rask(False{}), w),
+      RS.walk(X.rask(False{}), Bytes.to_list(X.rser(X.Rsp{cd, why, fs2, "", b, False{}}, X.conn.val(closing, False{}))), RS.w.new()),
+      RS.W{RS.MDone{R.Resp{code, False{}, closing, Bytes.concat(ws)}, Nil{}}, Nil{}},
+      po.walk.te(cd, why, fs, closing, code, ws, sm, fit, po.c5(cd, code, s1), s2, s3, enb)),
+    Equal.sym(R.Look, Laws.sent(False{}, closing, code, True{}, Bytes.concat(ws)),
+      R.Look{Nil{}, R.Final{R.Resp{code, False{}, closing, Bytes.concat(ws)}, ""}},
+      Equal.cong(Bool, R.Look, b2 => R.Look{Nil{}, R.Final{R.Resp{code, False{}, closing, Bool.pick(Bytes(), b2, "", Bytes.concat(ws))},
+        ""}}, U32.is_eq(code, 204) || U32.is_eq(code, 304), False{}, enb)))
+
+def po.pc(ok: Bool, nb: Bool, +cd: Bytes(), +why: Bytes(), +fs: List<&2, Wr.Field>, +closing: Bool, +code: U32,
+  +ws: List<&2, Bytes()>, sm: {Laws.small(ws) == True{} : Bool},
+  fit: {Laws.fits(ws, R.ask.cap(X.rask(False{}))) == True{} : Bool},
+  +eok: {Stream.rhd.ok(cd, code, why, fs) == ok : Bool},
+  +enb: {(U32.is_eq(code, 204) || U32.is_eq(code, 304)) == nb : Bool}) ->
+  {RS.response(X.rask(False{}), Bytes.to_list(Stream.poured.at(Stream.opening.none.at(nb, False{}, False{}, False{}, closing, False{},
+    code, cd, why, fs), ws))) == Laws.sent(False{}, closing, code, ok, Bytes.concat(ws)) : R.Look}:
+  match ok nb:
+    case False{} True{}:
+      %Equal.sym(Bool, Stream.rhd.ok(cd, code, why, fs), False{}, eok) :
+        {RS.response(X.rask(False{}), Bytes.to_list(Stream.poured.at(Stream.opening.ok(_, False{}, closing, False{},
+          Stream.rhd.bytes(cd, why, fs, "", X.conn.val(closing, False{})), Stream.MNone{}), ws))) ==
+          Laws.sent(False{}, closing, code, False{}, Bytes.concat(ws)) : R.Look}
+      po.pc500(closing, code, ws)
+    case False{} False{}:
+      %Equal.sym(Bool, Stream.rhd.ok(cd, code, why, fs), False{}, eok) :
+        {RS.response(X.rask(False{}), Bytes.to_list(Stream.poured.at(Stream.opening.ok(_, False{}, closing, False{},
+          Stream.rhd.bytes(cd, why, List.append(&2, Wr.Field, fs, Stream.te()), "", X.conn.val(closing, False{})),
+          Stream.mode.body(False{}, Stream.MChunked{})), ws))) ==
+          Laws.sent(False{}, closing, code, False{}, Bytes.concat(ws)) : R.Look}
+      po.pc500(closing, code, ws)
+    case True{} True{}:
+      %Equal.sym(Bool, Stream.rhd.ok(cd, code, why, fs), True{}, eok) :
+        {RS.response(X.rask(False{}), Bytes.to_list(Stream.poured.at(Stream.opening.ok(_, False{}, closing, False{},
+          Stream.rhd.bytes(cd, why, fs, "", X.conn.val(closing, False{})), Stream.MNone{}), ws))) ==
+          Laws.sent(False{}, closing, code, True{}, Bytes.concat(ws)) : R.Look}
+      po.pc.nb(cd, why, fs, closing, code, ws, po.split3(X.rok.code(cd, code), X.rok.all(RS.TVal{}, why), X.rok.fields(fs), eok),
+        enb)
+    case True{} False{}:
+      %Equal.sym(Bool, Stream.rhd.ok(cd, code, why, fs), True{}, eok) :
+        {RS.response(X.rask(False{}), Bytes.to_list(Stream.poured.at(Stream.opening.ok(_, False{}, closing, False{},
+          Stream.rhd.bytes(cd, why, List.append(&2, Wr.Field, fs, Stream.te()), "", X.conn.val(closing, False{})),
+          Stream.mode.body(False{}, Stream.MChunked{})), ws))) ==
+          Laws.sent(False{}, closing, code, True{}, Bytes.concat(ws)) : R.Look}
+      po.pc.te(cd, why, fs, closing, code, ws, sm, fit, po.split3(X.rok.code(cd, code), X.rok.all(RS.TVal{}, why),
+        X.rok.fields(fs), eok), enb)
+
+def po.pc.h(h: X.RHead, +closing: Bool, +code: U32, +ws: List<&2, Bytes()>, sm: {Laws.small(ws) == True{} : Bool},
+  fit: {Laws.fits(ws, R.ask.cap(X.rask(False{}))) == True{} : Bool}) ->
+  {RS.response(X.rask(False{}), Bytes.to_list(Stream.poured.at(Stream.opening.none(False{}, closing, False{}, code,
+    U32.is_eq(code, 204) || U32.is_eq(code, 304), h), ws))) ==
+    Laws.sent(False{}, closing, code, Laws.pour.ok(code, h), Bytes.concat(ws)) : R.Look}:
+  match h:
+    case X.RHead{+cd, +why, +fs, hl}:
+      po.pc(Stream.rhd.ok(cd, code, why, fs), U32.is_eq(code, 204) || U32.is_eq(code, 304), cd, why, fs, closing, code, ws, sm, fit,
+        {==}, {==})
+
+def Laws.pour_chunked(closing, code, hs, ws, sm, fit):
+  po.pc.h(Http.rhead(code, hs, ""), closing, code, ws, sm, fit)
+
+# pour_length, pour_capped
+# ------------------------
+
+def po.le0(n: Nat) -> {Nat.is_le(0n, n) == True{} : Bool}:
+  match n:
+    case 0n:
+      {==}
+    case 1n+p:
+      {==}
+
+def po.eq.refl(n: Nat) -> {Nat.is_eq(n, n) == True{} : Bool}:
+  match n:
+    case 0n:
+      {==}
+    case 1n+p:
+      po.eq.refl(p)
+
+def po.le.add(a: Nat, +b: Nat) -> {Nat.is_le(a, Nat.add(a, b)) == True{} : Bool}:
+  match a:
+    case 0n:
+      po.le0(b)
+    case 1n+p:
+      po.le.add(p, b)
+
+def po.sub.add.l(a: Nat, +b: Nat) -> {Nat.sub(Nat.add(a, b), a) == b : Nat}:
+  match a:
+    case 0n:
+      po.sub0(b)
+    case 1n+p:
+      po.sub.add.l(p, b)
+
+# a over n, b over what is left: the two over n
+def po.le.add.sub(a: Nat, +b: Nat, n: Nat, h1: {Nat.is_le(a, n) == True{} : Bool},
+  h2: {Nat.is_le(b, Nat.sub(n, a)) == True{} : Bool}) -> {Nat.is_le(Nat.add(a, b), n) == True{} : Bool}:
+  match a n:
+    case 0n 0n:
+      h2
+    case 0n 1n+q:
+      h2
+    case 1n+p 0n:
+      Bool.no({Nat.is_le(Nat.add(1n+p, b), 0n) == True{} : Bool}, h1)
+    case 1n+p 1n+q:
+      po.le.add.sub(p, b, q, h1, h2)
+
+def po.empty.len(b: Bytes()) -> {String.is_empty(b) == Nat.is_eq(Bytes.len(b), 0n) : Bool}:
+  match b:
+    case SNil{}:
+      {==}
+    case SCon{+c, +t}:
+      Equal.cong(Nat, Bool, n => Nat.is_eq(n, 0n), 1n+Bytes.len(t), Bytes.len(SCon{c, t}),
+        Equal.sym(Nat, Bytes.len(SCon{c, t}), 1n+Bytes.len(t), po.blen(c, t)))
+
+# rvalid's length, read against a body, is len.ok's against its length
+def po.len.at(v: RS.FLine, +bl: Bool, +body: Bytes()) ->
+  {X.rok.len.at(v, bl, body) == Stream.len.at.n(v, bl, Bytes.len(body)) : Bool}:
+  match v:
+    case RS.FVal{val}:
+      match val:
+        case RS.VLen{+m, ws}:
+          Equal.cong(Bool, Bool, q => (Bool.not(U32.is_lt(268435455, m)) && (bl ||
+            (X.same(U32.is_zero(m), q) && Nat.is_eq(U32.to_nat(m), Bytes.len(body))))), String.is_empty(body),
+            Nat.is_eq(Bytes.len(body), 0n), po.empty.len(body))
+        case RS.VLen0{}:
+          {==}
+        case RS.VTe0{}:
+          {==}
+        case RS.VTe{t}:
+          {==}
+        case RS.VConn{d, c}:
+          {==}
+        case RS.VSkip{}:
+          {==}
+    case RS.FEmpty{}:
+      {==}
+    case RS.FName{nm}:
+      {==}
+    case RS.FBad{}:
+      {==}
+
+def po.len.ok(+head: Bool, +bl: Bool, clen: Bytes(), +body: Bytes()) ->
+  {X.rok.len(head, bl, clen, body) == Stream.len.ok(head, bl, clen, Bytes.len(body)) : Bool}:
+  match clen:
+    case SNil{}:
+      {==}
+    case SCon{+c, +t}:
+      Equal.cong(Bool, Bool, q => (X.rok.all(RS.TVal{}, SCon{c, t}) && q),
+        X.rok.len.at(RS.len.view(X.rask(head), RS.span(RS.TOws{}, Con{32, Bytes.to_list(SCon{c, t})})), bl, body),
+        Stream.len.at.n(RS.len.view(X.rask(head), RS.span(RS.TOws{}, Con{32, Bytes.to_list(SCon{c, t})})), bl, Bytes.len(body)),
+        po.len.at(RS.len.view(X.rask(head), RS.span(RS.TOws{}, Con{32, Bytes.to_list(SCon{c, t})})), bl, body))
+
+# a length's writes that come to it go out as they are
+def po.emits.len(ws: List<&2, Bytes()>, +n: Nat, h: {Nat.is_eq(Bytes.len(Bytes.concat(ws)), n) == True{} : Bool}) ->
+  {Stream.emits(ws, Stream.Sent{Stream.MLen{n}, None{}}) == Bytes.concat(ws) : Bytes()}:
+  match ws:
+    case Nil{}:
+      {==}
+    case Con{+x, +t}:
+      +lc = Bytes.len(Bytes.concat(t))
+      +en = Equal.trans(Nat, n, Bytes.len(Bytes.append(x, Bytes.concat(t))), Nat.add(Bytes.len(x), lc),
+        Equal.sym(Nat, Bytes.len(Bytes.append(x, Bytes.concat(t))), n, po.nat.eq(Bytes.len(Bytes.append(x, Bytes.concat(t))), n, h)),
+        Bytes.len_append(x, Bytes.concat(t)))
+      +hl = Equal.trans(Bool, Nat.is_le(Bytes.len(x), n), Nat.is_le(Bytes.len(x), Nat.add(Bytes.len(x), lc)), True{},
+        Equal.cong(Nat, Bool, m => Nat.is_le(Bytes.len(x), m), n, Nat.add(Bytes.len(x), lc), en), po.le.add(Bytes.len(x), lc))
+      +hr = Equal.trans(Bool, Nat.is_eq(lc, Nat.sub(n, Bytes.len(x))), Nat.is_eq(lc, lc), True{},
+        Equal.cong(Nat, Bool, m => Nat.is_eq(lc, m), Nat.sub(n, Bytes.len(x)), lc,
+          Equal.trans(Nat, Nat.sub(n, Bytes.len(x)), Nat.sub(Nat.add(Bytes.len(x), lc), Bytes.len(x)), lc,
+            Equal.cong(Nat, Nat, m => Nat.sub(m, Bytes.len(x)), n, Nat.add(Bytes.len(x), lc), en), po.sub.add.l(Bytes.len(x), lc))),
+        po.eq.refl(lc))
+      %Equal.sym(Bool, Nat.is_le(Bytes.len(x), n), True{}, hl) :
+        {Stream.emits.on(Stream.emit.len(_, n, x), s2 => Stream.emits(t, s2)) == Bytes.concat(Con{x, t}) : Bytes()}
+      Equal.cong(Bytes(), Bytes(), y => Bytes.append(x, y), Stream.emits(t, Stream.Sent{Stream.MLen{Nat.sub(n, Bytes.len(x))}, None{}}),
+        Bytes.concat(t), po.emits.len(t, Nat.sub(n, Bytes.len(x)), hr))
+
+def po.R500v(+closing: Bool, +v10: Bool) -> Bytes():
+  X.reply(Some{X.rsp.fin(False{}, 500, Http.e500.head(), Http.e500.body())}, False{}, closing, v10)
+
+def po.pl500(+closing: Bool, +v10: Bool, +code: U32, +ws: List<&2, Bytes()>) ->
+  {RS.response(X.rask(False{}), Bytes.to_list(Bytes.append(po.R500v(closing, v10),
+    Stream.emits(ws, Stream.Sent{Stream.MNone{}, Some{Stream.EBad{}}})))) ==
+    Laws.sent(False{}, closing, code, False{}, Bytes.concat(ws)) : R.Look}:
+  %Equal.sym(Bytes(), Stream.emits(ws, Stream.Sent{Stream.MNone{}, Some{Stream.EBad{}}}), "",
+    Laws.pour_quiet(Stream.MNone{}, Stream.EBad{}, ws)) :
+    {RS.response(X.rask(False{}), Bytes.to_list(Bytes.append(po.R500v(closing, v10), _))) ==
+      Laws.sent(False{}, closing, code, False{}, Bytes.concat(ws)) : R.Look}
+  %Equal.sym(Bytes(), Bytes.append(po.R500v(closing, v10), ""), po.R500v(closing, v10), po.bapp.nil(po.R500v(closing, v10))) :
+    {RS.response(X.rask(False{}), Bytes.to_list(_)) == Laws.sent(False{}, closing, code, False{}, Bytes.concat(ws)) : R.Look}
+  PP.rr.h(Http.e500.head(), False{}, 500, Http.e500.body(), closing, v10, po.e500.ok(False{}))
+
+# a declared length, the check passed: rmain, the body the writes
+def po.pl.body(+cd: Bytes(), +why: Bytes(), +fs: List<&2, Wr.Field>, +clen: Bytes(), +closing: Bool, +v10: Bool, +code: U32,
+  +ws: List<&2, Bytes()>, +n: Nat, sp: po.C3(cd, code, why, fs),
+  +lk: {Stream.len.ok(False{}, X.rbodyless(False{}, code), clen, n) == True{} : Bool},
+  hn: {Nat.is_eq(Bytes.len(Bytes.concat(ws)), n) == True{} : Bool}) ->
+  {RS.response(X.rask(False{}), Bytes.to_list(X.rser(X.Rsp{cd, why, fs, clen, Bytes.concat(ws), X.rbodyless(False{}, code)},
+    X.conn.val(closing, v10)))) ==
+    R.Look{Nil{}, R.Final{R.Resp{code, False{}, closing, Bool.pick(Bytes(), X.rbodyless(False{}, code), "", Bytes.concat(ws))}, ""}} :
+    R.Look}:
+  (s1, k) = sp
+  (s2, s3) = k
+  +rbl = X.rbodyless(False{}, code)
+  +body = Bytes.concat(ws)
+  +lv = Equal.trans(Bool, X.rok.len(False{}, rbl, clen, body), Stream.len.ok(False{}, rbl, clen, Bytes.len(body)), True{},
+    po.len.ok(False{}, rbl, clen, body),
+    Equal.trans(Bool, Stream.len.ok(False{}, rbl, clen, Bytes.len(body)), Stream.len.ok(False{}, rbl, clen, n), True{},
+      Equal.cong(Nat, Bool, m => Stream.len.ok(False{}, rbl, clen, m), Bytes.len(body), n, po.nat.eq(Bytes.len(body), n, hn)), lk))
+  Equal.cong(RS.W, R.Look, w => RS.finish(X.rask(False{}), w),
+    RS.walk(X.rask(False{}), Bytes.to_list(X.rser(X.Rsp{cd, why, fs, clen, body, rbl}, X.conn.val(closing, v10))), RS.w.new()),
+    RS.W{RS.MDone{R.Resp{code, False{}, closing, Bool.pick(Bytes(), rbl, "", body)}, Nil{}}, Nil{}},
+    PP.rmain(cd, why, fs, clen, False{}, code, body, closing, v10,
+      po.and4(X.rok.code(cd, code), X.rok.all(RS.TVal{}, why), X.rok.fields(fs), X.rok.len(False{}, rbl, clen, body), s1, s2, s3, lv)))
+
+# the check passed: a 204 or 304 has its head alone, any other the
+# writes, which come to the length
+def po.pl.nb(nb: Bool, +cd: Bytes(), +why: Bytes(), +fs: List<&2, Wr.Field>, +closing: Bool, +v10: Bool, +code: U32, +n: Nat,
+  +ws: List<&2, Bytes()>, +hn: {Nat.is_eq(Bytes.len(Bytes.concat(ws)), n) == True{} : Bool}, sp: po.C3(cd, code, why, fs),
+  +lk: {Stream.len.ok(False{}, X.rbodyless(False{}, code), Bool.pick(Bytes(), nb, "", Nat.show(n)), n) == True{} : Bool},
+  +enb: {(U32.is_eq(code, 204) || U32.is_eq(code, 304)) == nb : Bool}) ->
+  {RS.response(X.rask(False{}), Bytes.to_list(Bytes.append(Stream.rhd.bytes(cd, why, fs, Bool.pick(Bytes(), nb, "", Nat.show(n)),
+    X.conn.val(closing, v10)), Stream.emits(ws, Stream.Sent{Stream.mode.body(X.rbodyless(False{}, code), Stream.MLen{n}), None{}})))) ==
+    Laws.sent(False{}, closing, code, True{}, Bytes.concat(ws)) : R.Look}:
+  match nb:
+    case True{}:
+      +rbl = X.rbodyless(False{}, code)
+      +hb = Stream.rhd.bytes(cd, why, fs, "", X.conn.val(closing, v10))
+      %Equal.sym(Bool, rbl, True{}, enb) :
+        {RS.response(X.rask(False{}), Bytes.to_list(Bytes.append(hb, Stream.emits(ws, Stream.Sent{Stream.mode.body(_, Stream.MLen{n}),
+          None{}})))) == Laws.sent(False{}, closing, code, True{}, Bytes.concat(ws)) : R.Look}
+      %Equal.sym(Bytes(), Stream.emits(ws, Stream.Sent{Stream.MNone{}, None{}}), "", po.emits.none(ws)) :
+        {RS.response(X.rask(False{}), Bytes.to_list(Bytes.append(hb, _))) ==
+          Laws.sent(False{}, closing, code, True{}, Bytes.concat(ws)) : R.Look}
+      %Equal.cong(Bool, Bytes(), b => Bytes.append(hb, Bool.pick(Bytes(), b, "", Bytes.concat(ws))), rbl, True{}, enb) :
+        {RS.response(X.rask(False{}), Bytes.to_list(_)) == Laws.sent(False{}, closing, code, True{}, Bytes.concat(ws)) : R.Look}
+      po.pl.body(cd, why, fs, "", closing, v10, code, ws, n, sp, lk, hn)
+    case False{}:
+      +rbl = X.rbodyless(False{}, code)
+      +hb = Stream.rhd.bytes(cd, why, fs, Nat.show(n), X.conn.val(closing, v10))
+      %Equal.sym(Bool, rbl, False{}, enb) :
+        {RS.response(X.rask(False{}), Bytes.to_list(Bytes.append(hb, Stream.emits(ws, Stream.Sent{Stream.mode.body(_, Stream.MLen{n}),
+          None{}})))) == Laws.sent(False{}, closing, code, True{}, Bytes.concat(ws)) : R.Look}
+      %Equal.sym(Bytes(), Stream.emits(ws, Stream.Sent{Stream.MLen{n}, None{}}), Bytes.concat(ws), po.emits.len(ws, n, hn)) :
+        {RS.response(X.rask(False{}), Bytes.to_list(Bytes.append(hb, _))) ==
+          Laws.sent(False{}, closing, code, True{}, Bytes.concat(ws)) : R.Look}
+      %Equal.cong(Bool, Bytes(), b => Bytes.append(hb, Bool.pick(Bytes(), b, "", Bytes.concat(ws))), rbl, False{}, enb) :
+        {RS.response(X.rask(False{}), Bytes.to_list(_)) == Laws.sent(False{}, closing, code, True{}, Bytes.concat(ws)) : R.Look}
+      po.pl.body(cd, why, fs, Nat.show(n), closing, v10, code, ws, n, sp, lk, hn)
+
+def po.pl(ok: Bool, +nb: Bool, +cd: Bytes(), +why: Bytes(), +fs: List<&2, Wr.Field>, +closing: Bool, +v10: Bool, +code: U32,
+  +n: Nat, +ws: List<&2, Bytes()>, +hn: {Nat.is_eq(Bytes.len(Bytes.concat(ws)), n) == True{} : Bool},
+  +eok: {Stream.len.check(False{}, code, cd, why, fs, Bool.pick(Bytes(), nb, "", Nat.show(n)), n) == ok : Bool},
+  +enb: {(U32.is_eq(code, 204) || U32.is_eq(code, 304)) == nb : Bool}) ->
+  {RS.response(X.rask(False{}), Bytes.to_list(Stream.poured.at(Stream.opening.ok(Stream.len.check(False{}, code, cd, why, fs,
+    Bool.pick(Bytes(), nb, "", Nat.show(n)), n), False{}, closing, v10, Stream.rhd.bytes(cd, why, fs, Bool.pick(Bytes(), nb, "",
+    Nat.show(n)), X.conn.val(closing, v10)), Stream.mode.body(X.rbodyless(False{}, code), Stream.MLen{n})), ws))) ==
+    Laws.sent(False{}, closing, code, ok, Bytes.concat(ws)) : R.Look}:
+  match ok:
+    case False{}:
+      %Equal.sym(Bool, Stream.len.check(False{}, code, cd, why, fs, Bool.pick(Bytes(), nb, "", Nat.show(n)), n), False{}, eok) :
+        {RS.response(X.rask(False{}), Bytes.to_list(Stream.poured.at(Stream.opening.ok(_, False{}, closing, v10,
+          Stream.rhd.bytes(cd, why, fs, Bool.pick(Bytes(), nb, "", Nat.show(n)), X.conn.val(closing, v10)),
+          Stream.mode.body(X.rbodyless(False{}, code), Stream.MLen{n})), ws))) ==
+          Laws.sent(False{}, closing, code, False{}, Bytes.concat(ws)) : R.Look}
+      po.pl500(closing, v10, code, ws)
+    case True{}:
+      +clen = Bool.pick(Bytes(), nb, "", Nat.show(n))
+      +rbl = X.rbodyless(False{}, code)
+      +hb = Stream.rhd.bytes(cd, why, fs, clen, X.conn.val(closing, v10))
+      +lk = po.and.r(Stream.rhd.ok(cd, code, why, fs), Stream.len.ok(False{}, rbl, clen, n), eok)
+      %Equal.sym(Bool, Stream.len.check(False{}, code, cd, why, fs, clen, n), True{}, eok) :
+        {RS.response(X.rask(False{}), Bytes.to_list(Stream.poured.at(Stream.opening.ok(_, False{}, closing, v10, hb,
+          Stream.mode.body(rbl, Stream.MLen{n})), ws))) == Laws.sent(False{}, closing, code, True{}, Bytes.concat(ws)) : R.Look}
+      po.pl.nb(nb, cd, why, fs, closing, v10, code, n, ws, hn, po.split3(X.rok.code(cd, code), X.rok.all(RS.TVal{}, why),
+        X.rok.fields(fs), Bool.and_l(Stream.rhd.ok(cd, code, why, fs), Stream.len.ok(False{}, rbl, clen, n), eok)), lk, enb)
+
+def po.pl.h(h: X.RHead, +closing: Bool, +v10: Bool, +code: U32, +n: Nat, +ws: List<&2, Bytes()>,
+  +hn: {Nat.is_eq(Bytes.len(Bytes.concat(ws)), n) == True{} : Bool}) ->
+  {RS.response(X.rask(False{}), Bytes.to_list(Stream.poured.at(Stream.opening.len(False{}, closing, v10, code,
+    U32.is_eq(code, 204) || U32.is_eq(code, 304), n, h), ws))) ==
+    Laws.sent(False{}, closing, code, Laws.pour.ok.len(code, h, n), Bytes.concat(ws)) : R.Look}:
+  match h:
+    case X.RHead{+cd, +why, +fs, hl}:
+      po.pl(Stream.len.check(False{}, code, cd, why, fs, Bool.pick(Bytes(), U32.is_eq(code, 204) || U32.is_eq(code, 304), "",
+        Nat.show(n)), n), U32.is_eq(code, 204) || U32.is_eq(code, 304), cd, why, fs, closing, v10, code, n, ws, hn, {==}, {==})
+
+def Laws.pour_length(closing, v10, code, hs, n, ws, hn):
+  po.pl.h(Http.rhead(code, hs, ""), closing, v10, code, n, ws, hn)
+
+# pour_capped
+# -----------
+
+def po.cap.at(fit: Bool, +x: Bytes(), +t: List<&2, Bytes()>, +n: Nat, +ef: {Nat.is_le(Bytes.len(x), n) == fit : Bool},
+  ih: @+n2: Nat -> {Nat.is_le(Bytes.len(Stream.emits(t, Stream.Sent{Stream.MLen{n2}, None{}})), n2) == True{} : Bool}) ->
+  {Nat.is_le(Bytes.len(Stream.emits.on(Stream.emit.len(fit, n, x), s2 => Stream.emits(t, s2))), n) == True{} : Bool}:
+  match fit:
+    case True{}:
+      +r = Stream.emits(t, Stream.Sent{Stream.MLen{Nat.sub(n, Bytes.len(x))}, None{}})
+      %Equal.sym(Nat, Bytes.len(Bytes.append(x, r)), Nat.add(Bytes.len(x), Bytes.len(r)), Bytes.len_append(x, r)) :
+        {Nat.is_le(_, n) == True{} : Bool}
+      po.le.add.sub(Bytes.len(x), Bytes.len(r), n, ef, ih(Nat.sub(n, Bytes.len(x))))
+    case False{}:
+      %Equal.sym(Bytes(), Stream.emits(t, Stream.Sent{Stream.MLen{n}, Some{Stream.ELarge{}}}), "",
+        Laws.pour_quiet(Stream.MLen{n}, Stream.ELarge{}, t)) :
+        {Nat.is_le(Bytes.len(Bytes.append("", _)), n) == True{} : Bool}
+      po.le0(n)
+
+def po.cap(ws: List<&2, Bytes()>, +n: Nat) ->
+  {Nat.is_le(Bytes.len(Stream.emits(ws, Stream.Sent{Stream.MLen{n}, None{}})), n) == True{} : Bool}:
+  match ws:
+    case Nil{}:
+      po.le0(n)
+    case Con{+x, +t}:
+      po.cap.at(Nat.is_le(Bytes.len(x), n), x, t, n, {==}, n2 => po.cap(t, n2))
+
+def Laws.pour_capped(n, ws):
+  po.cap(ws, n)
+
+
+# every size line is at most four digits
+def po.hl(j: Nat, hj: {Nat.is_le(j, 14n) == True{} : Bool}) -> {Nat.is_le(Bytes.len(Stream.chunk.hex(j)), 4n) == True{} : Bool}:
+  match j:
+    case 0n:
+      {==}
+    case 1n+j1:
+      match j1:
+        case 0n:
+          {==}
+        case 1n+j2:
+          match j2:
+            case 0n:
+              {==}
+            case 1n+j3:
+              match j3:
+                case 0n:
+                  {==}
+                case 1n+j4:
+                  match j4:
+                    case 0n:
+                      {==}
+                    case 1n+j5:
+                      match j5:
+                        case 0n:
+                          {==}
+                        case 1n+j6:
+                          match j6:
+                            case 0n:
+                              {==}
+                            case 1n+j7:
+                              match j7:
+                                case 0n:
+                                  {==}
+                                case 1n+j8:
+                                  match j8:
+                                    case 0n:
+                                      {==}
+                                    case 1n+j9:
+                                      match j9:
+                                        case 0n:
+                                          {==}
+                                        case 1n+j10:
+                                          match j10:
+                                            case 0n:
+                                              {==}
+                                            case 1n+j11:
+                                              match j11:
+                                                case 0n:
+                                                  {==}
+                                                case 1n+j12:
+                                                  match j12:
+                                                    case 0n:
+                                                      {==}
+                                                    case 1n+j13:
+                                                      match j13:
+                                                        case 0n:
+                                                          {==}
+                                                        case 1n+j14:
+                                                          match j14:
+                                                            case 0n:
+                                                              {==}
+                                                            case 1n+j15:
+                                                              Bool.no({Nat.is_le(Bytes.len(Stream.chunk.hex(1n+1n+1n+1n+1n+1n+1n+1n+1n+1n+1n+1n+1n+1n+1n+j15)), 4n) == True{} : Bool}, hj)
+
+# pour_bounded
+# ------------
+
+def po.le.refl(n: Nat) -> {Nat.is_le(n, n) == True{} : Bool}:
+  match n:
+    case 0n:
+      {==}
+    case 1n+p:
+      po.le.refl(p)
+
+def po.le.add.k(k: Nat, +c: Nat) -> {Nat.is_le(c, Nat.add(k, c)) == True{} : Bool}:
+  match k:
+    case 0n:
+      po.le.refl(c)
+    case 1n+(+q):
+      po.le.up(c, Nat.add(q, c), po.le.add.k(q, c))
+
+# adding on the left keeps the order
+def po.le.add.l(s: Nat, +r: Nat, +t: Nat, h: {Nat.is_le(r, t) == True{} : Bool}) ->
+  {Nat.is_le(Nat.add(s, r), Nat.add(s, t)) == True{} : Bool}:
+  match s:
+    case 0n:
+      h
+    case 1n+p:
+      po.le.add.l(p, r, t, h)
+
+# and on the right
+def po.le.add.r(a: Nat, b: Nat, +t: Nat, h: {Nat.is_le(a, b) == True{} : Bool}) ->
+  {Nat.is_le(Nat.add(a, t), Nat.add(b, t)) == True{} : Bool}:
+  match a b:
+    case 0n 0n:
+      po.le.refl(t)
+    case 0n 1n+(+q):
+      po.le.up(t, Nat.add(q, t), po.le.add.k(q, t))
+    case 1n+p 0n:
+      Bool.no({Nat.is_le(Nat.add(1n+p, t), Nat.add(0n, t)) == True{} : Bool}, h)
+    case 1n+p 1n+q:
+      po.le.add.r(p, q, t, h)
+
+def po.add.assoc(a: Nat, +b: Nat, +c: Nat) -> {Nat.add(Nat.add(a, b), c) == Nat.add(a, Nat.add(b, c)) : Nat}:
+  match a:
+    case 0n:
+      {==}
+    case 1n+(+p):
+      Equal.cong(Nat, Nat, y => 1n+y, Nat.add(Nat.add(p, b), c), Nat.add(p, Nat.add(b, c)), po.add.assoc(p, b, c))
+
+def po.add.shift(+a: Nat, k: Nat, +b: Nat) -> {Nat.add(a, Nat.add(k, b)) == Nat.add(k, Nat.add(a, b)) : Nat}:
+  match k:
+    case 0n:
+      {==}
+    case 1n+(+q):
+      Equal.trans(Nat, Nat.add(a, 1n+Nat.add(q, b)), 1n+Nat.add(a, Nat.add(q, b)), 1n+Nat.add(q, Nat.add(a, b)),
+        po.add.succ(a, Nat.add(q, b)),
+        Equal.cong(Nat, Nat, y => 1n+y, Nat.add(a, Nat.add(q, b)), Nat.add(q, Nat.add(a, b)), po.add.shift(a, q, b)))
+
+# the framing a write may take, from 2^j down: eight bytes a chunk
+def po.capj(j: Nat) -> Nat:
+  match j:
+    case 0n:
+      Nat.add(8n, 0n)
+    case 1n+i:
+      Nat.add(8n, po.capj(i))
+
+# a chunk's length: its line, CR LF, its data, CR LF, then the rest's
+def po.len4(+hx: Bytes(), +tk: Bytes(), +rr: Bytes()) ->
+  {Bytes.len(Bytes.append(hx, Bytes.append("\r\n", Bytes.append(tk, Bytes.append("\r\n", rr))))) ==
+    Nat.add(Bytes.len(hx), 2n+Nat.add(Bytes.len(tk), 2n+Bytes.len(rr))) : Nat}:
+  +w = Bytes.append("\r\n", rr)
+  +z = Bytes.append(tk, w)
+  +y = Bytes.append("\r\n", z)
+  Equal.trans(Nat, Bytes.len(Bytes.append(hx, y)), Nat.add(Bytes.len(hx), Bytes.len(y)),
+    Nat.add(Bytes.len(hx), 2n+Nat.add(Bytes.len(tk), 2n+Bytes.len(rr))), Bytes.len_append(hx, y),
+    Equal.cong(Nat, Nat, q => Nat.add(Bytes.len(hx), q), Bytes.len(y), 2n+Nat.add(Bytes.len(tk), 2n+Bytes.len(rr)),
+      Equal.trans(Nat, Bytes.len(y), Nat.add(2n, Bytes.len(z)), 2n+Nat.add(Bytes.len(tk), 2n+Bytes.len(rr)),
+        Bytes.len_append("\r\n", z),
+        Equal.cong(Nat, Nat, q => 2n+q, Bytes.len(z), Nat.add(Bytes.len(tk), 2n+Bytes.len(rr)),
+          Equal.trans(Nat, Bytes.len(z), Nat.add(Bytes.len(tk), Bytes.len(w)), Nat.add(Bytes.len(tk), 2n+Bytes.len(rr)),
+            Bytes.len_append(tk, w),
+            Equal.cong(Nat, Nat, q => Nat.add(Bytes.len(tk), q), Bytes.len(w), 2n+Bytes.len(rr), Bytes.len_append("\r\n", rr)))))))
+
+def po.bnd.fit(+j: Nat, +x: Bytes(), go: Bytes() -> Bytes(), +cg: Nat, +hj: {Nat.is_le(j, 14n) == True{} : Bool},
+  +fit: {Nat.is_le(Stream.chunk.size(j), Bytes.len(x)) == True{} : Bool},
+  +ih: {Nat.is_le(Bytes.len(go(String.drop(x, Stream.chunk.size(j)))),
+    Nat.add(Bytes.len(String.drop(x, Stream.chunk.size(j))), cg)) == True{} : Bool}) ->
+  {Nat.is_le(Bytes.len(Stream.chunks.at(True{}, j, x, go)), Nat.add(Bytes.len(x), Nat.add(8n, cg))) == True{} : Bool}:
+  +s = Stream.chunk.size(j)
+  +hx = Stream.chunk.hex(j)
+  +tk = String.take(x, s)
+  +d = String.drop(x, s)
+  +rr = go(d)
+  +lh = Bytes.len(hx)
+  +lt = Bytes.len(tk)
+  +lr = Bytes.len(rr)
+  +ld = Bytes.len(d)
+  +lx = Bytes.len(x)
+  %Equal.sym(Nat, Bytes.len(Bytes.append(hx, Bytes.append("\r\n", Bytes.append(tk, Bytes.append("\r\n", rr))))),
+    Nat.add(lh, 2n+Nat.add(lt, 2n+lr)), po.len4(hx, tk, rr)) :
+    {Nat.is_le(_, Nat.add(lx, Nat.add(8n, cg))) == True{} : Bool}
+  %Equal.sym(Nat, Nat.add(lt, 2n+lr), 2n+Nat.add(lt, lr), Equal.trans(Nat, Nat.add(lt, 2n+lr), 1n+Nat.add(lt, 1n+lr),
+    2n+Nat.add(lt, lr), po.add.succ(lt, 1n+lr), Equal.cong(Nat, Nat, y => 1n+y, Nat.add(lt, 1n+lr), 1n+Nat.add(lt, lr),
+      po.add.succ(lt, lr)))) :
+    {Nat.is_le(Nat.add(lh, 2n+_), Nat.add(lx, Nat.add(8n, cg))) == True{} : Bool}
+  %Equal.sym(Nat, Nat.add(lx, Nat.add(8n, cg)), Nat.add(8n, Nat.add(lx, cg)), po.add.shift(lx, 8n, cg)) :
+    {Nat.is_le(Nat.add(lh, 4n+Nat.add(lt, lr)), _) == True{} : Bool}
+  +lxe = Equal.trans(Nat, Nat.add(lt, ld), Nat.add(s, Nat.sub(lx, s)), lx,
+    Equal.trans(Nat, Nat.add(lt, ld), Nat.add(s, ld), Nat.add(s, Nat.sub(lx, s)),
+      Equal.cong(Nat, Nat, y => Nat.add(y, ld), lt, s, po.take.len(x, s, fit)),
+      Equal.cong(Nat, Nat, y => Nat.add(s, y), ld, Nat.sub(lx, s), po.drop.len(x, s))),
+    po.sub.add(s, lx, fit))
+  Nat.is_le_trans(Nat.add(lh, 4n+Nat.add(lt, lr)), Nat.add(4n, 4n+Nat.add(lt, lr)), 8n+Nat.add(lx, cg),
+    po.le.add.r(lh, 4n, 4n+Nat.add(lt, lr), po.hl(j, hj)),
+    Nat.is_le_trans(Nat.add(lt, lr), Nat.add(lt, Nat.add(ld, cg)), Nat.add(lx, cg),
+      po.le.add.l(lt, lr, Nat.add(ld, cg), ih),
+      Equal.trans(Bool, Nat.is_le(Nat.add(lt, Nat.add(ld, cg)), Nat.add(lx, cg)), Nat.is_le(Nat.add(lx, cg), Nat.add(lx, cg)), True{},
+        Equal.cong(Nat, Bool, y => Nat.is_le(y, Nat.add(lx, cg)), Nat.add(lt, Nat.add(ld, cg)), Nat.add(lx, cg),
+          Equal.trans(Nat, Nat.add(lt, Nat.add(ld, cg)), Nat.add(Nat.add(lt, ld), cg), Nat.add(lx, cg),
+            Equal.sym(Nat, Nat.add(Nat.add(lt, ld), cg), Nat.add(lt, Nat.add(ld, cg)), po.add.assoc(lt, ld, cg)),
+            Equal.cong(Nat, Nat, y => Nat.add(y, cg), Nat.add(lt, ld), lx, lxe))),
+        po.le.refl(Nat.add(lx, cg)))))
+
+def po.bnd.at(fit: Bool, +j: Nat, +x: Bytes(), go: Bytes() -> Bytes(), +cg: Nat, +hj: {Nat.is_le(j, 14n) == True{} : Bool},
+  +ef: {Nat.is_ge(Bytes.len(x), Stream.chunk.size(j)) == fit : Bool},
+  ih: @+y: Bytes() -> {Nat.is_le(Bytes.len(go(y)), Nat.add(Bytes.len(y), cg)) == True{} : Bool}) ->
+  {Nat.is_le(Bytes.len(Stream.chunks.at(fit, j, x, go)), Nat.add(Bytes.len(x), Nat.add(8n, cg))) == True{} : Bool}:
+  match fit:
+    case True{}:
+      po.bnd.fit(j, x, go, cg, hj, Equal.trans(Bool, Nat.is_le(Stream.chunk.size(j), Bytes.len(x)),
+        Nat.is_ge(Bytes.len(x), Stream.chunk.size(j)), True{},
+        Equal.sym(Bool, Nat.is_ge(Bytes.len(x), Stream.chunk.size(j)), Nat.is_le(Stream.chunk.size(j), Bytes.len(x)),
+          po.ge.le(Bytes.len(x), Stream.chunk.size(j))), ef), ih(String.drop(x, Stream.chunk.size(j))))
+    case False{}:
+      Nat.is_le_trans(Bytes.len(go(x)), Nat.add(Bytes.len(x), cg), Nat.add(Bytes.len(x), Nat.add(8n, cg)), ih(x),
+        po.le.add.l(Bytes.len(x), cg, Nat.add(8n, cg), po.le.add.k(8n, cg)))
+
+def po.bnd(j: Nat, +x: Bytes(), +hj: {Nat.is_le(j, 14n) == True{} : Bool}) ->
+  {Nat.is_le(Bytes.len(Stream.chunks.go(j, x)), Nat.add(Bytes.len(x), po.capj(j))) == True{} : Bool}:
+  match j:
+    case 0n:
+      po.bnd.at(Nat.is_ge(Bytes.len(x), Stream.chunk.size(0n)), 0n, x, t => "", 0n, hj, {==}, y => po.le0(Nat.add(Bytes.len(y), 0n)))
+    case 1n+(+i):
+      po.bnd.at(Nat.is_ge(Bytes.len(x), Stream.chunk.size(1n+i)), 1n+i, x, t => Stream.chunks.go(i, t), po.capj(i), hj, {==},
+        y => po.bnd(i, y, Nat.is_le_trans(i, 13n, 14n, hj, {==})))
+
+def po.bd.ch(ok: Bool, +x: Bytes(), ef: {Nat.is_le(Bytes.len(x), Stream.emit.max()) == ok : Bool}) ->
+  {Nat.is_le(Bytes.len(Pair.snd(Stream.Sent, Bytes(), Stream.emit.chunked(ok, x))), Nat.add(Bytes.len(x), 120n)) == True{} : Bool}:
+  match ok:
+    case True{}:
+      po.bnd(14n, x, {==})
+    case False{}:
+      po.le0(Nat.add(Bytes.len(x), 120n))
+
+def po.bd.len(ok: Bool, +left: Nat, +x: Bytes()) ->
+  {Nat.is_le(Bytes.len(Pair.snd(Stream.Sent, Bytes(), Stream.emit.len(ok, left, x))), Nat.add(Bytes.len(x), 120n)) == True{} : Bool}:
+  match ok:
+    case True{}:
+      po.le.add(Bytes.len(x), 120n)
+    case False{}:
+      po.le0(Nat.add(Bytes.len(x), 120n))
+
+def po.bd.mode(m: Stream.Mode, +x: Bytes()) ->
+  {Nat.is_le(Bytes.len(Pair.snd(Stream.Sent, Bytes(), Stream.emit.mode(m, x))), Nat.add(Bytes.len(x), 120n)) == True{} : Bool}:
+  match m:
+    case Stream.MChunked{}:
+      po.bd.ch(Nat.is_le(Bytes.len(x), Stream.emit.max()), x, {==})
+    case Stream.MLen{+left}:
+      po.bd.len(Nat.is_le(Bytes.len(x), left), left, x)
+    case Stream.MRaw{}:
+      po.le.add(Bytes.len(x), 120n)
+    case Stream.MNone{}:
+      po.le0(Nat.add(Bytes.len(x), 120n))
+
+def Laws.pour_bounded(st, x):
+  match st:
+    case Stream.Sent{m, f}:
+      match f:
+        case Some{e}:
+          po.le0(Nat.add(Bytes.len(x), 120n))
+        case None{}:
+          po.bd.mode(m, x)
