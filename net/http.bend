@@ -370,12 +370,13 @@ def statuses() -> List<&2, St>:
    St{501, "501", "Not Implemented"}, St{502, "502", "Bad Gateway"}, St{503, "503", "Service Unavailable"},
    St{504, "504", "Gateway Timeout"}]
 
-def st.hit(eq: Bool, t: St, rest: Maybe<&2, St>) -> Maybe<&2, St>:
+# (each walk stops at its hit: the rest is only asked for when needed)
+def st.hit(eq: Bool, t: St, rest: Unit -> Maybe<&2, St>) -> Maybe<&2, St>:
   match eq:
     case True{}:
       Some{t}
     case False{}:
-      rest
+      rest(Unit{})
 
 def st.find(ts: List<&2, St>, +c: U32) -> Maybe<&2, St>:
   match ts:
@@ -384,7 +385,7 @@ def st.find(ts: List<&2, St>, +c: U32) -> Maybe<&2, St>:
     case Con{t, r}:
       match t:
         case St{+k, cd, why}:
-          st.hit(U32.is_eq(k, c), St{k, cd, why}, st.find(r, c))
+          st.hit(U32.is_eq(k, c), St{k, cd, why}, u => st.find(r, c))
 
 # the three digits and the reason of a status
 def st.of(+c: U32) -> St:
@@ -482,12 +483,19 @@ def known() -> List<&2, Bytes()>:
    "x-frame-options", "referrer-policy", "content-security-policy", "strict-transport-security",
    "cross-origin-opener-policy", "cross-origin-resource-policy", "x-request-id"]
 
+def known.at(eq: Bool, rest: Unit -> Bool) -> Bool:
+  match eq:
+    case True{}:
+      True{}
+    case False{}:
+      rest(Unit{})
+
 def known.has(+n: Bytes(), ks: List<&2, Bytes()>) -> Bool:
   match ks:
     case Nil{}:
       False{}
     case Con{k, t}:
-      String.eq(n, k) || known.has(n, t)
+      known.at(String.eq(n, k), u => known.has(n, t))
 
 def fields.fast(fs: List<&2, Wr.Field>) -> Bool:
   match fs:
@@ -498,6 +506,13 @@ def fields.fast(fs: List<&2, Wr.Field>) -> Bool:
         case Wr.Field{+n, +v}:
           (known.has(n, known()) && X.all.in(v, 32, 127)) && fields.fast(t)
 
+def st.in.at(hit: Bool, +cd: Bytes(), +why: Bytes(), tc: Bytes(), tw: Bytes(), rest: Unit -> Bool) -> Bool:
+  match hit:
+    case True{}:
+      known.at(String.eq(tc, cd) && String.eq(tw, why), rest)
+    case False{}:
+      rest(Unit{})
+
 def st.in(ts: List<&2, St>, +c: U32, +cd: Bytes(), +why: Bytes()) -> Bool:
   match ts:
     case Nil{}:
@@ -505,7 +520,7 @@ def st.in(ts: List<&2, St>, +c: U32, +cd: Bytes(), +why: Bytes()) -> Bool:
     case Con{t, r}:
       match t:
         case St{k, tc, tw}:
-          (U32.is_eq(k, c) && String.eq(tc, cd) && String.eq(tw, why)) || st.in(r, c, cd, why)
+          st.in.at(U32.is_eq(k, c), cd, why, tc, tw, u => st.in(r, c, cd, why))
 
 def enc.fast(+head: Bool, +code: U32, h: X.RHead, +body: Bytes()) -> Bool:
   match h:

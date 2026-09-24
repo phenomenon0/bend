@@ -237,17 +237,40 @@ def names.known() -> {names.all(Http.known()) == True{} : Bool}:
 
 # a status the table has is one rvalid takes, its code and its reason
 def st.hit(+k: U32, +tc: Bytes(), +tw: Bytes(), +c: U32, +cd: Bytes(), +why: Bytes(),
-  +hit: {Bool.and(Bool.and(U32.is_eq(k, c), String.eq(tc, cd)), String.eq(tw, why)) == True{} : Bool},
+  ek: {U32.is_eq(k, c) == True{} : Bool}, +hit: {Bool.and(String.eq(tc, cd), String.eq(tw, why)) == True{} : Bool},
   g: {st.good(Http.St{k, tc, tw}) == True{} : Bool}) ->
   {Bool.and(X.rok.code(cd, c), X.rok.all(RS.TVal{}, why)) == True{} : Bool}:
-  +h12 = Bool.and_l(Bool.and(U32.is_eq(k, c), String.eq(tc, cd)), String.eq(tw, why), hit)
-  +e1 = PP.u32.eq(k, c, Bool.and_l(U32.is_eq(k, c), String.eq(tc, cd), h12))
-  +e2 = str.eq(tc, cd, Bool.and_r(U32.is_eq(k, c), String.eq(tc, cd), h12))
-  +e3 = str.eq(tw, why, Bool.and_r(Bool.and(U32.is_eq(k, c), String.eq(tc, cd)), String.eq(tw, why), hit))
+  +e1 = PP.u32.eq(k, c, ek)
+  +e2 = str.eq(tc, cd, Bool.and_l(String.eq(tc, cd), String.eq(tw, why), hit))
+  +e3 = str.eq(tw, why, Bool.and_r(String.eq(tc, cd), String.eq(tw, why), hit))
   %e1 : {Bool.and(X.rok.code(cd, _), X.rok.all(RS.TVal{}, why)) == True{} : Bool}
   %e2 : {Bool.and(X.rok.code(_, k), X.rok.all(RS.TVal{}, why)) == True{} : Bool}
   %e3 : {Bool.and(X.rok.code(tc, k), X.rok.all(RS.TVal{}, _)) == True{} : Bool}
   g
+
+def st.eqs(e: Bool, +k: U32, +tc: Bytes(), +tw: Bytes(), +c: U32, +cd: Bytes(), +why: Bytes(), -r: List<&2, Http.St>,
+  ek: {U32.is_eq(k, c) == True{} : Bool}, ee: {Bool.and(String.eq(tc, cd), String.eq(tw, why)) == e : Bool},
+  h: {Http.known.at(e, u => Http.st.in(r, c, cd, why)) == True{} : Bool},
+  g: {st.good(Http.St{k, tc, tw}) == True{} : Bool},
+  ih: {Http.st.in(r, c, cd, why) == True{} : Bool} -> {Bool.and(X.rok.code(cd, c), X.rok.all(RS.TVal{}, why)) == True{} : Bool}) ->
+  {Bool.and(X.rok.code(cd, c), X.rok.all(RS.TVal{}, why)) == True{} : Bool}:
+  match e:
+    case True{}:
+      st.hit(k, tc, tw, c, cd, why, ek, ee, g)
+    case False{}:
+      ih(h)
+
+def st.at(b: Bool, +k: U32, +tc: Bytes(), +tw: Bytes(), +c: U32, +cd: Bytes(), +why: Bytes(), -r: List<&2, Http.St>,
+  eb: {U32.is_eq(k, c) == b : Bool},
+  h: {Http.st.in.at(b, cd, why, tc, tw, u => Http.st.in(r, c, cd, why)) == True{} : Bool},
+  g: {st.good(Http.St{k, tc, tw}) == True{} : Bool},
+  ih: {Http.st.in(r, c, cd, why) == True{} : Bool} -> {Bool.and(X.rok.code(cd, c), X.rok.all(RS.TVal{}, why)) == True{} : Bool}) ->
+  {Bool.and(X.rok.code(cd, c), X.rok.all(RS.TVal{}, why)) == True{} : Bool}:
+  match b:
+    case True{}:
+      st.eqs(Bool.and(String.eq(tc, cd), String.eq(tw, why)), k, tc, tw, c, cd, why, r, eb, {==}, h, g, ih)
+    case False{}:
+      ih(h)
 
 def st.sound(ts: List<&2, Http.St>, +c: U32, +cd: Bytes(), +why: Bytes(), +all: {st.all(ts) == True{} : Bool},
   h: {Http.st.in(ts, c, cd, why) == True{} : Bool}) ->
@@ -258,15 +281,22 @@ def st.sound(ts: List<&2, Http.St>, +c: U32, +cd: Bytes(), +why: Bytes(), +all: 
     case Con{t, +r}:
       match t:
         case Http.St{+k, +tc, +tw}:
-          or.at({Bool.and(X.rok.code(cd, c), X.rok.all(RS.TVal{}, why)) == True{} : Bool},
-            Bool.and(Bool.and(U32.is_eq(k, c), String.eq(tc, cd)), String.eq(tw, why)), Http.st.in(r, c, cd, why), h,
-            hh => st.hit(k, tc, tw, c, cd, why, hh, Bool.and_l(st.good(Http.St{k, tc, tw}), st.all(r), all)),
+          st.at(U32.is_eq(k, c), k, tc, tw, c, cd, why, r, {==}, h, Bool.and_l(st.good(Http.St{k, tc, tw}), st.all(r), all),
             hr => st.sound(r, c, cd, why, Bool.and_r(st.good(Http.St{k, tc, tw}), st.all(r), all), hr))
 
 def name.hit(+n: Bytes(), +k: Bytes(), e: {n == k : Bytes()}, g: {name.ok(k) == True{} : Bool}) ->
   {name.ok(n) == True{} : Bool}:
   %Equal.sym(Bytes(), n, k, e) : {name.ok(_) == True{} : Bool}
   g
+
+def name.at(b: Bool, +n: Bytes(), +k: Bytes(), -t: List<&2, Bytes()>, eb: {String.eq(n, k) == b : Bool},
+  h: {Http.known.at(b, u => Http.known.has(n, t)) == True{} : Bool}, g: {name.ok(k) == True{} : Bool},
+  ih: {Http.known.has(n, t) == True{} : Bool} -> {name.ok(n) == True{} : Bool}) -> {name.ok(n) == True{} : Bool}:
+  match b:
+    case True{}:
+      name.hit(n, k, str.eq(n, k, eb), g)
+    case False{}:
+      ih(h)
 
 # a name the table knows is one rvalid takes
 def name.sound(ks: List<&2, Bytes()>, +n: Bytes(), +all: {names.all(ks) == True{} : Bool},
@@ -275,8 +305,7 @@ def name.sound(ks: List<&2, Bytes()>, +n: Bytes(), +all: {names.all(ks) == True{
     case Nil{}:
       Bool.no({name.ok(n) == True{} : Bool}, h)
     case Con{+k, +t}:
-      or.at({name.ok(n) == True{} : Bool}, String.eq(n, k), Http.known.has(n, t), h,
-        hh => name.hit(n, k, str.eq(n, k, hh), Bool.and_l(name.ok(k), names.all(t), all)),
+      name.at(String.eq(n, k), n, k, t, {==}, h, Bool.and_l(name.ok(k), names.all(t), all),
         hr => name.sound(t, n, Bool.and_r(name.ok(k), names.all(t), all), hr))
 
 # a value of space and visible ASCII, by one scan, is one rvalid takes
