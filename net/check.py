@@ -20,7 +20,10 @@ cap, 303 and 307, credentials kept to their origin), gzip, the body
 cap, and a pooled connection reused only when its response allows;
 and streamed bodies (upload): 100 MB by length and chunked in bounded
 memory, the stream's cap (413), a stalled body (408), a handler that
-returns without reading, 100-continue, pipelining after a streamed body.
+returns without reading, 100-continue, pipelining after a streamed body;
+and streamed responses (export, events): chunked, 1 GB byte for byte in
+bounded memory, a declared length exact, short and long, HEAD, HTTP/1.0,
+a client gone mid-body, server-sent events with curl -N.
 WebSockets on the server: chat_server's room with two ws_chat clients
 (its broadcast), its page beside it, its 426 and 400, the 101's Accept
 and subprotocol, SIGTERM's 1001, and ws_echo from Python's websockets
@@ -582,6 +585,107 @@ def check_stream(upload_bin, tmp):
     ok("stream: a chunked body past --max-stream is a 413 that closes", r.startswith(b"HTTP/1.1 413") and eof, r)
     stop(p)
 
+# Streamed responses
+# ==================
+
+def pattern_sha(n):
+    """the sha256 of export's /bytes?n=N: a 16 KiB block of a pattern, over and over"""
+    blk = bytes((i * 7 + 3) % 256 for i in range(16384))
+    h, left = hashlib.sha256(), n
+    while left:
+        m = min(left, len(blk)); h.update(blk[:m]); left -= m
+    return h.hexdigest()
+
+def dechunk(b):
+    """a chunked body, read strictly: its bytes, and whether it ended with the last chunk"""
+    out = b""
+    while True:
+        line, _, b = b.partition(b"\r\n")
+        n = int(line, 16)
+        if n == 0:
+            return out, b == b"\r\n"
+        out, b = out + b[:n], b[n:]
+        if not b.startswith(b"\r\n"):
+            return out, False
+        b = b[2:]
+
+def check_pour(export, events, tmp):
+    port = PORT + 12
+    errf = os.path.join(tmp, "export.err")
+    p = subprocess.Popen([export, "--port", str(port)], stdout=subprocess.DEVNULL, stderr=open(errf, "w"))
+    PROCS.append(p)
+    if not up(port):
+        sys.exit("never listened: export")
+    r = get(port, "/export.csv?rows=3")
+    h, _, body = r.partition(b"\r\n\r\n")
+    rows, fin = dechunk(body)
+    ok("pour: a body of unknown length is chunked (Stream.pour), the rows written a block at a time",
+       b"transfer-encoding: chunked" in h and b"content-length" not in h.lower() and fin
+       and rows == b"0,user0,0\n1,user1,2\n2,user2,4\n", r)
+    r = get(port, "/export.ndjson?rows=2")
+    ok("pour: NDJSON, the same way", dechunk(r.partition(b"\r\n\r\n")[2])[0] ==
+       b'{"id":0,"name":"user0","score":0}\n{"id":1,"name":"user1","score":2}\n', r)
+    N = 1000 * 1000 * 1000
+    base = peak_kb(p.pid)
+    with Peak(p.pid) as pk:
+        t0 = time.time()
+        c = subprocess.run("curl -sS --fail 'http://127.0.0.1:%d/bytes?n=%d' | sha256sum" % (port, N), shell=True,
+                           capture_output=True, text=True, timeout=300)
+        dt = time.time() - t0
+    ok("pour: 1 GB chunked, byte for byte (curl's own reading of the chunks), peak RSS %d kB (%d kB before), %.0f MB/s"
+       % (pk.most, base, N / dt / 1e6), c.returncode == 0 and c.stdout.split()[0] == pattern_sha(N) and pk.most < base + 16384,
+       (c.returncode, c.stdout, c.stderr[-200:], base, pk.most))
+    r, eof = raw(port, b"GET /sized?n=25 HTTP/1.1\r\nHost: t\r\n\r\nGET / HTTP/1.1\r\nHost: t\r\nConnection: close\r\n\r\n")
+    ok("pour: a declared length (Stream.pour.len) is a Content-Length, the body exactly it, and the connection goes on",
+       r.startswith(b"HTTP/1.1 200 OK\r\n") and b"content-length: 25\r\n\r\n0123456789012345678901234HTTP/1.1 200" in r
+       and b"transfer-encoding" not in r and eof, r)
+    r, eof = raw(port, b"GET /sized?n=25&give=15 HTTP/1.1\r\nHost: t\r\n\r\nGET / HTTP/1.1\r\nHost: t\r\n\r\n")
+    ok("pour: a producer short of its length: what it wrote, then the connection closes (nothing after it read)",
+       r.endswith(b"content-length: 25\r\n\r\n012345678901234") and eof, r)
+    r, eof = raw(port, b"GET /sized?n=25&give=35 HTTP/1.1\r\nHost: t\r\n\r\nGET / HTTP/1.1\r\nHost: t\r\n\r\n")
+    time.sleep(0.2)
+    ok("pour: a producer past its length: the write past it refused whole (ELarge), never more than declared, then close",
+       r.endswith(b"content-length: 25\r\n\r\n01234567890123456789") and eof
+       and "sized stopped after 20: the body is too large" in open(errf).read(), (r, open(errf).read()))
+    r, eof = raw(port, b"HEAD /bytes?n=100000 HTTP/1.1\r\nHost: t\r\n\r\nHEAD /sized?n=25 HTTP/1.1\r\nHost: t\r\n\r\n"
+                       b"GET /sized?n=3 HTTP/1.1\r\nHost: t\r\nConnection: close\r\n\r\n")
+    ok("pour: HEAD sends the head only (chunked's, and the declared length's), and the connection goes on",
+       r == b"HTTP/1.1 200 OK\r\ncontent-type: application/octet-stream\r\ntransfer-encoding: chunked\r\n\r\n"
+            b"HTTP/1.1 200 OK\r\ncontent-type: text/plain\r\ncontent-length: 25\r\n\r\n"
+            b"HTTP/1.1 200 OK\r\ncontent-type: text/plain\r\ncontent-length: 3\r\nconnection: close\r\n\r\n012" and eof, r)
+    r, eof = raw(port, b"GET /export.csv?rows=2 HTTP/1.0\r\n\r\n")
+    ok("pour: to HTTP/1.0, a body of unknown length runs to the close",
+       r == b"HTTP/1.1 200 OK\r\ncontent-type: text/csv\r\nconnection: close\r\n\r\n0,user0,0\n1,user1,2\n" and eof, r)
+    s = socket.create_connection(("127.0.0.1", port)); s.settimeout(5)
+    s.sendall(b"GET /bytes?n=1000000000 HTTP/1.1\r\nHost: t\r\n\r\n")
+    got = 0
+    while got < 1 << 20:
+        got += len(s.recv(65536))
+    s.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, b"\x01\x00\x00\x00\x00\x00\x00\x00")
+    s.close()
+    t0, said = time.time(), ""
+    while time.time() - t0 < 5 and "bytes stopped after" not in said:
+        time.sleep(0.05)
+        said = open(errf).read()
+    line = [l for l in said.splitlines() if "bytes stopped after" in l]
+    ok("pour: a client gone mid-body is an error to the producer (%s), within %.2f s, and the server goes on"
+       % (line[0].split(": ", 1)[1] if line else "none", time.time() - t0),
+       line and "closed the connection" in line[0] and get(port, "/").startswith(b"HTTP/1.1 200"), said)
+    stop(p)
+    port = PORT + 13
+    p = start([events, "--port", str(port), "--keepalive-ms", "200"], port)
+    t0 = time.time()
+    c = subprocess.run(["curl", "-N", "-sS", "-i", "--max-time", "10", "http://127.0.0.1:%d/ticks?n=3&ms=500" % port],
+                       capture_output=True, text=True)
+    dt = time.time() - t0
+    h, _, b = c.stdout.replace("\r\n", "\n").partition("\n\n")
+    evs = [e for e in b.split("\n\n") if e.startswith("event:")]
+    ok("pour: server-sent events (Stream.events) with curl -N: each event as it comes, keepalives between, the end (%.2f s)" % dt,
+       c.returncode == 0 and "content-type: text/event-stream" in h and "cache-control: no-cache" in h
+       and evs == ["event: tick\nid: %d\ndata: %d" % (i, i) for i in range(3)] and b.count(": keepalive\n\n") >= 2
+       and 0.9 < dt < 3, (c.returncode, c.stdout, c.stderr))
+    stop(p)
+
 # WebSockets on the server
 # ========================
 
@@ -684,6 +788,7 @@ def main():
         check_listen(hello, tmp)
         check_client(fetch_bin, hello, tmp)
         check_stream(bins["upload"], tmp)
+        check_pour(bins["export"], bins["events"], tmp)
         check_ws(bins["chat_server"], bins["ws_chat"], bins["ws_echo"])
     finally:
         for p in PROCS:

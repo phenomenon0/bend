@@ -267,13 +267,24 @@ def flag(xs: List<String>, +name: String, +d: String) -> String:
 type Ask is Data:
   Ask{up: Bool, key: Bytes()}
 
+# what a route that writes its own response is told: whether the request
+# was HEAD, whether the connection ends after it, whether it is HTTP/1.0,
+# and the time each send has to make progress
+type Terms is Data:
+  Terms{head: Bool, closing: Bool, v10: Bool, send: U32}
+
 # what a route that may take the connection over answers: a response, or
 # the head that switches the connection and what runs on the socket
 # then, given the bytes that came after the request; it hands the
-# socket back, and the connection ends
+# socket back, and the connection ends; or a response the route writes
+# itself, head and body, as it makes it (net/stream.bend's Stream.pour),
+# told the request's terms: it hands the socket back and whether the
+# response ended as its framing said, and the connection goes on only
+# then (and when the request did not close it)
 type Reply is Type:
   Answer{resp: Http.Response}
   Switch{head: Bytes(), run: Socket -> Bytes() -> IO(Socket)}
+  Pour{run: Terms -> Socket -> IO(Socket & Bool)}
 
 def Ux(E: Data) -> Type:
   @+env: E -> Ask -> Http.Request -> IO(Reply)
@@ -577,6 +588,28 @@ def one.switched(sb: Socket & Bool, run: Socket -> Bytes() -> IO(Socket), rest: 
     case False{}:
       IO.pure(Socket, s)
 
+# a response the route writes: what waits goes out, then the route's;
+# the connection goes on when it ended well and the request did not close
+def one.poured.at(on: Bool, s: Socket, go: List<&2, L.Seg> -> Socket -> IO(Socket)) -> IO(Socket):
+  match on:
+    case True{}:
+      go(Nil{}, s)
+    case False{}:
+      IO.pure(Socket, s)
+
+def one.poured(sb: Socket & Bool, more: Bool, go: List<&2, L.Seg> -> Socket -> IO(Socket)) -> IO(Socket):
+  (s, ok) = sb
+  one.poured.at(ok && more, s, go)
+
+def one.pour(sb: Socket & Bool, run: Socket -> IO(Socket & Bool), more: Bool,
+  go: List<&2, L.Seg> -> Socket -> IO(Socket)) -> IO(Socket):
+  (s, ok) = sb
+  match ok:
+    case True{}:
+      IO.bind(Socket & Bool, Socket, run(s), sb2 => one.poured(sb2, more, go))
+    case False{}:
+      IO.pure(Socket, s)
+
 def one.reply(+cfg: Cfg, +head: Bool, +closing: Bool, +v10: Bool, rp: Reply, acc: List<&2, L.Seg>, s: Socket,
   rest: Bytes(), go: List<&2, L.Seg> -> Socket -> IO(Socket)) -> IO(Socket):
   match rp:
@@ -585,6 +618,9 @@ def one.reply(+cfg: Cfg, +head: Bool, +closing: Bool, +v10: Bool, rp: Reply, acc
     case Switch{hd, run}:
       IO.bind(Socket & Bool, Socket, flush.segs(s, rev.onto(Con{L.Raw{hd}, acc}, Nil{}), cfg.send(cfg)),
         sb => one.switched(sb, run, rest))
+    case Pour{run}:
+      IO.bind(Socket & Bool, Socket, flush.segs(s, rev.onto(acc, Nil{}), cfg.send(cfg)),
+        sb => one.pour(sb, run(Terms{head, closing, v10, cfg.send(cfg)}), Bool.not(closing), go))
 
 def one.at(~E: Data, ~app: Ux(E), +cfg: Cfg, +ip: Bytes(), +env: E, +r: Eng.Req, +ask: Ask, +head: Bool, +v10: Bool,
   far: Bool, acc: List<&2, L.Seg>, s: Socket, rest: Bytes(), go: List<&2, L.Seg> -> Socket -> IO(Socket)) -> IO(Socket):
@@ -950,6 +986,8 @@ def reply.resp(rp: Reply) -> IO(Http.Response):
     case Answer{resp}:
       Http.reply(resp)
     case Switch{hd, run}:
+      Http.reply(Http.plain(500))
+    case Pour{run}:
       Http.reply(Http.plain(500))
 
 # the routes' answer to a request (a handler, given the routes); a Sock
