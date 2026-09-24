@@ -2694,15 +2694,15 @@ def cd.ymd.jd(+k: Nat, jd: Nat & Nat, -tf: Bytes() -> Bytes(), -ts: List<&2, Byt
   match jd:
     case (+j, +d):
       cd.cmp(z => C.p2(z, 1n+d), C.d2(1n+d),
-        z => tf(C.di.y(Bytes.append(Bytes.push(z, 32), C.nth(C.monc(), j)), Nat.divmod(Nat.add(1970n, k), 100n))), Bytes.append(SCon{Chr{32}, SNil{}}, Bytes.append(C.nth(C.monc(), j), Bytes.concat(C.date.y(Nat.divmod(Nat.add(1970n, k), 100n), ts)))),
+        z => tf(C.di.y(Bytes.append(Bytes.push(z, 32), C.nth(C.monc(), j)), Nat.divmod(Nat.add(k, 1970n), 100n))), Bytes.append(SCon{Chr{32}, SNil{}}, Bytes.append(C.nth(C.monc(), j), Bytes.concat(C.date.y(Nat.divmod(Nat.add(k, 1970n), 100n), ts)))),
         cd.p2(1n+d),
         cd.cmp(z => Bytes.push(z, 32), SCon{Chr{32}, SNil{}},
-          z => tf(C.di.y(Bytes.append(z, C.nth(C.monc(), j)), Nat.divmod(Nat.add(1970n, k), 100n))), Bytes.append(C.nth(C.monc(), j), Bytes.concat(C.date.y(Nat.divmod(Nat.add(1970n, k), 100n), ts))),
+          z => tf(C.di.y(Bytes.append(z, C.nth(C.monc(), j)), Nat.divmod(Nat.add(k, 1970n), 100n))), Bytes.append(C.nth(C.monc(), j), Bytes.concat(C.date.y(Nat.divmod(Nat.add(k, 1970n), 100n), ts))),
           cd.push(32),
           cd.cmp(z => Bytes.append(z, C.nth(C.monc(), j)), C.nth(C.monc(), j),
-            z => tf(C.di.y(z, Nat.divmod(Nat.add(1970n, k), 100n))), Bytes.concat(C.date.y(Nat.divmod(Nat.add(1970n, k), 100n), ts)),
+            z => tf(C.di.y(z, Nat.divmod(Nat.add(k, 1970n), 100n))), Bytes.concat(C.date.y(Nat.divmod(Nat.add(k, 1970n), 100n), ts)),
             cd.app(C.nth(C.monc(), j)),
-            cd.y(Nat.divmod(Nat.add(1970n, k), 100n), tf, ts, wt))))
+            cd.y(Nat.divmod(Nat.add(k, 1970n), 100n), tf, ts, wt))))
 
 def cd.ymd(kjd: Nat & Nat & Nat, -tf: Bytes() -> Bytes(), -ts: List<&2, Bytes()>, wt: cd.Is(tf, Bytes.concat(ts))) ->
   cd.Is(a => tf(C.di.ymd(a, kjd)), Bytes.concat(C.date.ymd(kjd, ts))):
@@ -2712,9 +2712,9 @@ def cd.ymd(kjd: Nat & Nat & Nat, -tf: Bytes() -> Bytes(), -ts: List<&2, Bytes()>
 
 def cd.ds(+days: Nat, +h: Nat, +m: Nat, +x: Nat) ->
   cd.Is(a => C.di.ds(a, days, h, m, x), Bytes.concat(C.date.ds(days, h, m, x))):
-  cd.cmp(z => Bytes.append(z, C.nth(C.wkc(), Nat.mod(Nat.add(days, 4n), 7n))), C.nth(C.wkc(), Nat.mod(Nat.add(days, 4n), 7n)),
+  cd.cmp(z => Bytes.append(z, C.nth(C.wkc(), Nat.mod(Nat.add(4n, days), 7n))), C.nth(C.wkc(), Nat.mod(Nat.add(4n, days), 7n)),
     z => Bytes.append(C.p2(Bytes.push(C.p2(Bytes.push(C.p2(C.di.ymd(z, C.civil(days)), h), 58), m), 58), x), " GMT"), Bytes.concat(C.date.ymd(C.civil(days), [C.d2(h), ":", C.d2(m), ":", C.d2(x), " GMT"])),
-    cd.app(C.nth(C.wkc(), Nat.mod(Nat.add(days, 4n), 7n))),
+    cd.app(C.nth(C.wkc(), Nat.mod(Nat.add(4n, days), 7n))),
     cd.ymd(C.civil(days), b => Bytes.append(C.p2(Bytes.push(C.p2(Bytes.push(C.p2(b, h), 58), m), 58), x), " GMT"), [C.d2(h), ":", C.d2(m), ":", C.d2(x), " GMT"],
     cd.cmp(z => C.p2(z, h), C.d2(h),
       z => Bytes.append(C.p2(Bytes.push(C.p2(Bytes.push(z, 58), m), 58), x), " GMT"), Bytes.append(SCon{Chr{58}, SNil{}}, Bytes.append(C.d2(m), Bytes.append(SCon{Chr{58}, SNil{}}, Bytes.append(C.d2(x), Bytes.append(" GMT", ""))))),
@@ -3361,10 +3361,6 @@ def cp.cal(g, rem, k, c, ec, fuel):
               cp.lt_two(rem, gp, Nat.sub(C.ylen(k), 1n), fuel),
               le))
 
-# the place the walk may start past 1970, counted by the checker
-def cp.b30() -> {C.before(30n) == 10957n : Nat}:
-  {==}
-
 def cp.lt_self(+r: Nat) -> {Nat.is_lt(r, 1n+r) == True{} : Bool}:
   %Equal.sym(Bool, Nat.is_lt(r, 1n+r), Nat.is_le(r, r), Nat.lt_succ(r, r)) : {_ == True{} : Bool}
   cp.le_refl(r)
@@ -3380,18 +3376,10 @@ def cp.from(+days: Nat, +b: Nat, +k: Nat, eb: {C.before(k) == b : Nat},
   cp.cal(Nat.sub(days, b), Nat.sub(days, b), k, Nat.is_lt(Nat.sub(days, b), C.ylen(k)), {==},
     cp.lt_self(Nat.sub(days, b)))
 
-def cp.civil.at(c00: Bool, +days: Nat) -> {Nat.is_le(10957n, days) == c00 : Bool} ->
-  {cp.cd(C.civil.at(c00, days)) == Some{days} : Maybe<&2, Nat>}:
-  match c00:
-    case True{}:
-      e00 => cp.from(days, 10957n, 30n, cp.b30(), e00)
-    case False{}:
-      e00 => cp.from(days, 0n, 0n, {==}, cp.le0(days))
-
 # LAW: every day, placed in the calendar, is the days before its year,
 # its month and its day
 def cp.civil(+days: Nat) -> {cp.cd(C.civil(days)) == Some{days} : Maybe<&2, Nat>}:
-  cp.civil.at(Nat.is_le(10957n, days), days)({==})
+  cp.from(days, 0n, 0n, {==}, cp.le0(days))
 
 # a month and a day the months have are within them: the month one of
 # them, the day before its month's end
@@ -3627,30 +3615,36 @@ def cp.run_cells(cs, tail, dt, r, all):
 # seconds as they were split out of them; the year's two halves are the
 # year, 1970 or later, and its month and day are where the calendar
 # placed the day.
+# k + c - c is k
+def cp.sub_add_r(+k: Nat, +c: Nat) -> {Nat.sub(Nat.add(k, c), c) == k : Nat}:
+  %cp.add_comm(c, k) : {Nat.sub(_, c) == k : Nat}
+  WW.wl.sub_add(c, k)
+
 def cp.rt.stamp(+days: Nat, +t: Nat, +k: Nat, +j: Nat, +d: Nat, +yh: Nat, +yl: Nat,
   +h: Nat, +hs: Nat, +m: Nat, +ms: Nat, +x: Nat,
   eq1: {Nat.add(Nat.mul(ms, 60n), x) == t : Nat},
   eq2: {Nat.add(Nat.mul(hs, 60n), m) == ms : Nat},
   eq3: {Nat.add(Nat.mul(days, 24n), h) == hs : Nat},
-  eq4: {Nat.add(Nat.mul(yh, 100n), yl) == Nat.add(1970n, k) : Nat},
+  eq4: {Nat.add(Nat.mul(yh, 100n), yl) == Nat.add(k, 1970n) : Nat},
   ec: {C.days.of(k, (j, d)) == Some{days} : Maybe<&2, Nat>},
   lh: {Nat.is_lt(h, 24n) == True{} : Bool}, lm: {Nat.is_lt(m, 60n) == True{} : Bool},
   lx: {Nat.is_lt(x, 60n) == True{} : Bool}) ->
-  {C.stamp(Nat.add(Nat.mul(yh, 100n), yl), j, 1n+d, h, m, x) == Some{t} : Maybe<&2, Nat>}:
-  %Equal.sym(Nat, Nat.add(Nat.mul(yh, 100n), yl), Nat.add(1970n, k), eq4) :
+  {C.stamp(Nat.add(yl, Nat.mul(yh, 100n)), j, 1n+d, h, m, x) == Some{t} : Maybe<&2, Nat>}:
+  %cp.add_comm(Nat.mul(yh, 100n), yl) : {C.stamp(_, j, 1n+d, h, m, x) == Some{t} : Maybe<&2, Nat>}
+  %Equal.sym(Nat, Nat.add(Nat.mul(yh, 100n), yl), Nat.add(k, 1970n), eq4) :
     {C.stamp(_, j, 1n+d, h, m, x) == Some{t} : Maybe<&2, Nat>}
   %Equal.sym(Bool, Nat.is_lt(h, 24n), True{}, lh) :
-    {C.stamp.ok(Bool.and(_, Bool.and(Nat.is_lt(m, 60n), Nat.is_lt(x, 60n))), Nat.add(1970n, k), j, 1n+d, h,
+    {C.stamp.ok(Bool.and(_, Bool.and(Nat.is_lt(m, 60n), Nat.is_lt(x, 60n))), Nat.add(k, 1970n), j, 1n+d, h,
       m, x) == Some{t} : Maybe<&2, Nat>}
   %Equal.sym(Bool, Nat.is_lt(m, 60n), True{}, lm) :
-    {C.stamp.ok(Bool.and(True{}, Bool.and(_, Nat.is_lt(x, 60n))), Nat.add(1970n, k), j, 1n+d, h,
+    {C.stamp.ok(Bool.and(True{}, Bool.and(_, Nat.is_lt(x, 60n))), Nat.add(k, 1970n), j, 1n+d, h,
       m, x) == Some{t} : Maybe<&2, Nat>}
   %Equal.sym(Bool, Nat.is_lt(x, 60n), True{}, lx) :
-    {C.stamp.ok(Bool.and(True{}, Bool.and(True{}, _)), Nat.add(1970n, k), j, 1n+d, h,
+    {C.stamp.ok(Bool.and(True{}, Bool.and(True{}, _)), Nat.add(k, 1970n), j, 1n+d, h,
       m, x) == Some{t} : Maybe<&2, Nat>}
-  %Equal.sym(Bool, Nat.is_le(1970n, Nat.add(1970n, k)), True{}, cp.le_add(1970n, k)) :
-    {C.stamp.go(_, Nat.add(1970n, k), j, 1n+d, h, m, x) == Some{t} : Maybe<&2, Nat>}
-  %Equal.sym(Nat, Nat.sub(Nat.add(1970n, k), 1970n), k, WW.wl.sub_add(1970n, k)) :
+  %Equal.sym(Bool, Nat.is_le(1970n, Nat.add(k, 1970n)), True{}, cp.le_add_l(k, 1970n)) :
+    {C.stamp.go(_, Nat.add(k, 1970n), j, 1n+d, h, m, x) == Some{t} : Maybe<&2, Nat>}
+  %Equal.sym(Nat, Nat.sub(Nat.add(k, 1970n), 1970n), k, cp.sub_add_r(k, 1970n)) :
     {C.stamp.at(C.days.of(_, (j, d)), h, m, x) == Some{t} : Maybe<&2, Nat>}
   %Equal.sym(Maybe<&2, Nat>, C.days.of(k, (j, d)), Some{days}, ec) :
     {C.stamp.at(_, h, m, x) == Some{t} : Maybe<&2, Nat>}
@@ -3783,11 +3777,11 @@ def cp.rt.fin(+t: Nat, +days: Nat, +h: Nat, +m: Nat, +x: Nat, +ms: Nat, +hs: Nat
   +lh: {Nat.is_lt(h, 24n) == True{} : Bool}, +lm: {Nat.is_lt(m, 60n) == True{} : Bool},
   +lx: {Nat.is_lt(x, 60n) == True{} : Bool},
   +ec: {C.days.of(k, (j, d)) == Some{days} : Maybe<&2, Nat>},
-  +ey: {Nat.is_lt(Nat.add(1970n, k), 10000n) == True{} : Bool},
-  dmy: cp.dm(100n, Nat.add(1970n, k), yy),
-  +wl: {Nat.is_lt(Nat.mod(Nat.add(days, 4n), 7n), 7n) == True{} : Bool},
+  +ey: {Nat.is_lt(C.year.hi(yy), 100n) == True{} : Bool},
+  dmy: cp.dm(100n, Nat.add(k, 1970n), yy),
+  +wl: {Nat.is_lt(Nat.mod(Nat.add(4n, days), 7n), 7n) == True{} : Bool},
   jdb: {Nat.is_lt(j, 12n) == True{} : Bool} & {Nat.is_lt(d, 31n) == True{} : Bool}) ->
-  {C.rd.form(C.imf.toks(), Bytes.concat(Con{C.nth(C.wkc(), Nat.mod(Nat.add(days, 4n), 7n)),
+  {C.rd.form(C.imf.toks(), Bytes.concat(Con{C.nth(C.wkc(), Nat.mod(Nat.add(4n, days), 7n)),
     Con{C.d2(1n+d), Con{" ", Con{C.nth(C.monc(), j),
       C.date.y(yy, [C.d2(h), ":", C.d2(m), ":", C.d2(x), " GMT"])}}}})) == Some{t} : Maybe<&2, Nat>}:
   match yy:
@@ -3795,14 +3789,14 @@ def cp.rt.fin(+t: Nat, +days: Nat, +h: Nat, +m: Nat, +x: Nat, +ms: Nat, +hs: Nat
       (+eq4, +lyl) = dmy
       (+lj, +ld) = jdb
       %Equal.sym(Maybe<&2, C.Dt>,
-        C.run(cp.toks(cp.imf.cells(Nat.mod(Nat.add(days, 4n), 7n), 1n+d, j, yh, yl, h, m, x), Nil{}),
-          Some{(C.dt0(), cp.text(cp.imf.cells(Nat.mod(Nat.add(days, 4n), 7n), 1n+d, j, yh, yl, h, m, x), ""))}),
-        C.run(Nil{}, Some{(cp.fold(cp.imf.cells(Nat.mod(Nat.add(days, 4n), 7n), 1n+d, j, yh, yl, h, m, x),
+        C.run(cp.toks(cp.imf.cells(Nat.mod(Nat.add(4n, days), 7n), 1n+d, j, yh, yl, h, m, x), Nil{}),
+          Some{(C.dt0(), cp.text(cp.imf.cells(Nat.mod(Nat.add(4n, days), 7n), 1n+d, j, yh, yl, h, m, x), ""))}),
+        C.run(Nil{}, Some{(cp.fold(cp.imf.cells(Nat.mod(Nat.add(4n, days), 7n), 1n+d, j, yh, yl, h, m, x),
           C.dt0()), "")}),
-        cp.run_cells(cp.imf.cells(Nat.mod(Nat.add(days, 4n), 7n), 1n+d, j, yh, yl, h, m, x), Nil{}, C.dt0(), "",
-          cp.imf.all(Nat.mod(Nat.add(days, 4n), 7n), 1n+d, j, yh, yl, h, m, x, wl,
+        cp.run_cells(cp.imf.cells(Nat.mod(Nat.add(4n, days), 7n), 1n+d, j, yh, yl, h, m, x), Nil{}, C.dt0(), "",
+          cp.imf.all(Nat.mod(Nat.add(4n, days), 7n), 1n+d, j, yh, yl, h, m, x, wl,
             Nat.is_lt_le_trans(d, 31n, 99n, ld, {==}), lj,
-            cp.qb(yh, yl, Nat.add(1970n, k), 100n, 100n, eq4, ey), lyl,
+            ey, lyl,
             Nat.is_lt_le_trans(h, 24n, 100n, lh, {==}), Nat.is_lt_le_trans(m, 60n, 100n, lm, {==}),
             Nat.is_lt_le_trans(x, 60n, 100n, lx, {==})))) :
         {C.dt.stamp(_) == Some{t} : Maybe<&2, Nat>}
@@ -3817,14 +3811,14 @@ def cp.rt.jd(+t: Nat, +ms: Nat, +x: Nat, +hs: Nat, +m: Nat, +days: Nat, +h: Nat,
   +lh: {Nat.is_lt(h, 24n) == True{} : Bool},
   +k: Nat, jd: Nat & Nat,
   +ec: {C.days.of(k, jd) == Some{days} : Maybe<&2, Nat>},
-  +ey: {Nat.is_lt(Nat.add(1970n, k), 10000n) == True{} : Bool},
-  +wl: {Nat.is_lt(Nat.mod(Nat.add(days, 4n), 7n), 7n) == True{} : Bool}) ->
-  {C.rd.form(C.imf.toks(), Bytes.concat(Con{C.nth(C.wkc(), Nat.mod(Nat.add(days, 4n), 7n)),
+  +ey: {Nat.is_lt(C.year.hi(Nat.divmod(Nat.add(k, 1970n), 100n)), 100n) == True{} : Bool},
+  +wl: {Nat.is_lt(Nat.mod(Nat.add(4n, days), 7n), 7n) == True{} : Bool}) ->
+  {C.rd.form(C.imf.toks(), Bytes.concat(Con{C.nth(C.wkc(), Nat.mod(Nat.add(4n, days), 7n)),
     C.date.ymd((k, jd), [C.d2(h), ":", C.d2(m), ":", C.d2(x), " GMT"])})) == Some{t} : Maybe<&2, Nat>}:
   match jd:
     case (+j, +d):
-      cp.rt.fin(t, days, h, m, x, ms, hs, k, j, d, Nat.divmod(Nat.add(1970n, k), 100n), eq1, eq2, eq3,
-        lh, lm, lx, ec, ey, cp.divmod(Nat.add(1970n, k), 99n), wl, cp.jd(k, j, d, days, ec))
+      cp.rt.fin(t, days, h, m, x, ms, hs, k, j, d, Nat.divmod(Nat.add(k, 1970n), 100n), eq1, eq2, eq3,
+        lh, lm, lx, ec, ey, cp.divmod(Nat.add(k, 1970n), 99n), wl, cp.jd(k, j, d, days, ec))
 
 def cp.rt.cal(+t: Nat, +ms: Nat, +x: Nat, +hs: Nat, +m: Nat, +days: Nat, +h: Nat,
   +eq1: {Nat.add(Nat.mul(ms, 60n), x) == t : Nat},
@@ -3835,9 +3829,9 @@ def cp.rt.cal(+t: Nat, +ms: Nat, +x: Nat, +hs: Nat, +m: Nat, +days: Nat, +h: Nat
   +lh: {Nat.is_lt(h, 24n) == True{} : Bool},
   kjd: Nat & Nat & Nat,
   +ec: {cp.cd(kjd) == Some{days} : Maybe<&2, Nat>},
-  +ey: {Nat.is_lt(C.year.of(kjd), 10000n) == True{} : Bool},
-  +wl: {Nat.is_lt(Nat.mod(Nat.add(days, 4n), 7n), 7n) == True{} : Bool}) ->
-  {C.rd.form(C.imf.toks(), Bytes.concat(Con{C.nth(C.wkc(), Nat.mod(Nat.add(days, 4n), 7n)),
+  +ey: {Nat.is_lt(C.year.hi(Nat.divmod(C.year.of(kjd), 100n)), 100n) == True{} : Bool},
+  +wl: {Nat.is_lt(Nat.mod(Nat.add(4n, days), 7n), 7n) == True{} : Bool}) ->
+  {C.rd.form(C.imf.toks(), Bytes.concat(Con{C.nth(C.wkc(), Nat.mod(Nat.add(4n, days), 7n)),
     C.date.ymd(kjd, [C.d2(h), ":", C.d2(m), ":", C.d2(x), " GMT"])})) == Some{t} : Maybe<&2, Nat>}:
   match kjd:
     case (+k, jd):
@@ -3849,19 +3843,19 @@ def cp.rt.q3(+t: Nat, +ms: Nat, +x: Nat, +hs: Nat, +m: Nat,
   +eq2: {Nat.add(Nat.mul(hs, 60n), m) == ms : Nat},
   +lm: {Nat.is_lt(m, 60n) == True{} : Bool},
   dh: Nat & Nat, dm: cp.dm(24n, hs, dh),
-  +ey: {Nat.is_lt(C.year.q3(dh), 10000n) == True{} : Bool}) ->
+  +ey: {Nat.is_lt(C.year.hi(Nat.divmod(C.year.q3(dh), 100n)), 100n) == True{} : Bool}) ->
   {C.rd.form(C.imf.toks(), C.date.q3(m, x, dh)) == Some{t} : Maybe<&2, Nat>}:
   match dh:
     case (+days, +h):
       (eq3, lh) = dm
       cp.rt.cal(t, ms, x, hs, m, days, h, eq1, lx, eq2, lm, eq3, lh, C.civil(days), cp.civil(days), ey,
-        cp.rt.wk(Nat.add(days, 4n), Nat.divmod(Nat.add(days, 4n), 7n), cp.divmod(Nat.add(days, 4n), 6n)))
+        cp.rt.wk(Nat.add(4n, days), Nat.divmod(Nat.add(4n, days), 7n), cp.divmod(Nat.add(4n, days), 6n)))
 
 def cp.rt.q2(+t: Nat, +ms: Nat, +x: Nat,
   +eq1: {Nat.add(Nat.mul(ms, 60n), x) == t : Nat},
   +lx: {Nat.is_lt(x, 60n) == True{} : Bool},
   hm: Nat & Nat, dm: cp.dm(60n, ms, hm),
-  +ey: {Nat.is_lt(C.year.q2(hm), 10000n) == True{} : Bool}) ->
+  +ey: {Nat.is_lt(C.year.hi(Nat.divmod(C.year.q2(hm), 100n)), 100n) == True{} : Bool}) ->
   {C.rd.form(C.imf.toks(), C.date.q2(x, hm)) == Some{t} : Maybe<&2, Nat>}:
   match hm:
     case (+hs, +m):
@@ -3869,7 +3863,7 @@ def cp.rt.q2(+t: Nat, +ms: Nat, +x: Nat,
       cp.rt.q3(t, ms, x, hs, m, eq1, lx, eq2, lm, Nat.divmod(hs, 24n), cp.divmod(hs, 23n), ey)
 
 def cp.rt.q1(+t: Nat, mx: Nat & Nat, dm: cp.dm(60n, t, mx),
-  +ey: {Nat.is_lt(C.year.q1(mx), 10000n) == True{} : Bool}) ->
+  +ey: {Nat.is_lt(C.year.hi(Nat.divmod(C.year.q1(mx), 100n)), 100n) == True{} : Bool}) ->
   {C.rd.form(C.imf.toks(), C.date.q1(mx)) == Some{t} : Maybe<&2, Nat>}:
   match mx:
     case (+ms, +x):
@@ -3878,7 +3872,7 @@ def cp.rt.q1(+t: Nat, mx: Nat & Nat, dm: cp.dm(60n, t, mx),
 
 # every time before the year 10000 is written as an IMF-fixdate that
 # reads back as itself
-def cp.date_rt(+t: Nat, +ey: {Nat.is_lt(C.date.year(t), 10000n) == True{} : Bool}) ->
+def cp.date_rt(+t: Nat, +ey: {C.year.ok(t) == True{} : Bool}) ->
   {C.date.read(C.date.fmt(t)) == Some{t} : Maybe<&2, Nat>}:
   cp.or.some(C.rd.form(C.imf.toks(), C.date.fmt(t)),
     Maybe.or(&2, Nat, C.rd.form(C.rfc850.toks(), C.date.fmt(t)), C.rd.form(C.asctime.toks(), C.date.fmt(t))),

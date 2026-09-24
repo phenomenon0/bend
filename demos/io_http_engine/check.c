@@ -348,6 +348,44 @@ static int stream_ask(const char* path, long len, int m, int reps) {
 
 #define TEXT(s) s, (int)(sizeof(s) - 1)
 
+// Conditional and range requests of a file (RFC 9110 13, 14): a field's
+// value in a reply's head, the status, and whether the body is exactly
+// the file's bytes from off, len of them.
+static int hval(const char* b, int n, const char* name, char* out, int cap) {
+  char key[64];
+  snprintf(key, sizeof(key), "\r\n%s: ", name);
+  const char* end = memmem(b, (size_t)n, "\r\n\r\n", 4);
+  const char* p = memmem(b, (size_t)n, key, strlen(key));
+  if (p == NULL || end == NULL || p > end) return 0;
+  p += strlen(key);
+  const char* q = memmem(p, (size_t)(b + n - p), "\r\n", 2);
+  int k = (int)(q - p);
+  if (q == NULL || k >= cap) return 0;
+  memcpy(out, p, (size_t)k);
+  out[k] = 0;
+  return 1;
+}
+
+static int status_is(const char* b, int n, const char* st) {
+  return n > 12 && memcmp(b, "HTTP/1.1 ", 9) == 0 && memcmp(b + 9, st, 3) == 0;
+}
+
+static int body_is(const char* b, int n, uint32_t off, long len) {
+  const char* h = memmem(b, (size_t)n, "\r\n\r\n", 4);
+  if (h == NULL || (long)(b + n - (h + 4)) != len) return 0;
+  for (long i = 0; i < len; i++) if ((uint8_t)h[4 + i] != pat(off + (uint32_t)i)) return 0;
+  return 1;
+}
+
+// a GET (or HEAD) of path with the extra fields, the connection closed
+// after it so the reply is all that comes back
+static int ask_file(const char* meth, const char* path, const char* extra, char* b, int cap) {
+  char req[1024];
+  int k = snprintf(req, sizeof(req), "%s %s HTTP/1.1\r\nHost: x\r\n%sconnection: close\r\n\r\n",
+    meth, path, extra);
+  return one(req, k, b, cap, 0);
+}
+
 int main(int argc, char** argv) {
   if (argc > 1) PORT = atoi(argv[1]);
   static char b[262144];
@@ -599,14 +637,15 @@ int main(int argc, char** argv) {
   // they asked for.
   if (root != NULL) {
     char p[1024];
-    const char* made[] = { "pw", "etcl", ".env", "big.bin", "mid.bin", "shrink.bin" };
-    for (int i = 0; i < 6; i++) { snprintf(p, sizeof(p), "%s/%s", root, made[i]); unlink(p); }
+    const char* made[] = { "pw", "etcl", ".env", "big.bin", "mid.bin", "shrink.bin", "r.bin" };
+    for (int i = 0; i < 7; i++) { snprintf(p, sizeof(p), "%s/%s", root, made[i]); unlink(p); }
     snprintf(p, sizeof(p), "%s/pw", root);
     int fx = symlink("/etc/passwd", p);
     snprintf(p, sizeof(p), "%s/etcl", root);
     fx |= symlink("/etc", p);
     fx |= put_file(root, ".env", 9) | put_file(root, "big.bin", 4194304)
-      | put_file(root, "mid.bin", 1048576) | put_file(root, "shrink.bin", 16777216);
+      | put_file(root, "mid.bin", 1048576) | put_file(root, "shrink.bin", 16777216)
+      | put_file(root, "r.bin", 1000);
     check("the fixtures are written", fx == 0, "", 0);
 
     n = one(TEXT("GET /pw HTTP/1.1\r\nHost: x\r\n\r\n"), b, sizeof(b), 0);
@@ -657,6 +696,144 @@ int main(int argc, char** argv) {
     check("a file that shrinks mid-reply ends the connection, and the server serves on",
       !s1.bad && s1.replies == 0 && s1.got < 16777216 && s1.done && has(b, n, "200 OK"),
       why, (int)strlen(why));
+
+    // Conditional and range requests (RFC 9110 13, 14), of a 1000 byte
+    // file read whole and of the 4 MiB one sent by sendfile. The first
+    // GET gives the validators the rest send back.
+    char et[128] = "", lm[128] = "", x[512];
+    n = ask_file("GET", "/r.bin", "", b, sizeof(b));
+    int vok = hval(b, n, "etag", et, sizeof(et)) && hval(b, n, "last-modified", lm, sizeof(lm));
+    check("a file's 200 has an entity-tag, a Last-Modified and Accept-Ranges",
+      status_is(b, n, "200") && vok && et[0] == '"' && strlen(lm) == 29
+      && has(b, n, "\r\naccept-ranges: bytes\r\n") && body_is(b, n, 0, 1000), b, n);
+
+    snprintf(x, sizeof(x), "if-none-match: %s\r\n", et);
+    n = ask_file("GET", "/r.bin", x, b, sizeof(b));
+    char v[128];
+    check("If-None-Match naming the tag is a 304 with the validators and no body",
+      status_is(b, n, "304") && !has(b, n, "content-length") && hval(b, n, "etag", v, sizeof(v))
+      && strcmp(v, et) == 0 && hval(b, n, "last-modified", v, sizeof(v)) && strcmp(v, lm) == 0
+      && body_is(b, n, 0, 0), b, n);
+
+    snprintf(x, sizeof(x), "if-none-match: W/%s\r\n", et);
+    n = ask_file("GET", "/r.bin", x, b, sizeof(b));
+    check("If-None-Match compares weakly: W/ and the tag is a 304", status_is(b, n, "304"), b, n);
+
+    snprintf(x, sizeof(x), "if-none-match: \"x\", %s\r\n", et);
+    n = ask_file("GET", "/r.bin", x, b, sizeof(b));
+    check("If-None-Match: the tag anywhere in a list is a 304", status_is(b, n, "304"), b, n);
+
+    n = ask_file("GET", "/r.bin", "if-none-match: *\r\n", b, sizeof(b));
+    check("If-None-Match: * is a 304", status_is(b, n, "304"), b, n);
+
+    n = ask_file("GET", "/r.bin", "if-none-match: \"nope\"\r\n", b, sizeof(b));
+    check("If-None-Match naming another tag is the whole file",
+      status_is(b, n, "200") && body_is(b, n, 0, 1000), b, n);
+
+    snprintf(x, sizeof(x), "if-modified-since: %s\r\n", lm);
+    n = ask_file("GET", "/r.bin", x, b, sizeof(b));
+    check("If-Modified-Since its own Last-Modified is a 304", status_is(b, n, "304")
+      && body_is(b, n, 0, 0), b, n);
+
+    n = ask_file("GET", "/r.bin", "if-modified-since: Thu, 01 Jan 1970 00:00:00 GMT\r\n", b, sizeof(b));
+    check("If-Modified-Since before the mtime is the whole file",
+      status_is(b, n, "200") && body_is(b, n, 0, 1000), b, n);
+
+    n = ask_file("GET", "/r.bin", "if-modified-since: Friday, 01-Jan-38 00:00:00 GMT\r\n", b, sizeof(b));
+    check("If-Modified-Since in the obsolete RFC 850 form is read (38 is 2038)", status_is(b, n, "304"), b, n);
+
+    n = ask_file("GET", "/r.bin", "if-modified-since: Fri Jan  1 00:00:00 2038\r\n", b, sizeof(b));
+    check("If-Modified-Since in asctime's form is read", status_is(b, n, "304"), b, n);
+
+    n = ask_file("GET", "/r.bin", "if-modified-since: not a date\r\n", b, sizeof(b));
+    check("If-Modified-Since that does not read is ignored",
+      status_is(b, n, "200") && body_is(b, n, 0, 1000), b, n);
+
+    snprintf(x, sizeof(x), "if-none-match: \"nope\"\r\nif-modified-since: %s\r\n", lm);
+    n = ask_file("GET", "/r.bin", x, b, sizeof(b));
+    check("If-None-Match wins over If-Modified-Since",
+      status_is(b, n, "200") && body_is(b, n, 0, 1000), b, n);
+
+    snprintf(x, sizeof(x), "if-none-match: %s\r\n", et);
+    n = ask_file("HEAD", "/r.bin", x, b, sizeof(b));
+    check("a HEAD with If-None-Match naming the tag is a 304", status_is(b, n, "304")
+      && body_is(b, n, 0, 0), b, n);
+
+    n = ask_file("GET", "/r.bin", "range: bytes=10-19\r\n", b, sizeof(b));
+    check("a range is a 206 of exactly those bytes, named in Content-Range",
+      status_is(b, n, "206") && has(b, n, "\r\ncontent-range: bytes 10-19/1000\r\n")
+      && has(b, n, "\r\ncontent-length: 10\r\n") && body_is(b, n, 10, 10), b, n);
+
+    n = ask_file("GET", "/r.bin", "range: bytes=-5\r\n", b, sizeof(b));
+    check("a suffix range is the file's last bytes",
+      status_is(b, n, "206") && has(b, n, "bytes 995-999/1000") && body_is(b, n, 995, 5), b, n);
+
+    n = ask_file("GET", "/r.bin", "range: bytes=990-\r\n", b, sizeof(b));
+    check("an open range runs to the end",
+      status_is(b, n, "206") && has(b, n, "bytes 990-999/1000") && body_is(b, n, 990, 10), b, n);
+
+    n = ask_file("GET", "/r.bin", "range: bytes=995-5000\r\n", b, sizeof(b));
+    check("a range past the end stops at it",
+      status_is(b, n, "206") && has(b, n, "bytes 995-999/1000") && body_is(b, n, 995, 5), b, n);
+
+    n = ask_file("GET", "/r.bin", "range: bytes=1000-\r\n", b, sizeof(b));
+    check("a range from the end is a 416 naming the size",
+      status_is(b, n, "416") && has(b, n, "\r\ncontent-range: bytes */1000\r\n"), b, n);
+
+    n = ask_file("GET", "/r.bin", "range: bytes=5-3\r\n", b, sizeof(b));
+    check("a range whose last byte is before its first is ignored",
+      status_is(b, n, "200") && body_is(b, n, 0, 1000), b, n);
+
+    n = ask_file("GET", "/r.bin", "range: bytes=0-1,5-6\r\n", b, sizeof(b));
+    check("two ranges are the whole file (no multipart)",
+      status_is(b, n, "200") && body_is(b, n, 0, 1000), b, n);
+
+    n = ask_file("GET", "/big.bin", "range: bytes=4000000-4000099\r\n", b, sizeof(b));
+    check("a range of a large file comes by sendfile from its offset",
+      status_is(b, n, "206") && has(b, n, "bytes 4000000-4000099/4194304")
+      && body_is(b, n, 4000000, 100), b, n);
+
+    n = ask_file("GET", "/big.bin", "range: bytes=-10\r\n", b, sizeof(b));
+    check("a suffix of a large file", status_is(b, n, "206")
+      && has(b, n, "bytes 4194294-4194303/4194304") && body_is(b, n, 4194294, 10), b, n);
+
+    snprintf(x, sizeof(x), "if-range: %s\r\nrange: bytes=0-9\r\n", et);
+    n = ask_file("GET", "/r.bin", x, b, sizeof(b));
+    check("If-Range with the tag lets the range through",
+      status_is(b, n, "206") && body_is(b, n, 0, 10), b, n);
+
+    snprintf(x, sizeof(x), "if-range: %s\r\nrange: bytes=0-9\r\n", lm);
+    n = ask_file("GET", "/r.bin", x, b, sizeof(b));
+    check("If-Range with the Last-Modified lets the range through",
+      status_is(b, n, "206") && body_is(b, n, 0, 10), b, n);
+
+    n = ask_file("GET", "/r.bin", "if-range: \"stale\"\r\nrange: bytes=0-9\r\n", b, sizeof(b));
+    check("If-Range with another tag is the whole file",
+      status_is(b, n, "200") && body_is(b, n, 0, 1000), b, n);
+
+    n = ask_file("GET", "/r.bin", "if-match: \"nope\"\r\n", b, sizeof(b));
+    check("If-Match naming another tag is a 412", status_is(b, n, "412"), b, n);
+
+    snprintf(x, sizeof(x), "if-match: %s\r\n", et);
+    n = ask_file("GET", "/r.bin", x, b, sizeof(b));
+    check("If-Match naming the tag is the file", status_is(b, n, "200") && body_is(b, n, 0, 1000), b, n);
+
+    n = ask_file("GET", "/r.bin", "if-unmodified-since: Thu, 01 Jan 1970 00:00:00 GMT\r\n", b, sizeof(b));
+    check("If-Unmodified-Since before the mtime is a 412", status_is(b, n, "412"), b, n);
+
+    // one connection: a 304, a 206 and a 200 in a row, each framed so
+    // the next is read where it starts
+    {
+      int k = snprintf(x, sizeof(x), "GET /r.bin HTTP/1.1\r\nHost: x\r\nif-none-match: %s\r\n\r\n"
+        "GET /r.bin HTTP/1.1\r\nHost: x\r\nrange: bytes=0-3\r\n\r\n"
+        "GET /health HTTP/1.1\r\nHost: x\r\nconnection: close\r\n\r\n", et);
+      n = one(x, k, b, sizeof(b), 0);
+      const char* r2 = n > 0 ? memmem(b + 1, (size_t)n - 1, "HTTP/1.1 206", 12) : NULL;
+      const char* r3 = r2 != NULL ? memmem(r2 + 1, (size_t)(b + n - r2 - 1), "HTTP/1.1 200", 12) : NULL;
+      int ok = status_is(b, n, "304") && r2 != NULL && r3 != NULL
+        && body_is(b, (int)(r2 - b), 0, 0) && body_is(r2, (int)(r3 - r2), 0, 4) && has(r3, (int)(b + n - r3), "{\"ok\":true}");
+      check("a 304, a 206 and a 200 on one connection, each framed", ok, b, n);
+    }
   }
 
   // Time and size, when the idle time is known. A peer that goes quiet,

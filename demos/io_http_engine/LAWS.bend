@@ -1005,13 +1005,14 @@ law file_head_is_built:
 # fields and the file's size and mtime (RFC 9110 8.8, 13, 14). These laws
 # say it, for every size and every mtime unless a vector says otherwise.
 
-# LAW: Last-Modified reads back. Every time before the year 10000 (every
-# 32-bit mtime is, the last being in 2106) is written as an IMF-fixdate
-# that date.read reads as that same time: the calendar, the digits, the
-# weekday and month names and the reader agree.
+# LAW: Last-Modified reads back. Every time whose year IMF-fixdate's
+# four digits hold (every year before 10000: every 32-bit mtime, the
+# last being in 2106) is written as an IMF-fixdate that date.read reads
+# as that same time: the calendar, the digits, the weekday and month
+# names and the reader agree.
 law date_round_trip:
   for +t: Nat
-  for +ey: {Nat.is_lt(C.date.year(t), 10000n) == True{} : Bool}
+  for +ey: {C.year.ok(t) == True{} : Bool}
   {C.date.read(C.date.fmt(t)) == Some{t} : Maybe<&2, Nat>}
 
 # LAW: the calendar, by known dates (days since 1970-01-01, and the hour,
@@ -1043,22 +1044,22 @@ law date_last_u32:
 # same date, and the calendar places it; a day no month has, an hour 24,
 # a year before 1970 and what is not a date at all read as nothing.
 law read_imf:
-  {C.run(C.imf.toks(), Some{(C.dt0(), "Sun, 06 Nov 1994 08:49:37 GMT")}) ==
-    Some{C.Dt{6n, 10n, 1994n, 8n, 49n, 37n}} : Maybe<&2, C.Dt>}
+  {C.dt.is(C.run(C.imf.toks(), Some{(C.dt0(), "Sun, 06 Nov 1994 08:49:37 GMT")}), 6n, 10n, 1994n, 8n, 49n, 37n) ==
+    True{} : Bool}
 
 law read_rfc850:
-  {C.run(C.rfc850.toks(), Some{(C.dt0(), "Sunday, 06-Nov-94 08:49:37 GMT")}) ==
-    Some{C.Dt{6n, 10n, 1994n, 8n, 49n, 37n}} : Maybe<&2, C.Dt>}
+  {C.dt.is(C.run(C.rfc850.toks(), Some{(C.dt0(), "Sunday, 06-Nov-94 08:49:37 GMT")}), 6n, 10n, 1994n, 8n, 49n, 37n) ==
+    True{} : Bool}
 
 law read_asctime:
-  {C.run(C.asctime.toks(), Some{(C.dt0(), "Sun Nov  6 08:49:37 1994")}) ==
-    Some{C.Dt{6n, 10n, 1994n, 8n, 49n, 37n}} : Maybe<&2, C.Dt>}
+  {C.dt.is(C.run(C.asctime.toks(), Some{(C.dt0(), "Sun Nov  6 08:49:37 1994")}), 6n, 10n, 1994n, 8n, 49n, 37n) ==
+    True{} : Bool}
 
 law days_rfc_example:
-  {C.days.of(24n, (10n, 5n)) == Some{9075n} : Maybe<&2, Nat>}
+  {C.mdays(C.mlens(C.leap(24n)), 10n, 5n) == Some{309n} : Maybe<&2, Nat>}
 
 law days_leap_2000:
-  {C.days.of(30n, (1n, 28n)) == Some{11016n} : Maybe<&2, Nat>}
+  {C.mdays(C.mlens(C.leap(30n)), 1n, 28n) == Some{59n} : Maybe<&2, Nat>}
 
 law no_feb_30:
   {C.days.of(54n, (1n, 29n)) == None{} : Maybe<&2, Nat>}
@@ -1210,7 +1211,7 @@ law ims_echo:
   for ir: Maybe<&2, Bytes()>
   for +mt: U32
   for +n: U32
-  for +ey: {Nat.is_lt(C.date.year(U32.to_nat(mt)), 10000n) == True{} : Bool}
+  for +ey: {C.year.ok(U32.to_nat(mt)) == True{} : Bool}
   {C.decide(C.Ask{None{}, None{}, None{}, Some{C.date.fmt(U32.to_nat(mt))}, rg, ir}, mt, n) == C.Same{} : C.Got}
 
 law ims_changed:
@@ -1310,9 +1311,10 @@ law range_suffix:
   {C.want(C.Last{1n+j}, 1n+m) == C.Span{Nat.sub(m, Nat.min(j, m)), m} : C.Want}
 
 law range_vectors:
-  {[C.want(C.Last{500n}, 1000n), C.want(C.Last{2000n}, 1000n), C.want(C.From{0n, Some{5000n}}, 1000n),
-    C.want(C.From{1000n, None{}}, 1000n), C.want(C.From{999n, None{}}, 1000n)] ==
-    [C.Span{500n, 999n}, C.Span{0n, 999n}, C.Span{0n, 999n}, C.Unsat{}, C.Span{999n, 999n}] : List<&2, C.Want>}
+  {[C.want(C.Last{50n}, 100n), C.want(C.Last{200n}, 100n), C.want(C.From{0n, Some{500n}}, 100n),
+    C.want(C.From{100n, None{}}, 100n), C.want(C.From{99n, None{}}, 100n), C.want(C.From{5n, Some{9n}}, 100n)] ==
+    [C.Span{50n, 99n}, C.Span{0n, 99n}, C.Span{0n, 99n}, C.Unsat{}, C.Span{99n, 99n}, C.Span{5n, 9n}] :
+    List<&2, C.Want>}
 
 # LAW: every range the decision serves is in the file: its first byte at
 # or before its last, and its last before the file's end. So the 206's

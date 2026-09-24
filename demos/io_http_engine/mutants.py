@@ -202,8 +202,8 @@ MUTANTS = [
     '''  ["\\r\\ncontent-range: bytes ", num(a), "-", num(b), "/", num(n)]''',
     '''  ["\\r\\ncontent-range: bytes ", num(a), "-", num(1n+b), "/", num(n)]'''),
   ('the weekday a day late', COND,
-    '''  Con{nth(wkc(), Nat.mod(Nat.add(days, 4n), 7n)),''',
-    '''  Con{nth(wkc(), Nat.mod(Nat.add(days, 5n), 7n)),'''),
+    '''  Con{nth(wkc(), Nat.mod(Nat.add(4n, days), 7n)),''',
+    '''  Con{nth(wkc(), Nat.mod(Nat.add(5n, days), 7n)),'''),
   ('every fourth year a leap year', COND,
     '''    case True{}:
       leap.c(y)''',

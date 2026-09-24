@@ -31,9 +31,10 @@
 # Every number here is a Nat: a machine word when compiled, and a chain
 # the checker can reason about, which is what lets LAWS.bend prove the
 # calendar, the heads and the byte counts for every mtime and every size.
-# The checker counts in unary, so no closed number here is large: a day
-# is split by 60, 60 and 24, never by 86400, and the calendar steps from
-# 2000 (day 10957) rather than counting from 1970 to it.
+# The checker counts in unary, and compares a number it has counted one
+# unit at a time, so no closed number here is large: a day is split by
+# 60, 60 and 24, never by 86400; the calendar has no checkpoint past
+# 1970; and a sum puts its small side first.
 import Base
 import ../../wire/reader.bend as Wr
 import ../../wire/loop.bend as L
@@ -116,7 +117,7 @@ def leap.of(+y: Nat) -> Bool:
   leap.at(Nat.is_eq(Nat.mod(y, 4n), 0n), y)
 
 def leap(k: Nat) -> Bool:
-  leap.of(Nat.add(1970n, k))
+  leap.of(Nat.add(k, 1970n))
 
 def ylen.of(lp: Bool) -> Nat:
   Bool.pick(Nat, lp, 366n, 365n)
@@ -184,24 +185,16 @@ def cal(f: Nat, fits: Bool, +rem: Nat, +k: Nat, +yl: Nat) -> Nat & Nat & Nat:
           +y2 = ylen(1n+k)
           cal(g, Nat.is_lt(r2, y2), r2, 1n+k, y2)
 
-# a day's year (from 1970), month (from 0) and day of the month (from 0).
-# From 2000 (day 10957) on, the walk starts there: before(30) is that
-# day (PROOF.bend has the checker count it), so a file written this
-# century costs its own years' walk, not thirty more.
+# a day's year (from 1970), month (from 0) and day of the month (from 0):
+# the walk from 1970, a year at a time (half a century is a tenth of a
+# microsecond)
 def civil.from(+days: Nat, +b: Nat, +k: Nat) -> Nat & Nat & Nat:
   +r = Nat.sub(days, b)
   +y = ylen(k)
   cal(1n+r, Nat.is_lt(r, y), r, k, y)
 
-def civil.at(c2000: Bool, +days: Nat) -> Nat & Nat & Nat:
-  match c2000:
-    case True{}:
-      civil.from(days, 10957n, 30n)
-    case False{}:
-      civil.from(days, 0n, 0n)
-
 def civil(+days: Nat) -> Nat & Nat & Nat:
-  civil.at(Nat.is_le(10957n, days), days)
+  civil.from(days, 0n, 0n)
 
 # ... and back: the days before a day of a month of a year, when there
 # is such a day
@@ -287,10 +280,10 @@ def date.y(yy: Nat & Nat, tail: List<&2, Bytes()>) -> List<&2, Bytes()>:
 def date.ymd(ymd: Nat & Nat & Nat, tail: List<&2, Bytes()>) -> List<&2, Bytes()>:
   (k, jd) = ymd
   (j, d) = jd
-  Con{d2(1n+d), Con{" ", Con{nth(monc(), j), date.y(Nat.divmod(Nat.add(1970n, k), 100n), tail)}}}
+  Con{d2(1n+d), Con{" ", Con{nth(monc(), j), date.y(Nat.divmod(Nat.add(k, 1970n), 100n), tail)}}}
 
 def date.ds(+days: Nat, +h: Nat, +m: Nat, +x: Nat) -> List<&2, Bytes()>:
-  Con{nth(wkc(), Nat.mod(Nat.add(days, 4n), 7n)),
+  Con{nth(wkc(), Nat.mod(Nat.add(4n, days), 7n)),
     date.ymd(civil(days), [d2(h), ":", d2(m), ":", d2(x), " GMT"])}
 
 def date.q3(+m: Nat, +x: Nat, dh: Nat & Nat) -> Bytes():
@@ -316,11 +309,11 @@ def di.ymd(acc: Bytes(), ymd: Nat & Nat & Nat) -> Bytes():
   (k, jd) = ymd
   (j, d) = jd
   di.y(Bytes.append(Bytes.push(p2(acc, 1n+d), 32), nth(monc(), j)),
-    Nat.divmod(Nat.add(1970n, k), 100n))
+    Nat.divmod(Nat.add(k, 1970n), 100n))
 
 def di.ds(acc: Bytes(), +days: Nat, +h: Nat, +m: Nat, +x: Nat) -> Bytes():
   Bytes.append(p2(Bytes.push(p2(Bytes.push(p2(
-    di.ymd(Bytes.append(acc, nth(wkc(), Nat.mod(Nat.add(days, 4n), 7n))), civil(days)),
+    di.ymd(Bytes.append(acc, nth(wkc(), Nat.mod(Nat.add(4n, days), 7n))), civil(days)),
       h), 58), m), 58), x), " GMT")
 
 def di.q3(acc: Bytes(), +m: Nat, +x: Nat, dh: Nat & Nat) -> Bytes():
@@ -342,7 +335,7 @@ def date.into(acc: Bytes(), t: Nat) -> Bytes():
 # date.fmt reads back for every time before the year 10000
 def year.of(kjd: Nat & Nat & Nat) -> Nat:
   (k, jd) = kjd
-  Nat.add(1970n, k)
+  Nat.add(k, 1970n)
 
 def year.q3(dh: Nat & Nat) -> Nat:
   (days, h) = dh
@@ -358,6 +351,14 @@ def year.q1(mx: Nat & Nat) -> Nat:
 
 def date.year(t: Nat) -> Nat:
   year.q1(Nat.divmod(t, 60n))
+
+# whether IMF-fixdate's four digits hold the year: its hundreds are two
+def year.hi(yy: Nat & Nat) -> Nat:
+  (a, b) = yy
+  a
+
+def year.ok(t: Nat) -> Bool:
+  Nat.is_lt(year.hi(Nat.divmod(date.year(t), 100n)), 100n)
 
 # Reading a date
 # ==============
@@ -513,7 +514,7 @@ type Dt is Data:
   Dt{d: Nat, j: Nat, y: Nat, h: Nat, m: Nat, x: Nat}
 
 def yy.full(+y: Nat) -> Nat:
-  Bool.pick(Nat, Nat.is_lt(y, 70n), Nat.add(2000n, y), Nat.add(1900n, y))
+  Bool.pick(Nat, Nat.is_lt(y, 70n), Nat.add(y, 2000n), Nat.add(y, 1900n))
 
 def dt.put(dt: Dt, sl: Sl, +v: Nat) -> Dt:
   match dt:
@@ -526,7 +527,7 @@ def dt.put(dt: Dt, sl: Sl, +v: Nat) -> Dt:
         case SYh{}:
           Dt{d, j, Nat.mul(v, 100n), h, m, x}
         case SYl{}:
-          Dt{d, j, Nat.add(y, v), h, m, x}
+          Dt{d, j, Nat.add(v, y), h, m, x}
         case SYy{}:
           Dt{d, j, yy.full(v), h, m, x}
         case SH{}:
@@ -619,6 +620,18 @@ def dt.stamp(m: Maybe<&2, Dt>) -> Maybe<&2, Nat>:
       match dt:
         case Dt{d, j, y, h, mi, x}:
           stamp(y, j, d, h, mi, x)
+
+# whether a walk read this date, each field compared as a number (as
+# LAWS.bend's vectors compare them)
+def dt.is(m: Maybe<&2, Dt>, +d0: Nat, +j0: Nat, +y0: Nat, +h0: Nat, +m0: Nat, +x0: Nat) -> Bool:
+  match m:
+    case None{}:
+      False{}
+    case Some{dt}:
+      match dt:
+        case Dt{d, j, y, h, mi, x}:
+          Nat.is_eq(d, d0) && Nat.is_eq(j, j0) && Nat.is_eq(y, y0) && Nat.is_eq(h, h0)
+            && Nat.is_eq(mi, m0) && Nat.is_eq(x, x0)
 
 def dt0() -> Dt:
   Dt{0n, 0n, 0n, 0n, 0n, 0n}
