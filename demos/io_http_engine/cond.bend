@@ -93,9 +93,28 @@ def num.into(acc: Bytes(), n: Nat) -> Bytes():
 def num(n: Nat) -> Bytes():
   num.into("", n)
 
-# a 32-bit number in lowercase hex with no leading zeros
-def hex(acc: Bytes(), x: U32) -> Bytes():
-  num.go(8n, 16n, acc, Nat.divmod(U32.to_nat(x), 16n))
+# a 32-bit number in lowercase hex with no leading zeros: its nibbles
+# from the top, each pushed once one has been (on) or it is not zero or
+# it is the last; the walk is a loop, so a head pays no frame per digit
+def nib(+x: U32, +g: Nat) -> U32:
+  U32.and(U32.shrn(x, Nat.mul(4n, g)), 15)
+
+def hex.on(+x: U32, +g: Nat) -> Bool:
+  U32.is_lt(0, nib(x, Nat.sub(g, 1n))) || Nat.is_le(g, 1n)
+
+def hex.go(+f: Nat, on: Bool, +x: U32, acc: Bytes()) -> Bytes():
+  match f:
+    case 0n:
+      acc
+    case 1n+g:
+      match on:
+        case True{}:
+          hex.go(g, True{}, x, Bytes.push(acc, hdig(U32.to_nat(nib(x, g)))))
+        case False{}:
+          hex.go(g, hex.on(x, g), x, acc)
+
+def hex(acc: Bytes(), +x: U32) -> Bytes():
+  hex.go(8n, hex.on(x, 8n), x, acc)
 
 # The calendar
 # ============

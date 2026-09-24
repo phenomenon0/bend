@@ -212,9 +212,12 @@ MUTANTS = [
   ('a date read back a second late', COND,
     '''      Some{Nat.add(Nat.mul(Nat.add(Nat.mul(Nat.add(Nat.mul(days, 24n), h), 60n), mi), 60n), x)}''',
     '''      Some{Nat.add(Nat.mul(Nat.add(Nat.mul(Nat.add(Nat.mul(days, 24n), h), 60n), mi), 60n), 1n+x)}'''),
-  ('the entity-tag in decimal', COND,
-    '''  num.go(8n, 16n, acc, Nat.divmod(U32.to_nat(x), 16n))''',
-    '''  num.go(8n, 10n, acc, Nat.divmod(U32.to_nat(x), 10n))'''),
+  ('the entity-tag\'s hex digits read three bits apart, not four', COND,
+    '''  U32.and(U32.shrn(x, Nat.mul(4n, g)), 15)''',
+    '''  U32.and(U32.shrn(x, Nat.mul(3n, g)), 15)'''),
+  ('the entity-tag drops a leading digit that is not zero', COND,
+    '''  U32.is_lt(0, nib(x, Nat.sub(g, 1n))) || Nat.is_le(g, 1n)''',
+    '''  U32.is_lt(1, nib(x, Nat.sub(g, 1n))) || Nat.is_le(g, 1n)'''),
 ]
 
 # the framing's mutants: (what, file, before, after)

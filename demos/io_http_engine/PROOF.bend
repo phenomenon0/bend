@@ -2641,8 +2641,35 @@ def cd.num.go(+f: Nat, +b: Nat, qr: Nat & Nat) -> cd.Is(a => C.num.go(f, b, a, q
 def cd.num(+n: Nat) -> cd.Is(a => C.num.into(a, n), C.num(n)):
   cd.num.go(20n, 10n, Nat.divmod(n, 10n))
 
+def cd.hex.go(+f: Nat, on: Bool, +x: U32) -> cd.Is(a => C.hex.go(f, on, x, a), C.hex.go(f, on, x, "")):
+  match f:
+    case 0n:
+      cd.id()
+    case 1n+g:
+      match on:
+        case True{}:
+          +a => Equal.trans(Bytes(),
+            C.hex.go(g, True{}, x, Bytes.push(a, C.hdig(U32.to_nat(C.nib(x, g))))),
+            Bytes.append(Bytes.push(a, C.hdig(U32.to_nat(C.nib(x, g)))), C.hex.go(g, True{}, x, "")),
+            Bytes.append(a, C.hex.go(g, True{}, x, Bytes.push("", C.hdig(U32.to_nat(C.nib(x, g)))))),
+            cd.hex.go(g, True{}, x)(Bytes.push(a, C.hdig(U32.to_nat(C.nib(x, g))))),
+            Equal.trans(Bytes(),
+              Bytes.append(Bytes.push(a, C.hdig(U32.to_nat(C.nib(x, g)))), C.hex.go(g, True{}, x, "")),
+              Bytes.append(a, Bytes.append(SCon{Chr{C.hdig(U32.to_nat(C.nib(x, g)))}, SNil{}}, C.hex.go(g, True{}, x, ""))),
+              Bytes.append(a, C.hex.go(g, True{}, x, Bytes.push("", C.hdig(U32.to_nat(C.nib(x, g)))))),
+              cd.app_assoc(a, SCon{Chr{C.hdig(U32.to_nat(C.nib(x, g)))}, SNil{}}, C.hex.go(g, True{}, x, "")),
+              Equal.cong(Bytes(), Bytes(), y => Bytes.append(a, y),
+                Bytes.append(SCon{Chr{C.hdig(U32.to_nat(C.nib(x, g)))}, SNil{}}, C.hex.go(g, True{}, x, "")),
+                C.hex.go(g, True{}, x, Bytes.push("", C.hdig(U32.to_nat(C.nib(x, g))))),
+                Equal.sym(Bytes(),
+                  C.hex.go(g, True{}, x, Bytes.push("", C.hdig(U32.to_nat(C.nib(x, g))))),
+                  Bytes.append(SCon{Chr{C.hdig(U32.to_nat(C.nib(x, g)))}, SNil{}}, C.hex.go(g, True{}, x, "")),
+                  cd.hex.go(g, True{}, x)(SCon{Chr{C.hdig(U32.to_nat(C.nib(x, g)))}, SNil{}})))))
+        case False{}:
+          cd.hex.go(g, C.hex.on(x, g), x)
+
 def cd.hex(+x: U32) -> cd.Is(a => C.hex(a, x), C.hex("", x)):
-  cd.num.go(8n, 16n, Nat.divmod(U32.to_nat(x), 16n))
+  cd.hex.go(8n, C.hex.on(x, 8n), x)
 
 def cd.etag(+mt: U32, +n: U32) -> cd.Is(a => C.etag.into(a, mt, n), C.etag.of(mt, n)):
   cd.fix(a => C.etag.into(a, mt, n), Bytes.append(SCon{Chr{34}, SNil{}}, Bytes.append(C.hex("", mt), Bytes.append(SCon{Chr{45}, SNil{}}, Bytes.append(C.hex("", n), SCon{Chr{34}, SNil{}})))),
