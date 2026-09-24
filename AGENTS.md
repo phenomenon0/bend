@@ -35,6 +35,8 @@ lines its run must print, and the gates run on the mini cluster.
     demos/              one dir per demo
     net/                the networking library: HTTP server and client, JSON,
                         a WebSocket client; its laws, mutants and examples
+    apps/               one dir per app built on net/ as a user would: the app,
+                        its check.py and FRICTION.md (what the library cost it)
     wire/               bend-wire, the loops, readers and pool net/ is built on
     guide/              GUIDE.md, and the extras SHADERS.md, EFFECTS.md and
                         NETWORKING.md (`bend guide networking`)
