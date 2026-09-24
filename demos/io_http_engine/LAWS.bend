@@ -1738,3 +1738,155 @@ law fsend_stalled:
     Bytes.len(String.drop(f, U32.to_nat(off))), U32.to_nat(len),
     WW.fsend.res(WW.w.fsend(WW.World{rd, Nil{}, False{}, now, fs, out}, f, off, len, ms))) ==
     True{} : Bool}
+
+# Compression
+# ===========
+#
+# --gzip is a filter on built replies (main.bend's Compression): a
+# reply keeps its bytes, gains "vary: accept-encoding", or is gzipped
+# under "content-encoding: gzip" and the vary line. Its body is then
+# power/gzip.bend's gzip of the body it replaced, which gunzips back to
+# it: power/deflate_laws.bend proves the stored and fixed streams read
+# back for every input, and tests/power/deflate.bend holds the dynamic
+# ones to CPython's zlib.
+
+# a head asking with Accept-Encoding: v
+def ae(+v: Bytes()) -> Eng.Hd:
+  hd("GET", False{}, [Wr.Field{"host", " x"}, Wr.Field{"accept-encoding", v}], Nil{})
+
+# LAW: what a peer takes (RFC 9110 12.5.3). gzip named with a weight
+# above 0, in any case, as x-gzip, or with a weight in any spelling; "*"
+# when gzip is not named. Not when gzip's weight is 0 however it is
+# written, when "*" is 0 and gzip is not named, when a weight is not a
+# qvalue, when only other codings are named, or when there is no
+# Accept-Encoding at all. Two lines are one list.
+law gz_takes:
+  {Eng.gz.takes(ae("gzip")) == True{} : Bool} &
+  {Eng.gz.takes(ae("GZip")) == True{} : Bool} &
+  {Eng.gz.takes(ae("x-gzip")) == True{} : Bool} &
+  {Eng.gz.takes(ae("*")) == True{} : Bool} &
+  {Eng.gz.takes(ae("br;q=1.0, gzip;q=0.5")) == True{} : Bool} &
+  {Eng.gz.takes(ae("deflate, gzip ; Q=0.001")) == True{} : Bool} &
+  {Eng.gz.takes(ae("gzip;q=1.000")) == True{} : Bool} &
+  {Eng.gz.takes(ae("identity;q=0, *")) == True{} : Bool} &
+  {Eng.gz.takes(hd("GET", False{}, [Wr.Field{"accept-encoding", "br"},
+    Wr.Field{"accept-encoding", "gzip"}], Nil{})) == True{} : Bool} &
+  {Eng.gz.takes(ae("gzip;q=0")) == False{} : Bool} &
+  {Eng.gz.takes(ae("gzip;q=0.000")) == False{} : Bool} &
+  {Eng.gz.takes(ae("*;q=0")) == False{} : Bool} &
+  {Eng.gz.takes(ae("gzip;q=0, *")) == False{} : Bool} &
+  {Eng.gz.takes(ae("gzip;q=2")) == False{} : Bool} &
+  {Eng.gz.takes(ae("gzip;q=0.0001")) == False{} : Bool} &
+  {Eng.gz.takes(ae("gzip;q=")) == False{} : Bool} &
+  {Eng.gz.takes(ae("identity")) == False{} : Bool} &
+  {Eng.gz.takes(ae("deflate, br")) == False{} : Bool} &
+  {Eng.gz.takes(ae("")) == False{} : Bool} &
+  {Eng.gz.takes(get()) == False{} : Bool}
+
+def zipped(c: Eng.Zc) -> Bool:
+  match c:
+    case Eng.ZZip{}:
+      True{}
+    case _:
+      False{}
+
+def varies(c: Eng.Zc) -> Bool:
+  match c:
+    case Eng.ZKeep{}:
+      False{}
+    case _:
+      True{}
+
+# LAW: nothing is compressed for a peer that does not take gzip, however
+# the rest of the choice falls.
+law gz_needs_take:
+  for +on: Bool
+  for +fits: Bool
+  for +head: Bool
+  {zipped(Eng.z.pick(on, fits, head, False{})) == False{} : Bool}
+
+# LAW: a reply that could be compressed says it varies by
+# Accept-Encoding, whatever the peer takes and whether it is a HEAD ...
+law gz_varies:
+  for +head: Bool
+  for +takes: Bool
+  {varies(Eng.z.pick(True{}, True{}, head, takes)) == True{} : Bool}
+
+# ... and one that could not be is kept as it was whatever the peer
+# takes: its choice did not depend on Accept-Encoding, and it says
+# nothing about it.
+law gz_keeps:
+  for +on: Bool
+  for +fits: Bool
+  for +head: Bool
+  for +takes: Bool
+  for e: {Bool.and(on, fits) == False{} : Bool}
+  {Eng.z.pick(on, fits, head, takes) == Eng.ZKeep{} : Eng.Zc}
+
+# what a file's head becomes for a peer that does not take gzip: the
+# vary line when it could have been compressed, else itself
+def vhead(+g: Eng.Gz, +ct: Bytes()) -> Bytes():
+  Bool.pick(Bytes(), Bool.and(Eng.gz.on(g), Bool.and(Eng.z.fits(ct), String.ends_with(ct, Eng.cl.tag()))),
+    Eng.z.ins(ct, Eng.z.vl()), ct)
+
+# LAW: for such a peer a file is the same file, by the same name (so
+# z.open opens it as net.open does), under its head or its head and the
+# vary line, and never content-encoding.
+law gz_page_untaken:
+  for +g: Eng.Gz
+  for +head: Bool
+  for +root: Bytes()
+  for +path: Bytes()
+  for +ct: Bytes()
+  for +h: Bool
+  {Eng.z.seg(g, False{}, head, L.Page{root, path, ct, h}) == L.Page{root, path, vhead(g, ct), h} : L.Seg}
+
+# the same for a fixed reply: its bytes, or its head, the vary line and
+# its body, when it could have been compressed
+def rawv.at(+g: Eng.Gz, +head: Bool, +bs: Bytes(), m: Maybe<&2, Nat>) -> Bytes():
+  match m:
+    case None{}:
+      bs
+    case Some{+i}:
+      +h = Bytes.slice(bs, 0n, Nat.add(i, 2n))
+      +b = Bytes.drop(bs, Nat.add(i, 4n))
+      Bool.pick(Bytes(), Bool.and(Eng.gz.on(g), Eng.z.fits(h) && Eng.z.has(h, "\r\ncontent-length: ")
+        && Nat.is_le(Eng.gz.min(g), Nat.max(Bytes.len(b), Eng.n.pick(head, Eng.z.clen(h), 0n)))),
+        Bytes.concat([h, Eng.z.vl(), "\r\n", b]), bs)
+
+def rawv(+g: Eng.Gz, +head: Bool, +bs: Bytes()) -> Bytes():
+  rawv.at(g, head, bs, Bytes.find(bs, "\r\n\r\n"))
+
+law gz_raw_untaken:
+  for +g: Eng.Gz
+  for +head: Bool
+  for +bs: Bytes()
+  {Eng.z.raw(g, False{}, head, bs) == rawv(g, head, bs) : Bytes()}
+
+# LAW: what the filter makes of an HTML file, a PNG and a fixed reply,
+# with compression on at level 6 and a least length of 0: a peer that
+# takes gzip gets the file under the marked name z.open compresses and
+# the head that says so; one that does not, and a HEAD, the head with
+# the vary line; a PNG is kept; and a fixed text reply gains the vary
+# line after its last field.
+def gz6() -> Eng.Gz:
+  Eng.Gz{True{}, 6n, 0n, False{}}
+
+law gz_vectors:
+  {Eng.z.seg(gz6(), True{}, False{}, L.Page{"www", "a.html", Eng.mime.head("html"), False{}}) ==
+    L.Page{"www", "\u{1}6-a.html",
+      "HTTP/1.1 200 OK\r\ncontent-type: text/html; charset=utf-8\r\ncontent-encoding: gzip\r\nvary: accept-encoding\r\ncontent-length: ",
+      False{}} : L.Seg} &
+  {Eng.z.seg(gz6(), False{}, False{}, L.Page{"www", "a.html", Eng.mime.head("html"), False{}}) ==
+    L.Page{"www", "a.html",
+      "HTTP/1.1 200 OK\r\ncontent-type: text/html; charset=utf-8\r\nvary: accept-encoding\r\ncontent-length: ",
+      False{}} : L.Seg} &
+  {Eng.z.seg(gz6(), True{}, True{}, L.Page{"www", "a.html", Eng.mime.head("html"), True{}}) ==
+    L.Page{"www", "a.html",
+      "HTTP/1.1 200 OK\r\ncontent-type: text/html; charset=utf-8\r\nvary: accept-encoding\r\ncontent-length: ",
+      True{}} : L.Seg} &
+  {Eng.z.seg(gz6(), True{}, False{}, L.Page{"www", "a.png", Eng.mime.head("png"), False{}}) ==
+    L.Page{"www", "a.png", Eng.mime.head("png"), False{}} : L.Seg} &
+  {Eng.z.raw(gz6(), False{}, False{}, Eng.resp.root()) ==
+    "HTTP/1.1 200 OK\r\ncontent-type: text/plain\r\ncontent-length: 10\r\nconnection: keep-alive\r\nvary: accept-encoding\r\n\r\nbend-http\n" : Bytes()} &
+  {Eng.z.raw(gz6(), True{}, False{}, Eng.resp.missing()) == Eng.resp.missing() : Bytes()}

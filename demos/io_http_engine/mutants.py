@@ -125,6 +125,45 @@ MUTANTS = [
       "HTTP/1.1 200 OK\\r\\ncontent-type: image/png\\r\\ncontent-length: "},''',
     '''    Mime{"png", "image/png",
       "HTTP/1.1 200 OK\\r\\ncontent-type: image/jpeg\\r\\ncontent-length: "},'''),
+  # --gzip: the choice, what a peer takes, and the filtered heads
+  ('gzip for a peer that does not take it', MAIN,
+    '''    case True{} True{} False{} False{}:
+      ZVary{}''',
+    '''    case True{} True{} False{} False{}:
+      ZZip{}'''),
+  ('a HEAD of a reply that could be compressed says nothing of it', MAIN,
+    '''    case True{} True{} True{} _:
+      ZVary{}''',
+    '''    case True{} True{} True{} _:
+      ZKeep{}'''),
+  ('a weight of 0 is taken as gzip', MAIN,
+    '''      (U32.is_eq(c, 49) || U32.is_eq(c, 48)) && q.dot(t, U32.is_eq(c, 49))''',
+    '''      U32.is_eq(c, 49) || U32.is_eq(c, 48)'''),
+  ('"*" wins over gzip named with a weight of 0', MAIN,
+    '''      match gz:
+        case Some{b}:
+          b
+        case None{}:
+          match star:
+            case Some{b}:
+              b
+            case None{}:
+              False{}''',
+    '''      match star:
+        case Some{b}:
+          b
+        case None{}:
+          match gz:
+            case Some{b}:
+              b
+            case None{}:
+              False{}'''),
+  ('a file for a peer that does not take gzip is sent under content-encoding', MAIN,
+    '''      L.Page{root, path, z.ins(ct, z.vl()), head}''',
+    '''      L.Page{root, path, z.ins(ct, z.cl()), head}'''),
+  ('a fixed reply that could be compressed loses its vary line', MAIN,
+    '''      Bytes.concat([h, z.vl(), "\\r\\n", b])''',
+    '''      Bytes.concat([h, "\\r\\n", b])'''),
   # File.get_under's memo, as wire/world.bend models it
   ('the memo keeps every answer, past its cap', WORLD,
     '''  memo.take(Con{Memo{key, now, got}, ms}, memo.cap())''',
@@ -245,6 +284,9 @@ def main():
   try:
     os.makedirs(d)
     shutil.copytree(os.path.join(ROOT, 'wire'), os.path.join(top, 'wire'))
+    os.makedirs(os.path.join(top, 'power'))
+    for f in ['deflate.bend', 'gzip.bend']:
+      shutil.copy(os.path.join(ROOT, 'power', f), os.path.join(top, 'power'))
     for f in os.listdir(HERE):
       if f.endswith('.bend'):
         shutil.copy(os.path.join(HERE, f), d)

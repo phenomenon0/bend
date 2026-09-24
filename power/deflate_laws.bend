@@ -26,6 +26,15 @@ law inflate_buf:
   for +st: D.St
   {D.feed(s, st) == D.feed_list(Bytes.to_list(s), st) : D.St}
 
+# LAW: a whole stream is the machine over it. D.inflate reads what it
+# can a symbol at a time (deflate.bend's fast path) and steps the machine
+# a bit where it cannot; whatever the stream, that is the machine fed the
+# stream, so every law of the machine is a law of D.inflate.
+law inflate_fast:
+  for +cap: Nat
+  for +s: Bytes()
+  {D.inflate(cap, s) == D.finish(D.feed(s, D.new(cap))) : Result<&2, &2, D.Why, Bytes()>}
+
 # ... so reads cut anywhere decode as the stream whole.
 law inflate_buf_split:
   for +a: Bytes()

@@ -58,6 +58,10 @@ def check(name, ok, why=""):
 # client sent: (opcode, masked, payload), and the close code among them.
 
 seen = {}
+# connections still being served, per path: a check waits for them, so
+# it never reads a log the server thread has not finished writing
+busy = {}
+idle = threading.Condition()
 
 
 def accept_of(key):
@@ -139,6 +143,22 @@ def scenario(s):
     path, key = head_of(s)
     if path is None:
         return
+    with idle:
+        busy[path] = busy.get(path, 0) + 1
+    try:
+        scenario_on(s, path, key)
+    finally:
+        with idle:
+            busy[path] -= 1
+            idle.notify_all()
+
+
+def settled(path, secs=10):
+    with idle:
+        idle.wait_for(lambda: busy.get(path, 0) == 0, timeout=secs)
+
+
+def scenario_on(s, path, key):
     log = seen.setdefault(path, [])
     sc = path.strip("/")
     bad_hs = {
@@ -251,11 +271,18 @@ def raw_server(port):
     return ls
 
 
+def frames_of(path):
+    settled(path)
+    return seen.get(path, [])
+
+
 def closes(path):
+    settled(path)
     return [struct.unpack("!H", d[:2])[0] if len(d) >= 2 else None for op, m, d in seen.get(path, []) if op == 8]
 
 
 def all_masked(path):
+    settled(path)
     fs = seen.get(path, [])
     return bool(fs) and all(m for op, m, d in fs)
 
@@ -386,10 +413,10 @@ def main():
            "t:x", "r")
     expect("raw.early", ["open", "text 10 early bird", "close answered 1000"], R + "/early", "r")
     expect("raw.frag", ["open", "text 5 héllo", "closed 1000", "close answered 1000"], R + "/frag", "r", "r")
-    check("raw.frag.pong", [(op, d) for op, m, d in seen.get("/frag", []) if op == 10] == [(10, b"between")]
+    check("raw.frag.pong", [(op, d) for op, m, d in frames_of("/frag") if op == 10] == [(10, b"between")]
           and all_masked("/frag"), str(seen.get("/frag"))[:200])
     expect("raw.ping", ["open", "text 5 after", "close answered 1000"], R + "/ping", "r")
-    check("raw.ping.pong", [(op, d) for op, m, d in seen.get("/ping", []) if op == 10] == [(10, b"are you there")],
+    check("raw.ping.pong", [(op, d) for op, m, d in frames_of("/ping") if op == 10] == [(10, b"are you there")],
           str(seen.get("/ping"))[:200])
     expect("raw.bye", ["open", "closed 4001 farewell é", "close answered 4001"], R + "/bye", "r")
     check("raw.bye.echoed", closes("/bye") == [4001] and all_masked("/bye"), str(seen.get("/bye")))
