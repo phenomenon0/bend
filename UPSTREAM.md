@@ -447,7 +447,7 @@ stock runtime; these are what the port hit. Each reads REPRO on canon
   std/bytes_list.bend stopped rebuilding (its `skip`, `first`), 1.1 s
   after. What is left is the walk itself: std/csv.bend reads 0.3 MB/s in
   canon's JS lane and 8 MB/s in its C lane, std/json_value.bend 0.16 MB/s
-  and 3.2 MB/s. `bend F.bend` runs an IO main on the JS runtime, so this
+  and 3.0 MB/s. `bend F.bend` runs an IO main on the JS runtime, so this
   is the speed a user gets by default.
 - **F11 deep recursion in the JS lane.** `String.take` (`base.bend:1903`)
   builds `SCon{h, String.take(t, p)}`, a call a char, and the JS lane and
