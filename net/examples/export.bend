@@ -176,5 +176,5 @@ def routes(+u: Unit) -> List<Server.Route>:
 
 def main() -> IO(Unit):
   do IO<Unit>:
-    xs : List<String> <- IO.args()
+    +xs : List<&2, String> <- Server.argv([])
     Server.serve.routes(~Unit, ~routes, Unit{}, Server.args(xs, Server.config(8080)))

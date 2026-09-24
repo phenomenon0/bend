@@ -40,8 +40,11 @@ the client to http://[::1]:port/ (Host [::1]:port, pooled), to a name
 with both families whichever one listens, over TLS to an IP-literal
 (its IP SAN checked, one without refused, no SNI sent); a WebSocket
 room on ::1 through ws://[::1]:port/ (its Host bracketed).
-Every Bend snippet in guide/NETWORKING.md must be in a file under net/,
-word for word. Prints PASS/FAIL per case and exits 1 on any failure.
+Server.argv's refusals (an unknown flag, a value missing, a number that
+is none), typed JSON fields (signup: every reason in one 400), and
+Server.wrap's log lines and headers over files and a WebSocket route.
+Every Bend snippet in guide/NETWORKING.md and guide/net/*.md must be in
+a file under net/, word for word. Prints PASS/FAIL per case and exits 1 on any failure.
 """
 import gzip, hashlib, os, shutil, signal, socket, ssl, subprocess, sys, tempfile, threading, time
 
@@ -227,7 +230,11 @@ def check_notes(notes):
     r = get(port, "/notes", body=b'{"text":', method="POST")
     ok("json: a body that is not JSON is a 400 saying where", r.startswith(b"HTTP/1.1 400") and b"syntax error" in r, r)
     r = get(port, "/notes", body=b'{"t":1}', method="POST")
-    ok("json: a note with no text is a 422", r.startswith(b"HTTP/1.1 422"), r)
+    ok("json: a note with no text is a 422 that says so", r.startswith(b"HTTP/1.1 422")
+       and r.endswith(b'{"errors":["text is required"]}'), r)
+    r = get(port, "/notes", body=b'{"text":7}', method="POST")
+    ok("json: a text that is a number is no text (Json.get.str)", r.startswith(b"HTTP/1.1 422")
+       and r.endswith(b'{"errors":["text must be a string"]}'), r)
     r = get(port, "/notes", body=b'{"text":"' + b"x" * 70000 + b'"}', method="POST")
     ok("json: a body past its budget is a 400", r.startswith(b"HTTP/1.1 400") and b"budget" in r, r)
     r = get(port, "/notes/1", method="DELETE")
@@ -296,6 +303,32 @@ def check_listen(hello, tmp):
     ok("server: a certificate that does not load ends it, saying TLS setup failed and naming the file",
        r.returncode != 0 and "TLS setup failed" in err and "no certificate" in err and missing in err, (r.returncode, err))
 
+def check_args(hello, files):
+    """Server.argv: an unknown flag, a value missing, a number that is none, each refused with a usage line"""
+    for args, why in [(["--prot", "80"], "unknown flag --prot"), (["--port"], "--port needs a value (N)"),
+                      (["--port", "eighty"], "--port wants a number, not eighty"), (["x"], "unexpected argument x")]:
+        r = subprocess.run([hello] + args, capture_output=True, timeout=10)
+        err = r.stderr.decode()
+        ok("args: %s: refused, exit 2, with a usage line" % " ".join(args),
+           r.returncode == 2 and why in err and "usage: [--host A] [--port N]" in err, (r.returncode, err))
+    r = subprocess.run([files, "--port", "1", "--nope"], capture_output=True, timeout=10)
+    err = r.stderr.decode()
+    ok("args: a program's own flags are in its usage line", r.returncode == 2 and "usage: [--root DIR] [--host A]" in err,
+       (r.returncode, err))
+
+def check_signup(signup):
+    """typed JSON fields: every reason at once"""
+    port = PORT + 31
+    p = start([signup, "--port", str(port)], port)
+    r = get(port, "/signup", body=b'{"name":"Ada","age":36,"email":"ada@x.org","tags":["math"]}', method="POST")
+    ok("json: typed fields read, a default for the missing one", r.startswith(b"HTTP/1.1 201")
+       and r.endswith(b'{"name":"Ada","age":36,"email":"ada@x.org","tags":1,"newsletter":false}'), r)
+    r = get(port, "/signup", body=b'{"name":7,"age":-1,"tags":{},"newsletter":null}', method="POST")
+    ok("json: a 400 lists every problem", r.startswith(b"HTTP/1.1 400") and r.endswith(
+       b'{"errors":["name must be a string","age must be a whole number from 0 to 4294967295","email is required",'
+       b'"tags must be an array","newsletter must be true or false"]}'), r)
+    stop(p)
+
 def check_files(files, root):
     port = PORT + 2
     p = start([files, "--port", str(port), "--root", root], port)
@@ -313,7 +346,12 @@ def check_files(files, root):
     ok("files: a symbolic link is not followed", r.startswith(b"HTTP/1.1 404"), r)
     r = get(port, "/x", method="POST")
     ok("files: POST is a 405", r.startswith(b"HTTP/1.1 405"), r)
+    r = get(port, "/sub/b.css")
+    ok("files: Server.wrap secures the static files", b"content-security-policy: default-src 'self'" in r
+       and b"x-content-type-options: nosniff" in r, r)
     stop(p)
+    log = p.stderr.read().decode()
+    ok("files: Server.wrap logs the static files", "GET /sub/b.css 200" in log and "GET /.env 404" in log, log[-600:])
 
 # The client
 # ==========
@@ -852,6 +890,9 @@ def check_ws(room, chat_bin, echo):
         code = None
     ok("ws: SIGTERM closes the room with 1001, and the server ends", "closed the room: 1001" in c_out and code == 0,
        (c_out, code))
+    log = p.stderr.read().decode()
+    ok("ws: Server.wrap logs the page and the room, its 101 and its refusals", "GET / 200" in log
+       and "GET /room 101" in log and "GET /room 426" in log and "POST /room 400" in log, log[-600:])
     try:
         import asyncio, websockets
         from websockets.asyncio.client import connect
@@ -1058,15 +1099,19 @@ def check_v6(hello, fetch_bin, tls_bin, room, chat_bin, tmp):
     ok("v6: the WebSocket client's Host field is [::1]:port", ("\r\nHost: [::1]:%d\r\n" % port).encode() in head, head)
 
 def check_guide():
-    """every Bend snippet in guide/NETWORKING.md is in a file under net/, word for word"""
+    """every Bend snippet in guide/NETWORKING.md and guide/net/*.md is in a file under net/, word for word"""
     srcs = []
     for d, _, fs in os.walk(HERE):
         srcs += [open(os.path.join(d, f)).read() for f in fs if f.endswith(".bend")]
-    guide = open(os.path.join(ROOT, "guide", "NETWORKING.md")).read()
-    snips = [b.split("```", 1)[0] for b in guide.split("```python\n")[1:]]
-    stale = [b for b in snips if not any(b in src for src in srcs)]
-    ok("guide: each of NETWORKING.md's %d snippets is in a file under net/" % len(snips), not stale,
-       stale[0][:200] if stale else "")
+    pages = [os.path.join(ROOT, "guide", "NETWORKING.md")]
+    pages += sorted(os.path.join(ROOT, "guide", "net", f) for f in os.listdir(os.path.join(ROOT, "guide", "net"))
+                    if f.endswith(".md"))
+    for page in pages:
+        guide = open(page).read()
+        snips = [b.split("```", 1)[0] for b in guide.split("```python\n")[1:]]
+        stale = [b for b in snips if not any(b in src for src in srcs)]
+        ok("guide: each of %s's %d snippets is in a file under net/" % (os.path.relpath(page, ROOT), len(snips)),
+           not stale, stale[0][:200] if stale else "")
 
 def main():
     check_guide()
@@ -1089,6 +1134,8 @@ def main():
         check_files(files, root)
         check_greet(greet)
         check_listen(hello, tmp)
+        check_args(hello, files)
+        check_signup(bins["signup"])
         check_client(fetch_bin, hello, tmp)
         check_stream(bins["upload"], tmp)
         check_pour(bins["export"], bins["events"], bins["relay_stream"], tmp)

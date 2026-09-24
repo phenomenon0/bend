@@ -121,9 +121,6 @@ def state.show(+s: U32) -> Bytes():
 # JSON out
 # --------
 
-def nat(+n: Nat) -> J.Json:
-  J.Num{Nat.show(n)}
-
 def spec.kvs(s: Spec) -> List<&2, Sigma<&2, &2, Bytes(), _ => J.Json>>:
   match s:
     case Spec{name, url, every, timeout, expect, needle}:
@@ -136,7 +133,7 @@ def spec.json(s: Spec) -> J.Json:
 def probe.kvs(p: Probe) -> List<&2, Sigma<&2, &2, Bytes(), _ => J.Json>>:
   match p:
     case Probe{+t, up, ms, code, err, lag}:
-      [Json.kv("t", nat(t)), Json.kv("at", Json.str(Time.iso.ms(t))), Json.kv("up", Json.flag(up)),
+      [Json.kv("t", Json.nat(t)), Json.kv("at", Json.str(Time.iso.ms(t))), Json.kv("up", Json.flag(up)),
        Json.kv("ms", Json.num(ms)), Json.kv("code", Json.num(code)), Json.kv("err", Json.str(err)),
        Json.kv("lag", Json.num(lag))]
 
@@ -169,9 +166,7 @@ def hours.sum(hs: List<&2, Bucket>, +now: Nat, acc: U32 & U32) -> U32 & U32:
 # up / all as a percentage with two decimals (99.95), a JSON number;
 # null when nothing was probed
 def percent(+up: U32, +all: U32) -> J.Json:
-  +bp = U32.div((up * 10000 : U32), all)
-  Bool.pick(J.Json, U32.is_eq(all, 0), Json.null(),
-    J.Num{U32.show(U32.div(bp, 100)) ++ "." ++ String.pad_start(U32.show(U32.mod(bp, 100)), 2n, '0')})
+  Bool.pick(J.Json, U32.is_eq(all, 0), Json.null(), Json.dec(U32.to_nat(U32.div((up * 10000 : U32), all)), 2n))
 
 def last.json(hist: List<&2, Probe>) -> J.Json:
   match hist:
@@ -194,45 +189,6 @@ def mon.json(+now: Nat, +m: Mon) -> J.Json:
 
 # JSON in: the checks
 # -------------------
-
-# a field read as a string: missing is d (None: required)
-def field.str(m: Maybe<&2, J.Json>, +key: Bytes(), d: Maybe<&2, Bytes()>) -> Result<&2, &2, Bytes(), Bytes()>:
-  match m:
-    case None{}:
-      match d:
-        case Some{v}:
-          Done{v}
-        case None{}:
-          Fail{key ++ " is required"}
-    case Some{v}:
-      match v:
-        case J.Str{s}:
-          Done{s}
-        case _:
-          Fail{key ++ " must be a string"}
-
-def field.num.read(+key: Bytes(), r: Maybe<&2, U32>) -> Result<&2, &2, Bytes(), U32>:
-  match r:
-    case Some{n}:
-      Done{n}
-    case None{}:
-      Fail{key ++ " must be a whole number of at most 4294967295"}
-
-# a field read as a U32: missing is d (None: required)
-def field.num(m: Maybe<&2, J.Json>, +key: Bytes(), d: Maybe<&2, U32>) -> Result<&2, &2, Bytes(), U32>:
-  match m:
-    case None{}:
-      match d:
-        case Some{v}:
-          Done{v}
-        case None{}:
-          Fail{key ++ " is required"}
-    case Some{v}:
-      match v:
-        case J.Num{t}:
-          field.num.read(key, U32.read(t))
-        case _:
-          Fail{key ++ " must be a number"}
 
 # a U32 in [lo, hi]
 def within(r: Result<&2, &2, Bytes(), U32>, +key: Bytes(), +lo: U32, +hi: U32) -> Result<&2, &2, Bytes(), U32>:
@@ -284,19 +240,8 @@ def url.ok(r: Result<&2, &2, Bytes(), Bytes()>) -> Result<&2, &2, Bytes(), Bytes
     case Fail{e}:
       Fail{e}
 
-def errs.one(-A: Data, r: Result<&2, &2, Bytes(), A>, rest: List<&2, Bytes()>) -> List<&2, Bytes()>:
-  match r:
-    case Done{v}:
-      rest
-    case Fail{e}:
-      Con{e, rest}
-
 def val(-A: Data, r: Result<&2, &2, Bytes(), A>, d: A) -> A:
-  match r:
-    case Done{v}:
-      v
-    case Fail{e}:
-      d
+  Result.default(&2, &2, Bytes(), A, r, d)
 
 # the timeout must leave the interval room
 def timeout.fits(t: Result<&2, &2, Bytes(), U32>, +every: U32) -> Result<&2, &2, Bytes(), U32>:
@@ -311,18 +256,17 @@ def check.fields(+name: Result<&2, &2, Bytes(), Bytes()>, +url: Result<&2, &2, B
   +every: Result<&2, &2, Bytes(), U32>, +timeout: Result<&2, &2, Bytes(), U32>, +expect: Result<&2, &2, Bytes(), U32>,
   +needle: Result<&2, &2, Bytes(), Bytes()>) -> Checked:
   +tfit = timeout.fits(timeout, val(U32, every, 4294967295))
-  Checked{errs.one(Bytes(), name, errs.one(Bytes(), url, errs.one(U32, every, errs.one(U32, tfit,
-      errs.one(U32, expect, errs.one(Bytes(), needle, [])))))),
+  Checked{Json.fails(Bytes(), name, Json.fails(Bytes(), url, Json.fails(U32, every, Json.fails(U32, tfit,
+      Json.fails(U32, expect, Json.fails(Bytes(), needle, [])))))),
     Spec{val(Bytes(), name, ""), val(Bytes(), url, ""), val(U32, every, 0), val(U32, tfit, 0),
       val(U32, expect, 0), val(Bytes(), needle, "")}}
 
 def check.obj(+j: J.Json) -> Checked:
-  check.fields(name.ok(field.str(Json.get(j, "name"), "name", None{})),
-    url.ok(field.str(Json.get(j, "url"), "url", None{})),
-    within(field.num(Json.get(j, "interval_ms"), "interval_ms", Some{60000}), "interval_ms", 200, 86400000),
-    within(field.num(Json.get(j, "timeout_ms"), "timeout_ms", Some{5000}), "timeout_ms", 50, 60000),
-    within(field.num(Json.get(j, "expect"), "expect", Some{200}), "expect", 100, 599),
-    field.str(Json.get(j, "body"), "body", Some{""}))
+  check.fields(name.ok(Json.get.str(j, "name")), url.ok(Json.get.str(j, "url")),
+    within(Json.or(U32, j, "interval_ms", 60000, Json.get.u32), "interval_ms", 200, 86400000),
+    within(Json.or(U32, j, "timeout_ms", 5000, Json.get.u32), "timeout_ms", 50, 60000),
+    within(Json.or(U32, j, "expect", 200, Json.get.u32), "expect", 100, 599),
+    Json.or(Bytes(), j, "body", "", Json.get.str))
 
 # a monitor's JSON, checked: every reason it is refused, or its spec
 def check(+j: J.Json) -> Checked:
@@ -342,26 +286,16 @@ def checked.spec(c: Checked) -> Spec:
     case Checked{errs, spec}:
       spec
 
-def u32.of(m: Maybe<&2, Bytes()>) -> U32:
-  Maybe.default(&2, U32, Maybe.bind(&2, Bytes(), U32, m, U32.read), 0)
+def u32.of(+j: J.Json, +key: Bytes()) -> U32:
+  val(U32, Json.get.u32(j, key), 0)
 
-def flag.of(m: Maybe<&2, J.Json>) -> Bool:
-  match m:
-    case Some{v}:
-      match v:
-        case J.Flag{b}:
-          b
-        case _:
-          False{}
-    case None{}:
-      False{}
+def str.of(+j: J.Json, +key: Bytes()) -> Bytes():
+  val(Bytes(), Json.get.str(j, key), "")
 
 # a probe read back from a log line, with its monitor's name
 def probe.of(+j: J.Json) -> Bytes() & Probe:
-  +t = Maybe.default(&2, Nat, Maybe.bind(&2, Bytes(), Nat, Json.get.str(j, "t"), Nat.read), 0n)
-  (Maybe.default(&2, Bytes(), Json.get.str(j, "name"), ""),
-   Probe{t, flag.of(Json.get(j, "up")), u32.of(Json.get.str(j, "ms")), u32.of(Json.get.str(j, "code")),
-     Maybe.default(&2, Bytes(), Json.get.str(j, "err"), ""), u32.of(Json.get.str(j, "lag"))})
+  (str.of(j, "name"), Probe{val(Nat, Json.get.nat(j, "t"), 0n), val(Bool, Json.get.bool(j, "up"), False{}),
+    u32.of(j, "ms"), u32.of(j, "code"), str.of(j, "err"), u32.of(j, "lag")})
 
 # The store
 # ---------

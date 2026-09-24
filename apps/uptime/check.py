@@ -6,7 +6,8 @@
   python3 apps/uptime/check.py --js                      the checks on the JS lane (bun)
 
 Starts fake targets (ok, slow, flaky, down, a body mismatch, a webhook
-sink that fails its first POST) and the app on ports 29400-29499, then
+sink that fails its first POST) and the app on ports 29400-29499 (from
+--port-base N: N+10, N+11, N+20), then
 asserts the API, the state transitions, the webhook and its retry, the
 live WebSocket push, persistence across a restart and a clean SIGTERM.
 Needs `websockets` (pip install websockets).
@@ -64,7 +65,8 @@ def targets():
 # HTTP helpers
 # ------------
 
-def req(method, path, body=None, port=APP):
+def req(method, path, body=None, port=None):
+    port = port or APP
     data = None if body is None else (body if isinstance(body, bytes) else json.dumps(body).encode())
     r = urllib.request.Request("http://127.0.0.1:%d%s" % (port, path), data=data, method=method)
     if data is not None: r.add_header("content-type", "application/json")
@@ -310,7 +312,10 @@ def main():
     ap.add_argument("--every", type=int, default=1000, help="the soak's interval, ms")
     ap.add_argument("--keep", action="store_true")
     ap.add_argument("--tmp", help="the directory to make the state directory in")
+    ap.add_argument("--port-base", type=int, default=29400, help="the ports: N+10 and N+11 the targets, N+20 the app")
     a = ap.parse_args()
+    global TGT, DOWN, APP
+    TGT, DOWN, APP = a.port_base + 10, a.port_base + 11, a.port_base + 20
     cmd = ["bun", os.path.join(ROOT, "bend2/main.ts"), os.path.join(ROOT, "apps/uptime/main.bend"), "--"] if a.js \
         else [os.path.abspath(a.bin)]
     d = tempfile.mkdtemp(prefix="uptime-", dir=a.tmp)

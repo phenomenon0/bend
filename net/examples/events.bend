@@ -99,7 +99,6 @@ def routes(+keep: U32) -> List<Server.Route>:
 
 def main() -> IO(Unit):
   do IO<Unit>:
-    xs : List<String> <- IO.args()
-    ys : List<String> <- IO.args()
-    +keep : U32 = Server.arg.num(Server.flag(xs, "--keepalive-ms", "15000"), 15000)
-    Server.serve.routes(~U32, ~routes, keep, Server.args(ys, Server.config(8080)))
+    +xs : List<&2, String> <- Server.argv(["--keepalive-ms N"])
+    +keep : U32 = Server.flag.num(xs, "--keepalive-ms", 15000)
+    Server.serve.routes(~U32, ~routes, keep, Server.args(xs, Server.config(8080)))

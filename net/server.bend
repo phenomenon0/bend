@@ -207,7 +207,106 @@ def set.shared(c: Cfg) -> Cfg:
     case Cfg{host, port, idle, head, body, send, mh, mb, conns, grace, cert, key, shared, handler}:
       Cfg{host, port, idle, head, body, send, mh, mb, conns, grace, cert, key, True{}, handler}
 
-# A configuration from the command line (IO.args()), read over cfg: a
+# The command line
+# ================
+#
+# Server.argv(own) is IO.args(), asked once and checked: every flag is
+# one of the server's (Server.args reads them) or one of own, the
+# program's, each named as a usage line names it: "--config FILE" takes
+# a value, "--verbose" none, and a value named N must be a number. A
+# flag neither knows, a flag without its value, a number that is not one
+# or a word that is no flag's value ends the program: the reason and a
+# usage line, exit 2 (--help: the usage line alone, exit 0). What it
+# answers is Data, so Server.flag, flag.num, flag.on and args read it as
+# often as they like, and each reads it as it is.
+
+def flags() -> List<&2, String>:
+  ["--host A", "--port N", "--idle-ms N", "--head-ms N", "--body-ms N", "--max-head N", "--max-body N",
+   "--max-conns N", "--grace-ms N", "--handler-ms N", "--tls-cert FILE", "--tls-key FILE", "--shared"]
+
+def strs(xs: List<String>) -> List<&2, String>:
+  match xs:
+    case Nil{}:
+      Nil{}
+    case Con{x, t}:
+      Con{x, strs(t)}
+
+def head.or(xs: List<&2, String>, d: String) -> String:
+  match xs:
+    case Nil{}:
+      d
+    case Con{v, t}:
+      v
+
+# a spec's name ("--port" of "--port N") and its value's name ("N"; ""
+# for a flag that takes none)
+def spec.name(+s: String) -> String:
+  head.or(String.split_on(s, " "), s)
+
+def spec.arg(+s: String) -> String:
+  Bytes.drop(s, Nat.add(Bytes.len(spec.name(s)), 1n))
+
+def spec.find(specs: List<&2, String>, +x: String) -> Maybe<&2, String>:
+  match specs:
+    case Nil{}:
+      None{}
+    case Con{+s, t}:
+      Bool.pick(Maybe<&2, String>, String.eq(spec.name(s), x), Some{s}, spec.find(t, x))
+
+def usage(own: List<&2, String>) -> String:
+  "usage: [" ++ String.join(List.append(&2, String, own, flags()), "] [") ++ "]"
+
+# what a word the command line gives as a flag says: why it is refused
+# (none known by that name), and the name of the value it takes ("" for
+# none)
+def argv.bad(m: Maybe<&2, String>, +x: String) -> Maybe<&2, String>:
+  match m:
+    case None{}:
+      Some{Bool.pick(String, String.starts_with(x, "-"), "unknown flag " ++ x, "unexpected argument " ++ x)}
+    case Some{s}:
+      None{}
+
+def argv.want(m: Maybe<&2, String>) -> String:
+  match m:
+    case None{}:
+      ""
+    case Some{+s}:
+      spec.arg(s)
+
+# a value a flag takes: a number when its spec says N
+def argv.num(+want: String, +prev: String, +v: String) -> Maybe<&2, String>:
+  Bool.pick(Maybe<&2, String>, String.eq(want, "N") && Maybe.is_none(&2, U32, U32.read(v)),
+    Some{prev ++ " wants a number, not " ++ v}, None{})
+
+# why a command line is refused, given every flag's spec (the word
+# before xs, prev, wants a value named want, or none): None when it is
+# not
+def argv.why(+specs: List<&2, String>, xs: List<&2, String>, +want: String, +prev: String) -> Maybe<&2, String>:
+  match xs:
+    case Nil{}:
+      Bool.pick(Maybe<&2, String>, String.is_empty(want), None{}, Some{prev ++ " needs a value (" ++ want ++ ")"})
+    case Con{+x, +t}:
+      +m = spec.find(specs, x)
+      Bool.pick(Maybe<&2, String>, String.is_empty(want),
+        Maybe.or(&2, String, argv.bad(m, x), argv.why(specs, t, argv.want(m), x)),
+        Maybe.or(&2, String, argv.num(want, prev, x), argv.why(specs, t, "", x)))
+
+def argv.check(+own: List<&2, String>, +xs: List<&2, String>, m: Maybe<&2, String>) -> IO(List<&2, String>):
+  match m:
+    case None{}:
+      IO.pure(List<&2, String>, xs)
+    case Some{+why}:
+      Bool.pick(IO(List<&2, String>), String.eq(why, "unknown flag --help"), IO.die(List<&2, String>, 0, usage(own)),
+        IO.die(List<&2, String>, 2, why ++ "\n" ++ usage(own)))
+
+# the command line, checked against the server's flags and own
+def argv(+own: List<&2, String>) -> IO(List<&2, String>):
+  do IO<List<&2, String>>:
+    ys : List<String> <- IO.args()
+    +xs : List<&2, String> = strs(ys)
+    argv.check(own, xs, argv.why(List.append(&2, String, own, flags()), xs, "", ""))
+
+# A configuration from the command line (Server.argv), read over cfg: a
 # flag given wins over what cfg says, and a set.* applied to what args
 # answers wins over the flag. --host A, --port N, --idle-ms N, --head-ms
 # N, --body-ms N, --max-head N, --max-body N, --max-conns N, --grace-ms
@@ -232,29 +331,15 @@ def args.one(+prev: String, +x: String, +c: Cfg) -> Cfg:
         Bool.pick(String, String.eq(prev, "--tls-key"), x, key), shared || String.eq(x, "--shared"),
         Bool.pick(U32, String.eq(prev, "--handler-ms"), arg.num(x, handler), handler)}
 
-def args.go(xs: List<String>, +prev: String, c: Cfg) -> Cfg:
+def args.go(xs: List<&2, String>, +prev: String, c: Cfg) -> Cfg:
   match xs:
     case Nil{}:
       c
     case Con{+x, t}:
       args.go(t, x, args.one(prev, x, c))
 
-def args(xs: List<String>, c: Cfg) -> Cfg:
+def args(xs: List<&2, String>, c: Cfg) -> Cfg:
   args.go(xs, "", c)
-
-def strs(xs: List<String>) -> List<&2, String>:
-  match xs:
-    case Nil{}:
-      Nil{}
-    case Con{x, t}:
-      Con{x, strs(t)}
-
-def head.or(xs: List<&2, String>, d: String) -> String:
-  match xs:
-    case Nil{}:
-      d
-    case Con{v, t}:
-      v
 
 def flag.go(xs: List<&2, String>, +name: String, +d: String) -> String:
   match xs:
@@ -264,8 +349,21 @@ def flag.go(xs: List<&2, String>, +name: String, +d: String) -> String:
       Bool.pick(String, String.eq(x, name), head.or(t, d), flag.go(t, name, d))
 
 # a flag's value (the argument after it) in the command line, or d
-def flag(xs: List<String>, +name: String, +d: String) -> String:
-  flag.go(strs(xs), name, d)
+def flag(xs: List<&2, String>, +name: String, +d: String) -> String:
+  flag.go(xs, name, d)
+
+# a flag's value as a number, or d (argv refuses one that is not a
+# number when its spec names the value N)
+def flag.num(xs: List<&2, String>, +name: String, +d: U32) -> U32:
+  arg.num(flag.go(xs, name, ""), d)
+
+# whether a flag that takes no value was given
+def flag.on(xs: List<&2, String>, +name: String) -> Bool:
+  match xs:
+    case Nil{}:
+      False{}
+    case Con{+x, t}:
+      String.eq(x, name) || flag.on(t, name)
 
 # The router
 # ==========
@@ -302,13 +400,14 @@ type Terms is Data:
 # then, given the bytes that came after the request; it hands the
 # socket back, and the connection ends; or a response the route writes
 # itself, head and body, as it makes it (net/stream.bend's Stream.pour),
-# told the request's terms: it hands the socket back and whether the
-# response ended as its framing said, and the connection goes on only
-# then (and when the request did not close it)
+# its status and fields told apart (so middleware may add to them) and
+# handed to run with the request's terms: it hands the socket back and
+# whether the response ended as its framing said, and the connection
+# goes on only then (and when the request did not close it)
 type Reply is Type:
   Answer{resp: Http.Response}
   Switch{head: Bytes(), run: Socket -> Bytes() -> IO(Socket)}
-  Pour{run: Terms -> Socket -> IO(Socket & Bool)}
+  Pour{code: U32, hs: List<&2, Http.Header>, run: U32 -> List<&2, Http.Header> -> Terms -> Socket -> IO(Socket & Bool)}
 
 def Ux(E: Data) -> Type:
   @+env: E -> Ask -> Http.Request -> IO(Reply)
@@ -688,9 +787,9 @@ def one.reply(+cfg: Cfg, +head: Bool, +closing: Bool, +v10: Bool, rp: Reply, acc
     case Switch{hd, run}:
       IO.bind(Socket & Bool, Socket, flush.segs(s, rev.onto(Con{L.Raw{hd}, acc}, Nil{}), cfg.send(cfg)),
         sb => one.switched(sb, run, rest))
-    case Pour{run}:
+    case Pour{code, hs, run}:
       IO.bind(Socket & Bool, Socket, flush.segs(s, rev.onto(acc, Nil{}), cfg.send(cfg)),
-        sb => one.pour(sb, run(Terms{head, closing, v10, cfg.send(cfg)}), Bool.not(closing), go))
+        sb => one.pour(sb, run(code, hs, Terms{head, closing, v10, cfg.send(cfg)}), Bool.not(closing), go))
 
 # the handler's reply, if it came in time
 def one.timed(+cfg: Cfg, +head: Bool, +closing: Bool, +v10: Bool, m: Maybe<&1, Reply>, acc: List<&2, L.Seg>, s: Socket,
@@ -1075,7 +1174,7 @@ def reply.resp(rp: Reply) -> IO(Http.Response):
       Http.reply(resp)
     case Switch{hd, run}:
       Http.reply(Http.plain(500))
-    case Pour{run}:
+    case Pour{code, hs, run}:
       Http.reply(Http.plain(500))
 
 # the routes' answer to a request (a handler, given the routes); a Sock
@@ -1154,6 +1253,66 @@ def secured.around(io: IO(Http.Response)) -> IO(Http.Response):
 
 def secured(~h: Http.Request -> IO(Http.Response), r: Http.Request) -> IO(Http.Response):
   secured.around(h(r))
+
+# Middleware over a route table
+# -----------------------------
+#
+# wrap(~mw, routes): every route with mw around its handler, where mw is
+# a middleware's .around form (Http.Request -> IO(Response) -> IO(Response),
+# as Server.logged.around is, or several nested): a plain route's handler
+# (Server.get and the rest, Server.static), and a Sock route's answer
+# (WsServer.ws's accept or refusal, Stream.get's whole response or
+# pour). A Sock route's answer passes through mw once the handler gave
+# it: a response as itself; a pour as its status and fields, with no
+# body (mw's fields go out in its head); a switch as a 101 with none
+# (its head is the handshake's). When mw answers another status in their
+# place (a refusal), that response is the answer. The router's own 404
+# and 405 are no route's: wrap the whole handler (~Server.logged(~app))
+# to see those too.
+
+def Mw() -> Type:
+  @+r: Http.Request -> IO(Http.Response) -> IO(Http.Response)
+
+def wrap.switch(hd: Bytes(), run: Socket -> Bytes() -> IO(Socket), resp: Http.Response, same: Bool) -> Reply:
+  match same:
+    case True{}:
+      Switch{hd, run}
+    case False{}:
+      Answer{resp}
+
+def wrap.pour(+code: U32, run: U32 -> List<&2, Http.Header> -> Terms -> Socket -> IO(Socket & Bool), resp: Http.Response,
+  same: Bool) -> Reply:
+  match same:
+    case True{}:
+      Pour{code, Http.resp.headers(resp), run}
+    case False{}:
+      Answer{resp}
+
+def wrap.face(~mw: Mw(), +r: Http.Request, rp: Reply) -> IO(Reply):
+  match rp:
+    case Answer{resp}:
+      IO.bind(Http.Response, Reply, mw(r, Http.reply(resp)), x => IO.pure(Reply, Answer{x}))
+    case Switch{hd, run}:
+      IO.bind(Http.Response, Reply, mw(r, Http.reply(Http.Response{101, Nil{}, Http.BBody{""}})),
+        +x => IO.pure(Reply, wrap.switch(hd, run, x, U32.is_eq(Http.status(x), 101))))
+    case Pour{+code, hs, run}:
+      IO.bind(Http.Response, Reply, mw(r, Http.reply(Http.Response{code, hs, Http.BBody{""}})),
+        +x => IO.pure(Reply, wrap.pour(code, run, x, U32.is_eq(Http.status(x), code))))
+
+def wrap.one(~mw: Mw(), rt: Route) -> Route:
+  match rt:
+    case Route{ms, pat, h}:
+      Route{ms, pat, +r => mw(r, h(r))}
+    case Sock{pat, h}:
+      Sock{pat, a => +r => IO.bind(Reply, Reply, h(a, r), rp => wrap.face(~mw, r, rp))}
+
+# every route of rs with mw around it
+def wrap(~mw: Mw(), rs: List<&1, Route>) -> List<&1, Route>:
+  match rs:
+    case Nil{}:
+      Nil{}
+    case Con{rt, t}:
+      Con{wrap.one(~mw, rt), wrap(~mw, t)}
 
 # The connection
 # ==============

@@ -133,22 +133,17 @@ def args.go(xs: List<&2, String>, +prev: String, c: Cfg) -> Cfg:
     case Con{+x, t}:
       args.go(t, x, args.one(prev, x, c))
 
-def weak(xs: List<&2, String>) -> List<String>:
-  match xs:
-    case Nil{}:
-      Nil{}
-    case Con{x, t}:
-      Con{x, weak(t)}
-
-def args.srv(+ys: List<&2, String>, c: Cfg) -> Cfg:
+# the command line (Stream.argv) over c: the server's flags (Server.args),
+# and --max-stream N, --progress-ms N
+def args(+xs: List<&2, String>, c: Cfg) -> Cfg:
   match c:
     case Cfg{s, m, p}:
-      args.go(ys, "", Cfg{Server.args(weak(ys), s), m, p})
+      args.go(xs, "", Cfg{Server.args(xs, s), m, p})
 
-# the command line (IO.args()) over c: the server's flags (Server.args),
-# and --max-stream N, --progress-ms N
-def args(xs: List<String>, c: Cfg) -> Cfg:
-  args.srv(Server.strs(xs), c)
+# the command line, checked (Server.argv) against the server's flags,
+# the stream's and own
+def argv(own: List<&2, String>) -> IO(List<&2, String>):
+  Server.argv(List.append(&2, String, own, ["--max-stream N", "--progress-ms N"]))
 
 # The body's reader
 # =================
@@ -1622,8 +1617,8 @@ def reply.of(rp: Reply) -> IO(Server.Reply):
   match rp:
     case Plain{r}:
       IO.pure(Server.Reply, Server.Answer{r})
-    case Pour{+code, hs, ln, run}:
-      IO.pure(Server.Reply, Server.Pour{t => s => pour.go(code, hs, ln, run, t, s)})
+    case Pour{code, hs, ln, run}:
+      IO.pure(Server.Reply, Server.Pour{code, hs, c => h => t => s => pour.go(c, h, ln, run, t, s)})
 
 # a GET route (HEAD too) whose handler answers a Stream.Reply, beside
 # Server.get and the rest in Server.serve.routes (or WsServer.serve)
