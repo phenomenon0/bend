@@ -240,11 +240,19 @@ def head.or(xs: List<&2, String>, d: String) -> String:
 
 # a spec's name ("--port" of "--port N") and its value's name ("N"; ""
 # for a flag that takes none)
-def spec.name(+s: String) -> String:
-  head.or(String.split_on(s, " "), s)
+def spec.name(s: String) -> String:
+  match s:
+    case SNil{}:
+      SNil{}
+    case SCon{Chr{+c}, t}:
+      Bool.pick(String, U32.is_eq(c, 32), SNil{}, SCon{Chr{c}, spec.name(t)})
 
-def spec.arg(+s: String) -> String:
-  Bytes.drop(s, Nat.add(Bytes.len(spec.name(s)), 1n))
+def spec.arg(s: String) -> String:
+  match s:
+    case SNil{}:
+      SNil{}
+    case SCon{Chr{+c}, +t}:
+      Bool.pick(String, U32.is_eq(c, 32), t, spec.arg(t))
 
 def spec.find(specs: List<&2, String>, +x: String) -> Maybe<&2, String>:
   match specs:

@@ -353,7 +353,7 @@ def w.table() -> List<&1, Server.Route>:
    Server.on(["PUT", "PATCH"], "/q/:id", w.h)]
 
 def w.mw(+r: Http.Request, io: IO(Http.Response)) -> IO(Http.Response):
-  Server.logged.around(r, Server.secured.around(io))
+  Server.secured.around(io)
 
 def w.pats(+up: Bool, +m: Bytes(), rs: List<&1, Server.Route>) -> List<&2, Server.Pat>:
   Pair.fst(List<&2, Server.Pat>, List<&1, Server.Hr()>, Server.unzip(up, m, rs))

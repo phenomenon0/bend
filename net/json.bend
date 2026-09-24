@@ -127,9 +127,17 @@ def path.go(ks: List<&2, Bytes()>, m: Maybe<&2, J.Json>) -> Maybe<&2, J.Json>:
     case Con{+k, t}:
       path.go(t, Maybe.bind(&2, J.Json, J.Json, m, v => path.in(v, k)))
 
+# a path's keys: its bytes cut at every '.'
+def path.keys(s: Bytes(), +cur: Bytes()) -> List<&2, Bytes()>:
+  match s:
+    case SNil{}:
+      [cur]
+    case SCon{Chr{+c}, +t}:
+      Bool.pick(List<&2, Bytes()>, U32.is_eq(c, 46), Con{cur, path.keys(t, "")}, path.keys(t, Bytes.push(cur, c)))
+
 # the value at a path, or None
 def path(j: J.Json, +p: Bytes()) -> Maybe<&2, J.Json>:
-  path.go(String.split_on(p, "."), Some{j})
+  path.go(path.keys(p, ""), Some{j})
 
 # Typed fields
 # ------------
