@@ -1187,9 +1187,357 @@ def written(st: St) -> Nat:
         case O{out, keep, n, cap, t}:
           n
 
-# a whole raw deflate stream, at most cap bytes out
+
+# Inflate, fast
+# =============
+#
+# The machine steps a bit at a time and builds its state at every bit.
+# A whole stream is read faster where the machine is at the start of a
+# literal/length code: from there fi.dec reads a symbol whole, its code
+# (fi.walk: the machine's walk, cell by cell), its extra bits (fi.get:
+# the machine's Get) and its distance, with the same tables, the same
+# checks in the same order and the bits the machine would read, at the
+# same offsets; a copy reads the byte it copies where it lies (fi.copy,
+# copy.go's loop). Anything else -- an end of block, a code, length or
+# distance the machine refuses, a cap reached, the input's end -- is
+# left to the machine, which steps its bit. inflate_proof.bend proves the
+# driver (fi.drv) is the machine over the stream's bits, whatever the
+# stream, so D.inflate is finish(feed(s, new(cap))) (law inflate_fast).
+
+
+# the bit at bit r of byte q, as the machine reads it
+def fi.b(+s: Bytes(), +q: Nat, +r: Nat) -> Bool:
+  bit(Bytes.get(s, q), r)
+
+# the byte after that bit
+def fi.nq(+q: Nat, +r: Nat) -> Nat:
+  pick(Nat.is_eq(r, 7n), 1n+q, q)
+
+# whether byte q is there to read
+def fi.in(+s: Bytes(), +q: Nat) -> Bool:
+  Nat.is_lt(q, Bytes.len(s))
+
+# the cell the machine reads at node for the bit b (mode's Walk row)
+def fi.cell(+tab: String, +node: Nat, b: Bool) -> Nat:
+  U32.to_nat(Bytes.get(tab, Nat.add(Nat.double(node), Nat.bit(b, 0n))))
+
+# what a cell says, as walk reads it: go on from a node, a symbol, or
+# no code
+type Wn is Data:
+  WGo{n: Nat}
+  WSym{s: Nat}
+  WBad{}
+
+def fi.step.lr(q: Nat, leaf: Bool) -> Wn:
+  match leaf:
+    case True{}:
+      WSym{q}
+    case False{}:
+      WGo{q}
+
+def fi.step.at(zero: Bool, qr: Nat & Nat) -> Wn:
+  match zero:
+    case True{}:
+      WBad{}
+    case False{}:
+      (q, r) = qr
+      fi.step.lr(q, Nat.is_eq(r, 1n))
+
+def fi.step(+x: Nat) -> Wn:
+  fi.step.at(Nat.is_eq(x, 0n), Nat.divmod(x, 2n))
+
+# a code read from bit r of byte q: the symbol and where it ends, or
+# none (no code, the input ends, or k bits did not reach one)
+type Wk is Data:
+  WLeaf{s: Nat, q: Nat, r: Nat}
+  WStop{}
+
+def fi.walk(k: Nat, w: Wn, ok: Bool, +tab: String, +s: Bytes(), +q: Nat, +r: Nat) -> Wk:
+  match k w ok:
+    case _ WSym{sy} _:
+      WLeaf{sy, q, r}
+    case 1n+p WGo{n} True{}:
+      +q2 = fi.nq(q, r)
+      fi.walk(p, fi.step(fi.cell(tab, n, fi.b(s, q, r))), fi.in(s, q2), tab, s, q2, next_bp(r))
+    case _ _ _:
+      WStop{}
+
+# k bits more, as the machine's Get gathers them (newest first)
+type Gt is Data:
+  Gt{acc: List<&2, Bool>, q: Nat, r: Nat}
+  GStop{}
+
+def fi.get(k: Nat, ok: Bool, +s: Bytes(), +q: Nat, +r: Nat, acc: List<&2, Bool>) -> Gt:
+  match k ok:
+    case 0n _:
+      Gt{acc, q, r}
+    case 1n+p True{}:
+      +q2 = fi.nq(q, r)
+      fi.get(p, fi.in(s, q2), s, q2, next_bp(r), Con{fi.b(s, q, r), acc})
+    case 1n+p False{}:
+      GStop{}
+
+def fi.at(+s: String, +i: Nat) -> Nat:
+  U32.to_nat(Bytes.get(s, i))
+
+# The symbols
+# -----------
+#
+# The next symbol of a Huffman block, read whole the way sym, lit,
+# len_x, dist and copy read it: a literal, a copy, or one the fast
+# path leaves to the machine (an end of block, a refusal, the input's
+# end), with the position after it.
+
+type Dc is Data:
+  DLit{c: Nat, q: Nat, r: Nat}
+  DCopy{len: Nat, dist: Nat, q: Nat, r: Nat}
+  DStop{}
+
+def fi.cp(far: Bool, big: Bool, +len: Nat, +dist: Nat, +q: Nat, +r: Nat) -> Dc:
+  match far big:
+    case False{} False{}:
+      DCopy{len, dist, q, r}
+    case _ _:
+      DStop{}
+
+def fi.copy.ok(+len: Nat, +dist: Nat, +q: Nat, +r: Nat, +olen: Nat, +n: Nat, +cap: Nat) -> Dc:
+  fi.cp(Nat.is_lt(olen, dist), Nat.is_lt(cap, Nat.add(n, len)), len, dist, q, r)
+
+def fi.dist.g(g: Gt, +len: Nat, +base: Nat, +olen: Nat, +n: Nat, +cap: Nat) -> Dc:
+  match g:
+    case Gt{acc, +q, +r}:
+      fi.copy.ok(len, Nat.add(base, hval(acc, 0n)), q, r, olen, n, cap)
+    case GStop{}:
+      DStop{}
+
+def fi.dist_x(x: Nat, +base: Nat, +s: Bytes(), +len: Nat, +q: Nat, +r: Nat, +olen: Nat, +n: Nat,
+  +cap: Nat) -> Dc:
+  match x:
+    case 0n:
+      fi.copy.ok(len, base, q, r, olen, n, cap)
+    case 1n+p:
+      fi.dist.g(fi.get(1n+p, fi.in(s, q), s, q, r, Nil{}), len, base, olen, n, cap)
+
+def fi.dist(ok: Bool, +ds: Nat, +s: Bytes(), +len: Nat, +q: Nat, +r: Nat, +db: String, +dx: String,
+  +olen: Nat, +n: Nat, +cap: Nat) -> Dc:
+  match ok:
+    case True{}:
+      fi.dist_x(fi.at(dx, ds), fi.at(db, ds), s, len, q, r, olen, n, cap)
+    case False{}:
+      DStop{}
+
+def fi.dsym(wk: Wk, +s: Bytes(), +len: Nat, +db: String, +dx: String, +olen: Nat, +n: Nat, +cap: Nat) ->
+  Dc:
+  match wk:
+    case WLeaf{+ds, +q, +r}:
+      fi.dist(Nat.is_lt(ds, 30n), ds, s, len, q, r, db, dx, olen, n, cap)
+    case WStop{}:
+      DStop{}
+
+def fi.dwalk(+len: Nat, +s: Bytes(), +q: Nat, +r: Nat, +d: String, +db: String, +dx: String, +olen: Nat,
+  +n: Nat, +cap: Nat) -> Dc:
+  fi.dsym(fi.walk(16n, WGo{0n}, fi.in(s, q), d, s, q, r), s, len, db, dx, olen, n, cap)
+
+def fi.len.g(g: Gt, +base: Nat, +s: Bytes(), +d: String, +db: String, +dx: String, +olen: Nat,
+  +n: Nat, +cap: Nat) -> Dc:
+  match g:
+    case Gt{acc, +q, +r}:
+      fi.dwalk(Nat.add(base, hval(acc, 0n)), s, q, r, d, db, dx, olen, n, cap)
+    case GStop{}:
+      DStop{}
+
+def fi.len_x(x: Nat, +base: Nat, +s: Bytes(), +q: Nat, +r: Nat, +d: String, +db: String,
+  +dx: String, +olen: Nat, +n: Nat, +cap: Nat) -> Dc:
+  match x:
+    case 0n:
+      fi.dwalk(base, s, q, r, d, db, dx, olen, n, cap)
+    case 1n+p:
+      fi.len.g(fi.get(1n+p, fi.in(s, q), s, q, r, Nil{}), base, s, d, db, dx, olen, n, cap)
+
+def fi.lit.c(ok: Bool, +i: Nat, +s: Bytes(), +q: Nat, +r: Nat, +d: String, +lb: String, +lx: String,
+  +db: String, +dx: String, +olen: Nat, +n: Nat, +cap: Nat) -> Dc:
+  match ok:
+    case True{}:
+      fi.len_x(fi.at(lx, i), fi.at(lb, i), s, q, r, d, db, dx, olen, n, cap)
+    case False{}:
+      DStop{}
+
+def fi.lit.b(eob: Bool, +sy: Nat, +s: Bytes(), +q: Nat, +r: Nat, +d: String, +lb: String,
+  +lx: String, +db: String, +dx: String, +olen: Nat, +n: Nat, +cap: Nat) -> Dc:
+  match eob:
+    case True{}:
+      DStop{}
+    case False{}:
+      fi.lit.c(Nat.is_lt(sy, U32.to_nat(286)), Nat.sub(sy, U32.to_nat(257)), s, q, r, d, lb, lx, db, dx,
+        olen, n, cap)
+
+def fi.emit(ok: Bool, +sy: Nat, +q: Nat, +r: Nat) -> Dc:
+  match ok:
+    case True{}:
+      DLit{sy, q, r}
+    case False{}:
+      DStop{}
+
+def fi.lit(is_lit: Bool, +sy: Nat, +s: Bytes(), +q: Nat, +r: Nat, +d: String, +lb: String,
+  +lx: String, +db: String, +dx: String, +olen: Nat, +n: Nat, +cap: Nat) -> Dc:
+  match is_lit:
+    case True{}:
+      fi.emit(Nat.is_lt(n, cap), sy, q, r)
+    case False{}:
+      fi.lit.b(Nat.is_eq(sy, 256n), sy, s, q, r, d, lb, lx, db, dx, olen, n, cap)
+
+def fi.lsym(wk: Wk, +s: Bytes(), +d: String, +lb: String, +lx: String, +db: String, +dx: String,
+  +olen: Nat, +n: Nat, +cap: Nat) -> Dc:
+  match wk:
+    case WLeaf{+sy, +q, +r}:
+      fi.lit(Nat.is_lt(sy, 256n), sy, s, q, r, d, lb, lx, db, dx, olen, n, cap)
+    case WStop{}:
+      DStop{}
+
+# the next symbol at bit r of byte q, its code read with tab
+def fi.dec(+s: Bytes(), +q: Nat, +r: Nat, +tab: String, +d: String, +lb: String, +lx: String,
+  +db: String, +dx: String, +olen: Nat, +n: Nat, +cap: Nat) -> Dc:
+  fi.lsym(fi.walk(16n, WGo{0n}, fi.in(s, q), tab, s, q, r), s, d, lb, lx, db, dx, olen, n, cap)
+
+def fi.back(+o: Bytes(), +dist: Nat) -> U32:
+  Bytes.get(o, Nat.sub(Bytes.len(o), dist))
+
+# copy.go, with the byte read where it lies
+def fi.copy(len: Nat, +out: Bytes(), +dist: Nat) -> Bytes():
+  match len:
+    case 0n:
+      out
+    case 1n+p:
+      +c = fi.back(out, dist)
+      fi.copy(p, Bytes.push(out, c), dist)
+
+def fi.len(+o: Bytes()) -> Nat:
+  Bytes.len(o)
+
+# where the fast path stopped
+type Fr is Data:
+  Fr{q: Nat, r: Nat, out: Bytes(), n: Nat}
+
+# symbols until one is left to the machine
+def fi.run(k: Nat, dc: Dc, +s: Bytes(), +ll: String, +d: String, +lb: String, +lx: String,
+  +db: String, +dx: String, +q: Nat, +r: Nat, out: Bytes(), +n: Nat, +cap: Nat) -> Fr:
+  match k dc:
+    case 1n+p DLit{+c, +q2, +r2}:
+      +o2 = Bytes.push(out, U32.from_nat(c))
+      fi.run(p, fi.dec(s, q2, r2, ll, d, lb, lx, db, dx, fi.len(o2), 1n+n, cap), s, ll, d, lb, lx, db, dx,
+        q2, r2, o2, 1n+n, cap)
+    case 1n+p DCopy{+len, +dist, +q2, +r2}:
+      +o2 = fi.copy(len, out, dist)
+      fi.run(p, fi.dec(s, q2, r2, ll, d, lb, lx, db, dx, fi.len(o2), Nat.add(n, len), cap), s, ll, d, lb,
+        lx, db, dx, q2, r2, o2, Nat.add(n, len), cap)
+    case _ _:
+      Fr{q, r, out, n}
+
+# The driver
+# ----------
+
+# the bits of a stream, each byte's low first
+def fi.bits(s: Bytes()) -> List<&2, Bool>:
+  match s:
+    case SNil{}:
+      Nil{}
+    case SCon{Chr{c}, t}:
+      List.append(&2, Bool, unbyte(c), fi.bits(t))
+
+# the machine over bits
+def fi.bfeed(bs: List<&2, Bool>, st: St) -> St:
+  match bs:
+    case Nil{}:
+      st
+    case Con{b, t}:
+      fi.bfeed(t, bstep(st, b))
+
+# the rest of the input from bit r of its first byte, as bits
+def fi.rest(t: Bytes(), +r: Nat) -> List<&2, Bool>:
+  match t:
+    case SNil{}:
+      Nil{}
+    case SCon{Chr{c}, u}:
+      List.append(&2, Bool, List.drop(&2, Bool, unbyte(c), r), fi.bits(u))
+
+type Dv is Data:
+  Dv{q: Nat, r: Nat, st: St, go: Bool}
+
+# the machine a bit on
+def fi.bit(+s: Bytes(), +q: Nat, +r: Nat, st: St) -> Dv:
+  +q2 = fi.nq(q, r)
+  Dv{q2, next_bp(r), bstep(st, fi.b(s, q, r)), fi.in(s, q2)}
+
+def fi.fr(f: Fr, +s: Bytes(), last: Bool, +ll: String, +d: String, +keep: Nat, +cap: Nat, t: Tabs) -> Dv:
+  match f:
+    case Fr{+q, +r, out, n}:
+      Dv{q, r, St{lit_mode(Blk{last, ll, d}), O{out, keep, n, cap, t}, r}, fi.in(s, q)}
+
+# a first symbol read whole, and then the rest the fast path reads
+def fi.first(dc: Dc, +s: Bytes(), +q: Nat, +r: Nat, +tab: String, last: Bool, +ll: String, +d: String,
+  out: Bytes(), +keep: Nat, +n: Nat, +cap: Nat, fll: String, fd: String, +lb: String, +lx: String,
+  +db: String, +dx: String) -> Dv:
+  match dc:
+    case DStop{}:
+      fi.bit(s, q, r, St{Walk{0n, tab, SLit{Blk{last, ll, d}}}, O{out, keep, n, cap,
+        Tabs{fll, fd, lb, lx, db, dx}}, r})
+    case DLit{+c, +q2, +r2}:
+      +o2 = Bytes.push(out, U32.from_nat(c))
+      fi.fr(fi.run(Bytes.len(s), fi.dec(s, q2, r2, ll, d, lb, lx, db, dx, fi.len(o2), 1n+n, cap), s, ll, d,
+        lb, lx, db, dx, q2, r2, o2, 1n+n, cap), s, last, ll, d, keep, cap, Tabs{fll, fd, lb, lx, db, dx})
+    case DCopy{+len, +dist, +q2, +r2}:
+      +o2 = fi.copy(len, out, dist)
+      fi.fr(fi.run(Bytes.len(s), fi.dec(s, q2, r2, ll, d, lb, lx, db, dx, fi.len(o2), Nat.add(n, len), cap),
+        s, ll, d, lb, lx, db, dx, q2, r2, o2, Nat.add(n, len), cap), s, last, ll, d, keep, cap,
+        Tabs{fll, fd, lb, lx, db, dx})
+
+def fi.fast(+s: Bytes(), +q: Nat, +r: Nat, +tab: String, last: Bool, +ll: String, +d: String, o: O) ->
+  Dv:
+  match o:
+    case O{+out, +keep, +n, +cap, t}:
+      match t:
+        case Tabs{fll, fd, +lb, +lx, +db, +dx}:
+          fi.first(fi.dec(s, q, r, tab, d, lb, lx, db, dx, fi.len(out), n, cap), s, q, r, tab, last, ll, d,
+            out, keep, n, cap, fll, fd, lb, lx, db, dx)
+
+# at node 0 of a literal code at the machine's own bit, the fast path;
+# anywhere else, a bit
+def fi.at.bp(same: Bool, +s: Bytes(), +q: Nat, +r: Nat, +tab: String, last: Bool, +ll: String,
+  +d: String, o: O, +bp: Nat) -> Dv:
+  match same:
+    case True{}:
+      fi.fast(s, q, r, tab, last, ll, d, o)
+    case False{}:
+      fi.bit(s, q, r, St{Walk{0n, tab, SLit{Blk{last, ll, d}}}, o, bp})
+
+def fi.node(+s: Bytes(), +q: Nat, +r: Nat, st: St) -> Dv:
+  match st:
+    case St{m, o, +bp}:
+      match m:
+        case Walk{node, +tab, sk}:
+          match node sk:
+            case 0n SLit{blk}:
+              match blk:
+                case Blk{last, +ll, +d}:
+                  fi.at.bp(Nat.is_eq(bp, r), s, q, r, tab, last, ll, d, o, bp)
+            case _ _:
+              fi.bit(s, q, r, St{Walk{node, tab, sk}, o, bp})
+        case _:
+          fi.bit(s, q, r, St{m, o, bp})
+
+def fi.drv(k: Nat, +s: Bytes(), dv: Dv) -> St:
+  match k dv:
+    case 1n+p Dv{+q, +r, st, True{}}:
+      fi.drv(p, s, fi.node(s, q, r, st))
+    case 0n Dv{+q, +r, st, True{}}:
+      fi.bfeed(fi.rest(Bytes.drop(s, q), r), st)
+    case _ Dv{q, r, st, False{}}:
+      st
+
+# a whole raw deflate stream, at most cap bytes out: the machine over
+# it (law inflate_fast), driven by the fast path
 def inflate(cap: Nat, +s: Bytes()) -> Result<&2, &2, Why, Bytes()>:
-  finish(feed(s, new(cap)))
+  finish(fi.drv(Nat.add(Nat.mul(8n, Bytes.len(s)), 1n), s, Dv{0n, 0n, new(cap), fi.in(s, 0n)}))
 
 # Deflate
 # =======
@@ -2211,12 +2559,504 @@ def lz_all(+x: Bytes(), +lvl: Nat, fx: Bool) -> Z:
   lz(1n+n, Z{x, n, level(lvl), ec_fixed(fx), 0n, h_new(), Nil{}, 0n, 0n, 0n, w_new(), 0n, 0n, False{},
     Nat.is_lt(0n, n)})
 
+# Deflate, fast
+# =============
+#
+# The pass above again, decision for decision -- the hash, the chains,
+# the greedy and lazy rules, the block split, the code lengths, the
+# header -- and so the same stream, byte for byte (the fixture holds it
+# to deflate_gen.py's twin, and to the pass above on 10 MB of text at
+# every level), but in flat state: the chains, the block's tokens and
+# the frequencies in arrays, the writer's bits in a word that goes out a
+# byte at a time, a match's length found four bytes at a time, and a
+# link that cannot beat the best match so far passed over at the byte
+# that would have to beat it. A token is a U32: a literal, or
+# len << 16 | dist. What deflate writes at levels 1 to 9.
+
+# The writer
+# ----------
+
+# the bytes out, and the bits of the byte being filled: nb of them, low
+# first, in acc (nb < 8)
+type FW is Data:
+  FW{out: Bytes(), acc: U32, nb: Nat}
+
+# the k low bytes of a, low first
+def pushn(k: Nat, out: Bytes(), +a: U32) -> Bytes():
+  match k:
+    case 0n:
+      out
+    case 1n+p:
+      pushn(p, Bytes.push(out, U32.and(a, 255)), U32.shrn(a, 8n))
+
+# a field of k bits (at most 24), low first
+def fput(w: FW, +v: U32, +k: Nat) -> FW:
+  match w:
+    case FW{out, acc, +nb}:
+      +a2 = U32.or(acc, U32.shln(v, nb))
+      +n2 = Nat.add(nb, k)
+      +nby = Nat.div(n2, 8n)
+      FW{pushn(nby, out, a2), U32.shrn(a2, Nat.mul(8n, nby)), Nat.mod(n2, 8n)}
+
+def fput_n(w: FW, +v: Nat, +k: Nat) -> FW:
+  fput(w, U32.from_nat(v), k)
+
+# zeros to the next byte
+def falign(w: FW) -> FW:
+  match w:
+    case FW{out, acc, +nb}:
+      fput(FW{out, acc, nb}, 0, Nat.mod(Nat.sub(8n, nb), 8n))
+
+def fw_out(w: FW) -> Bytes():
+  match w:
+    case FW{out, acc, nb}:
+      out
+
+# bytes as they are, the writer being at a byte
+def fraw(w: FW, +b: Bytes()) -> FW:
+  match w:
+    case FW{out, acc, nb}:
+      FW{Bytes.append(out, b), acc, nb}
+
+# A code as the writer takes it: each symbol's code with its bits in the
+# order they go out (the code read back low first), and its length
+type RC is Data:
+  RC{c: String, l: String}
+
+def rc.go(cs: List<&2, Code>, c: String, l: String) -> RC:
+  match cs:
+    case Nil{}:
+      RC{c, l}
+    case Con{Code{+n, v}, t}:
+      rc.go(t, Bytes.push(c, U32.from_nat(rev(n, v, 0n))), Bytes.push(l, U32.from_nat(n)))
+
+def rc(+lens: List<&2, Nat>) -> RC:
+  rc.go(codes(lens), "", "")
+
+# a cell of a table written out (st_n), or of one built at runtime (at,
+# at_n): kept apart so the runtime tables are only ever lent, never owned
+def st_n(+s: String, +i: Nat) -> Nat:
+  U32.to_nat(Bytes.get(s, i))
+
+def at(+s: String, +i: Nat) -> U32:
+  Bytes.get(s, i)
+
+def at_n(+s: String, +i: Nat) -> Nat:
+  U32.to_nat(Bytes.get(s, i))
+
+def fsym(w: FW, +c: String, +l: String, +s: Nat) -> FW:
+  fput(w, at(c, s), at_n(l, s))
+
+def fsym.rc(w: FW, +h: RC, +s: Nat) -> FW:
+  match h:
+    case RC{+c, +l}:
+      fsym(w, c, l, s)
+
+# The tables a block's tokens are written with: the literal/length
+# code's literals and end (lc, ll); each length from 3 to 258 at l - 3,
+# its code and extra bits as one field (mv) and that field's width (ml);
+# the distance code (dc, dl)
+type BT is Data:
+  BT{lc: String, ll: String, mv: String, ml: String, dc: String, dl: String}
+
+type S2 is Data:
+  S2{a: String, b: String}
+
+def bt.lens(k: Nat, +lc: String, +ll: String, +len: Nat, mv: String, ml: String) -> S2:
+  match k:
+    case 0n:
+      S2{mv, ml}
+    case 1n+p:
+      +kk = st_n(LCS(), Nat.sub(len, 3n))
+      +l = at_n(ll, Nat.add(257n, kk))
+      bt.lens(p, lc, ll, 1n+len, Bytes.push(mv, U32.or(at(lc, Nat.add(257n, kk)),
+        U32.shln(U32.from_nat(Nat.sub(len, st_n(LBS(), kk))), l))),
+        Bytes.push(ml, U32.from_nat(Nat.add(l, st_n(LXS(), kk)))))
+
+def bt.at(+lc: String, +ll: String, r: S2, d: RC) -> BT:
+  match r d:
+    case S2{mv, ml} RC{dc, dl}:
+      BT{lc, ll, mv, ml, dc, dl}
+
+def bt.of(ll: RC, d: RC) -> BT:
+  match ll:
+    case RC{+lc, +l}:
+      bt.at(lc, l, bt.lens(256n, lc, l, 3n, "", ""), d)
+
+# a token: a literal (below 256), or a copy (len << 16 | dist)
+def ftok.at(lit: Bool, w: FW, +lc: String, +ll: String, +mv: String, +ml: String, +dc: String,
+  +dl: String, +v: U32) -> FW:
+  match lit:
+    case True{}:
+      fsym(w, lc, ll, U32.to_nat(v))
+    case False{}:
+      +li = Nat.sub(U32.to_nat(U32.shrn(v, 16n)), 3n)
+      +dist = U32.to_nat(U32.and(v, 65535))
+      +q = st_n(DCS(), didx(dist))
+      fput(fput(fput(w, at(mv, li), at_n(ml, li)), at(dc, q), at_n(dl, q)),
+        U32.from_nat(Nat.sub(dist, st_n(DBS(), q))), st_n(DXS(), q))
+
+type TW is Type:
+  TW{tk: Array<U32>, w: FW}
+
+# the tokens j.. of tk, nt in all
+def ftoks(k: Nat, go: Bool, r: Array<U32> & U32, +j: Nat, +nt: Nat, w: FW, +lc: String,
+  +ll: String, +mv: String, +ml: String, +dc: String, +dl: String) -> TW:
+  match k go:
+    case 1n+p True{}:
+      (tk, +v) = r
+      ftoks(p, Nat.is_lt(1n+j, nt), Array.get(U32, tk, U32.from_nat(1n+j)), 1n+j, nt,
+        ftok.at(U32.is_lt(v, 256), w, lc, ll, mv, ml, dc, dl, v), lc, ll, mv, ml, dc, dl)
+    case _ _:
+      (tk, v) = r
+      TW{tk, w}
+
+def fbody.end(r: TW, +lc: String, +ll: String) -> TW:
+  match r:
+    case TW{tk, w}:
+      TW{tk, fsym(w, lc, ll, 256n)}
+
+# the tokens of a block, then its end
+def fbody(tk: Array<U32>, +nt: Nat, w: FW, t: BT) -> TW:
+  match t:
+    case BT{+lc, +ll, +mv, +ml, +dc, +dl}:
+      fbody.end(ftoks(1n+nt, Nat.is_lt(0n, nt), Array.get(U32, tk, 0), 0n, nt, w, lc, ll, mv, ml, dc,
+        dl), lc, ll)
+
+# Frequencies
+# -----------
+
+type FQ2 is Type:
+  FQ2{fa: Array<U32>, da: Array<U32>, xt: Nat}
+
+type FF is Type:
+  FF{tk: Array<U32>, fa: Array<U32>, da: Array<U32>, xt: Nat}
+
+def ffreq.tok(lit: Bool, +v: U32, fa: Array<U32>, da: Array<U32>, +xt: Nat) -> FQ2:
+  match lit:
+    case True{}:
+      FQ2{bump_a(fa, U32.to_nat(v)), da, xt}
+    case False{}:
+      +k = st_n(LCS(), lidx(U32.to_nat(U32.shrn(v, 16n))))
+      +q = st_n(DCS(), didx(U32.to_nat(U32.and(v, 65535))))
+      FQ2{bump_a(fa, Nat.add(257n, k)), bump_a(da, q),
+        Nat.add(xt, Nat.add(st_n(LXS(), k), st_n(DXS(), q)))}
+
+def ffreq(k: Nat, go: Bool, r: Array<U32> & U32, +j: Nat, +nt: Nat, f: FQ2) -> FF:
+  match k go:
+    case 1n+p True{}:
+      (tk, +v) = r
+      match f:
+        case FQ2{fa, da, xt}:
+          ffreq(p, Nat.is_lt(1n+j, nt), Array.get(U32, tk, U32.from_nat(1n+j)), 1n+j, nt,
+            ffreq.tok(U32.is_lt(v, 256), v, fa, da, xt))
+    case _ _:
+      (tk, v) = r
+      match f:
+        case FQ2{fa, da, xt}:
+          FF{tk, fa, da, xt}
+
+# Blocks
+# ------
+
+def lastb(b: Bool) -> U32:
+  u32.pick(b, 1, 0)
+
+# stored blocks of the len bytes of x from at: 65535 a block, the last
+# (0 to 65535 bytes) marked last if last is
+def fstored(k: Nat, +x: Bytes(), +at: Nat, +left: Nat, +last: Bool, w: FW, go: Bool) -> FW:
+  match k go:
+    case 1n+p True{}:
+      +big = Nat.is_lt(65535n, left)
+      +m = pick(big, 65535n, left)
+      fstored(p, x, Nat.add(at, m), Nat.sub(left, m), last,
+        fraw(fput_n(fput_n(falign(fput(w, lastb(Bool.not(big) && last), 3n)), m, 16n),
+          Nat.sub(65535n, m), 16n), Bytes.slice(x, at, m)), big)
+    case _ _:
+      w
+
+def fput3s(n: Nat, xs: List<&2, Nat>, w: FW) -> FW:
+  match n xs:
+    case 1n+p Con{+x, t}:
+      fput3s(p, t, fput_n(w, x, 3n))
+    case _ _:
+      w
+
+def fitems(xs: List<&2, CLI>, +h: RC, w: FW) -> FW:
+  match xs:
+    case Nil{}:
+      w
+    case Con{CLI{+s, +x, +v}, t}:
+      fitems(t, h, fput_n(fsym.rc(w, h, s), v, x))
+
+def fdyn(tk: Array<U32>, +nt: Nat, w: FW, last: Bool, p: Dp) -> TW:
+  match p:
+    case Dp{+ll, +d, +nlit, +ndist, items, +cll, pl, +n, bits}:
+      fbody(tk, nt, fitems(items, rc(cll), fput3s(n, pl, fput_n(fput_n(fput_n(
+        fput(w, U32.add(4, lastb(last)), 3n), Nat.sub(nlit, 257n), 5n), Nat.sub(ndist, 1n), 5n),
+        Nat.sub(n, 4n), 4n))), bt.of(rc(ll), rc(d)))
+
+def bt_fixed() -> BT:
+  bt.of(rc(fixed_ll_lens()), rc(fixed_d_lens()))
+
+def fblock.at(kind: Nat, tk: Array<U32>, +nt: Nat, +x: Bytes(), +at: Nat, +len: Nat, last: Bool,
+  w: FW, p: Dp) -> TW:
+  match kind:
+    case 0n:
+      TW{tk, fstored(2n+Nat.div(len, 65535n), x, at, len, last, w, True{})}
+    case 1n:
+      fbody(tk, nt, fput(w, U32.add(2, lastb(last)), 3n), bt_fixed())
+    case _:
+      fdyn(tk, nt, w, last, p)
+
+def fblock.plan(r: FF, +nt: Nat, +x: Bytes(), +at: Nat, +len: Nat, last: Bool, w: FW) -> TW:
+  match r:
+    case FF{tk, fa, da, +xt}:
+      +fl = List.take(&2, Nat, nats(Array.to_list(~U32, bump_a(fa, 256n))), 286n)
+      +fd = List.take(&2, Nat, nats(Array.to_list(~U32, da)), 30n)
+      +p = dplan(hlens(fl, 15n, 286n), hlens(fd, 15n, 30n))
+      fblock.at(choose(Nat.add(Nat.mul(8n, len), Nat.mul(48n, 1n+Nat.div(len, K64()))),
+        Nat.add(3n, Nat.add(xt, Nat.add(dot(fl, fixed_ll_lens()), Nat.mul(5n, sum(fd))))),
+        Nat.add(dp_bits(p), Nat.add(xt, Nat.add(dot(fl, dp_ll(p)), dot(fd, dp_d(p)))))),
+        tk, nt, x, at, len, last, w, p)
+
+# a block: the nt tokens of tk, which cover the len bytes of x from at
+def fblock(tk: Array<U32>, +nt: Nat, +x: Bytes(), +at: Nat, +len: Nat, last: Bool, w: FW) -> TW:
+  fblock.plan(ffreq(1n+nt, Nat.is_lt(0n, nt), Array.get(U32, tk, 0), 0n, nt,
+    FQ2{Array.new(U32, 9n, 0), Array.new(U32, 5n, 0), 0n}), nt, x, at, len, last, w)
+
+# LZ77
+# ----
+
+# how many of the four bytes of a and b agree, from the low end
+def same4(+a: U32, +b: U32) -> Nat:
+  +z = U32.xor(a, b)
+  pick(U32.is_ne(U32.and(z, 255), 0), 0n, pick(U32.is_ne(U32.and(z, 65535), 0), 1n,
+    pick(U32.is_ne(U32.and(z, 16777215), 0), 2n, pick(U32.is_ne(z, 0), 3n, 4n))))
+
+# how many bytes from a and from b agree, from l on, at most n: four at
+# a time (a byte past the input reads 0; none past n is counted)
+def mlen4(k: Nat, +x: Bytes(), +a: Nat, +b: Nat, +n: Nat, +l: Nat, go: Bool) -> Nat:
+  match k go:
+    case 1n+p True{}:
+      +s = same4(Bytes.word_le(x, Nat.add(a, l)), Bytes.word_le(x, Nat.add(b, l)))
+      +l2 = Nat.min(Nat.add(l, s), n)
+      mlen4(p, x, a, b, n, l2, Nat.is_eq(s, 4n) && Nat.is_lt(l2, n))
+    case _ _:
+      l
+
+# The chain's walk from the link cand (lastc the one before it): the
+# best match so far, packed as len << 16 | dist
+def zchain(k: Nat, +x: Bytes(), +i: Nat, +maxl: Nat, +nice: Nat, go: Bool, r: Array<U32> & U32,
+  +blen: Nat, +bdist: Nat, +lastc: U32) -> Array<U32> & U32:
+  match k go:
+    case 1n+p True{}:
+      (prev, +cand) = r
+      +j = Nat.sub(U32.to_nat(cand), 1n)
+      +ok = U32.is_ne(cand, 0) && U32.is_lt(cand, lastc) && Nat.is_lt(j, i) &&
+        Nat.is_le(Nat.sub(i, j), 32768n)
+      +ml = mlen4(66n, x, j, i, maxl, 0n, ok && Nat.is_lt(blen, maxl) &&
+        U32.is_eq(Bytes.get(x, Nat.add(j, blen)), Bytes.get(x, Nat.add(i, blen))))
+      +better = Nat.is_lt(blen, ml)
+      zchain(p, x, i, maxl, nice, ok && Nat.is_lt(ml, nice),
+        Array.get(U32, prev, U32.and(U32.sub(cand, 1), 32767)), pick(better, ml, blen),
+        pick(better, Nat.sub(i, j), bdist), cand)
+    case _ _:
+      (prev, cand) = r
+      (prev, U32.or(U32.shln(U32.from_nat(blen), 16n), U32.from_nat(bdist)))
+
+type ZM is Type:
+  ZM{head: Array<U32>, prev: Array<U32>, len: Nat, dist: Nat}
+
+def fm(head: Array<U32>, r: Array<U32> & U32) -> ZM:
+  (prev, +pk) = r
+  +blen = U32.to_nat(U32.shrn(pk, 16n))
+  +bdist = U32.to_nat(U32.and(pk, 65535))
+  ZM{head, prev, pick(Nat.is_eq(blen, 3n) && Nat.is_lt(4096n, bdist), 0n, blen), bdist}
+
+def fh(r: Array<U32> & U32, prev: Array<U32>, +x: Bytes(), +n: Nat, +i: Nat, +nice: Nat, +k: Nat) ->
+  ZM:
+  (head, +cand) = r
+  fm(head, zchain(k, x, i, Nat.min(258n, Nat.sub(n, i)), nice, True{},
+    (Array.set(U32, prev, U32.and(U32.from_nat(i), 32767), cand), cand), 0n, 0n, 4294967295))
+
+# position i into its chain, and the longest match there, trying k
+# links; none where there are not three bytes to hash
+def zfind(ok: Bool, +x: Bytes(), +n: Nat, +i: Nat, +nice: Nat, +k: Nat, head: Array<U32>,
+  prev: Array<U32>) -> ZM:
+  match ok:
+    case True{}:
+      fh(Array.swap(U32, head, hash(x, i), U32.from_nat(1n+i)), prev, x, n, i, nice, k)
+    case False{}:
+      ZM{head, prev, 0n, 0n}
+
+type HP is Type:
+  HP{head: Array<U32>, prev: Array<U32>}
+
+def fins1.r(r: Array<U32> & U32, prev: Array<U32>, +i: Nat) -> HP:
+  (head, +old) = r
+  HP{head, Array.set(U32, prev, U32.and(U32.from_nat(i), 32767), old)}
+
+def fins1(ok: Bool, +x: Bytes(), +i: Nat, head: Array<U32>, prev: Array<U32>) -> HP:
+  match ok:
+    case True{}:
+      fins1.r(Array.swap(U32, head, hash(x, i), U32.from_nat(1n+i)), prev, i)
+    case False{}:
+      HP{head, prev}
+
+# the positions from i, k of them, into their chains
+def fins(k: Nat, +x: Bytes(), +n: Nat, +i: Nat, h: HP) -> HP:
+  match k:
+    case 0n:
+      h
+    case 1n+p:
+      match h:
+        case HP{head, prev}:
+          fins(p, x, n, 1n+i, fins1(Nat.is_le(Nat.add(i, 3n), n), x, i, head, prev))
+
+# The pass's state: the position, the chains, the block's tokens (nt of
+# them, covering the bytes to tpos) and the offset it starts at, the
+# writer; the lazy match held from the position before; whether there
+# is more input
+type FZ is Type:
+  FZ{i: Nat, head: Array<U32>, prev: Array<U32>, tk: Array<U32>, nt: Nat, tpos: Nat, bs: Nat,
+    w: FW, plen: Nat, pdist: Nat, avail: Bool, go: Bool}
+
+def tok_ref(+len: Nat, +dist: Nat) -> U32:
+  U32.or(U32.shln(U32.from_nat(len), 16n), U32.from_nat(dist))
+
+def zgreedy.hp(h: HP, tk: Array<U32>, +x: Bytes(), +n: Nat, +i: Nat, +nt: Nat, +tpos: Nat, +bs: Nat,
+  w: FW, +len: Nat) -> FZ:
+  match h:
+    case HP{head, prev}:
+      FZ{Nat.add(i, len), head, prev, tk, 1n+nt, Nat.add(tpos, len), bs, w, 0n, 0n, False{},
+        Nat.is_lt(Nat.add(i, len), n)}
+
+def zgreedy.ok(ok: Bool, +x: Bytes(), +n: Nat, +lazy: Nat, +i: Nat, head: Array<U32>,
+  prev: Array<U32>, tk: Array<U32>, +nt: Nat, +tpos: Nat, +bs: Nat, w: FW, +len: Nat, +dist: Nat) ->
+  FZ:
+  match ok:
+    case True{}:
+      zgreedy.hp(fins(pick(Nat.is_le(len, lazy), Nat.sub(len, 1n), 0n), x, n, 1n+i, HP{head, prev}),
+        Array.set(U32, tk, U32.from_nat(nt), tok_ref(len, dist)), x, n, i, nt, tpos, bs, w, len)
+    case False{}:
+      FZ{1n+i, head, prev, Array.set(U32, tk, U32.from_nat(nt), Bytes.get(x, i)), 1n+nt, 1n+tpos, bs,
+        w, 0n, 0n, False{}, Nat.is_lt(1n+i, n)}
+
+def zgreedy.at(fm: ZM, +x: Bytes(), +n: Nat, +lazy: Nat, +i: Nat, tk: Array<U32>, +nt: Nat,
+  +tpos: Nat, +bs: Nat, w: FW) -> FZ:
+  match fm:
+    case ZM{head, prev, +len, +dist}:
+      zgreedy.ok(Nat.is_le(3n, len), x, n, lazy, i, head, prev, tk, nt, tpos, bs, w, len, dist)
+
+def zlazy.hp(h: HP, tk: Array<U32>, +x: Bytes(), +n: Nat, +i: Nat, +nt: Nat, +tpos: Nat, +bs: Nat,
+  w: FW, +plen: Nat) -> FZ:
+  match h:
+    case HP{head, prev}:
+      FZ{Nat.add(Nat.sub(i, 1n), plen), head, prev, tk, 1n+nt, Nat.add(tpos, plen), bs, w, 0n, 0n,
+        False{}, Nat.is_lt(Nat.add(Nat.sub(i, 1n), plen), n)}
+
+def zlazy.ok(take: Bool, avail: Bool, +x: Bytes(), +n: Nat, +i: Nat, head: Array<U32>,
+  prev: Array<U32>, tk: Array<U32>, +nt: Nat, +tpos: Nat, +bs: Nat, w: FW, +plen: Nat, +pdist: Nat,
+  +len: Nat, +dist: Nat) -> FZ:
+  match take avail:
+    case True{} _:
+      zlazy.hp(fins(Nat.sub(plen, 2n), x, n, 1n+i, HP{head, prev}),
+        Array.set(U32, tk, U32.from_nat(nt), tok_ref(plen, pdist)), x, n, i, nt, tpos, bs, w, plen)
+    case False{} True{}:
+      FZ{1n+i, head, prev, Array.set(U32, tk, U32.from_nat(nt), Bytes.get(x, Nat.sub(i, 1n))), 1n+nt,
+        1n+tpos, bs, w, len, dist, True{}, Nat.is_lt(1n+i, n)}
+    case False{} False{}:
+      FZ{1n+i, head, prev, tk, nt, tpos, bs, w, len, dist, True{}, Nat.is_lt(1n+i, n)}
+
+def zlazy.at(fm: ZM, +x: Bytes(), +n: Nat, +i: Nat, tk: Array<U32>, +nt: Nat, +tpos: Nat, +bs: Nat,
+  w: FW, +plen: Nat, +pdist: Nat, avail: Bool) -> FZ:
+  match fm:
+    case ZM{head, prev, +len, +dist}:
+      zlazy.ok(Nat.is_le(3n, plen) && Nat.is_le(len, plen), avail, x, n, i, head, prev, tk, nt, tpos,
+        bs, w, plen, pdist, len, dist)
+
+# a position: greedy or lazy
+def fpos.at(slow: Bool, +x: Bytes(), +n: Nat, +lv: Lv, +i: Nat, head: Array<U32>,
+  prev: Array<U32>, tk: Array<U32>, +nt: Nat, +tpos: Nat, +bs: Nat, w: FW, +plen: Nat, +pdist: Nat,
+  avail: Bool) -> FZ:
+  match slow:
+    case False{}:
+      zgreedy.at(zfind(Nat.is_le(Nat.add(i, 3n), n), x, n, i, lv_nice(lv), lv_chain(lv), head,
+        prev), x, n, lv_lazy(lv), i, tk, nt, tpos, bs, w)
+    case True{}:
+      zlazy.at(zfind(Nat.is_le(Nat.add(i, 3n), n), x, n, i, lv_nice(lv),
+        pick(Nat.is_lt(plen, lv_lazy(lv)),
+          pick(Nat.is_le(lv_good(lv), plen), Nat.div(lv_chain(lv), 4n), lv_chain(lv)), 0n),
+        head, prev), x, n, i, tk, nt, tpos, bs, w, plen, pdist, avail)
+
+def fpos(+x: Bytes(), +n: Nat, +lv: Lv, +i: Nat, head: Array<U32>, prev: Array<U32>,
+  tk: Array<U32>, +nt: Nat, +tpos: Nat, +bs: Nat, w: FW, +plen: Nat, +pdist: Nat, avail: Bool) -> FZ:
+  fpos.at(lv_slow(lv), x, n, lv, i, head, prev, tk, nt, tpos, bs, w, plen, pdist, avail)
+
+def fflush.at(r: TW, +x: Bytes(), +n: Nat, +lv: Lv, +i: Nat, head: Array<U32>, prev: Array<U32>,
+  +tpos: Nat, +bs: Nat, +plen: Nat, +pdist: Nat, avail: Bool) -> FZ:
+  match r:
+    case TW{tk, w}:
+      fpos(x, n, lv, i, head, prev, tk, 0n, tpos, bs, w, plen, pdist, avail)
+
+# a full block goes out first
+def fstep(full: Bool, +x: Bytes(), +n: Nat, +lv: Lv, +i: Nat, head: Array<U32>,
+  prev: Array<U32>, tk: Array<U32>, +nt: Nat, +tpos: Nat, +bs: Nat, w: FW, +plen: Nat, +pdist: Nat,
+  avail: Bool) -> FZ:
+  match full:
+    case True{}:
+      +len = Nat.min(Nat.sub(tpos, bs), Nat.sub(n, bs))
+      fflush.at(fblock(tk, nt, x, bs, len, False{}, w), x, n, lv, i, head, prev, tpos,
+        Nat.add(bs, len), plen, pdist, avail)
+    case False{}:
+      fpos(x, n, lv, i, head, prev, tk, nt, tpos, bs, w, plen, pdist, avail)
+
+def flz(k: Nat, +x: Bytes(), +n: Nat, +lv: Lv, z: FZ) -> FZ:
+  match k:
+    case 0n:
+      z
+    case 1n+p:
+      match z:
+        case FZ{+i, head, prev, tk, +nt, +tpos, +bs, w, +plen, +pdist, avail, go}:
+          match go:
+            case False{}:
+              FZ{i, head, prev, tk, nt, tpos, bs, w, plen, pdist, avail, False{}}
+            case True{}:
+              flz(p, x, n, lv, fstep(Nat.is_le(16383n, nt), x, n, lv, i, head, prev, tk, nt, tpos, bs,
+                w, plen, pdist, avail))
+
+def fend.tw(r: TW) -> Bytes():
+  match r:
+    case TW{tk, w}:
+      fw_out(falign(w))
+
+# the pass is over: the byte held, if one, and the last block
+def fend.at(avail: Bool, +x: Bytes(), +n: Nat, tk: Array<U32>, +nt: Nat, +bs: Nat, w: FW) -> Bytes():
+  match avail:
+    case True{}:
+      fend.tw(fblock(Array.set(U32, tk, U32.from_nat(nt), Bytes.get(x, Nat.sub(n, 1n))), 1n+nt, x, bs,
+        Nat.sub(n, bs), True{}, w))
+    case False{}:
+      fend.tw(fblock(tk, nt, x, bs, Nat.sub(n, bs), True{}, w))
+
+def fend(+x: Bytes(), +n: Nat, z: FZ) -> Bytes():
+  match z:
+    case FZ{i, head, prev, tk, +nt, tpos, +bs, w, plen, pdist, avail, go}:
+      fend.at(avail, x, n, tk, nt, bs, w)
+
+# the raw deflate stream of x at a level from 1 to 9
+def fdeflate(+x: Bytes(), +lvl: Nat) -> Bytes():
+  +n = Bytes.len(x)
+  fend(x, n, flz(1n+n, x, n, level(lvl), FZ{0n, Array.new(U32, 15n, 0), Array.new(U32, 15n, 0),
+    Array.new(U32, 15n, 0), 0n, 0n, 0n, FW{"", 0, 0n}, 0n, 0n, False{}, Nat.is_lt(0n, n)}))
+
 def deflate.at(lz_level: Bool, +x: Bytes(), +lvl: Nat) -> Bytes():
   match lz_level:
     case False{}:
       w_out(stored.go(x, True{}, SS{"", z16(), w_new()}))
     case True{}:
-      w_out(lz_end(lz_all(x, lvl, False{})))
+      fdeflate(x, lvl)
 
 def deflate(+x: Bytes(), +lvl: Nat) -> Bytes():
   deflate.at(Nat.is_lt(0n, lvl), x, lvl)

@@ -11847,3 +11847,138 @@ def Laws.frame_chunked():
 
 def Laws.frame_10():
   {==}
+
+# Compression
+# ===========
+#
+# The choice computes once its three booleans are known, so each law of
+# the choice is a case split. A filtered segment is the choice applied
+# to what its head and the settings say; pg.u and rw.u take those as
+# free booleans, split on them, and are then applied at the ones the
+# filter computes.
+
+def Laws.gz_takes():
+  ({==}, {==}, {==}, {==}, {==}, {==}, {==}, {==}, {==}, {==}, {==}, {==}, {==}, {==}, {==},
+    {==}, {==}, {==}, {==}, {==})
+
+def Laws.gz_needs_take(on, fits, head):
+  match on fits head:
+    case True{} True{} True{}:
+      {==}
+    case True{} True{} False{}:
+      {==}
+    case True{} False{} True{}:
+      {==}
+    case True{} False{} False{}:
+      {==}
+    case False{} True{} True{}:
+      {==}
+    case False{} True{} False{}:
+      {==}
+    case False{} False{} True{}:
+      {==}
+    case False{} False{} False{}:
+      {==}
+
+def Laws.gz_varies(head, takes):
+  match head takes:
+    case True{} True{}:
+      {==}
+    case True{} False{}:
+      {==}
+    case False{} True{}:
+      {==}
+    case False{} False{}:
+      {==}
+
+def gz.keep4(+on: Bool, +fits: Bool, +head: Bool, +takes: Bool,
+  e: {Bool.and(on, fits) == False{} : Bool}) -> {Eng.z.pick(on, fits, head, takes) == Eng.ZKeep{} : Eng.Zc}:
+  match on fits head takes:
+    case True{} True{} _ _:
+      WW.no({Eng.z.pick(True{}, True{}, head, takes) == Eng.ZKeep{} : Eng.Zc},
+        Equal.sym(Bool, True{}, False{}, e))
+    case True{} False{} True{} True{}:
+      {==}
+    case True{} False{} True{} False{}:
+      {==}
+    case True{} False{} False{} True{}:
+      {==}
+    case True{} False{} False{} False{}:
+      {==}
+    case False{} _ True{} True{}:
+      {==}
+    case False{} _ True{} False{}:
+      {==}
+    case False{} _ False{} True{}:
+      {==}
+    case False{} _ False{} False{}:
+      {==}
+
+def Laws.gz_keeps(on, fits, head, takes, e):
+  gz.keep4(on, fits, head, takes, e)
+
+# a file's segment for a peer that does not take gzip, whatever the
+# choice's other two booleans are
+def pg.u(+a: Bool, +b: Bool, +h: Bool, +g: Eng.Gz, +root: Bytes(), +path: Bytes(), +ct: Bytes(),
+  +ask: List<&2, Wr.Field>) ->
+  {Eng.z.page.at(Eng.z.pick(a, b, h, False{}), g, root, path, ct, ask, h) ==
+    L.Page{root, path, Bool.pick(Bytes(), Bool.and(a, b), Eng.z.ins(ct, Eng.z.vl()), ct), ask, h} : L.Seg}:
+  match a b h:
+    case True{} True{} True{}:
+      {==}
+    case True{} True{} False{}:
+      {==}
+    case True{} False{} True{}:
+      {==}
+    case True{} False{} False{}:
+      {==}
+    case False{} True{} True{}:
+      {==}
+    case False{} True{} False{}:
+      {==}
+    case False{} False{} True{}:
+      {==}
+    case False{} False{} False{}:
+      {==}
+
+def Laws.gz_page_untaken(g, head, root, path, ct, ask, h):
+  pg.u(Eng.gz.on(g), Bool.and(Eng.z.fits(ct), String.ends_with(ct, Eng.cl.tag())), h, g, root, path, ct, ask)
+
+def rw.at(+a: Bool, +c: Bool, +head: Bool, +g: Eng.Gz, +h: Bytes(), +b: Bytes(), +bs: Bytes()) ->
+  {Eng.z.raw.at(Eng.z.pick(a, c, head, False{}), g, h, b, bs) ==
+    Bool.pick(Bytes(), Bool.and(a, c), Bytes.concat([h, Eng.z.vl(), "\r\n", b]), bs) : Bytes()}:
+  match a c head:
+    case True{} True{} True{}:
+      {==}
+    case True{} True{} False{}:
+      {==}
+    case True{} False{} True{}:
+      {==}
+    case True{} False{} False{}:
+      {==}
+    case False{} True{} True{}:
+      {==}
+    case False{} True{} False{}:
+      {==}
+    case False{} False{} True{}:
+      {==}
+    case False{} False{} False{}:
+      {==}
+
+def rw.u(+g: Eng.Gz, +head: Bool, +bs: Bytes(), m: Maybe<&2, Nat>) ->
+  {Eng.z.raw.cut(g, False{}, head, bs, m) == Laws.rawv.at(g, head, bs, m) : Bytes()}:
+  match m:
+    case None{}:
+      {==}
+    case Some{+i}:
+      +h = Bytes.slice(bs, 0n, Nat.add(i, 2n))
+      +b = Bytes.drop(bs, Nat.add(i, 4n))
+      rw.at(Eng.gz.on(g), Eng.z.fits(h) && Eng.z.has(h, "\r\ncontent-length: ")
+        && Nat.is_le(Eng.gz.min(g), Nat.max(Bytes.len(b), Eng.n.pick(head, Eng.z.clen(h), 0n))), head, g,
+        h, b, bs)
+
+def Laws.gz_raw_untaken(g, head, bs):
+  rw.u(g, head, bs, Bytes.find(bs, "\r\n\r\n"))
+
+def Laws.gz_vectors():
+  ({==}, {==}, {==}, {==}, {==}, {==})

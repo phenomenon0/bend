@@ -196,6 +196,8 @@ def add_zero(x):
 # References
 
 - Guide: [GUIDE.md](guide/GUIDE.md), also printed by `bend guide`.
+- Networking: [NETWORKING.md](guide/NETWORKING.md), an HTTP server and client, WebSockets and JSON in [net/](net), also printed by `bend guide networking`.
+- Map: [REPO_MAP.md](REPO_MAP.md), where everything in this repo is.
 - Demos: [demos/](demos), apps, servers and proofs, each with its `LAWS.bend`.
 - Base: [base.bend](bend2/base.bend), the base library, also printed by `bend base`.
 - Paper: [BendTT: An Affine Dependent Type Theory](paper/BendTT.pdf).

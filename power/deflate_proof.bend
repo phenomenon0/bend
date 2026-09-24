@@ -4,6 +4,7 @@ import ../wire/reader.bend as Wr
 import ./deflate.bend as D
 import ./gzip.bend as Z
 import ./deflate_laws.bend as Laws
+import ./inflate_proof.bend as IP
 
 # The reads
 # =========
@@ -22,6 +23,9 @@ def adv_ok(+e: Unit, +s: Bytes(), p: D.St) ->
 
 def Laws.inflate_buf(s, st):
   Wr.feed_buf_is_feed(~Unit, ~D.St, ~D.wstep, ~D.wadv, ~adv_ok, Unit{}, s, st)
+
+def Laws.inflate_fast(cap, s):
+  IP.inflate_fast(cap, s)
 
 def Laws.inflate_buf_split(a, b, st):
   Wr.feed_buf_split(~Unit, ~D.St, ~D.wstep, ~D.wadv, ~adv_ok, Unit{}, a, b, st)
@@ -2983,7 +2987,9 @@ def round_trip(+x: Bytes(), +cap: Nat, +tb: D.Tabs, +vx: {D.valid(x) == True{} :
   Equal.cong(Bytes(), Result<&2, &2, D.Why, Bytes()>, y => Done{y}, Bytes.drop(x, 0n), x, drop0(x))
 
 def Laws.stored_round_trip(x, cap, vx, fits):
-  round_trip(x, cap, D.tabs(), vx, fits)
+  Equal.trans(Result<&2, &2, D.Why, Bytes()>, D.inflate(cap, D.deflate(x, 0n)),
+    D.finish(D.feed(D.deflate(x, 0n), D.new(cap))), Done{x}, IP.inflate_fast(cap, D.deflate(x, 0n)),
+    round_trip(x, cap, D.tabs(), vx, fits))
 
 # The code tables, closed: each side computed
 def Laws.length_codes():
@@ -3821,7 +3827,9 @@ def Laws.output_cap(s, cap):
   cap.output(s, cap, D.tabs())
 
 def Laws.inflate_cap(s, cap, y, e):
-  cap.inflate(s, cap, D.tabs(), y, e)
+  cap.inflate(s, cap, D.tabs(), y, Equal.trans(Result<&2, &2, D.Why, Bytes()>, D.finish(D.feed(s, D.new(cap))),
+    D.inflate(cap, s), Done{y}, Equal.sym(Result<&2, &2, D.Why, Bytes()>, D.inflate(cap, s),
+      D.finish(D.feed(s, D.new(cap))), IP.inflate_fast(cap, s)), e))
 
 def Laws.copy_far(out, keep, n, cap, t, len, dist, next, bp, far):
   %Equal.sym(Bool, Nat.is_lt(Bytes.len(out), dist), True{}, far) :
@@ -5620,10 +5628,17 @@ def fixed_read(+x: Bytes(), +tt: List<&2, D.Tok>, +cap: Nat, +vx: {D.valid(x) ==
       blockP(x, cap, 0n, n, D.w_new(), tt, True{}, D.new(cap), vx, capok, hw0(x, cap), hl)),
     Equal.cong(Bytes(), Result<&2, &2, D.Why, Bytes()>, y => Done{y}, Bytes.drop(String.take(x, n), 0n), x, ex))
 
-def Laws.fixed_round_trip(x, lvl, cap, vx, fits):
+def fixed_rt(+x: Bytes(), +lvl: Nat, +cap: Nat, +vx: {D.valid(x) == True{} : Bool},
+  fits: {Nat.is_le(Bytes.len(x), cap) == True{} : Bool}) ->
+  {D.finish(D.feed(D.deflate_fixed(x, lvl), D.new(cap))) == Done{x} : Result<&2, &2, D.Why, Bytes()>}:
   +d = D.deflate_fixed(x, lvl)
   +e = Equal.trans(D.St, D.feed(d, D.new(cap)), D.feed_list(Bytes.to_list(d), D.new(cap)), bfeed(bitsof(d), D.new(cap)),
     Laws.inflate_buf(d, D.new(cap)), feed_bits(d, D.new(cap)))
   %Equal.sym(D.St, D.feed(d, D.new(cap)), bfeed(bitsof(d), D.new(cap)), e) :
     {D.finish(_) == Done{x} : Result<&2, &2, D.Why, Bytes()>}
   fixed_read(x, D.lz_toks(D.lz_all(x, Nat.max(1n, lvl), True{})), cap, vx, le_by(bl(x), Bytes.len(x), cap, Equal.sym(Nat, Bytes.len(x), bl(x), blen(x)), fits))
+
+def Laws.fixed_round_trip(x, lvl, cap, vx, fits):
+  Equal.trans(Result<&2, &2, D.Why, Bytes()>, D.inflate(cap, D.deflate_fixed(x, lvl)),
+    D.finish(D.feed(D.deflate_fixed(x, lvl), D.new(cap))), Done{x}, IP.inflate_fast(cap, D.deflate_fixed(x, lvl)),
+    fixed_rt(x, lvl, cap, vx, fits))

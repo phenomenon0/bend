@@ -43,6 +43,7 @@ import ../../wire/loop.bend as L
 import ../../wire/effects.bend as Fx
 import ./ws.bend as Ws
 import ./cond.bend as C
+import ../../power/gzip.bend as Z
 
 # Bytes
 # =====
@@ -2102,118 +2103,167 @@ def pem.key(m: Maybe<&2, Pem>, p: List<&2, U32>) -> Maybe<&2, Pem>:
         case Pem{cert, key}:
           Some{Pem{cert, p}}
 
+# What --gzip asked for (nginx's gzip, gzip_comp_level, gzip_min_length
+# and gzip_static): whether replies are compressed at all, at which
+# level (1 to 9, as zlib's), the least body length a fixed reply is
+# compressed from, and whether a file's .gz twin is served in its place
+# when the peer takes gzip.
+type Gz is Data:
+  Gz{on: Bool, lvl: Nat, min: Nat, st: Bool}
+
+def gz.off() -> Gz:
+  Gz{False{}, 1n, 20n, False{}}
+
+# what a connection asks the keeper of compressed bodies (z.cache): the
+# body kept under a key, answered on the asker's channel, or a body to
+# keep
+type Zq is Data:
+  ZGet{key: Bytes(), back: Chan(Maybe<&2, Bytes()>)}
+  ZPut{key: Bytes(), z: Bytes()}
+
 # What the binary was started with: the port, the directory static
 # files come from if any, and whether to log. The route table is built
 # from it once, in main, and every connection shares that one table.
 type Cfg is Data:
   Cfg{port: U32, root: Maybe<&2, List<&2, U32>>, log: Bool, idle: U32, conns: U32,
-    grace: U32, shared: Bool, pem: Maybe<&2, Pem>, head: U32}
+    grace: U32, shared: Bool, pem: Maybe<&2, Pem>, head: U32, gz: Gz}
 
 def cfg.new() -> Cfg:
-  Cfg{8080, None{}, False{}, 10000, 1024, 5000, False{}, None{}, 10000}
+  Cfg{8080, None{}, False{}, 10000, 1024, 5000, False{}, None{}, 10000, gz.off()}
 
 def cfg.port(c: Cfg) -> U32:
   match c:
-    case Cfg{port, root, log, idle, conns, grace, shared, pem, head}:
+    case Cfg{port, root, log, idle, conns, grace, shared, pem, head, gz}:
       port
 
 # how long a connection may be silent, in ms, before it is dropped
 def cfg.idle(c: Cfg) -> U32:
   match c:
-    case Cfg{port, root, log, idle, conns, grace, shared, pem, head}:
+    case Cfg{port, root, log, idle, conns, grace, shared, pem, head, gz}:
       idle
 
 def cfg.root(c: Cfg) -> List<&2, U32>:
   match c:
-    case Cfg{port, root, log, idle, conns, grace, shared, pem, head}:
+    case Cfg{port, root, log, idle, conns, grace, shared, pem, head, gz}:
       Maybe.default(&2, List<&2, U32>, root, bytes("."))
 
 def cfg.set_port(c: Cfg, n: U32) -> Cfg:
   match c:
-    case Cfg{port, root, log, idle, conns, grace, shared, pem, head}:
-      Cfg{n, root, log, idle, conns, grace, shared, pem, head}
+    case Cfg{port, root, log, idle, conns, grace, shared, pem, head, gz}:
+      Cfg{n, root, log, idle, conns, grace, shared, pem, head, gz}
 
 # the most connections open at once; past it, accepting waits
 def cfg.conns(c: Cfg) -> U32:
   match c:
-    case Cfg{port, root, log, idle, conns, grace, shared, pem, head}:
+    case Cfg{port, root, log, idle, conns, grace, shared, pem, head, gz}:
       conns
 
 # how long open connections get to finish after a stop is asked, in ms
 def cfg.grace(c: Cfg) -> U32:
   match c:
-    case Cfg{port, root, log, idle, conns, grace, shared, pem, head}:
+    case Cfg{port, root, log, idle, conns, grace, shared, pem, head, gz}:
       grace
 
 def cfg.set_conns(c: Cfg, n: U32) -> Cfg:
   match c:
-    case Cfg{port, root, log, idle, conns, grace, shared, pem, head}:
-      Cfg{port, root, log, idle, n, grace, shared, pem, head}
+    case Cfg{port, root, log, idle, conns, grace, shared, pem, head, gz}:
+      Cfg{port, root, log, idle, n, grace, shared, pem, head, gz}
 
 def cfg.set_grace(c: Cfg, n: U32) -> Cfg:
   match c:
-    case Cfg{port, root, log, idle, conns, grace, shared, pem, head}:
-      Cfg{port, root, log, idle, conns, n, shared, pem, head}
+    case Cfg{port, root, log, idle, conns, grace, shared, pem, head, gz}:
+      Cfg{port, root, log, idle, conns, n, shared, pem, head, gz}
 
 # whether the port is shared with other copies of this server
 def cfg.log(c: Cfg) -> Bool:
   match c:
-    case Cfg{port, root, log, idle, conns, grace, shared, pem, head}:
+    case Cfg{port, root, log, idle, conns, grace, shared, pem, head, gz}:
       log
 
 # the certificate and key a TLS listener needs, if the server was given
 # a pair; the half-given pair is refused when the arguments are read
 def cfg.pem(c: Cfg) -> Maybe<&2, Pem>:
   match c:
-    case Cfg{port, root, log, idle, conns, grace, shared, pem, head}:
+    case Cfg{port, root, log, idle, conns, grace, shared, pem, head, gz}:
       pem
 
 def cfg.set_cert(c: Cfg, p: List<&2, U32>) -> Cfg:
   match c:
-    case Cfg{port, root, log, idle, conns, grace, shared, pem, head}:
-      Cfg{port, root, log, idle, conns, grace, shared, pem.cert(pem, p), head}
+    case Cfg{port, root, log, idle, conns, grace, shared, pem, head, gz}:
+      Cfg{port, root, log, idle, conns, grace, shared, pem.cert(pem, p), head, gz}
 
 def cfg.set_key(c: Cfg, p: List<&2, U32>) -> Cfg:
   match c:
-    case Cfg{port, root, log, idle, conns, grace, shared, pem, head}:
-      Cfg{port, root, log, idle, conns, grace, shared, pem.key(pem, p), head}
+    case Cfg{port, root, log, idle, conns, grace, shared, pem, head, gz}:
+      Cfg{port, root, log, idle, conns, grace, shared, pem.key(pem, p), head, gz}
 
 def cfg.shared(c: Cfg) -> Bool:
   match c:
-    case Cfg{port, root, log, idle, conns, grace, shared, pem, head}:
+    case Cfg{port, root, log, idle, conns, grace, shared, pem, head, gz}:
       shared
 
 def cfg.set_shared(c: Cfg) -> Cfg:
   match c:
-    case Cfg{port, root, log, idle, conns, grace, shared, pem, head}:
-      Cfg{port, root, log, idle, conns, grace, True{}, pem, head}
+    case Cfg{port, root, log, idle, conns, grace, shared, pem, head, gz}:
+      Cfg{port, root, log, idle, conns, grace, True{}, pem, head, gz}
 
 def cfg.set_idle(c: Cfg, n: U32) -> Cfg:
   match c:
-    case Cfg{port, root, log, idle, conns, grace, shared, pem, head}:
-      Cfg{port, root, log, n, conns, grace, shared, pem, head}
+    case Cfg{port, root, log, idle, conns, grace, shared, pem, head, gz}:
+      Cfg{port, root, log, n, conns, grace, shared, pem, head, gz}
 
 def cfg.set_root(c: Cfg, dir: List<&2, U32>) -> Cfg:
   match c:
-    case Cfg{port, root, log, idle, conns, grace, shared, pem, head}:
-      Cfg{port, Some{dir}, log, idle, conns, grace, shared, pem, head}
+    case Cfg{port, root, log, idle, conns, grace, shared, pem, head, gz}:
+      Cfg{port, Some{dir}, log, idle, conns, grace, shared, pem, head, gz}
 
 # how long a request head may take to arrive, in ms, however it is
 # spread over reads: the idle time bounds each wait, this bounds them all
 def cfg.head(c: Cfg) -> U32:
   match c:
-    case Cfg{port, root, log, idle, conns, grace, shared, pem, head}:
+    case Cfg{port, root, log, idle, conns, grace, shared, pem, head, gz}:
       head
 
 def cfg.set_head(c: Cfg, n: U32) -> Cfg:
   match c:
-    case Cfg{port, root, log, idle, conns, grace, shared, pem, head}:
-      Cfg{port, root, log, idle, conns, grace, shared, pem, n}
+    case Cfg{port, root, log, idle, conns, grace, shared, pem, head, gz}:
+      Cfg{port, root, log, idle, conns, grace, shared, pem, n, gz}
 
 def cfg.set_log(c: Cfg) -> Cfg:
   match c:
-    case Cfg{port, root, log, idle, conns, grace, shared, pem, head}:
-      Cfg{port, root, True{}, idle, conns, grace, shared, pem, head}
+    case Cfg{port, root, log, idle, conns, grace, shared, pem, head, gz}:
+      Cfg{port, root, True{}, idle, conns, grace, shared, pem, head, gz}
+
+# what --gzip and its settings asked for
+def cfg.gz(c: Cfg) -> Gz:
+  match c:
+    case Cfg{port, root, log, idle, conns, grace, shared, pem, head, gz}:
+      gz
+
+def cfg.set_gz(c: Cfg, g: Gz) -> Cfg:
+  match c:
+    case Cfg{port, root, log, idle, conns, grace, shared, pem, head, gz}:
+      Cfg{port, root, log, idle, conns, grace, shared, pem, head, g}
+
+def gz.set_on(g: Gz) -> Gz:
+  match g:
+    case Gz{on, lvl, min, st}:
+      Gz{True{}, lvl, min, st}
+
+def gz.set_lvl(g: Gz, +n: Nat) -> Gz:
+  match g:
+    case Gz{on, lvl, min, st}:
+      Gz{on, n, min, st}
+
+def gz.set_min(g: Gz, +n: Nat) -> Gz:
+  match g:
+    case Gz{on, lvl, min, st}:
+      Gz{on, lvl, n, st}
+
+def gz.set_st(g: Gz) -> Gz:
+  match g:
+    case Gz{on, lvl, min, st}:
+      Gz{on, lvl, min, True{}}
 
 # a non-empty run of decimal digits
 def digits.go(bs: List<&2, U32>, ok: Bool) -> Bool:
@@ -2257,10 +2307,42 @@ type Want is Data:
   CertOf{}
   KeyOf{}
   HeadOf{}
+  GzLvlOf{}
+  GzMinOf{}
   Wrong{why: List<&2, U32>}
 
 type Args is Data:
   Args{cfg: Cfg, want: Want}
+
+# --gzip, its level, its least length, and --gzip-static (which turns
+# --gzip on too)
+def args.gz(+c: Cfg, +a: List<&2, U32>, on: Bool, lvl: Bool, min: Bool, st: Bool) -> Args:
+  match on lvl min st:
+    case True{} _ _ _:
+      Args{cfg.set_gz(c, gz.set_on(cfg.gz(c))), Flag{}}
+    case False{} True{} _ _:
+      Args{c, GzLvlOf{}}
+    case False{} False{} True{} _:
+      Args{c, GzMinOf{}}
+    case False{} False{} False{} True{}:
+      Args{cfg.set_gz(c, gz.set_st(gz.set_on(cfg.gz(c)))), Flag{}}
+    case False{} False{} False{} False{}:
+      Args{c, Wrong{cat(bytes("unknown flag: "), a)}}
+
+# a level is 1 to 9
+def args.gzl(+c: Cfg, a: List<&2, U32>, ok: Bool) -> Args:
+  match ok:
+    case True{}:
+      Args{cfg.set_gz(c, gz.set_lvl(cfg.gz(c), U32.to_nat(u32.of(a, 0)))), Flag{}}
+    case False{}:
+      Args{c, Wrong{cat(bytes("not a level from 1 to 9: "), a)}}
+
+def args.gzm(+c: Cfg, a: List<&2, U32>, ok: Bool) -> Args:
+  match ok:
+    case True{}:
+      Args{cfg.set_gz(c, gz.set_min(cfg.gz(c), U32.to_nat(u32.of(a, 0)))), Flag{}}
+    case False{}:
+      Args{c, Wrong{cat(bytes("not a length: "), a)}}
 
 # the flags that take a path, and the head budget, split out so the one
 # match below stays readable rather than nine deep
@@ -2273,7 +2355,8 @@ def args.pem(c: Cfg, +a: List<&2, U32>, cert: Bool, key: Bool, head: Bool) -> Ar
     case False{} False{} True{}:
       Args{c, HeadOf{}}
     case False{} False{} False{}:
-      Args{c, Wrong{cat(bytes("unknown flag: "), a)}}
+      args.gz(c, a, beq(a, bytes("--gzip"), True{}), beq(a, bytes("--gzip-level"), True{}),
+        beq(a, bytes("--gzip-min"), True{}), beq(a, bytes("--gzip-static"), True{}))
 
 def args.flag(
   c: Cfg, +a: List<&2, U32>, log: Bool, port: Bool, root: Bool, idle: Bool,
@@ -2360,6 +2443,10 @@ def args.feed(st: Args, +a: List<&2, U32>) -> Args:
           Args{cfg.set_key(c, a), Flag{}}
         case HeadOf{}:
           args.head(c, a, digits(a) && Bool.not(U32.is_zero(u32.of(a, 0))))
+        case GzLvlOf{}:
+          args.gzl(c, a, digits(a) && U32.is_le(1, u32.of(a, 0)) && U32.is_le(u32.of(a, 0), 9))
+        case GzMinOf{}:
+          args.gzm(c, a, digits(a))
         case Wrong{why}:
           Args{c, Wrong{why}}
 
@@ -2415,6 +2502,10 @@ def args.done(st: Args) -> IO(Cfg):
           IO.die(Cfg, 2, "--tls-key needs a path")
         case HeadOf{}:
           IO.die(Cfg, 2, "--head-ms needs a number")
+        case GzLvlOf{}:
+          IO.die(Cfg, 2, "--gzip-level needs a level")
+        case GzMinOf{}:
+          IO.die(Cfg, 2, "--gzip-min needs a length")
         case Wrong{why}:
           IO.die(Cfg, 2, text(why))
 
@@ -2501,7 +2592,7 @@ def routes.tail(root: Maybe<&2, List<&2, U32>>) -> List<&2, Route>:
 
 def routes(c: Cfg) -> List<&2, Route>:
   match c:
-    case Cfg{port, root, log, idle, conns, grace, shared, pem, head}:
+    case Cfg{port, root, log, idle, conns, grace, shared, pem, head, gz}:
       List.append(&2, Route, routes.base(), routes.tail(root))
 
 def hit(rp: Bytes(), path: Bytes(), prefix: Bool) -> Bool:
@@ -2568,6 +2659,11 @@ type Srv is Data:
 
 def srv.new(+c: Cfg) -> Srv:
   Srv{c, routes(c), Bytes.from_list(cfg.root(c))}
+
+def srv.gz(s: Srv) -> Gz:
+  match s:
+    case Srv{c, table, root}:
+      cfg.gz(c)
 
 def srv.table(s: Srv) -> List<&2, Route>:
   match s:
@@ -3362,8 +3458,414 @@ def serve.log(+srv: Srv, r: Req) -> Ans:
         ans.ask(serve.fit(srv, path.of(path), body, meth.get(meth) || meth.head(meth),
           meth.head(meth), ws, key, long(target.cap(), path)), hd))
 
+# Compression
+# ===========
+#
+# --gzip compresses replies the way nginx's gzip does, as one step after
+# a reply is built (a filter): nothing that builds replies knows it
+# exists. What the request asked (Accept-Encoding) and what the reply is
+# (a 200 of a type worth compressing, long enough) pick one of three:
+#
+#   ZKeep  the reply as it was: compression is off, or the reply is not
+#          one that is compressed. Nothing about it depended on
+#          Accept-Encoding, so nothing says it did.
+#   ZVary  the reply as it was, and "vary: accept-encoding": it would
+#          have been compressed for a peer that takes gzip, and this one
+#          does not, or asked with HEAD (whose reply has no body).
+#   ZZip   the body gzipped (power/gzip.bend, at --gzip-level), under
+#          "content-encoding: gzip", the vary line and its new length.
+#
+# A 206 or a 304 is never compressed (only a 200 is), and neither is a
+# reply that already carries a content-encoding. A file is compressed as
+# it is sent (z.open below), or, with --gzip-static, its .gz twin is sent
+# in its place when there is one.
+type Zc is Data:
+  ZKeep{}
+  ZVary{}
+  ZZip{}
+
+# fits: the reply is one that is compressed; head: the request was a
+# HEAD; takes: the peer takes gzip
+def z.pick(on: Bool, fits: Bool, head: Bool, takes: Bool) -> Zc:
+  match on fits head takes:
+    case True{} True{} False{} True{}:
+      ZZip{}
+    case True{} True{} True{} _:
+      ZVary{}
+    case True{} True{} False{} False{}:
+      ZVary{}
+    case _ _ _ _:
+      ZKeep{}
+
+def gz.on(g: Gz) -> Bool:
+  match g:
+    case Gz{on, lvl, min, st}:
+      on
+
+def gz.lvl(g: Gz) -> Nat:
+  match g:
+    case Gz{on, lvl, min, st}:
+      lvl
+
+def gz.min(g: Gz) -> Nat:
+  match g:
+    case Gz{on, lvl, min, st}:
+      min
+
+def gz.st(g: Gz) -> Bool:
+  match g:
+    case Gz{on, lvl, min, st}:
+      st
+
+def b.pick(b: Bool, x: Bool, y: Bool) -> Bool:
+  match b:
+    case True{}:
+      x
+    case False{}:
+      y
+
+# Accept-Encoding
+# ---------------
+#
+# RFC 9110 12.5.3: a list of codings, each with an optional weight;
+# gzip (or x-gzip) is taken when it is listed with a weight above 0, or
+# when it is not listed and "*" is, with a weight above 0. A coding and a
+# parameter's name are case-insensitive. A request with no
+# Accept-Encoding is not compressed (as nginx does), and a weight that
+# is not a qvalue counts as 0: a peer is never sent what it did not
+# clearly take. Every Accept-Encoding line is read, as one list.
+
+# a qvalue above 0: "1" with at most three zeros after a ".", or "0."
+# with at most three digits, one of them not 0
+def q.zeros(s: Bytes(), k: Nat) -> Bool:
+  match s k:
+    case SNil{} _:
+      True{}
+    case SCon{Chr{+c}, t} 1n+p:
+      U32.is_eq(c, 48) && q.zeros(t, p)
+    case SCon{h, t} 0n:
+      False{}
+
+def q.frac(s: Bytes(), k: Nat, nz: Bool) -> Bool:
+  match s k:
+    case SNil{} _:
+      nz
+    case SCon{Chr{+c}, t} 1n+p:
+      digit(c) && q.frac(t, p, nz || Bool.not(U32.is_eq(c, 48)))
+    case SCon{h, t} 0n:
+      False{}
+
+def q.dot.at(one: Bool, t: Bytes()) -> Bool:
+  match one:
+    case True{}:
+      q.zeros(t, 3n)
+    case False{}:
+      q.frac(t, 3n, False{})
+
+def q.dot(s: Bytes(), one: Bool) -> Bool:
+  match s:
+    case SNil{}:
+      one
+    case SCon{Chr{+c}, t}:
+      U32.is_eq(c, 46) && q.dot.at(one, t)
+
+def q.pos(v: Bytes()) -> Bool:
+  match v:
+    case SNil{}:
+      False{}
+    case SCon{Chr{+c}, t}:
+      (U32.is_eq(c, 49) || U32.is_eq(c, 48)) && q.dot(t, U32.is_eq(c, 49))
+
+# the reader: what it is in (0 a coding, 1 a parameter's name, 2 its
+# value), the three as read so far (lowercased), the current coding's
+# weight, and what gzip and "*" were given
+type Ae is Data:
+  Ae{at: Nat, cod: Bytes(), pn: Bytes(), pv: Bytes(), q: Bool, gz: Maybe<&2, Bool>,
+    star: Maybe<&2, Bool>}
+
+def ae.new() -> Ae:
+  Ae{0n, "", "", "", True{}, None{}, None{}}
+
+# a parameter ends: q= sets the weight
+def ae.param(a: Ae) -> Ae:
+  match a:
+    case Ae{+at, cod, +pn, pv, q, gz, star}:
+      Ae{at, cod, "", "", b.pick(Nat.is_eq(at, 2n) && bytes.eq(pn, "q"), q.pos(pv), q), gz, star}
+
+def ae.put(hit: Bool, +q: Bool, m: Maybe<&2, Bool>) -> Maybe<&2, Bool>:
+  match hit:
+    case True{}:
+      Some{q}
+    case False{}:
+      m
+
+def ae.entry.at(a: Ae) -> Ae:
+  match a:
+    case Ae{at, +cod, pn, pv, +q, gz, star}:
+      Ae{0n, "", "", "", True{}, ae.put(bytes.eq(cod, "gzip") || bytes.eq(cod, "x-gzip"), q, gz),
+        ae.put(bytes.eq(cod, "*"), q, star)}
+
+# a coding ends: gzip, x-gzip and "*" are kept with their weight
+def ae.entry(a: Ae) -> Ae:
+  ae.entry.at(ae.param(a))
+
+def ae.to(a: Ae, +at: Nat) -> Ae:
+  match a:
+    case Ae{x, cod, pn, pv, q, gz, star}:
+      Ae{at, cod, pn, pv, q, gz, star}
+
+# a byte of a coding, a name or a value, lowercased
+def ae.add(a: Ae, +c: U32) -> Ae:
+  match a:
+    case Ae{+at, cod, pn, pv, q, gz, star}:
+      match at:
+        case 0n:
+          Ae{0n, push(cod, lower(c)), pn, pv, q, gz, star}
+        case 1n:
+          Ae{1n, cod, push(pn, lower(c)), pv, q, gz, star}
+        case _:
+          Ae{at, cod, pn, push(pv, lower(c)), q, gz, star}
+
+def ae.at(a: Ae) -> Nat:
+  match a:
+    case Ae{at, cod, pn, pv, q, gz, star}:
+      at
+
+# ',' ends a coding, ';' a coding or a parameter, '=' a name; blanks
+# are dropped
+def ae.byte(a: Ae, +c: U32, comma: Bool, semi: Bool, eq: Bool, ws: Bool) -> Ae:
+  match comma semi eq ws:
+    case True{} _ _ _:
+      ae.entry(a)
+    case False{} True{} _ _:
+      ae.to(ae.param(a), 1n)
+    case False{} False{} True{} _:
+      ae.to(a, 2n)
+    case False{} False{} False{} True{}:
+      a
+    case False{} False{} False{} False{}:
+      ae.add(a, c)
+
+def ae.step(a: Ae, +c: U32) -> Ae:
+  ae.byte(a, c, U32.is_eq(c, 44), U32.is_eq(c, 59), U32.is_eq(c, 61),
+    U32.is_eq(c, 32) || U32.is_eq(c, 9))
+
+def ae.walk(s: Bytes(), a: Ae) -> Ae:
+  match s:
+    case SNil{}:
+      a
+    case SCon{Chr{+c}, t}:
+      ae.walk(t, ae.step(a, c))
+
+def ae.field(hit: Bool, v: Bytes(), a: Ae) -> Ae:
+  match hit:
+    case True{}:
+      ae.entry(ae.walk(v, a))
+    case False{}:
+      a
+
+def ae.fields(fs: List<&2, Wr.Field>, a: Ae) -> Ae:
+  match fs:
+    case Nil{}:
+      a
+    case Con{Wr.Field{+n, v}, t}:
+      ae.fields(t, ae.field(bytes.eq(n, "accept-encoding"), v, a))
+
+def ae.takes(a: Ae) -> Bool:
+  match a:
+    case Ae{at, cod, pn, pv, q, gz, star}:
+      match gz:
+        case Some{b}:
+          b
+        case None{}:
+          match star:
+            case Some{b}:
+              b
+            case None{}:
+              False{}
+
+# whether the peer takes gzip, by every Accept-Encoding line of its head
+def gz.takes(h: Hd) -> Bool:
+  match h:
+    case Hd{meth, v10, fields, conn}:
+      ae.takes(ae.fields(fields, ae.new()))
+
+# What is compressed
+# ------------------
+#
+# A reply head as this engine writes one: the status line, then
+# content-type, content-length and the rest. A 200 is compressed when
+# its type is text, JSON, JavaScript, XML or SVG and it has no
+# content-encoding already.
+def z.types() -> List<&2, Bytes()>:
+  ["\r\ncontent-type: text/", "\r\ncontent-type: application/json",
+    "\r\ncontent-type: application/javascript", "\r\ncontent-type: application/xml",
+    "\r\ncontent-type: image/svg+xml"]
+
+def z.some(m: Maybe<&2, Nat>) -> Bool:
+  match m:
+    case None{}:
+      False{}
+    case Some{i}:
+      True{}
+
+def z.has(+h: Bytes(), +p: Bytes()) -> Bool:
+  z.some(Bytes.find(h, p))
+
+def z.any(+h: Bytes(), ps: List<&2, Bytes()>) -> Bool:
+  match ps:
+    case Nil{}:
+      False{}
+    case Con{p, t}:
+      z.has(h, p) || z.any(h, t)
+
+def z.fits(+h: Bytes()) -> Bool:
+  Bytes.starts_with(h, "HTTP/1.1 200 ") && z.any(h, z.types())
+    && Bool.not(z.has(h, "\r\ncontent-encoding:"))
+
+def z.vl() -> Bytes():
+  "vary: accept-encoding\r\n"
+
+def z.cl() -> Bytes():
+  "content-encoding: gzip\r\nvary: accept-encoding\r\n"
+
+def cl.tag() -> Bytes():
+  "content-length: "
+
+# A file's head as the mime table keeps it ends at "content-length: ";
+# the lines a compressed or a varied one adds go in front of that
+def z.ins(+ct: Bytes(), +extra: Bytes()) -> Bytes():
+  Bytes.concat([Bytes.slice(ct, 0n, Nat.sub(Bytes.len(ct), 16n)), extra, cl.tag()])
+
+# what the file's name becomes for z.open: a byte no request path has
+# (fast and fnames.of refuse every control byte), the level, and
+# whether a .gz twin is tried first
+def z.mark(+g: Gz, +path: Bytes()) -> Bytes():
+  Bytes.concat(["\u{1}", Bytes.push("", U32.add(48, U32.from_nat(gz.lvl(g)))),
+    Bool.pick(Bytes(), gz.st(g), "s", "-"), path])
+
+def z.page.at(k: Zc, +g: Gz, root: Bytes(), +path: Bytes(), +ct: Bytes(), ask: List<&2, Wr.Field>,
+  head: Bool) -> L.Seg:
+  match k:
+    case ZKeep{}:
+      L.Page{root, path, ct, ask, head}
+    case ZVary{}:
+      L.Page{root, path, z.ins(ct, z.vl()), ask, head}
+    case ZZip{}:
+      L.Page{root, z.mark(g, path), z.ins(ct, z.cl()), ask, head}
+
+# a file: its head is known before it is opened, so its length is not;
+# every one of a type that is compressed is (--gzip-min is a fixed
+# reply's floor)
+def z.page(+g: Gz, takes: Bool, root: Bytes(), +path: Bytes(), +ct: Bytes(), ask: List<&2, Wr.Field>,
+  +head: Bool) -> L.Seg:
+  z.page.at(z.pick(gz.on(g), z.fits(ct) && String.ends_with(ct, cl.tag()), head, takes), g, root, path,
+    ct, ask, head)
+
+# the digits a head gives its content-length
+def n.pick(b: Bool, x: Nat, y: Nat) -> Nat:
+  match b:
+    case True{}:
+      x
+    case False{}:
+      y
+
+def z.num(s: Bytes(), +acc: Nat, go: Bool) -> Nat:
+  match s go:
+    case SCon{Chr{+c}, t} True{}:
+      z.num(t, n.pick(digit(c), Nat.add(Nat.mul(acc, 10n), U32.to_nat(U32.sub(c, 48))), acc), digit(c))
+    case _ _:
+      acc
+
+def z.clen.at(+h: Bytes(), m: Maybe<&2, Nat>) -> Nat:
+  match m:
+    case None{}:
+      0n
+    case Some{+i}:
+      z.num(Bytes.drop(h, Nat.add(i, 18n)), 0n, True{})
+
+# the length a reply's head declares; a HEAD's reply has lost its body
+def z.clen(+h: Bytes()) -> Nat:
+  z.clen.at(h, Bytes.find(h, "\r\ncontent-length: "))
+
+# the head again with the compressed body's length, and the two lines
+def z.rehead.at(+h: Bytes(), +j: Nat, m: Maybe<&2, Nat>, +z: Bytes()) -> Bytes():
+  match m:
+    case None{}:
+      Bytes.concat([h, "\r\n", z])
+    case Some{+k}:
+      Bytes.concat([Bytes.slice(h, 0n, Nat.add(j, 2n)), z.cl(), cl.tag(),
+        Nat.show(Bytes.len(z)), Bytes.drop(h, Nat.add(Nat.add(j, 18n), k)), "\r\n", z])
+
+def z.rehead(+h: Bytes(), m: Maybe<&2, Nat>, +z: Bytes()) -> Bytes():
+  match m:
+    case None{}:
+      Bytes.concat([h, "\r\n", z])
+    case Some{+j}:
+      z.rehead.at(h, j, Bytes.find(Bytes.drop(h, Nat.add(j, 18n)), "\r\n"), z)
+
+def z.raw.at(k: Zc, +g: Gz, +h: Bytes(), +b: Bytes(), bs: Bytes()) -> Bytes():
+  match k:
+    case ZKeep{}:
+      bs
+    case ZVary{}:
+      Bytes.concat([h, z.vl(), "\r\n", b])
+    case ZZip{}:
+      z.rehead(h, Bytes.find(h, "\r\ncontent-length: "), Z.gzip(b, gz.lvl(g)))
+
+# a fixed reply: its head is read, and its body is compressed when it
+# is at least --gzip-min long (a HEAD's by the length its head declares)
+def z.raw.cut(+g: Gz, takes: Bool, +head: Bool, +bs: Bytes(), m: Maybe<&2, Nat>) -> Bytes():
+  match m:
+    case None{}:
+      bs
+    case Some{+i}:
+      +h = Bytes.slice(bs, 0n, Nat.add(i, 2n))
+      +b = Bytes.drop(bs, Nat.add(i, 4n))
+      z.raw.at(z.pick(gz.on(g), z.fits(h) && z.has(h, "\r\ncontent-length: ")
+        && Nat.is_le(gz.min(g), Nat.max(Bytes.len(b), n.pick(head, z.clen(h), 0n))), head, takes), g, h,
+        b, bs)
+
+def z.raw(+g: Gz, takes: Bool, head: Bool, +bs: Bytes()) -> Bytes():
+  z.raw.cut(g, takes, head, bs, Bytes.find(bs, "\r\n\r\n"))
+
+def z.seg(+g: Gz, takes: Bool, head: Bool, s: L.Seg) -> L.Seg:
+  match s:
+    case L.Raw{+bs}:
+      L.Raw{z.raw(g, takes, head, bs)}
+    case L.Page{root, +path, +ct, ask, h}:
+      z.page(g, takes, root, path, ct, ask, h)
+    case L.Note{bs}:
+      L.Note{bs}
+    case L.Shut{}:
+      L.Shut{}
+
+def z.segs(+g: Gz, +takes: Bool, +head: Bool, xs: List<&2, L.Seg>) -> List<&2, L.Seg>:
+  match xs:
+    case Nil{}:
+      Nil{}
+    case Con{s, t}:
+      Con{z.seg(g, takes, head, s), z.segs(g, takes, head, t)}
+
+# the filter: every segment of a reply through the choice
+def z.ans(+g: Gz, takes: Bool, head: Bool, a: Ans) -> Ans:
+  match a:
+    case Ans{out, cl, st, sk}:
+      Ans{z.segs(g, takes, head, out), cl, st, sk}
+
+# with --gzip every reply goes through the filter, by the head its
+# request came with
+def serve.gz(on: Bool, +srv: Srv, +meth: Meth, +hd: Hd, a: Ans) -> Ans:
+  match on:
+    case False{}:
+      a
+    case True{}:
+      z.ans(srv.gz(srv), gz.takes(hd), meth.head(meth), a)
+
 def serve(+srv: Srv, r: Req) -> Ans:
-  serve.log(srv, r)
+  match r:
+    case Req{+meth, path, body, close, ws, key, +hd}:
+      serve.gz(gz.on(srv.gz(srv)), srv, meth, hd, serve.log(srv, Req{meth, path, body, close, ws, key, hd}))
 
 def ans.out(a: Ans) -> List<&2, L.Seg>:
   match a:
@@ -3586,10 +4088,392 @@ def log.sized(note: Bytes(), +hd: Bytes(), n: U32) -> String:
 def h.lsize(note: Bytes(), hd: Bytes(), n: U32) -> String:
   log.sized(note, hd, n)
 
-# One connection, with the real effects (wire/effects.bend)
-def go(+srv: Srv, s: Socket) -> IO(Socket):
-  Fx.serve(~Srv, ~P, ~Ws.W, ~srv.idle, ~srv.head, ~h.plan, ~h.mid, ~resp.big(), ~plan.ws,
-    ~sse.gap(), ~sse.event, ~h.shut, ~h.fhead, ~miss, ~h.lnote, ~h.lsize, srv, p.new(), s)
+
+
+# The compressed bodies, kept
+# ---------------------------
+#
+# A file is compressed once per level, size and mtime, not once per
+# request: one computation keeps the bodies (z.cache), and every
+# connection asks it over a channel before it compresses, and hands it
+# what it compressed after. A body is kept under the file's name, the
+# level, and the size and mtime its open saw, so a file that changes is
+# a new key and its old body is never sent for it. The keeper holds at
+# most z.budget() bytes; past it, it starts over empty.
+type Zs is Data:
+  Zs{live: Bool, m: Map<&2, Bytes()>, size: Nat}
+
+def z.budget() -> Nat:
+  33554432n
+
+def z.key(+lvl: Nat, +mt: U32, +n: U32, +path: Bytes()) -> Bytes():
+  Bytes.concat([Nat.show(lvl), "|", U32.show(mt), "|", U32.show(n), "|", path])
+
+def z.kept.at(+size: Nat, m: Map<&2, Bytes()>, +key: Bytes(), +z: Bytes(), full: Bool) -> Zs:
+  match full:
+    case True{}:
+      Zs{True{}, Map.set(&2, Bytes(), Map.new(&2, Bytes()), key, z), Bytes.len(z)}
+    case False{}:
+      Zs{True{}, Map.set(&2, Bytes(), m, key, z), Nat.add(size, Bytes.len(z))}
+
+def z.kept(st: Zs, +key: Bytes(), +z: Bytes()) -> Zs:
+  match st:
+    case Zs{live, m, +size}:
+      z.kept.at(size, m, key, z, Nat.is_lt(z.budget(), Nat.add(size, Bytes.len(z))))
+
+def z.found(+size: Nat, back: Chan(Maybe<&2, Bytes()>), r: Map<&2, Bytes()> & Bytes()) -> IO(Zs):
+  (m, +z) = r
+  IO.bind(Bool, Zs, Chan.send(Maybe<&2, Bytes()>, back,
+    Bool.pick(Maybe<&2, Bytes()>, Nat.is_eq(Bytes.len(z), 0n), None{}, Some{z})),
+    ok => IO.pure(Zs, Zs{True{}, m, size}))
+
+def z.served(r: Maybe<&1, Zq>, st: Zs) -> IO(Zs):
+  match r:
+    case None{}:
+      IO.pure(Zs, Zs{False{}, Map.new(&2, Bytes()), 0n})
+    case Some{q}:
+      match q:
+        case ZGet{+key, back}:
+          match st:
+            case Zs{live, m, size}:
+              z.found(size, back, Map.get(Bytes(), "", m, key))
+        case ZPut{+key, +z}:
+          IO.pure(Zs, z.kept(st, key, z))
+
+# the keeper: one request at a time, until its channel closes
+def z.cache(k: Nat, +ch: Chan(Zq), st: Zs) -> IO(Unit):
+  match k:
+    case 0n:
+      IO.pure(Unit, Unit{})
+    case 1n+p:
+      match st:
+        case Zs{live, m, size}:
+          match live:
+            case False{}:
+              IO.pure(Unit, Unit{})
+            case True{}:
+              IO.bind(Maybe<&1, Zq>, Unit, Chan.recv(Zq, ch), r =>
+                IO.bind(Zs, Unit, z.served(r, Zs{True{}, m, size}), st2 => z.cache(p, ch, st2)))
+
+def z.cache.fuel() -> Nat:
+  U32.to_nat(4294967295)
+
+# Files, compressed as they are sent
+# ----------------------------------
+#
+# A file the filter chose to compress reaches the loop as a Page whose
+# name z.mark marked, and whose head says content-encoding: gzip. The
+# loop opens it by z.open, the hook in place of wire/effects.bend's
+# net.open: an unmarked name is net.open's; a marked one is its .gz twin
+# when --gzip-static asked for it and there is one (sent as it is), and
+# otherwise the file gzipped -- the keeper's body for it if it has one,
+# else the file read whole and compressed, and handed to the keeper --
+# held as the body the loop sends, as a small file's is. The loop's
+# size, head and sending are the ones every file gets.
+
+# a file past this is not read into memory to be compressed: it is
+# refused as a missing one is
+def z.max() -> Nat:
+  67108864n
+
+type Sl is Type:
+  SMore{f: File, left: Nat, acc: Bytes()}
+  SEnd{f: File, acc: Bytes(), ok: Bool}
+
+def z.sl.at(end: Bool, f: File, +left: Nat, acc: Bytes(), exact: Bool) -> Sl:
+  match end:
+    case True{}:
+      SEnd{f, acc, exact}
+    case False{}:
+      SMore{f, left, acc}
+
+def z.sl.got(+left: Nat, acc: Bytes(), f: File, +b: Bytes()) -> Sl:
+  +n = Bytes.len(b)
+  z.sl.at(Nat.is_eq(n, 0n) || Nat.is_le(left, n), f, Nat.sub(left, n), Bytes.append(acc, b),
+    Nat.is_eq(left, n))
+
+def z.sl.next(r: File & Result<&1, &1, U32 & String, Bytes()>, +left: Nat, acc: Bytes()) -> Sl:
+  (f, res) = r
+  match res:
+    case Fail{e}:
+      SEnd{f, acc, False{}}
+    case Done{+b}:
+      z.sl.got(left, acc, f, b)
+
+def z.ok.body(ok: Bool, acc: Bytes()) -> Maybe<&1, Bytes()>:
+  match ok:
+    case True{}:
+      Some{acc}
+    case False{}:
+      None{}
+
+# the rest of a file left open, read to its length
+def z.slurp(k: Nat, st: Sl) -> IO(Maybe<&1, Bytes()>):
+  match k:
+    case 0n:
+      match st:
+        case SMore{f, left, acc}:
+          IO.bind(Unit, Maybe<&1, Bytes()>, File.close(f), u => IO.pure(Maybe<&1, Bytes()>, None{}))
+        case SEnd{f, acc, ok}:
+          IO.bind(Unit, Maybe<&1, Bytes()>, File.close(f), u => IO.pure(Maybe<&1, Bytes()>, None{}))
+    case 1n+p:
+      match st:
+        case SMore{f, +left, acc}:
+          IO.bind(File & Result<&1, &1, U32 & String, Bytes()>, Maybe<&1, Bytes()>,
+            File.read_buf(f, 1048576), r => z.slurp(p, z.sl.next(r, left, acc)))
+        case SEnd{f, acc, ok}:
+          IO.bind(Unit, Maybe<&1, Bytes()>, File.close(f), u =>
+            IO.pure(Maybe<&1, Bytes()>, z.ok.body(ok, acc)))
+
+# the compressed body, held as the loop sends a small file's
+def z.fh(+mt: U32, +z: Bytes()) -> Fx.Fh:
+  Fx.Fh{U32.from_nat(Bytes.len(z)), mt, None{}, z}
+
+def z.keep(e: Maybe<&2, Chan(Zq)>, +key: Bytes(), +z: Bytes()) -> IO(Unit):
+  match e:
+    case None{}:
+      IO.pure(Unit, Unit{})
+    case Some{ch}:
+      IO.bind(Bool, Unit, Chan.send(Zq, ch, ZPut{key, z}), ok => IO.pure(Unit, Unit{}))
+
+# a body in hand: compressed, handed to the keeper, sent
+def z.made(s: Socket, e: Maybe<&2, Chan(Zq)>, +key: Bytes(), +mt: U32, +lvl: Nat,
+  m: Maybe<&1, Bytes()>) -> IO(Socket & Result<&1, &1, U32 & String, Fx.Fh>):
+  match m:
+    case None{}:
+      IO.pure(Socket & Result<&1, &1, U32 & String, Fx.Fh>,
+        (s, Fail{(5, "the file could not be read to compress it")}))
+    case Some{+b}:
+      +z = Z.gzip(b, lvl)
+      IO.bind(Unit, Socket & Result<&1, &1, U32 & String, Fx.Fh>, z.keep(e, key, z), u =>
+        IO.pure(Socket & Result<&1, &1, U32 & String, Fx.Fh>, (s, Done{z.fh(mt, z)})))
+
+def z.read(big: Bool, f: File, +n: Nat, bs: Bytes()) -> IO(Maybe<&1, Bytes()>):
+  match big:
+    case True{}:
+      IO.bind(Unit, Maybe<&1, Bytes()>, File.close(f), u => IO.pure(Maybe<&1, Bytes()>, None{}))
+    case False{}:
+      z.slurp(Nat.add(2n, Nat.div(n, 65536n)), SMore{f, n, bs})
+
+# the file compressed here: its bytes, whole (a small one is already
+# read, a larger one is read to its end)
+def z.make(s: Socket, e: Maybe<&2, Chan(Zq)>, +key: Bytes(), +n: U32, +mt: U32, f: Maybe<&1, File>,
+  bs: Bytes(), +lvl: Nat) -> IO(Socket & Result<&1, &1, U32 & String, Fx.Fh>):
+  match f:
+    case None{}:
+      z.made(s, e, key, mt, lvl, Some{bs})
+    case Some{file}:
+      IO.bind(Maybe<&1, Bytes()>, Socket & Result<&1, &1, U32 & String, Fx.Fh>,
+        z.read(Nat.is_lt(z.max(), U32.to_nat(n)), file, U32.to_nat(n), bs),
+        m => z.made(s, e, key, mt, lvl, m))
+
+def z.shut(f: Maybe<&1, File>) -> IO(Unit):
+  match f:
+    case None{}:
+      IO.pure(Unit, Unit{})
+    case Some{file}:
+      File.close(file)
+
+# what the keeper answered: its body, or nothing, and the file is
+# compressed here
+def z.asked(got: Maybe<&1, Maybe<&2, Bytes()>>, s: Socket, e: Maybe<&2, Chan(Zq)>, +key: Bytes(),
+  +n: U32, +mt: U32, f: Maybe<&1, File>, bs: Bytes(), +lvl: Nat) ->
+  IO(Socket & Result<&1, &1, U32 & String, Fx.Fh>):
+  match got:
+    case Some{m}:
+      match m:
+        case Some{+z}:
+          IO.bind(Unit, Socket & Result<&1, &1, U32 & String, Fx.Fh>, z.shut(f), u =>
+            IO.pure(Socket & Result<&1, &1, U32 & String, Fx.Fh>, (s, Done{z.fh(mt, z)})))
+        case None{}:
+          z.make(s, e, key, n, mt, f, bs, lvl)
+    case None{}:
+      z.make(s, e, key, n, mt, f, bs, lvl)
+
+def z.back(back: Chan(Maybe<&2, Bytes()>), got: Maybe<&1, Maybe<&2, Bytes()>>) ->
+  IO(Maybe<&1, Maybe<&2, Bytes()>>):
+  IO.bind(Unit, Maybe<&1, Maybe<&2, Bytes()>>, Chan.close(Maybe<&2, Bytes()>, back), u =>
+    IO.pure(Maybe<&1, Maybe<&2, Bytes()>>, got))
+
+# ask the keeper for key, on a channel of the asker's own
+def z.ask.on(ch: Chan(Zq), +key: Bytes(), +back: Chan(Maybe<&2, Bytes()>)) ->
+  IO(Maybe<&1, Maybe<&2, Bytes()>>):
+  IO.bind(Bool, Maybe<&1, Maybe<&2, Bytes()>>, Chan.send(Zq, ch, ZGet{key, back}), ok =>
+    IO.bind(Maybe<&1, Maybe<&2, Bytes()>>, Maybe<&1, Maybe<&2, Bytes()>>,
+      Chan.recv(Maybe<&2, Bytes()>, back), got => z.back(back, got)))
+
+def z.ask(e: Maybe<&2, Chan(Zq)>, +key: Bytes()) -> IO(Maybe<&1, Maybe<&2, Bytes()>>):
+  match e:
+    case None{}:
+      IO.pure(Maybe<&1, Maybe<&2, Bytes()>>, None{})
+    case Some{ch}:
+      IO.bind(Chan(Maybe<&2, Bytes()>), Maybe<&1, Maybe<&2, Bytes()>>,
+        Chan.new(Maybe<&2, Bytes()>, 1), back => z.ask.on(ch, key, back))
+
+def z.flown(r: Result<&1, &1, U32 & String, U32 & U32 & Maybe<&1, File> & Bytes()>, s: Socket,
+  +e: Maybe<&2, Chan(Zq)>, +path: Bytes(), +lvl: Nat) -> IO(Socket & Result<&1, &1, U32 & String, Fx.Fh>):
+  match r:
+    case Fail{er}:
+      IO.pure(Socket & Result<&1, &1, U32 & String, Fx.Fh>, (s, Fail{er}))
+    case Done{g}:
+      (+n, (+mt, (f, bs))) = g
+      +key = z.key(lvl, mt, n, path)
+      IO.bind(Maybe<&1, Maybe<&2, Bytes()>>, Socket & Result<&1, &1, U32 & String, Fx.Fh>, z.ask(e, key),
+        got => z.asked(got, s, e, key, n, mt, f, bs, lvl))
+
+def z.fly(s: Socket, +e: Maybe<&2, Chan(Zq)>, root: String, +path: String, +lvl: Nat) ->
+  IO(Socket & Result<&1, &1, U32 & String, Fx.Fh>):
+  IO.bind(Result<&1, &1, U32 & String, U32 & U32 & Maybe<&1, File> & Bytes()>,
+    Socket & Result<&1, &1, U32 & String, Fx.Fh>, File.get_under(root, path, L.page.small()),
+    r => z.flown(r, s, e, path, lvl))
+
+# the .gz twin when there is one, else the file compressed
+def z.twin(r: Result<&1, &1, U32 & String, U32 & U32 & Maybe<&1, File> & Bytes()>, s: Socket,
+  +e: Maybe<&2, Chan(Zq)>, root: String, +path: String, +lvl: Nat) ->
+  IO(Socket & Result<&1, &1, U32 & String, Fx.Fh>):
+  match r:
+    case Done{g}:
+      IO.pure(Socket & Result<&1, &1, U32 & String, Fx.Fh>, Fx.net.got(s, Done{g}))
+    case Fail{er}:
+      z.fly(s, e, root, path, lvl)
+
+def z.open.m(st: Bool, s: Socket, +e: Maybe<&2, Chan(Zq)>, +root: String, +path: String, +lvl: Nat) ->
+  IO(Socket & Result<&1, &1, U32 & String, Fx.Fh>):
+  match st:
+    case True{}:
+      IO.bind(Result<&1, &1, U32 & String, U32 & U32 & Maybe<&1, File> & Bytes()>,
+        Socket & Result<&1, &1, U32 & String, Fx.Fh>,
+        File.get_under(root, String.append(path, ".gz"), L.page.small()),
+        r => z.twin(r, s, e, root, path, lvl))
+    case False{}:
+      z.fly(s, e, root, path, lvl)
+
+def z.open.at(mk: Bool, s: Socket, +e: Maybe<&2, Chan(Zq)>, root: String, +path: String) ->
+  IO(Socket & Result<&1, &1, U32 & String, Fx.Fh>):
+  match mk:
+    case False{}:
+      Fx.net.open(s, root, path)
+    case True{}:
+      z.open.m(U32.is_eq(Bytes.get(path, 2n), 115), s, e, root, Bytes.drop(path, 3n),
+        U32.to_nat(U32.sub(Bytes.get(path, 1n), 48)))
+
+def z.open.go(s: Socket, +e: Maybe<&2, Chan(Zq)>, root: String, +path: String) ->
+  IO(Socket & Result<&1, &1, U32 & String, Fx.Fh>):
+  z.open.at(U32.is_eq(Bytes.get(path, 0n), 1), s, e, root, path)
+
+# The socket the loop holds is the socket beside the keeper's channel,
+# so z.open can reach the keeper; every other effect takes the socket
+# and hands the pair back.
+def Zk() -> Data:
+  Maybe<&2, Chan(Zq)>
+
+def zs.fo(g: Socket & Result<&1, &1, U32 & String, Fx.Fh>, +e: Zk()) ->
+  (Socket & Zk()) & Result<&1, &1, U32 & String, Fx.Fh>:
+  (s, r) = g
+  ((s, e), r)
+
+def z.open(sp: Socket & Zk(), root: String, path: String) ->
+  IO((Socket & Zk()) & Result<&1, &1, U32 & String, Fx.Fh>):
+  (s, +e) = sp
+  IO.bind(Socket & Result<&1, &1, U32 & String, Fx.Fh>, (Socket & Zk()) & Result<&1, &1, U32 & String, Fx.Fh>,
+    z.open.go(s, e, root, path), g => IO.pure((Socket & Zk()) & Result<&1, &1, U32 & String, Fx.Fh>,
+      zs.fo(g, e)))
+
+def zs.got(g: Socket & Result<&1, &1, U32 & String, Maybe<&1, Bytes()>>, +e: Zk()) ->
+  (Socket & Zk()) & Result<&1, &1, U32 & String, Maybe<&1, Bytes()>>:
+  (s, r) = g
+  ((s, e), r)
+
+def zs.rx(sp: Socket & Zk(), max: U32, ms: U32) ->
+  IO((Socket & Zk()) & Result<&1, &1, U32 & String, Maybe<&1, Bytes()>>):
+  (s, +e) = sp
+  IO.bind(Socket & Result<&1, &1, U32 & String, Maybe<&1, Bytes()>>,
+    (Socket & Zk()) & Result<&1, &1, U32 & String, Maybe<&1, Bytes()>>, TCP.poll_buf(s, max, ms),
+    g => IO.pure((Socket & Zk()) & Result<&1, &1, U32 & String, Maybe<&1, Bytes()>>, zs.got(g, e)))
+
+def zs.put(g: Socket & Result<&1, &1, U32 & String, Unit>, +e: Zk()) ->
+  (Socket & Zk()) & Result<&1, &1, U32 & String, Unit>:
+  (s, r) = g
+  ((s, e), r)
+
+def zs.tx(sp: Socket & Zk(), bs: Bytes(), ms: U32) ->
+  IO((Socket & Zk()) & Result<&1, &1, U32 & String, Unit>):
+  (s, +e) = sp
+  IO.bind(Socket & Result<&1, &1, U32 & String, Unit>, (Socket & Zk()) & Result<&1, &1, U32 & String, Unit>,
+    TCP.send_buf_poll(s, bs, ms),
+    g => IO.pure((Socket & Zk()) & Result<&1, &1, U32 & String, Unit>, zs.put(g, e)))
+
+def zs.at(g: Socket & Nat, +e: Zk()) -> (Socket & Zk()) & Nat:
+  (s, t) = g
+  ((s, e), t)
+
+def zs.clk(sp: Socket & Zk()) -> IO((Socket & Zk()) & Nat):
+  (s, +e) = sp
+  IO.bind(Socket & Nat, (Socket & Zk()) & Nat, Fx.net.now(s), g => IO.pure((Socket & Zk()) & Nat, zs.at(g, e)))
+
+def zs.nap(sp: Socket & Zk(), ms: U32) -> IO(Socket & Zk()):
+  (s, +e) = sp
+  IO.bind(Socket, Socket & Zk(), Fx.net.nap(s, ms), s2 => IO.pure(Socket & Zk(), (s2, e)))
+
+def zs.sent(g: Socket & Fx.Fh & Result<&1, &1, U32 & String, Unit>, +e: Zk()) ->
+  (Socket & Zk()) & Fx.Fh & Result<&1, &1, U32 & String, Unit>:
+  (s, r) = g
+  ((s, e), r)
+
+def zs.fsend(sp: Socket & Zk(), f: Fx.Fh, off: U32, len: U32, ms: U32) ->
+  IO((Socket & Zk()) & Fx.Fh & Result<&1, &1, U32 & String, Unit>):
+  (s, +e) = sp
+  IO.bind(Socket & Fx.Fh & Result<&1, &1, U32 & String, Unit>,
+    (Socket & Zk()) & Fx.Fh & Result<&1, &1, U32 & String, Unit>, Fx.fh.send(s, f, off, len, ms),
+    g => IO.pure((Socket & Zk()) & Fx.Fh & Result<&1, &1, U32 & String, Unit>, zs.sent(g, e)))
+
+def zs.sock(sp: Socket & Zk()) -> Socket:
+  (s, e) = sp
+  s
+
+# One connection, with the real effects (wire/effects.bend), files
+# opened by z.open
+# What the accept loop hands each connection: the server, and the
+# keeper of compressed bodies (kept out of Srv, which the laws speak of)
+type Srvz is Data:
+  Srvz{srv: Srv, zc: Maybe<&2, Chan(Zq)>}
+
+def srvz.grace(z: Srvz) -> U32:
+  match z:
+    case Srvz{srv, zc}:
+      srv.grace(srv)
+
+def srvz.conns(z: Srvz) -> U32:
+  match z:
+    case Srvz{srv, zc}:
+      srv.conns(srv)
+
+def go.at(+srv: Srv, zc: Maybe<&2, Chan(Zq)>, s: Socket) -> IO(Socket):
+  IO.bind(Socket & Zk(), Socket, L.conn.start(~(A => IO(A)), ~IO.pure, ~IO.bind, ~(Socket & Zk()),
+    ~Fx.Fh, ~zs.rx, ~zs.tx, ~zs.clk, ~zs.nap, ~IO.print_err, ~z.open, ~Fx.fh.size, ~Fx.fh.read,
+    ~zs.fsend, ~Fx.fh.close, ~Srv, ~P, ~Ws.W, ~srv.idle, ~srv.head, ~h.plan, ~h.mid, ~resp.big(),
+    ~plan.ws, ~sse.gap(), ~sse.event, ~h.shut, ~h.fhead, ~miss, ~h.lnote, ~h.lsize, srv, p.new(),
+    (s, zc)), sp => IO.pure(Socket, zs.sock(sp)))
+
+def go(+sz: Srvz, s: Socket) -> IO(Socket):
+  match sz:
+    case Srvz{+srv, zc}:
+      go.at(srv, zc, s)
+
+# the keeper of compressed bodies, started once for the server
+def z.started.go(+ch: Chan(Zq)) -> IO(Maybe<&2, Chan(Zq)>):
+  IO.bind(Unit, Maybe<&2, Chan(Zq)>, IO.spawn(Unit, z.cache(z.cache.fuel(), ch,
+    Zs{True{}, Map.new(&2, Bytes()), 0n})), u => IO.pure(Maybe<&2, Chan(Zq)>, Some{ch}))
+
+def z.started(ch: Chan(Zq)) -> IO(Maybe<&2, Chan(Zq)>):
+  z.started.go(ch)
+
+def z.start(on: Bool) -> IO(Maybe<&2, Chan(Zq)>):
+  match on:
+    case False{}:
+      IO.pure(Maybe<&2, Chan(Zq)>, None{})
+    case True{}:
+      IO.bind(Chan(Zq), Maybe<&2, Chan(Zq)>, Chan.new(Zq, 1024), z.started)
 
 def scheme(m: Maybe<&2, Pem>) -> String:
   match m:
@@ -3629,7 +4513,8 @@ def run(+c: Cfg) -> IO(Unit):
   do IO<Unit>:
     l : Listener <- IO.try(Listener, listen(cfg.port(c), cfg.shared(c), cfg.pem(c)))
     IO.print(banner(c))
-    Fx.run(~Srv, ~go, ~srv.grace, ~srv.conns, "bend-http", srv.new(c), l)
+    zc : Maybe<&2, Chan(Zq)> <- z.start(gz.on(cfg.gz(c)))
+    Fx.run(~Srvz, ~go, ~srvz.grace, ~srvz.conns, "bend-http", Srvz{srv.new(c), zc}, l)
 
 # bend-http [--port N] [--root DIR] [--idle-ms N] [--head-ms N] [--max-conns N]
 #           [--grace-ms N] [--shared] [--tls-cert PEM --tls-key PEM] [--log]

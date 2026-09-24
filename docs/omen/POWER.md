@@ -65,7 +65,7 @@ Parsing and text:
 | `json_value.bend` | JSON as a value over `json`'s stream: `parse` under a depth cap, a byte budget and a duplicate-key policy; canonical `show`; `get`, `at`, `to_f64`, `to_i64`. Numbers keep their lexeme and unescaped strings are views of the input | CPython `json` (`object_pairs_hook`, `json.dumps`' escaper) **†** |
 | `grammar.bend` | a parser state that is a *value*, plus the set of next bytes it will accept — lane 5's machine with the document taken out, so it forks | XGrammar's mask; CPython `json` as the acceptance authority **†** |
 | `csv.bend` | RFC 4180 and its dialect knobs as a streaming reader over Base's `Bytes()` -- a field that lies in one read is a view of it -- and a minimal-quoting writer; budgets make hostile input a refusal at a byte offset. `csv_spec.bend` is RFC 4180's ABNF read over a whole input; `csv_laws.bend` states, and `csv_proof.bend` proves, chunking, the Bytes bridge, the reader is the grammar for every dialect, input and split into reads, and the writer's round trip (`tests/power/csv_mutants.py`: ten mutants, each fails the proof) | CPython `csv` **†** |
-| `deflate.bend`, `gzip.bend` | RFC 1951 inflate as a bit machine over `Bytes()` (reads cut anywhere, an output cap, malformed streams refused as zlib refuses them) and deflate at levels 0-9 (zlib's hash chains and level knobs; stored, fixed and dynamic blocks); RFC 1952 members with FEXTRA, FNAME, FCOMMENT, FHCRC, CRC-32 and ISIZE checked. `deflate_laws.bend` states, and `deflate_proof.bend` proves, chunking, refusal, the cap, the window, CRC-32 against the bit-at-a-time register, the RFC's code tables and fixed codes, and the round trip for stored (level 0) and fixed (`deflate_fixed`, its tokens checked as written) streams of any bytes; the dynamic round trip is checked on vectors (`tests/power/deflate_mutants.py`: eighteen mutants, each fails the proof) | CPython `zlib` and `gzip` **†** |
+| `deflate.bend`, `gzip.bend` | RFC 1951 inflate as a bit machine over `Bytes()` (reads cut anywhere, an output cap, malformed streams refused as zlib refuses them) and deflate at levels 0-9 (zlib's hash chains and level knobs; stored, fixed and dynamic blocks); RFC 1952 members with FEXTRA, FNAME, FCOMMENT, FHCRC, CRC-32 and ISIZE checked. `deflate_laws.bend` states, and `deflate_proof.bend` proves, chunking, refusal, the cap, the window, CRC-32 against the bit-at-a-time register, the RFC's code tables and fixed codes, the round trip for stored (level 0) and fixed (`deflate_fixed`, its tokens checked as written) streams of any bytes, and that `inflate`, which reads a symbol whole wherever the machine is at the start of one, is the bit machine over any stream (`inflate_fast`, `inflate_proof.bend`); the dynamic round trip is checked on vectors (`tests/power/deflate_mutants.py`: twenty-five mutants, seven of them in the fast path, each fails the proof) | CPython `zlib` and `gzip` **†** |
 | `text.bend` | identity over bytes: UTF-8 with every code point's offset, grapheme cluster boundaries, and a normalizer that hands back the map from normalized text to the original's byte ranges | UAX #29, CPython `unicodedata` **†** |
 
 Content addressing:
@@ -310,6 +310,28 @@ blake3 reads its blocks where they lie. 1T medians against the pre-port pins:
 json 0.54 -> 0.58 s, grammar 1.14 -> 1.07, text 2.22 -> 2.40, cdc 0.25 ->
 0.32, blake3 0.30 -> 0.48, bytes 0.53 -> 0.81. What is left is a descriptor's
 chain of loads per read where the Vec cell had one, and the push's.
+
+On JS, a read of a buffer that is being pushed to is still quadratic.
+`str_flat` (bend2/comp.ts) remembers the last string it tested for
+surrogates, and `Bytes.push` makes a new string every time, so every read
+after a push runs the regex over the whole buffer again. deflate.bend's
+copy (a read `dist` back, then a push) is that loop, so the JS lane
+inflates at kilobytes a second on large output. Ten lines show it: grow a
+buffer by pushing the byte seven back, n times; n = 100000 takes seconds
+on JS and milliseconds on C.
+
+    def run(n: Nat, out: Bytes()) -> Bytes():
+      match n:
+        case 0n:
+          out
+        case 1n+p:
+          +o = out
+          +c = Bytes.get(o, Nat.sub(Bytes.len(o), 7n))
+          run(p, Bytes.push(o, U32.and(U32.add(c, 1), 255)))
+
+The fix is in the runtime and not here: `bytes_push` can leave the cache
+warm when the string it pushes to is the one cached and the byte is not
+a surrogate (`STR_FLAT_S = s + ch` with `STR_FLAT` unchanged).
 
 ## Known hazard: a U64, I64 or F64 in an Array on the C backend
 
