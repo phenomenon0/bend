@@ -185,16 +185,31 @@ def cal(f: Nat, fits: Bool, +rem: Nat, +k: Nat, +yl: Nat) -> Nat & Nat & Nat:
           +y2 = ylen(1n+k)
           cal(g, Nat.is_lt(r2, y2), r2, 1n+k, y2)
 
-# a day's year (from 1970), month (from 0) and day of the month (from 0):
-# the walk from 1970, a year at a time (half a century is a tenth of a
-# microsecond)
-def civil.from(+days: Nat, +b: Nat, +k: Nat) -> Nat & Nat & Nat:
-  +r = Nat.sub(days, b)
+# a day's year (from 1970), month (from 0) and day of the month (from 0).
+# The walk takes whole blocks of four years first: each of the first 32
+# from 1970 (to 2097) has 1461 days, its third year a leap year (2000
+# being one); q counts the blocks taken, k the years, and ok says whether
+# the next block is one of them and within rem. What is left is walked a
+# year at a time.
+def blk(f: Nat, ok: Bool, +q: Nat, +k: Nat, +rem: Nat) -> Nat & Nat:
+  match f:
+    case 0n:
+      (k, rem)
+    case 1n+g:
+      match ok:
+        case True{}:
+          +r2 = Nat.sub(rem, 1461n)
+          blk(g, Nat.is_lt(1n+q, 32n) && Nat.is_le(1461n, r2), 1n+q, 1n+1n+1n+1n+k, r2)
+        case False{}:
+          (k, rem)
+
+def civil.from(kr: Nat & Nat) -> Nat & Nat & Nat:
+  (+k, +r) = kr
   +y = ylen(k)
   cal(1n+r, Nat.is_lt(r, y), r, k, y)
 
 def civil(+days: Nat) -> Nat & Nat & Nat:
-  civil.from(days, 0n, 0n)
+  civil.from(blk(32n, Nat.is_lt(0n, 32n) && Nat.is_le(1461n, days), 0n, 0n, days))
 
 # ... and back: the days before a day of a month of a year, when there
 # is such a day

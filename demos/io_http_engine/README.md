@@ -201,8 +201,80 @@ its answers the file system's when they were read (`memo_answers`,
 the new size after the second.
 
 The type comes from the extension, by a table whose rows keep the head
-a 200 of that type starts with, so a file's head is three pieces joined;
-`file_head_is_built` says it is the head `reply.n.head` builds.
+a 200 of that type starts with; `file_head_is_built` says it is the
+head `mime.pre` builds from the type's name, and that a request asking
+nothing of the file gets all of it after the head `cond.bend`'s
+`hd.full.is` spells out piece by piece.
+
+### Conditional and range requests
+
+A file's reply is decided by `cond.bend` from the request's fields and
+the size and mtime the open file reports (RFC 9110 8.8, 13, 14): the
+loop's `~fhead` hook returns the head and which of the file's bytes
+follow it (`L.Fr{hd, off, len}`), and the loop sends that part by
+sendfile from `off`, or, for a small file, slices it out of the bytes
+it read, the head in the same send.
+
+- Validators: every 200, 206 and 304 carries `last-modified` (the
+  mtime as an IMF-fixdate) and `etag`, nginx's `"<mtime hex>-<size
+  hex>"`, so a cache that holds one of nginx's tags keeps matching. It
+  is sent strong, as nginx sends it, but it is a weak validator in
+  truth (two writes in one second at one size share it): If-None-Match
+  compares it weakly, If-Match and If-Range strongly (RFC 9110 8.8.3).
+- Preconditions, in RFC 9110 13.2.2's order: If-Match (412 unless it
+  names the tag, or `*`), else If-Unmodified-Since (412 if the file
+  changed after it); If-None-Match (304 if it names the tag, or `*`),
+  else If-Modified-Since (304 if the file has not changed since). A 304
+  is the status line, `last-modified`, `etag` and `connection`, and no
+  byte of the file. A date is read in any of the three forms RFC 9110
+  5.6.7 asks a recipient to accept; one that does not read is as if the
+  field were absent.
+- Range: one `bytes=` range-spec the file satisfies is a 206 of exactly
+  those bytes with `content-range: bytes a-b/n`; none satisfiable is a
+  416 with `content-range: bytes */n`; a Range that is not RFC 9110
+  14.1.1's grammar is ignored; If-Range lets it through only when it is
+  the file's tag (strongly) or exactly its Last-Modified. A 200 of a
+  file says `accept-ranges: bytes`. An empty file ignores Range.
+
+The laws (LAWS.bend, "Conditional and range requests") are proven for
+every size and mtime: `date_round_trip` (date.read of date.fmt is the
+time back, for every year IMF-fixdate's four digits hold), the calendar
+by vectors (1994, the leap days of 2000 and 2024, 2100 not being one,
+the epoch, the last 32-bit second), the three date forms, the heads byte
+for byte (`head_vectors`) and built in place equal to their pieces
+(`same_head_is_built`, `part_head_is_built`), `not_modified_no_body`,
+`inm_over_ims`, `tag_hit_not_modified`, `ims_echo` (a client that sends
+back the Last-Modified it got gets a 304), the unreadable dates ignored,
+`part_in_file` (every range served is in the file, so Content-Range
+never names a byte the file lacks), the range forms and vectors, and
+`range_wire`: in the world model, a GET the fields decide is the range
+a to b puts on the wire the 206 head naming it and then exactly the
+file's bytes a to b. `mutants.py` breaks each of these (a body after a
+304, a Content-Length on it, If-Modified-Since read despite
+If-None-Match, a range one byte too long, Content-Range off by one, the
+weekday a day late, every fourth year a leap year, ...) and each is
+refused.
+
+Where it differs from nginx (1.24, `sendfile on`, defaults), with the
+same files, compared status line and header names on 62 requests:
+
+| request | nginx | here | why |
+|---|---|---|---|
+| If-Modified-Since later than the mtime | 200 | 304 | nginx's default `if_modified_since exact`; RFC 9110 13.1.3 says "earlier or equal" |
+| If-None-Match matching, If-Modified-Since earlier | 200 | 304 | RFC 9110 13.1.3: with If-None-Match present, If-Modified-Since is not evaluated |
+| If-Unmodified-Since that is not a date | 412 | 200 | RFC 9110 13.1.4: an invalid date is ignored |
+| `bytes=5-3`, `bytes=abc` | 416 | 200 | RFC 9110 14.2: a Range that does not parse is ignored |
+| `bytes=0 - 5` | 206 | 200 | whitespace inside a range-spec is not the grammar |
+| `bytes=0-1,` | 416 | 206 | an empty list element is allowed (RFC 9110 5.6.1) |
+| `bytes=0-1,5-6` | 206 multipart/byteranges | 200 | no multipart replies here; RFC 9110 14.2 lets a server ignore Range |
+| 412, 416 bodies | HTML, `Requested Range Not Satisfiable` | a line of text/plain, `Range Not Satisfiable` | RFC 9110's reason phrase |
+| `.txt` | application/octet-stream | text/plain | the engine's type table (as before) |
+| `server`, `date` | sent | not sent | as before |
+
+Everything else agrees: the status, the header set of the 200, 206, 304,
+412 and 416 (the 206 without `accept-ranges`, the 304 with only the
+validators and `connection`, as nginx sends them), the Content-Range and
+the bytes.
 
 On one core, against nginx with one worker (`sendfile on`, no
 `open_file_cache`) under `wrk -t2 -c32` on loopback, a 4 KiB file went

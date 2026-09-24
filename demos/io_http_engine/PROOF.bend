@@ -3366,20 +3366,207 @@ def cp.lt_self(+r: Nat) -> {Nat.is_lt(r, 1n+r) == True{} : Bool}:
   cp.le_refl(r)
 
 # a walk started at year k, b days in, with days - b to go
-def cp.from(+days: Nat, +b: Nat, +k: Nat, eb: {C.before(k) == b : Nat},
-  le: {Nat.is_le(b, days) == True{} : Bool}) ->
-  {cp.cd(C.civil.from(days, b, k)) == Some{days} : Maybe<&2, Nat>}:
-  %cp.add_sub(b, days, le) :
-    {cp.cd(C.civil.from(days, b, k)) == Some{_} : Maybe<&2, Nat>}
-  %eb :
-    {cp.cd(C.civil.from(days, b, k)) == Some{Nat.add(_, Nat.sub(days, b))} : Maybe<&2, Nat>}
-  cp.cal(Nat.sub(days, b), Nat.sub(days, b), k, Nat.is_lt(Nat.sub(days, b), C.ylen(k)), {==},
-    cp.lt_self(Nat.sub(days, b)))
+# the rest of a day's walk, a year at a time from year k with r days to
+# go: the days before year k and r
+def cp.cf(+k: Nat, +r: Nat) -> {cp.cd(C.civil.from((k, r))) == Some{Nat.add(C.before(k), r)} : Maybe<&2, Nat>}:
+  cp.cal(r, r, k, Nat.is_lt(r, C.ylen(k)), {==}, cp.lt_self(r))
+
+# four years on: the days before them are the days before the first and
+# the four years' lengths
+def cp.four(q: Nat) -> Nat:
+  match q:
+    case 0n:
+      0n
+    case 1n+p:
+      1n+1n+1n+1n+cp.four(p)
+
+def cp.S4(+k: Nat) -> Nat:
+  Nat.add(C.ylen(k), Nat.add(C.ylen(1n+k), Nat.add(C.ylen(1n+1n+k), C.ylen(1n+1n+1n+k))))
+
+def cp.b4(+k: Nat) -> {C.before(1n+1n+1n+1n+k) == Nat.add(C.before(k), cp.S4(k)) : Nat}:
+  Equal.trans(Nat,
+    Nat.add(Nat.add(Nat.add(Nat.add(C.before(k), C.ylen(k)), C.ylen(1n+k)), C.ylen(1n+1n+k)), C.ylen(1n+1n+1n+k)),
+    Nat.add(Nat.add(Nat.add(C.before(k), C.ylen(k)), C.ylen(1n+k)), Nat.add(C.ylen(1n+1n+k), C.ylen(1n+1n+1n+k))),
+    Nat.add(C.before(k), cp.S4(k)),
+    cp.add_assoc(Nat.add(Nat.add(C.before(k), C.ylen(k)), C.ylen(1n+k)), C.ylen(1n+1n+k), C.ylen(1n+1n+1n+k)),
+    Equal.trans(Nat,
+      Nat.add(Nat.add(Nat.add(C.before(k), C.ylen(k)), C.ylen(1n+k)), Nat.add(C.ylen(1n+1n+k), C.ylen(1n+1n+1n+k))),
+      Nat.add(Nat.add(C.before(k), C.ylen(k)), Nat.add(C.ylen(1n+k), Nat.add(C.ylen(1n+1n+k), C.ylen(1n+1n+1n+k)))),
+      Nat.add(C.before(k), cp.S4(k)),
+      cp.add_assoc(Nat.add(C.before(k), C.ylen(k)), C.ylen(1n+k), Nat.add(C.ylen(1n+1n+k), C.ylen(1n+1n+1n+k))),
+      cp.add_assoc(C.before(k), C.ylen(k), Nat.add(C.ylen(1n+k), Nat.add(C.ylen(1n+1n+k), C.ylen(1n+1n+1n+k))))))
+
+# each of the first 32 blocks from 1970 has 1461 days, counted by the
+# checker block by block
+def cp.s4(q0: Nat, lt: {Nat.is_lt(q0, 32n) == True{} : Bool}) -> {cp.S4(cp.four(q0)) == 1461n : Nat}:
+  match q0:
+    case 0n:
+      {==}
+    case 1n+q1:
+      match q1:
+        case 0n:
+          {==}
+        case 1n+q2:
+          match q2:
+            case 0n:
+              {==}
+            case 1n+q3:
+              match q3:
+                case 0n:
+                  {==}
+                case 1n+q4:
+                  match q4:
+                    case 0n:
+                      {==}
+                    case 1n+q5:
+                      match q5:
+                        case 0n:
+                          {==}
+                        case 1n+q6:
+                          match q6:
+                            case 0n:
+                              {==}
+                            case 1n+q7:
+                              match q7:
+                                case 0n:
+                                  {==}
+                                case 1n+q8:
+                                  match q8:
+                                    case 0n:
+                                      {==}
+                                    case 1n+q9:
+                                      match q9:
+                                        case 0n:
+                                          {==}
+                                        case 1n+q10:
+                                          match q10:
+                                            case 0n:
+                                              {==}
+                                            case 1n+q11:
+                                              match q11:
+                                                case 0n:
+                                                  {==}
+                                                case 1n+q12:
+                                                  match q12:
+                                                    case 0n:
+                                                      {==}
+                                                    case 1n+q13:
+                                                      match q13:
+                                                        case 0n:
+                                                          {==}
+                                                        case 1n+q14:
+                                                          match q14:
+                                                            case 0n:
+                                                              {==}
+                                                            case 1n+q15:
+                                                              match q15:
+                                                                case 0n:
+                                                                  {==}
+                                                                case 1n+q16:
+                                                                  match q16:
+                                                                    case 0n:
+                                                                      {==}
+                                                                    case 1n+q17:
+                                                                      match q17:
+                                                                        case 0n:
+                                                                          {==}
+                                                                        case 1n+q18:
+                                                                          match q18:
+                                                                            case 0n:
+                                                                              {==}
+                                                                            case 1n+q19:
+                                                                              match q19:
+                                                                                case 0n:
+                                                                                  {==}
+                                                                                case 1n+q20:
+                                                                                  match q20:
+                                                                                    case 0n:
+                                                                                      {==}
+                                                                                    case 1n+q21:
+                                                                                      match q21:
+                                                                                        case 0n:
+                                                                                          {==}
+                                                                                        case 1n+q22:
+                                                                                          match q22:
+                                                                                            case 0n:
+                                                                                              {==}
+                                                                                            case 1n+q23:
+                                                                                              match q23:
+                                                                                                case 0n:
+                                                                                                  {==}
+                                                                                                case 1n+q24:
+                                                                                                  match q24:
+                                                                                                    case 0n:
+                                                                                                      {==}
+                                                                                                    case 1n+q25:
+                                                                                                      match q25:
+                                                                                                        case 0n:
+                                                                                                          {==}
+                                                                                                        case 1n+q26:
+                                                                                                          match q26:
+                                                                                                            case 0n:
+                                                                                                              {==}
+                                                                                                            case 1n+q27:
+                                                                                                              match q27:
+                                                                                                                case 0n:
+                                                                                                                  {==}
+                                                                                                                case 1n+q28:
+                                                                                                                  match q28:
+                                                                                                                    case 0n:
+                                                                                                                      {==}
+                                                                                                                    case 1n+q29:
+                                                                                                                      match q29:
+                                                                                                                        case 0n:
+                                                                                                                          {==}
+                                                                                                                        case 1n+q30:
+                                                                                                                          match q30:
+                                                                                                                            case 0n:
+                                                                                                                              {==}
+                                                                                                                            case 1n+q31:
+                                                                                                                              match q31:
+                                                                                                                                case 0n:
+                                                                                                                                  {==}
+                                                                                                                                case 1n+q32:
+                                                                                                                                  cp.lt0.no({cp.S4(cp.four(1n+1n+1n+1n+1n+1n+1n+1n+1n+1n+1n+1n+1n+1n+1n+1n+1n+1n+1n+1n+1n+1n+1n+1n+1n+1n+1n+1n+1n+1n+1n+1n+q32)) == 1461n : Nat}, q32, lt)
+
+def cp.s4k(+q: Nat, +k: Nat, ek: {k == cp.four(q) : Nat}, lt: {Nat.is_lt(q, 32n) == True{} : Bool}) ->
+  {cp.S4(k) == 1461n : Nat}:
+  %Equal.sym(Nat, k, cp.four(q), ek) : {cp.S4(_) == 1461n : Nat}
+  cp.s4(q, lt)
+
+# the walk by blocks: from block q (year k, the four(q)th), rem days to
+# go, what it lands on is the days before year k and rem
+def cp.blk(f: Nat, ok: Bool, +q: Nat, +k: Nat, +rem: Nat, +ek: {k == cp.four(q) : Nat},
+  +eok: {Bool.and(Nat.is_lt(q, 32n), Nat.is_le(1461n, rem)) == ok : Bool}) ->
+  {cp.cd(C.civil.from(C.blk(f, ok, q, k, rem))) == Some{Nat.add(C.before(k), rem)} : Maybe<&2, Nat>}:
+  match f:
+    case 0n:
+      cp.cf(k, rem)
+    case 1n+g:
+      match ok:
+        case False{}:
+          cp.cf(k, rem)
+        case True{}:
+          +lt = Bool.and_l(Nat.is_lt(q, 32n), Nat.is_le(1461n, rem), eok)
+          +le = Bool.and_r(Nat.is_lt(q, 32n), Nat.is_le(1461n, rem), eok)
+          %cp.cal.skip(C.before(k), 1461n, rem, le) :
+            {cp.cd(C.civil.from(C.blk(g, Nat.is_lt(1n+q, 32n) && Nat.is_le(1461n, Nat.sub(rem, 1461n)), 1n+q,
+              1n+1n+1n+1n+k, Nat.sub(rem, 1461n)))) == Some{_} : Maybe<&2, Nat>}
+          %cp.s4k(q, k, ek, lt) :
+            {cp.cd(C.civil.from(C.blk(g, Nat.is_lt(1n+q, 32n) && Nat.is_le(1461n, Nat.sub(rem, 1461n)), 1n+q,
+              1n+1n+1n+1n+k, Nat.sub(rem, 1461n)))) == Some{Nat.add(Nat.add(C.before(k), _), Nat.sub(rem, 1461n))} :
+              Maybe<&2, Nat>}
+          %cp.b4(k) :
+            {cp.cd(C.civil.from(C.blk(g, Nat.is_lt(1n+q, 32n) && Nat.is_le(1461n, Nat.sub(rem, 1461n)), 1n+q,
+              1n+1n+1n+1n+k, Nat.sub(rem, 1461n)))) == Some{Nat.add(_, Nat.sub(rem, 1461n))} : Maybe<&2, Nat>}
+          cp.blk(g, Nat.is_lt(1n+q, 32n) && Nat.is_le(1461n, Nat.sub(rem, 1461n)), 1n+q, 1n+1n+1n+1n+k,
+            Nat.sub(rem, 1461n),
+            Equal.cong(Nat, Nat, x => 1n+1n+1n+1n+x, k, cp.four(q), ek), {==})
 
 # LAW: every day, placed in the calendar, is the days before its year,
 # its month and its day
 def cp.civil(+days: Nat) -> {cp.cd(C.civil(days)) == Some{days} : Maybe<&2, Nat>}:
-  cp.from(days, 0n, 0n, {==}, cp.le0(days))
+  cp.blk(32n, Nat.is_lt(0n, 32n) && Nat.is_le(1461n, days), 0n, 0n, days, {==}, {==})
 
 # a month and a day the months have are within them: the month one of
 # them, the day before its month's end
