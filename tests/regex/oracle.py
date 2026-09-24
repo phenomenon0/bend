@@ -20,7 +20,7 @@ import argparse, hashlib, json, os, random, re, subprocess, sys, tempfile
 from concurrent.futures import ThreadPoolExecutor
 
 VERSION = (3, 11, 15)
-PYTHON = "/home/omen/.hermes/hermes-agent/venv/bin/python3"  # same pin as tests/parser/normalize.py
+PYTHON = os.environ.get("PY_ORACLE") or sys.executable  # same pin as tests/parser/normalize.py
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 OUT = os.path.join(ROOT, "tests/regex/_out")
 CHUNK = 125
