@@ -8,7 +8,7 @@
 # a field the check should have stopped, a 101 taken as final, a close
 # the client is not told of, a 502 with a body to HEAD -- and PROOF.bend
 # must refuse it. Each runs in a scratch copy of the tree the proof
-# imports (the proxy, the engine, wire/), where the engine's own proof, which the proxy's
+# imports (the proxy, the engine, wire/, power/), where the engine's own proof, which the proxy's
 # uses (frame_sim, feed_buf_is_feed, bad_feeds, ...), is replaced by its statements
 # left open: the copy then checks to exactly its count of open holes, and a
 # mutant that the proxy's proof refuses shows an error instead. (The laws
@@ -120,7 +120,7 @@ def main():
   bad = 0
   top = tempfile.mkdtemp(prefix='proxy_laws_')
   try:
-    for d in ('demos/io_proxy', 'demos/io_http_engine', 'wire'):
+    for d in ('demos/io_proxy', 'demos/io_http_engine', 'wire', 'power'):
       shutil.copytree(os.path.join(ROOT, d), os.path.join(top, d))
     proof = os.path.join(top, 'demos/io_proxy/PROOF.bend')
     core = os.path.join(top, 'demos/io_proxy/core.bend')

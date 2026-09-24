@@ -401,6 +401,93 @@ and six valid ones (echoed), an overlong form, a surrogate and a cut
 character in text and a bad close reason (1007), and UTF-8 text in
 three and four bytes echoed.
 
+## Compression
+
+`--gzip` is nginx's `gzip on`: `--gzip-level N` (1 to 9, zlib's
+levels, 1 by default as `gzip_comp_level`), `--gzip-min N` (the least
+body a fixed reply is compressed from, 20 by default as
+`gzip_min_length`), and `--gzip-static`, which serves a file's `.gz`
+twin in its place when there is one (and turns `--gzip` on).
+
+    ./httpd --root www --gzip --gzip-level 6 --gzip-static
+
+It is one step after a reply is built, a filter over its segments
+(main.bend's Compression); nothing that builds replies knows it exists,
+so a route, a file's head or a conditional reply added later goes
+through it unchanged. Each reply gets one of three answers:
+
+- kept as it was, when compression is off or the reply is not one that
+  is compressed: only a `200` is, of a text, JSON, JavaScript, XML or
+  SVG type, with no content-encoding of its own, and a fixed reply of
+  at least `--gzip-min` bytes. A `206` or a `304` never is. Nothing
+  about it depended on Accept-Encoding, and nothing says it did.
+- the same bytes with `vary: accept-encoding`, when it could have been
+  compressed and the peer does not take gzip, or asked with `HEAD`
+  (whose reply has no body to compress; its head is the uncompressed
+  one GET would send a peer that does not take gzip).
+- gzipped (power/gzip.bend at the level) under `content-encoding:
+  gzip`, the vary line and the compressed length.
+
+Accept-Encoding is read as RFC 9110 12.5.3 has it, every line of it as
+one list: gzip (or x-gzip, in any case) is taken when it is named with
+a weight above 0, or when it is not named and `*` is. A weight of 0 in
+any spelling (`0`, `0.0`, `0.000`) refuses it, a weight that is not a
+qvalue (`2`, `0.0001`, empty) counts as 0, and a request with no
+Accept-Encoding is not compressed, as nginx does.
+
+A file is compressed as it is sent. The filter marks its name with a
+byte no request path can hold (the fast path and `fnames.of` refuse
+every control byte) and gives it the gzip head; the loop opens it with
+`z.open`, the engine's own hook in place of wire/effects.bend's
+`net.open`, which serves the `.gz` twin under `--gzip-static`, else
+compresses the file and holds the result as the body the loop sends
+(as it holds a small file's). The loop, its budgets and its laws are
+bend-wire's, untouched: the socket the engine hands it is the socket
+beside a channel, and every hook takes the pair.
+
+What is compressed is kept: one computation (`z.cache`) holds the
+bodies under the file's name, the level, and the size and mtime its
+open saw, and every connection asks it before it compresses and hands
+it what it compressed after, so a file is compressed once per version
+rather than once per request. A file that changes size or mtime is a
+new key; one rewritten to the same size within the same second is
+served its old body until either changes, the window nginx's
+`open_file_cache` also has. The keeper holds at most 32 MiB, and past
+it starts over. A file past 64 MiB is not read into memory to be
+compressed: it is refused as a missing one is (serve such files with
+`--gzip-static` or without `--gzip`).
+
+The laws (`gz_*` in LAWS.bend): what a peer takes, on twenty headers
+(`gz_takes`); nothing is compressed for a peer that does not take gzip
+(`gz_needs_take`), and for such a peer a file is the same file by the
+same name under its head or its head and the vary line, and a fixed
+reply its bytes or its head, the vary line and its body
+(`gz_page_untaken`, `gz_raw_untaken`, for every segment and setting);
+a reply that could be compressed says so whatever the peer takes and
+however it asked (`gz_varies`), and one that could not is kept whatever
+it takes (`gz_keeps`); and what the filter makes of an HTML file, a PNG,
+a HEAD and two fixed replies (`gz_vectors`). A compressed body is
+`Z.gzip` of the body it replaced, which power/deflate_laws.bend reads
+back for every input on the stored and fixed paths and
+tests/power/deflate.bend holds to CPython's zlib on the dynamic ones.
+`mutants.py` breaks each of these six ways, and each is refused.
+
+On one core (`--threads 1`, nginx one worker, `wrk -t2 -c32`, a 20 KB
+HTML file, loopback):
+
+    level  server       req/s   MB/s   body (bytes)
+    1      nginx        5,496   32.7   5,941
+    1      bend        32,549  185.9   5,836
+    6      nginx        2,111   11.0   5,161
+    6      bend        33,523  169.9   5,161
+    -      bend, off   19,530  373.5  19,947
+
+nginx compresses every response again; the engine compresses the file
+once and sends the kept body after that. Compressing on every request,
+before the keeper and with the default threads, it served 697 req/s at
+level 1: power/deflate.bend's compressor runs at 16-19 MB/s at level 1
+in the C lane, a quarter of zlib's.
+
 ## The log
 
 `--log` writes one line per request to stderr and nowhere else: what

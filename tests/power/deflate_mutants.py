@@ -12,7 +12,7 @@
 import os, shutil, subprocess, sys, tempfile
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-FILES = ['deflate.bend', 'gzip.bend', 'deflate_laws.bend', 'deflate_proof.bend']
+FILES = ['deflate.bend', 'gzip.bend', 'deflate_laws.bend', 'deflate_proof.bend', 'inflate_proof.bend']
 
 MUTANTS = [
   ('the final block is written without BFINAL', 'deflate.bend', [(
@@ -58,8 +58,8 @@ MUTANTS = [
     '\\u{4}\\u{5}\\u{5}\\u{5}\\u{5}\\u{0}"',
     '\\u{4}\\u{5}\\u{5}\\u{5}\\u{4}\\u{0}"')]),
   ('a code is walked with its 1 bits taken as 0', 'deflate.bend', [(
-    'Nat.add(Nat.double(node), Nat.bit(b, 0n))',
-    'Nat.add(Nat.double(node), Nat.bit(Bool.not(b), 0n))')]),
+    'walk(tab, U32.to_nat(Bytes.get(tab, Nat.add(Nat.double(node), Nat.bit(b, 0n)))), k, o, bp)',
+    'walk(tab, U32.to_nat(Bytes.get(tab, Nat.add(Nat.double(node), Nat.bit(Bool.not(b), 0n)))), k, o, bp)')]),
   ('the fixed path writes a copy it has not checked', 'deflate.bend', [(
     'ref_ok(x, pos, end, len, dist) && ck(r, x, Nat.add(pos, len), end)',
     'ck(r, x, Nat.add(pos, len), end)')]),
@@ -69,6 +69,28 @@ MUTANTS = [
   ('the fixed code gives one literal too few 8 bits', 'deflate.bend', [(
     'reps(144n, 8n, reps(112n, 9n,',
     'reps(143n, 8n, reps(113n, 9n,')]),
+  # the fast path (law inflate_fast): each reads a stream as the machine does not
+  ('the fast path reads the bit after the one it is at', 'deflate.bend', [(
+    '  bit(Bytes.get(s, q), r)',
+    '  bit(Bytes.get(s, q), 1n+r)')]),
+  ('the fast path walks a code with its 1 bits taken as 0', 'deflate.bend', [(
+    'U32.to_nat(Bytes.get(tab, Nat.add(Nat.double(node), Nat.bit(b, 0n))))\n',
+    'U32.to_nat(Bytes.get(tab, Nat.add(Nat.double(node), Nat.bit(Bool.not(b), 0n))))\n')]),
+  ('a fast copy reads one byte too far back', 'deflate.bend', [(
+    '  Bytes.get(o, Nat.sub(Bytes.len(o), dist))',
+    '  Bytes.get(o, Nat.sub(Bytes.len(o), 1n+dist))')]),
+  ('the fast path lets a literal past the cap', 'deflate.bend', [(
+    'fi.emit(Nat.is_lt(n, cap), sy, q, r)',
+    'fi.emit(Nat.is_le(n, cap), sy, q, r)')]),
+  ("the fast path reads a length's extra bits oldest first", 'deflate.bend', [(
+    'fi.dwalk(Nat.add(base, hval(acc, 0n))',
+    'fi.dwalk(Nat.add(base, val(acc))')]),
+  ('the fast path lets a distance one past the output', 'deflate.bend', [(
+    'fi.cp(Nat.is_lt(olen, dist),',
+    'fi.cp(Nat.is_lt(1n+olen, dist),')]),
+  ('the fast path starts at any offset', 'deflate.bend', [(
+    'fi.at.bp(Nat.is_eq(bp, r),',
+    'fi.at.bp(True{},')]),
 ]
 
 OK_BEND = '''import Base
