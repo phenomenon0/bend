@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 # bend-net's laws are not vacuous. Each mutant breaks net/ as a real bug
 # would -- a read scanned from a fresh reader, a header value left
-# untrimmed, a path that keeps its query; a response check that lets
-# any name or any value through, a status line that lies, a response
-# that failed the check written anyway, the length unchecked; a router
+# untrimmed (or trimmed at one end only), a path that keeps its query;
+# a response check that lets any name or any value through, a status
+# line that lies, a response that failed the check written anyway, the
+# length unchecked or read wrong a digit at a time; a router
 # that skips a hit, counts routes wrong, lists a method twice or one of
 # a route that does not match; a pool that takes back a connection its
 # response closed; a redirect that keeps credentials, forgets a cookie,
@@ -39,8 +40,11 @@ MUTANTS = [
     '''def scan(+bs: Bytes(), sc: X.Scan) -> X.Scanned:
   X.scan(String.drop(bs, 1n), sc)'''),
   ('a header value handed on untrimmed (handler_framed)', H,
-    '''          Con{Header{n, X.trim(v)}, fields.of(t)}''',
+    '''          Con{Header{n, trim.fast(v)}, fields.of(t)}''',
     '''          Con{Header{n, v}, fields.of(t)}'''),
+  ('a value that ends in a blank taken for trimmed (handler_framed)', H,
+    '''  trim.at(X.ows(Bytes.get(v, 0n)) || X.ows(Bytes.get(v, Nat.sub(Bytes.len(v), 1n))), v)''',
+    '''  trim.at(X.ows(Bytes.get(v, 0n)), v)'''),
   ('the path keeps the query (handler_framed)', H,
     '''  (String.take(t, i), String.drop(t, 1n+i))''',
     '''  (t, String.drop(t, 1n+i))'''),
@@ -52,8 +56,15 @@ MUTANTS = [
     '''          known.has(n, known()) && fields.fast(t)'''),
   ('the fast check skips the length (respond_framed)', H,
     '''      st.in(statuses(), code, cd, why) && fields.fast(fs)
-        && X.rok.len(head, X.rbodyless(head, code), X.rclen(head, X.rbodyless(head, code), hl, body), body)''',
+        && len.fast(head, X.rbodyless(head, code), X.rclen(head, X.rbodyless(head, code), hl, body), body)''',
     '''      st.in(statuses(), code, cd, why) && fields.fast(fs)'''),
+  ('the length read with a stray byte after its digits (respond_framed)', H,
+    '''    case False{}:
+      RS.len.digits(acc, RS.SAt{k, x, Bytes.to_list(v)})''',
+    '''    case False{}:
+      more'''),
+  ('the length read with every digit past the first a zero (respond_framed)', H,
+    '''lv.dig(e, v, lv.num(e, acc, x))''', '''lv.dig(e, v, lv.num(e, acc, 48))'''),
   ('a status line that says 200 for a 204 (respond_framed)', H,
     '''St{204, "204", "No Content"}''', '''St{204, "200", "No Content"}'''),
   ('a response that failed the check written anyway (respond_framed)', H,

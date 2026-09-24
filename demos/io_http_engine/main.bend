@@ -3327,11 +3327,23 @@ def events(head: Bool) -> Ans:
     case False{}:
       Ans{[L.Raw{sse.head()}], False{}, sse.count(), False{}}
 
+# A file's reply depends on what the request asked of it -- a range, a
+# condition -- which its segment carries to the writer, where the file's
+# size and mtime decide it (h.fhead). Only a file's segment reads them,
+# so only a file's route is handed them (fs, the request's fields).
+def seg.ask(g: L.Seg, fs: List<&2, Wr.Field>) -> L.Seg:
+  match g:
+    case L.Page{root, path, ct, ask, head}:
+      L.Page{root, path, ct, fs, head}
+    case _:
+      g
+
 # the echo's body goes back as it arrived: within one read it is a view
 # of that read, and the reply is the only copy made of it. A file's path
 # is walked as the byte list the normaliser and its laws speak of.
 def act.run(
-  +srv: Srv, a: Act, path: Bytes(), body: Bytes(), head: Bool, ws: Bool, key: Bytes()
+  +srv: Srv, a: Act, path: Bytes(), body: Bytes(), head: Bool, ws: Bool, key: Bytes(),
+  fs: List<&2, Wr.Field>
 ) -> Ans:
   match a:
     case Health{}:
@@ -3346,17 +3358,17 @@ def act.run(
     case Live{}:
       live.answer(key, ws, head)
     case Files{}:
-      Ans{[page(srv.root(srv), path, head)], False{}, 0, False{}}
+      Ans{[seg.ask(page(srv.root(srv), path, head), fs)], False{}, 0, False{}}
 
 def serve.act(
   +srv: Srv, found: Maybe<&2, Act>, path: Bytes(), body: Bytes(), head: Bool, ws: Bool,
-  key: Bytes()
+  key: Bytes(), fs: List<&2, Wr.Field>
 ) -> Ans:
   match found:
     case None{}:
       Ans{[L.Raw{miss(head)}], False{}, 0, False{}}
     case Some{a}:
-      act.run(srv, a, path, body, head, ws, key)
+      act.run(srv, a, path, body, head, ws, key, fs)
 
 # the longest request target served; a longer one is a 414. The head's
 # own budget bounds what a target can cost before it gets here.
@@ -3373,11 +3385,12 @@ def resp.long() -> Bytes():
 # A method this engine does not implement is refused before routing, so
 # no route ever sees one.
 def serve.go(
-  +srv: Srv, +path: Bytes(), body: Bytes(), ok: Bool, head: Bool, ws: Bool, key: Bytes()
+  +srv: Srv, +path: Bytes(), body: Bytes(), ok: Bool, head: Bool, ws: Bool, key: Bytes(),
+  fs: List<&2, Wr.Field>
 ) -> Ans:
   match ok:
     case True{}:
-      serve.act(srv, route(srv.table(srv), path), path, body, head, ws, key)
+      serve.act(srv, route(srv.table(srv), path), path, body, head, ws, key, fs)
     case False{}:
       Ans{[L.Raw{resp.method()}], False{}, 0, False{}}
 
@@ -3421,42 +3434,25 @@ def path.of(+p: Bytes()) -> Bytes():
 
 def serve.fit(
   +srv: Srv, +path: Bytes(), body: Bytes(), ok: Bool, head: Bool, ws: Bool, key: Bytes(),
-  far: Bool
+  far: Bool, fs: List<&2, Wr.Field>
 ) -> Ans:
   match far:
     case True{}:
       Ans{[L.Raw{fixed(resp.long(), head)}], False{}, 0, False{}}
     case False{}:
-      serve.go(srv, path, body, ok, head, ws, key)
+      serve.go(srv, path, body, ok, head, ws, key, fs)
 
-# A file's reply depends on what the request asked of it -- a range, a
-# condition -- which its segment carries to the writer, where the file's
-# size and mtime decide it (h.fhead). Only a file's segment reads them.
-def seg.ask(g: L.Seg, fs: List<&2, Wr.Field>) -> L.Seg:
-  match g:
-    case L.Page{root, path, ct, ask, head}:
-      L.Page{root, path, ct, fs, head}
-    case _:
-      g
-
-def segs.ask(xs: List<&2, L.Seg>, +fs: List<&2, Wr.Field>) -> List<&2, L.Seg>:
-  match xs:
-    case Nil{}:
-      Nil{}
-    case Con{g, t}:
-      Con{seg.ask(g, fs), segs.ask(t, fs)}
-
-def ans.ask(a: Ans, hd: Hd) -> Ans:
-  match a hd:
-    case Ans{out, cl, st, sk} Hd{m, v10, fs, cn}:
-      Ans{segs.ask(out, fs), cl, st, sk}
+def hd.fields(h: Hd) -> List<&2, Wr.Field>:
+  match h:
+    case Hd{m, v10, fs, cn}:
+      fs
 
 def serve.log(+srv: Srv, r: Req) -> Ans:
   match r:
     case Req{+meth, +path, body, close, ws, key, hd}:
       noted(srv.log(srv), meth, path,
-        ans.ask(serve.fit(srv, path.of(path), body, meth.get(meth) || meth.head(meth),
-          meth.head(meth), ws, key, long(target.cap(), path)), hd))
+        serve.fit(srv, path.of(path), body, meth.get(meth) || meth.head(meth),
+          meth.head(meth), ws, key, long(target.cap(), path), hd.fields(hd)))
 
 # Compression
 # ===========
@@ -4448,12 +4444,22 @@ def srvz.conns(z: Srvz) -> U32:
     case Srvz{srv, zc}:
       srv.conns(srv)
 
+# Without --gzip there is no keeper, and a connection runs on the plain
+# effects: the socket alone, as wire/effects.bend's serve has it, so a
+# server that does not compress pays nothing per effect for the keeper
+# it does not have (a pair taken apart and put back around every read,
+# write and clock).
 def go.at(+srv: Srv, zc: Maybe<&2, Chan(Zq)>, s: Socket) -> IO(Socket):
-  IO.bind(Socket & Zk(), Socket, L.conn.start(~(A => IO(A)), ~IO.pure, ~IO.bind, ~(Socket & Zk()),
-    ~Fx.Fh, ~zs.rx, ~zs.tx, ~zs.clk, ~zs.nap, ~IO.print_err, ~z.open, ~Fx.fh.size, ~Fx.fh.read,
-    ~zs.fsend, ~Fx.fh.close, ~Srv, ~P, ~Ws.W, ~srv.idle, ~srv.head, ~h.plan, ~h.mid, ~resp.big(),
-    ~plan.ws, ~sse.gap(), ~sse.event, ~h.shut, ~h.fhead, ~miss, ~h.lnote, ~h.lsize, srv, p.new(),
-    (s, zc)), sp => IO.pure(Socket, zs.sock(sp)))
+  match zc:
+    case None{}:
+      Fx.serve(~Srv, ~P, ~Ws.W, ~srv.idle, ~srv.head, ~h.plan, ~h.mid, ~resp.big(), ~plan.ws,
+        ~sse.gap(), ~sse.event, ~h.shut, ~h.fhead, ~miss, ~h.lnote, ~h.lsize, srv, p.new(), s)
+    case Some{ch}:
+      IO.bind(Socket & Zk(), Socket, L.conn.start(~(A => IO(A)), ~IO.pure, ~IO.bind, ~(Socket & Zk()),
+        ~Fx.Fh, ~zs.rx, ~zs.tx, ~zs.clk, ~zs.nap, ~IO.print_err, ~z.open, ~Fx.fh.size, ~Fx.fh.read,
+        ~zs.fsend, ~Fx.fh.close, ~Srv, ~P, ~Ws.W, ~srv.idle, ~srv.head, ~h.plan, ~h.mid, ~resp.big(),
+        ~plan.ws, ~sse.gap(), ~sse.event, ~h.shut, ~h.fhead, ~miss, ~h.lnote, ~h.lsize, srv, p.new(),
+        (s, Some{ch})), sp => IO.pure(Socket, zs.sock(sp)))
 
 def go(+sz: Srvz, s: Socket) -> IO(Socket):
   match sz:
