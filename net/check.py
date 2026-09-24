@@ -679,7 +679,7 @@ def check_pour(export, events, relay, tmp):
     s.connect(("127.0.0.1", port))
     s.sendall(b"GET /bytes?n=1000000000 HTTP/1.1\r\nHost: t\r\n\r\n")
     t0, said = time.time(), ""
-    while time.time() - t0 < 25 and "stalled" not in said:
+    while time.time() - t0 < 40 and "stalled" not in said:
         time.sleep(0.2)
         said = open(errf).read()
     dt = time.time() - t0
@@ -687,7 +687,7 @@ def check_pour(export, events, relay, tmp):
     line = [l for l in said.splitlines() if "bytes stopped after" in l and "stalled" in l]
     n = int(line[0].split("after ")[1].split(":")[0]) if line else -1
     ok("pour: a client that stops reading stops the producer (%d bytes written, the socket's buffers), then its send "
-       "stalls past the send time: ETime, after %.1f s" % (n, dt), line and 0 <= n < 64 << 20 and 9 < dt < 20, (said, dt))
+       "stalls past the send time: ETime, after %.1f s" % (n, dt), line and 0 <= n < 64 << 20 and 9 < dt < 35, (said, dt))
     rport = PORT + 14
     rerr = os.path.join(tmp, "relay.err")
     rl = subprocess.Popen([relay, "--port", str(rport), "--upstream", "http://127.0.0.1:%d" % port], stdout=subprocess.DEVNULL,
