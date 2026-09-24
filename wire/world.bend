@@ -34,6 +34,7 @@
 # bridge; what is left trusted is that the effects keep their contract
 # in the cases conform.bend does not try.
 import Base
+import ./reader.bend as Wr
 import ./loop.bend as L
 import ./stream.bend as Bs
 
@@ -206,10 +207,13 @@ def w.fopen(s: World, root: String, path: String) ->
   World & Result<&1, &1, U32 & String, Bytes()>:
   w.fopen.go(s, path)
 
-def w.fsize.go(+f: Bytes()) -> Bytes() & Result<&1, &1, U32 & String, U32>:
-  (f, Done{U32.from_nat(Bytes.len(f))})
+# fstat: its size, and its mtime, which the model does not keep: every
+# model file was last written at the epoch (the laws that read an mtime
+# are the protocol's, over every mtime)
+def w.fsize.go(+f: Bytes()) -> Bytes() & Result<&1, &1, U32 & String, U32 & U32>:
+  (f, Done{(U32.from_nat(Bytes.len(f)), 0)})
 
-def w.fsize(f: Bytes()) -> Bytes() & Result<&1, &1, U32 & String, U32>:
+def w.fsize(f: Bytes()) -> Bytes() & Result<&1, &1, U32 & String, U32 & U32>:
   w.fsize.go(f)
 
 def w.fread.go(+f: Bytes(), +n: Nat) -> Bytes() & Result<&1, &1, U32 & String, Bytes()>:
@@ -278,23 +282,24 @@ def sim.raw(
   L.send.raw(~Id, ~Id.pure, ~Id.bind, ~World, ~w.tx, ~w.say, ~lnote, ms, may, bs, st)
 
 def sim.page(
-  ~shut: Bool -> Bytes() -> Bytes(), ~fhead: Bytes() -> U32 -> Bytes(),
+  ~shut: Bool -> Bytes() -> Bytes(), ~fhead: Bytes() -> List<&2, Wr.Field> -> Bool -> U32 -> U32 -> L.Fr,
   ~miss: Bool -> Bytes(), ~lnote: Bytes() -> Bytes() -> String,
-  ~lsize: Bytes() -> Bytes() -> U32 -> String, +ms: U32, root: Bytes(), path: Bytes(), ct: Bytes(), head: Bool,
-  may: Maybe<&2, Bytes()>, sh: Bool, st: L.Em<World>
+  ~lsize: Bytes() -> Bytes() -> U32 -> String, +ms: U32, root: Bytes(), path: Bytes(), ct: Bytes(),
+  ask: List<&2, Wr.Field>, head: Bool, may: Maybe<&2, Bytes()>, sh: Bool, st: L.Em<World>
 ) -> L.Em<World>:
   L.send.page(~Id, ~Id.pure, ~Id.bind, ~World, ~Bytes(), ~w.tx, ~w.say, ~w.fopen, ~w.fsize,
-    ~w.fread, ~w.fsend, ~w.fclose, ~shut, ~fhead, ~miss, ~lnote, ~lsize, ms, root, path, ct, head, may, sh, st)
+    ~w.fread, ~w.fsend, ~w.fclose, ~shut, ~fhead, ~miss, ~lnote, ~lsize, ms, root, path, ct, ask, head,
+    may, sh, st)
 
 def sim.go(
-  ~shut: Bool -> Bytes() -> Bytes(), ~fhead: Bytes() -> U32 -> Bytes(),
+  ~shut: Bool -> Bytes() -> Bytes(), ~fhead: Bytes() -> List<&2, Wr.Field> -> Bool -> U32 -> U32 -> L.Fr,
   ~miss: Bool -> Bytes(), ~lnote: Bytes() -> Bytes() -> String,
   ~lsize: Bytes() -> Bytes() -> U32 -> String, xs: List<&2, L.Seg>, +ms: U32, may: Maybe<&2, Bytes()>, sh: Bool, st: L.Em<World>
 ) -> L.Put(World):
   L.send.go(~Id, ~Id.pure, ~Id.bind, ~World, ~Bytes(), ~w.tx, ~w.say, ~w.fopen, ~w.fsize,
     ~w.fread, ~w.fsend, ~w.fclose, ~shut, ~fhead, ~miss, ~lnote, ~lsize, xs, ms, may, sh, st)
 
-def sim.segs(~shut: Bool -> Bytes() -> Bytes(), ~fhead: Bytes() -> U32 -> Bytes(),
+def sim.segs(~shut: Bool -> Bytes() -> Bytes(), ~fhead: Bytes() -> List<&2, Wr.Field> -> Bool -> U32 -> U32 -> L.Fr,
   ~miss: Bool -> Bytes(), ~lnote: Bytes() -> Bytes() -> String,
   ~lsize: Bytes() -> Bytes() -> U32 -> String, s: World, xs: List<&2, L.Seg>, +ms: U32) -> L.Put(World):
   L.send.segs(~Id, ~Id.pure, ~Id.bind, ~World, ~Bytes(), ~w.tx, ~w.say, ~w.fopen, ~w.fsize,
@@ -326,41 +331,52 @@ def sim.miss(
 def sim.fsent(g: World & Bytes() & Result<&1, &1, U32 & String, Unit>) -> L.Em<World>:
   L.page.fsent(~Id, ~Id.pure, ~Id.bind, ~World, ~Bytes(), ~w.fclose, g)
 
-def sim.headed(+ms: U32, f: Bytes(), n: U32, m: L.Put(World)) -> L.Em<World>:
-  L.page.headed(~Id, ~Id.pure, ~Id.bind, ~World, ~Bytes(), ~w.fsend, ~w.fclose, ms, f, n, m)
+def sim.headed(+ms: U32, f: Bytes(), off: U32, len: U32, m: L.Put(World)) -> L.Em<World>:
+  L.page.headed(~Id, ~Id.pure, ~Id.bind, ~World, ~Bytes(), ~w.fsend, ~w.fclose, ms, f, off, len, m)
 
-def sim.read(+ms: U32, got: Bytes() & Result<&1, &1, U32 & String, Bytes()>, +n: U32, s: World,
-  pre: Bytes()) -> L.Em<World>:
-  L.page.read(~Id, ~Id.pure, ~Id.bind, ~World, ~Bytes(), ~w.tx, ~w.fclose, ms, got, n, s, pre)
+def sim.read(+ms: U32, got: Bytes() & Result<&1, &1, U32 & String, Bytes()>, +n: U32, +off: U32,
+  +len: U32, s: World, pre: Bytes()) -> L.Em<World>:
+  L.page.read(~Id, ~Id.pure, ~Id.bind, ~World, ~Bytes(), ~w.tx, ~w.fclose, ms, got, n, off, len, s,
+    pre)
 
-def sim.body(+ms: U32, f: Bytes(), +n: U32, s: World, pre: Bytes(), small: Bool) -> L.Em<World>:
+def sim.body(+ms: U32, f: Bytes(), +n: U32, +off: U32, +len: U32, s: World, pre: Bytes(),
+  small: Bool) -> L.Em<World>:
   L.page.body(~Id, ~Id.pure, ~Id.bind, ~World, ~Bytes(), ~w.tx, ~w.fread, ~w.fsend, ~w.fclose, ms,
-    f, n, s, pre, small)
+    f, n, off, len, s, pre, small)
 
 def sim.pstart(
-  ~lsize: Bytes() -> Bytes() -> U32 -> String, +ms: U32, f: Bytes(), +n: U32, +hd: Bytes(),
-  head: Bool, may: Maybe<&2, Bytes()>, s: World, acc: Bytes()
+  ~lsize: Bytes() -> Bytes() -> U32 -> String, +ms: U32, f: Bytes(), +n: U32, +off: U32,
+  +len: U32, +hd: Bytes(), head: Bool, may: Maybe<&2, Bytes()>, s: World, acc: Bytes()
 ) -> L.Em<World>:
   L.page.start(~Id, ~Id.pure, ~Id.bind, ~World, ~Bytes(), ~w.tx, ~w.say, ~w.fread, ~w.fsend, ~w.fclose,
-    ~lsize, ms, f, n, hd, head, may, s, acc)
+    ~lsize, ms, f, n, off, len, hd, head, may, s, acc)
 
 def sim.psized(
-  ~shut: Bool -> Bytes() -> Bytes(), ~fhead: Bytes() -> U32 -> Bytes(),
+  ~shut: Bool -> Bytes() -> Bytes(), ~fhead: Bytes() -> List<&2, Wr.Field> -> Bool -> U32 -> U32 -> L.Fr,
   ~miss: Bool -> Bytes(), ~lnote: Bytes() -> Bytes() -> String,
-  ~lsize: Bytes() -> Bytes() -> U32 -> String, +ms: U32, got: Bytes() & Result<&1, &1, U32 & String, U32>, ct: Bytes(),
-  head: Bool, may: Maybe<&2, Bytes()>, sh: Bool, s: World, acc: Bytes()
+  ~lsize: Bytes() -> Bytes() -> U32 -> String, +ms: U32,
+  got: Bytes() & Result<&1, &1, U32 & String, U32 & U32>, ct: Bytes(), ask: List<&2, Wr.Field>,
+  +head: Bool, may: Maybe<&2, Bytes()>, +sh: Bool, s: World, acc: Bytes()
 ) -> L.Em<World>:
   L.page.sized(~Id, ~Id.pure, ~Id.bind, ~World, ~Bytes(), ~w.tx, ~w.say, ~w.fread, ~w.fsend, ~w.fclose,
-    ~shut, ~fhead, ~miss, ~lnote, ~lsize, ms, got, ct, head, may, sh, s, acc)
+    ~shut, ~fhead, ~miss, ~lnote, ~lsize, ms, got, ct, ask, head, may, sh, s, acc)
+
+def sim.framed(
+  ~shut: Bool -> Bytes() -> Bytes(), ~lsize: Bytes() -> Bytes() -> U32 -> String, +ms: U32,
+  f: Bytes(), +n: U32, fr: L.Fr, head: Bool, may: Maybe<&2, Bytes()>, sh: Bool, s: World,
+  acc: Bytes()
+) -> L.Em<World>:
+  L.page.framed(~Id, ~Id.pure, ~Id.bind, ~World, ~Bytes(), ~w.tx, ~w.say, ~w.fread, ~w.fsend,
+    ~w.fclose, ~shut, ~lsize, ms, f, n, fr, head, may, sh, s, acc)
 
 def sim.opened(
-  ~shut: Bool -> Bytes() -> Bytes(), ~fhead: Bytes() -> U32 -> Bytes(),
+  ~shut: Bool -> Bytes() -> Bytes(), ~fhead: Bytes() -> List<&2, Wr.Field> -> Bool -> U32 -> U32 -> L.Fr,
   ~miss: Bool -> Bytes(), ~lnote: Bytes() -> Bytes() -> String,
   ~lsize: Bytes() -> Bytes() -> U32 -> String, +ms: U32, m: World & Result<&1, &1, U32 & String, Bytes()>, ct: Bytes(),
-  head: Bool, may: Maybe<&2, Bytes()>, sh: Bool, acc: Bytes()
+  ask: List<&2, Wr.Field>, head: Bool, may: Maybe<&2, Bytes()>, sh: Bool, acc: Bytes()
 ) -> L.Em<World>:
   L.page.opened(~Id, ~Id.pure, ~Id.bind, ~World, ~Bytes(), ~w.tx, ~w.say, ~w.fsize, ~w.fread, ~w.fsend,
-    ~w.fclose, ~shut, ~fhead, ~miss, ~lnote, ~lsize, ms, m, ct, head, may, sh, acc)
+    ~w.fclose, ~shut, ~fhead, ~miss, ~lnote, ~lsize, ms, m, ct, ask, head, may, sh, acc)
 
 def sim.turn(~E: Data, ~P: Data, ~U: Data, ~idle: E -> U32, ~hdms: E -> U32,
   ~plan: E -> Bytes() -> P -> L.Plan<P, U>, ~big: Bytes(), +srv: E, m: L.Put(World), p: P, hw: L.Hw) ->
@@ -376,7 +392,7 @@ def sim.tick(~P: Data, ~U: Data, ~gap: U32, ~event: U32 -> Bytes(), m: L.Put(Wor
 def sim.conn(~E: Data, ~P: Data, ~U: Data, ~idle: E -> U32, ~hdms: E -> U32,
   ~plan: E -> Bytes() -> P -> L.Plan<P, U>, ~mid: P -> Bool, ~big: Bytes(),
   ~uplan: U -> Bytes() -> L.Plan<P, U>, ~gap: U32, ~event: U32 -> Bytes(),
-  ~shut: Bool -> Bytes() -> Bytes(), ~fhead: Bytes() -> U32 -> Bytes(),
+  ~shut: Bool -> Bytes() -> Bytes(), ~fhead: Bytes() -> List<&2, Wr.Field> -> Bool -> U32 -> U32 -> L.Fr,
   ~miss: Bool -> Bytes(), ~lnote: Bytes() -> Bytes() -> String,
   ~lsize: Bytes() -> Bytes() -> U32 -> String, f: Nat, +srv: E, sph: (World & L.Plan<P, U>) & L.Hw, w: Nat) -> World:
   L.conn(~Id, ~Id.pure, ~Id.bind, ~World, ~Bytes(), ~w.rx, ~w.tx, ~w.clk, ~w.nap, ~w.say,
@@ -385,7 +401,7 @@ def sim.conn(~E: Data, ~P: Data, ~U: Data, ~idle: E -> U32, ~hdms: E -> U32,
 def sim.start(~E: Data, ~P: Data, ~U: Data, ~idle: E -> U32, ~hdms: E -> U32,
   ~plan: E -> Bytes() -> P -> L.Plan<P, U>, ~mid: P -> Bool, ~big: Bytes(),
   ~uplan: U -> Bytes() -> L.Plan<P, U>, ~gap: U32, ~event: U32 -> Bytes(),
-  ~shut: Bool -> Bytes() -> Bytes(), ~fhead: Bytes() -> U32 -> Bytes(),
+  ~shut: Bool -> Bytes() -> Bytes(), ~fhead: Bytes() -> List<&2, Wr.Field> -> Bool -> U32 -> U32 -> L.Fr,
   ~miss: Bool -> Bytes(), ~lnote: Bytes() -> Bytes() -> String,
   ~lsize: Bytes() -> Bytes() -> U32 -> String, +srv: E, p0: P, s: World) -> World:
   L.conn.start(~Id, ~Id.pure, ~Id.bind, ~World, ~Bytes(), ~w.rx, ~w.tx, ~w.clk, ~w.nap,
@@ -429,7 +445,7 @@ def m.fsend(s: World, f: Bytes(), off: U32, len: U32, ms: U32) ->
 def mute.conn(~E: Data, ~P: Data, ~U: Data, ~idle: E -> U32, ~hdms: E -> U32,
   ~plan: E -> Bytes() -> P -> L.Plan<P, U>, ~mid: P -> Bool, ~big: Bytes(),
   ~uplan: U -> Bytes() -> L.Plan<P, U>, ~gap: U32, ~event: U32 -> Bytes(),
-  ~shut: Bool -> Bytes() -> Bytes(), ~fhead: Bytes() -> U32 -> Bytes(),
+  ~shut: Bool -> Bytes() -> Bytes(), ~fhead: Bytes() -> List<&2, Wr.Field> -> Bool -> U32 -> U32 -> L.Fr,
   ~miss: Bool -> Bytes(), ~lnote: Bytes() -> Bytes() -> String,
   ~lsize: Bytes() -> Bytes() -> U32 -> String, f: Nat, +srv: E, sph: (World & L.Plan<P, U>) & L.Hw, w: Nat) -> World:
   L.conn(~Id, ~Id.pure, ~Id.bind, ~World, ~Bytes(), ~m.rx, ~m.tx, ~w.clk, ~m.nap, ~w.say,
@@ -440,7 +456,7 @@ def mute.turn(~E: Data, ~P: Data, ~U: Data, ~idle: E -> U32, ~hdms: E -> U32,
   (World & L.Plan<P, U>) & L.Hw:
   L.turn(~Id, ~Id.pure, ~Id.bind, ~World, ~m.rx, ~w.clk, ~E, ~P, ~U, ~idle, ~hdms, ~plan, ~big, srv, m, p, hw)
 
-def mute.segs(~shut: Bool -> Bytes() -> Bytes(), ~fhead: Bytes() -> U32 -> Bytes(),
+def mute.segs(~shut: Bool -> Bytes() -> Bytes(), ~fhead: Bytes() -> List<&2, Wr.Field> -> Bool -> U32 -> U32 -> L.Fr,
   ~miss: Bool -> Bytes(), ~lnote: Bytes() -> Bytes() -> String,
   ~lsize: Bytes() -> Bytes() -> U32 -> String, s: World, xs: List<&2, L.Seg>, +ms: U32) -> L.Put(World):
   L.send.segs(~Id, ~Id.pure, ~Id.bind, ~World, ~Bytes(), ~m.tx, ~w.say, ~w.fopen, ~w.fsize,
@@ -466,7 +482,7 @@ def mute.held(+ms: U32, s: World, acc: Bytes(), c: Cmp) -> L.Em<World>:
   L.send.held(~Id, ~Id.pure, ~Id.bind, ~World, ~m.tx, ms, s, acc, c)
 
 def mute.go(
-  ~shut: Bool -> Bytes() -> Bytes(), ~fhead: Bytes() -> U32 -> Bytes(),
+  ~shut: Bool -> Bytes() -> Bytes(), ~fhead: Bytes() -> List<&2, Wr.Field> -> Bool -> U32 -> U32 -> L.Fr,
   ~miss: Bool -> Bytes(), ~lnote: Bytes() -> Bytes() -> String,
   ~lsize: Bytes() -> Bytes() -> U32 -> String, xs: List<&2, L.Seg>, +ms: U32, may: Maybe<&2, Bytes()>, sh: Bool, st: L.Em<World>
 ) -> L.Put(World):
@@ -1100,7 +1116,7 @@ def wire(~shut: Bool -> Bytes() -> Bytes(), xs: List<&2, L.Seg>, sh: Bool) -> By
           wire(~shut, t, sh)
         case L.Shut{}:
           wire(~shut, t, True{})
-        case L.Page{root, path, ct, head}:
+        case L.Page{root, path, ct, ask, head}:
           wire(~shut, t, False{})
 
 def raws(xs: List<&2, L.Seg>) -> Bool:
@@ -1115,7 +1131,7 @@ def raws(xs: List<&2, L.Seg>) -> Bool:
           raws(t)
         case L.Shut{}:
           raws(t)
-        case L.Page{root, path, ct, head}:
+        case L.Page{root, path, ct, ask, head}:
           False{}
 
 # a peer that takes every byte at once, and what a send to it answers
@@ -1194,7 +1210,7 @@ law end_is_last:
   for ~gap: U32
   for ~event: U32 -> Bytes()
   for ~shut: Bool -> Bytes() -> Bytes()
-  for ~fhead: Bytes() -> U32 -> Bytes()
+  for ~fhead: Bytes() -> List<&2, Wr.Field> -> Bool -> U32 -> U32 -> L.Fr
   for ~miss: Bool -> Bytes()
   for ~lnote: Bytes() -> Bytes() -> String
   for ~lsize: Bytes() -> Bytes() -> U32 -> String
@@ -1223,7 +1239,7 @@ law stop_is_last:
   for ~gap: U32
   for ~event: U32 -> Bytes()
   for ~shut: Bool -> Bytes() -> Bytes()
-  for ~fhead: Bytes() -> U32 -> Bytes()
+  for ~fhead: Bytes() -> List<&2, Wr.Field> -> Bool -> U32 -> U32 -> L.Fr
   for ~miss: Bool -> Bytes()
   for ~lnote: Bytes() -> Bytes() -> String
   for ~lsize: Bytes() -> Bytes() -> U32 -> String
@@ -1253,7 +1269,7 @@ law go_order:
   for ~gap: U32
   for ~event: U32 -> Bytes()
   for ~shut: Bool -> Bytes() -> Bytes()
-  for ~fhead: Bytes() -> U32 -> Bytes()
+  for ~fhead: Bytes() -> List<&2, Wr.Field> -> Bool -> U32 -> U32 -> L.Fr
   for ~miss: Bool -> Bytes()
   for ~lnote: Bytes() -> Bytes() -> String
   for ~lsize: Bytes() -> Bytes() -> U32 -> String
@@ -1288,7 +1304,7 @@ law fail_go:
   for ~gap: U32
   for ~event: U32 -> Bytes()
   for ~shut: Bool -> Bytes() -> Bytes()
-  for ~fhead: Bytes() -> U32 -> Bytes()
+  for ~fhead: Bytes() -> List<&2, Wr.Field> -> Bool -> U32 -> U32 -> L.Fr
   for ~miss: Bool -> Bytes()
   for ~lnote: Bytes() -> Bytes() -> String
   for ~lsize: Bytes() -> Bytes() -> U32 -> String
@@ -1333,7 +1349,7 @@ law fail_up:
   for ~gap: U32
   for ~event: U32 -> Bytes()
   for ~shut: Bool -> Bytes() -> Bytes()
-  for ~fhead: Bytes() -> U32 -> Bytes()
+  for ~fhead: Bytes() -> List<&2, Wr.Field> -> Bool -> U32 -> U32 -> L.Fr
   for ~miss: Bool -> Bytes()
   for ~lnote: Bytes() -> Bytes() -> String
   for ~lsize: Bytes() -> Bytes() -> U32 -> String
@@ -1378,7 +1394,7 @@ law fail_feed:
   for ~gap: U32
   for ~event: U32 -> Bytes()
   for ~shut: Bool -> Bytes() -> Bytes()
-  for ~fhead: Bytes() -> U32 -> Bytes()
+  for ~fhead: Bytes() -> List<&2, Wr.Field> -> Bool -> U32 -> U32 -> L.Fr
   for ~miss: Bool -> Bytes()
   for ~lnote: Bytes() -> Bytes() -> String
   for ~lsize: Bytes() -> Bytes() -> U32 -> String
@@ -1569,17 +1585,18 @@ def wl.fsent_fine(g):
 law wl.headed_fine:
   for +ms: U32
   for f: Bytes()
-  for n: U32
+  for off: U32
+  for len: U32
   for m: L.Put(World)
-  {em.fine(sim.headed(ms, f, n, m)) == True{} : Bool}
+  {em.fine(sim.headed(ms, f, off, len, m)) == True{} : Bool}
 
-def wl.headed_fine(ms, f, n, m):
+def wl.headed_fine(ms, f, off, len, m):
   (s, r) = m
   match r:
     case Fail{e}:
       {==}
     case Done{u}:
-      wl.fsent_fine(w.fsend(s, f, 0, n, ms))
+      wl.fsent_fine(w.fsend(s, f, off, len, ms))
 
 law wl.blk_fine:
   for m: L.Put(World)
@@ -1602,33 +1619,39 @@ law wl.read_fine:
   for +ms: U32
   for got: Bytes() & Result<&1, &1, U32 & String, Bytes()>
   for +n: U32
+  for +off: U32
+  for +len: U32
   for s: World
   for pre: Bytes()
-  {em.fine(sim.read(ms, got, n, s, pre)) == True{} : Bool}
+  {em.fine(sim.read(ms, got, n, off, len, s, pre)) == True{} : Bool}
 
-def wl.read_fine(ms, got, n, s, pre):
+def wl.read_fine(ms, got, n, off, len, s, pre):
   (f, r) = got
   match r:
     case Fail{e}:
       {==}
     case Done{+bs}:
-      wl.blk_fine(w.tx(s, Bytes.append(pre, bs), ms), Nat.is_eq(Bytes.len(bs), U32.to_nat(n)))
+      wl.blk_fine(w.tx(s, Bytes.append(pre, Bytes.slice(bs, U32.to_nat(off), U32.to_nat(len))), ms),
+        Nat.is_eq(Bytes.len(bs), U32.to_nat(n))
+          && Nat.is_eq(Bytes.len(Bytes.slice(bs, U32.to_nat(off), U32.to_nat(len))), U32.to_nat(len)))
 
 law wl.body_fine:
   for +ms: U32
   for +f: Bytes()
   for +n: U32
+  for +off: U32
+  for +len: U32
   for +s: World
   for +pre: Bytes()
   for small: Bool
-  {em.fine(sim.body(ms, f, n, s, pre, small)) == True{} : Bool}
+  {em.fine(sim.body(ms, f, n, off, len, s, pre, small)) == True{} : Bool}
 
-def wl.body_fine(ms, f, n, s, pre, small):
+def wl.body_fine(ms, f, n, off, len, s, pre, small):
   match small:
     case True{}:
-      wl.read_fine(ms, w.fread(f, n), n, s, pre)
+      wl.read_fine(ms, w.fread(f, n), n, off, len, s, pre)
     case False{}:
-      wl.headed_fine(ms, f, n, w.tx(s, pre, ms))
+      wl.headed_fine(ms, f, off, len, w.tx(s, pre, ms))
 
 law wl.miss_fine:
   for ~shut: Bool -> Bytes() -> Bytes()
@@ -1650,70 +1673,94 @@ law wl.pstart_fine:
   for +ms: U32
   for +f: Bytes()
   for +n: U32
+  for +off: U32
+  for +len: U32
   for +hd: Bytes()
   for head: Bool
   for may: Maybe<&2, Bytes()>
   for +s: World
   for +acc: Bytes()
-  {em.fine(sim.pstart(~lsize, ms, f, n, hd, head, may, s, acc)) == True{} : Bool}
+  {em.fine(sim.pstart(~lsize, ms, f, n, off, len, hd, head, may, s, acc)) == True{} : Bool}
 
-def wl.pstart_fine(lsize, ms, f, n, hd, head, may, s, acc):
+def wl.pstart_fine(lsize, ms, f, n, off, len, hd, head, may, s, acc):
   match head:
     case True{}:
       hold_fine(ms, s, Bytes.append(acc, hd))
     case False{}:
-      wl.body_fine(ms, f, n, s, Bytes.append(acc, hd), U32.is_lt(n, L.page.small()))
+      wl.body_fine(ms, f, n, off, len, s, Bytes.append(acc, hd), U32.is_lt(n, L.page.small()))
+
+law wl.framed_fine:
+  for ~shut: Bool -> Bytes() -> Bytes()
+  for ~lsize: Bytes() -> Bytes() -> U32 -> String
+  for +ms: U32
+  for +f: Bytes()
+  for +n: U32
+  for fr: L.Fr
+  for head: Bool
+  for may: Maybe<&2, Bytes()>
+  for sh: Bool
+  for +s: World
+  for +acc: Bytes()
+  {em.fine(sim.framed(~shut, ~lsize, ms, f, n, fr, head, may, sh, s, acc)) == True{} : Bool}
+
+def wl.framed_fine(shut, lsize, ms, f, n, fr, head, may, sh, s, acc):
+  match fr:
+    case L.Fr{hd, +off, +len}:
+      wl.pstart_fine(~lsize, ms, f, n, off, len, shut(sh, hd), head, may, s, acc)
 
 law wl.psized_fine:
   for ~shut: Bool -> Bytes() -> Bytes()
-  for ~fhead: Bytes() -> U32 -> Bytes()
+  for ~fhead: Bytes() -> List<&2, Wr.Field> -> Bool -> U32 -> U32 -> L.Fr
   for ~miss: Bool -> Bytes()
   for ~lnote: Bytes() -> Bytes() -> String
   for ~lsize: Bytes() -> Bytes() -> U32 -> String
   for +ms: U32
-  for got: Bytes() & Result<&1, &1, U32 & String, U32>
+  for got: Bytes() & Result<&1, &1, U32 & String, U32 & U32>
   for ct: Bytes()
-  for head: Bool
+  for ask: List<&2, Wr.Field>
+  for +head: Bool
   for may: Maybe<&2, Bytes()>
-  for sh: Bool
+  for +sh: Bool
   for s: World
   for acc: Bytes()
-  {em.fine(sim.psized(~shut, ~fhead, ~miss, ~lnote, ~lsize, ms, got, ct, head, may, sh, s, acc)) == True{} : Bool}
+  {em.fine(sim.psized(~shut, ~fhead, ~miss, ~lnote, ~lsize, ms, got, ct, ask, head, may, sh, s, acc)) == True{} : Bool}
 
-def wl.psized_fine(shut, fhead, miss, lnote, lsize, ms, got, ct, head, may, sh, s, acc):
+def wl.psized_fine(shut, fhead, miss, lnote, lsize, ms, got, ct, ask, head, may, sh, s, acc):
   (f, r) = got
   match r:
     case Fail{e}:
       wl.miss_fine(~shut, ~miss, ~lnote, ms, head, may, sh, s, acc)
-    case Done{+n}:
-      wl.pstart_fine(~lsize, ms, f, n, shut(sh, fhead(ct, n)), head, may, s, acc)
+    case Done{nm}:
+      (+n, mt) = nm
+      wl.framed_fine(~shut, ~lsize, ms, f, n, fhead(ct, ask, head, n, mt), head, may, sh, s, acc)
 
 law wl.opened_fine:
   for ~shut: Bool -> Bytes() -> Bytes()
-  for ~fhead: Bytes() -> U32 -> Bytes()
+  for ~fhead: Bytes() -> List<&2, Wr.Field> -> Bool -> U32 -> U32 -> L.Fr
   for ~miss: Bool -> Bytes()
   for ~lnote: Bytes() -> Bytes() -> String
   for ~lsize: Bytes() -> Bytes() -> U32 -> String
   for +ms: U32
   for m: World & Result<&1, &1, U32 & String, Bytes()>
   for ct: Bytes()
+  for ask: List<&2, Wr.Field>
   for head: Bool
   for may: Maybe<&2, Bytes()>
   for sh: Bool
   for acc: Bytes()
-  {em.fine(sim.opened(~shut, ~fhead, ~miss, ~lnote, ~lsize, ms, m, ct, head, may, sh, acc)) == True{} : Bool}
+  {em.fine(sim.opened(~shut, ~fhead, ~miss, ~lnote, ~lsize, ms, m, ct, ask, head, may, sh, acc)) == True{} : Bool}
 
-def wl.opened_fine(shut, fhead, miss, lnote, lsize, ms, m, ct, head, may, sh, acc):
+def wl.opened_fine(shut, fhead, miss, lnote, lsize, ms, m, ct, ask, head, may, sh, acc):
   (s, r) = m
   match r:
     case Fail{e}:
       wl.miss_fine(~shut, ~miss, ~lnote, ms, head, may, sh, s, acc)
     case Done{f}:
-      wl.psized_fine(~shut, ~fhead, ~miss, ~lnote, ~lsize, ms, w.fsize(f), ct, head, may, sh, s, acc)
+      wl.psized_fine(~shut, ~fhead, ~miss, ~lnote, ~lsize, ms, w.fsize(f), ct, ask, head, may, sh, s, acc)
 
 law page_fine:
   for ~shut: Bool -> Bytes() -> Bytes()
-  for ~fhead: Bytes() -> U32 -> Bytes()
+  for ~fhead: Bytes() -> List<&2, Wr.Field> -> Bool -> U32 -> U32 -> L.Fr
   for ~miss: Bool -> Bytes()
   for ~lnote: Bytes() -> Bytes() -> String
   for ~lsize: Bytes() -> Bytes() -> U32 -> String
@@ -1721,20 +1768,21 @@ law page_fine:
   for root: Bytes()
   for path: Bytes()
   for ct: Bytes()
+  for ask: List<&2, Wr.Field>
   for head: Bool
   for may: Maybe<&2, Bytes()>
   for sh: Bool
   for st: L.Em<World>
-  {em.fine(sim.page(~shut, ~fhead, ~miss, ~lnote, ~lsize, ms, root, path, ct, head, may, sh, st)) == True{} : Bool}
+  {em.fine(sim.page(~shut, ~fhead, ~miss, ~lnote, ~lsize, ms, root, path, ct, ask, head, may, sh, st)) == True{} : Bool}
 
-def page_fine(shut, fhead, miss, lnote, lsize, ms, root, path, ct, head, may, sh, st):
+def page_fine(shut, fhead, miss, lnote, lsize, ms, root, path, ct, ask, head, may, sh, st):
   match st:
     case L.Em{s, acc, ok}:
       match ok:
         case False{}:
           {==}
         case True{}:
-          wl.opened_fine(~shut, ~fhead, ~miss, ~lnote, ~lsize, ms, w.fopen(s, root, path), ct, head, may, sh, acc)
+          wl.opened_fine(~shut, ~fhead, ~miss, ~lnote, ~lsize, ms, w.fopen(s, root, path), ct, ask, head, may, sh, acc)
 
 # LAW: the batch budget. After a reply of any size joins the batch,
 # what stays waiting is below send.cap(): a batch at or past the cap has
@@ -1979,7 +2027,7 @@ def wl.note_is(lnote, may, x):
 
 law wl.held_eager:
   for ~shut: Bool -> Bytes() -> Bytes()
-  for ~fhead: Bytes() -> U32 -> Bytes()
+  for ~fhead: Bytes() -> List<&2, Wr.Field> -> Bool -> U32 -> U32 -> L.Fr
   for ~miss: Bool -> Bytes()
   for ~lnote: Bytes() -> Bytes() -> String
   for ~lsize: Bytes() -> Bytes() -> U32 -> String
@@ -2039,7 +2087,7 @@ def wl.held_eager(shut, fhead, miss, lnote, lsize, t, ms, rd, now, fs, out, a, c
 
 law wl.go_wire:
   for ~shut: Bool -> Bytes() -> Bytes()
-  for ~fhead: Bytes() -> U32 -> Bytes()
+  for ~fhead: Bytes() -> List<&2, Wr.Field> -> Bool -> U32 -> U32 -> L.Fr
   for ~miss: Bool -> Bytes()
   for ~lnote: Bytes() -> Bytes() -> String
   for ~lsize: Bytes() -> Bytes() -> U32 -> String
@@ -2099,15 +2147,15 @@ def wl.go_wire(shut, fhead, miss, lnote, lsize, xs, ms, may, sh, rd, now, fs, ou
           wl.go_wire(~shut, ~fhead, ~miss, ~lnote, ~lsize, t, ms, Some{bs}, sh, rd, now, fs, out, acc, e)
         case L.Shut{}:
           wl.go_wire(~shut, ~fhead, ~miss, ~lnote, ~lsize, t, ms, may, True{}, rd, now, fs, out, acc, e)
-        case L.Page{root, path, ct, head}:
-          no({sim.go(~shut, ~fhead, ~miss, ~lnote, ~lsize, Con{L.Page{root, path, ct, head}, t}, ms, may, sh,
-            L.Em{eager(rd, now, fs, out), acc, True{}}) ==
+        case L.Page{root, path, ct, ask, head}:
+          no({sim.go(~shut, ~fhead, ~miss, ~lnote, ~lsize, Con{L.Page{root, path, ct, ask, head}, t}, ms,
+            may, sh, L.Em{eager(rd, now, fs, out), acc, True{}}) ==
             sent(rd, now, fs, Bytes.append(out, Bytes.append(acc,
-              wire(~shut, Con{L.Page{root, path, ct, head}, t}, sh)))) : L.Put(World)}, e)
+              wire(~shut, Con{L.Page{root, path, ct, ask, head}, t}, sh)))) : L.Put(World)}, e)
 
 law segs_wire:
   for ~shut: Bool -> Bytes() -> Bytes()
-  for ~fhead: Bytes() -> U32 -> Bytes()
+  for ~fhead: Bytes() -> List<&2, Wr.Field> -> Bool -> U32 -> U32 -> L.Fr
   for ~miss: Bool -> Bytes()
   for ~lnote: Bytes() -> Bytes() -> String
   for ~lsize: Bytes() -> Bytes() -> U32 -> String
@@ -2146,7 +2194,7 @@ law wl.mute_left:
   for ~gap: U32
   for ~event: U32 -> Bytes()
   for ~shut: Bool -> Bytes() -> Bytes()
-  for ~fhead: Bytes() -> U32 -> Bytes()
+  for ~fhead: Bytes() -> List<&2, Wr.Field> -> Bool -> U32 -> U32 -> L.Fr
   for ~miss: Bool -> Bytes()
   for ~lnote: Bytes() -> Bytes() -> String
   for ~lsize: Bytes() -> Bytes() -> U32 -> String
@@ -2182,7 +2230,7 @@ law wl.mute_turn_h:
   for ~gap: U32
   for ~event: U32 -> Bytes()
   for ~shut: Bool -> Bytes() -> Bytes()
-  for ~fhead: Bytes() -> U32 -> Bytes()
+  for ~fhead: Bytes() -> List<&2, Wr.Field> -> Bool -> U32 -> U32 -> L.Fr
   for ~miss: Bool -> Bytes()
   for ~lnote: Bytes() -> Bytes() -> String
   for ~lsize: Bytes() -> Bytes() -> U32 -> String
@@ -2219,7 +2267,7 @@ law wl.mute_turn:
   for ~gap: U32
   for ~event: U32 -> Bytes()
   for ~shut: Bool -> Bytes() -> Bytes()
-  for ~fhead: Bytes() -> U32 -> Bytes()
+  for ~fhead: Bytes() -> List<&2, Wr.Field> -> Bool -> U32 -> U32 -> L.Fr
   for ~miss: Bool -> Bytes()
   for ~lnote: Bytes() -> Bytes() -> String
   for ~lsize: Bytes() -> Bytes() -> U32 -> String
@@ -2253,7 +2301,7 @@ law wl.mute_up:
   for ~gap: U32
   for ~event: U32 -> Bytes()
   for ~shut: Bool -> Bytes() -> Bytes()
-  for ~fhead: Bytes() -> U32 -> Bytes()
+  for ~fhead: Bytes() -> List<&2, Wr.Field> -> Bool -> U32 -> U32 -> L.Fr
   for ~miss: Bool -> Bytes()
   for ~lnote: Bytes() -> Bytes() -> String
   for ~lsize: Bytes() -> Bytes() -> U32 -> String
@@ -2276,7 +2324,7 @@ def wl.mute_up(E, P, U, idle, hdms, plan, mid, big, uplan, gap, event, shut, fhe
 # a send of bytes to a stopped peer fails; of none, succeeds
 law wl.mute_held:
   for ~shut: Bool -> Bytes() -> Bytes()
-  for ~fhead: Bytes() -> U32 -> Bytes()
+  for ~fhead: Bytes() -> List<&2, Wr.Field> -> Bool -> U32 -> U32 -> L.Fr
   for ~miss: Bool -> Bytes()
   for ~lnote: Bytes() -> Bytes() -> String
   for ~lsize: Bytes() -> Bytes() -> U32 -> String
@@ -2300,7 +2348,7 @@ def wl.mute_held(shut, fhead, miss, lnote, lsize, ms, s, h, t, c):
 # (the bytes a Raw puts out are the protocol's shut of them)
 law wl.mute_raw.at:
   for ~shut: Bool -> Bytes() -> Bytes()
-  for ~fhead: Bytes() -> U32 -> Bytes()
+  for ~fhead: Bytes() -> List<&2, Wr.Field> -> Bool -> U32 -> U32 -> L.Fr
   for ~miss: Bool -> Bytes()
   for ~lnote: Bytes() -> Bytes() -> String
   for ~lsize: Bytes() -> Bytes() -> U32 -> String
@@ -2319,7 +2367,7 @@ def wl.mute_raw.at(shut, fhead, miss, lnote, lsize, ms, s, x):
 
 law wl.mute_raw:
   for ~shut: Bool -> Bytes() -> Bytes()
-  for ~fhead: Bytes() -> U32 -> Bytes()
+  for ~fhead: Bytes() -> List<&2, Wr.Field> -> Bool -> U32 -> U32 -> L.Fr
   for ~miss: Bool -> Bytes()
   for ~lnote: Bytes() -> Bytes() -> String
   for ~lsize: Bytes() -> Bytes() -> U32 -> String
@@ -2344,7 +2392,7 @@ law wl.mute_tick_failed:
   for ~gap: U32
   for ~event: U32 -> Bytes()
   for ~shut: Bool -> Bytes() -> Bytes()
-  for ~fhead: Bytes() -> U32 -> Bytes()
+  for ~fhead: Bytes() -> List<&2, Wr.Field> -> Bool -> U32 -> U32 -> L.Fr
   for ~miss: Bool -> Bytes()
   for ~lnote: Bytes() -> Bytes() -> String
   for ~lsize: Bytes() -> Bytes() -> U32 -> String
@@ -2380,7 +2428,7 @@ law wl.mute_more:
   for ~gap: U32
   for ~event: U32 -> Bytes()
   for ~shut: Bool -> Bytes() -> Bytes()
-  for ~fhead: Bytes() -> U32 -> Bytes()
+  for ~fhead: Bytes() -> List<&2, Wr.Field> -> Bool -> U32 -> U32 -> L.Fr
   for ~miss: Bool -> Bytes()
   for ~lnote: Bytes() -> Bytes() -> String
   for ~lsize: Bytes() -> Bytes() -> U32 -> String
@@ -2419,7 +2467,7 @@ law wl.mute_tick:
   for ~gap: U32
   for ~event: U32 -> Bytes()
   for ~shut: Bool -> Bytes() -> Bytes()
-  for ~fhead: Bytes() -> U32 -> Bytes()
+  for ~fhead: Bytes() -> List<&2, Wr.Field> -> Bool -> U32 -> U32 -> L.Fr
   for ~miss: Bool -> Bytes()
   for ~lnote: Bytes() -> Bytes() -> String
   for ~lsize: Bytes() -> Bytes() -> U32 -> String
@@ -2453,7 +2501,7 @@ law stall_ends:
   for ~gap: U32
   for ~event: U32 -> Bytes()
   for ~shut: Bool -> Bytes() -> Bytes()
-  for ~fhead: Bytes() -> U32 -> Bytes()
+  for ~fhead: Bytes() -> List<&2, Wr.Field> -> Bool -> U32 -> U32 -> L.Fr
   for ~miss: Bool -> Bytes()
   for ~lnote: Bytes() -> Bytes() -> String
   for ~lsize: Bytes() -> Bytes() -> U32 -> String
@@ -2797,8 +2845,10 @@ def fsend_stalled(rd, now, fs, out, f, off, len, ms, h, t, e):
 # LAW: a file's bytes. At a peer that takes what it is sent, a Page of a
 # file the root has (of fewer than 2^32 bytes, as File.size answers for
 # any it sizes) puts on the wire what waited in front of it, the head
-# its size framed, and then the file's own bytes, every one and nothing
-# else, and leaves the writer empty and able to go on.
+# ~fhead framed from the file's size, and then the part of the file
+# ~fhead named -- the whole file, a range of it, or nothing -- every
+# byte of that part and nothing else, and leaves the writer empty and
+# able to go on, whenever the file holds the part.
 def wl.drop_0(+f: Bytes()) -> {String.drop(f, 0n) == f : Bytes()}:
   match f:
     case SNil{}:
@@ -2817,99 +2867,85 @@ def wl.take_all(+f: Bytes()) -> {String.take(f, Bytes.len(f)) == f : Bytes()}:
       Equal.cong(Bytes(), Bytes(), x => SCon{h, x}, String.take(t, Bytes.len(t)), t,
         wl.take_all(t))
 
-law wl.fbytes_all:
-  for +f: Bytes()
-  for en: {U32.to_nat(U32.from_nat(Bytes.len(f))) == Bytes.len(f) : Nat}
-  {w.fbytes(f, 0, U32.from_nat(Bytes.len(f))) == f : Bytes()}
+# the part is there: the file holds len bytes from off
+def wl.part(+f: Bytes(), +off: U32, +len: U32) -> Bool:
+  Nat.is_eq(Bytes.len(w.fbytes(f, off, len)), U32.to_nat(len))
 
-def wl.fbytes_all(f, en):
-  %Equal.sym(Nat, U32.to_nat(U32.from_nat(Bytes.len(f))), Bytes.len(f), en) :
-    {String.take(String.drop(f, 0n), _) == f : Bytes()}
-  %Equal.sym(Bytes(), String.drop(f, 0n), f, wl.drop_0(f)) :
-    {String.take(_, Bytes.len(f)) == f : Bytes()}
-  wl.take_all(f)
+def wl.part_le(+f: Bytes(), +off: U32, +len: U32, ep: {wl.part(f, off, len) == True{} : Bool}) ->
+  {Nat.is_le(U32.to_nat(len), Bytes.len(String.drop(f, U32.to_nat(off)))) == True{} : Bool}:
+  %wl.eq_le(String.drop(f, U32.to_nat(off)), U32.to_nat(len)) :
+    {_ == True{} : Bool}
+  ep
 
-law wl.fall_le:
-  for +f: Bytes()
-  for en: {U32.to_nat(U32.from_nat(Bytes.len(f))) == Bytes.len(f) : Nat}
-  {Nat.is_le(U32.to_nat(U32.from_nat(Bytes.len(f))), Bytes.len(String.drop(f, 0n))) ==
-    True{} : Bool}
-
-def wl.fall_le(f, en):
-  %Equal.sym(Nat, U32.to_nat(U32.from_nat(Bytes.len(f))), Bytes.len(f), en) :
-    {Nat.is_le(_, Bytes.len(String.drop(f, 0n))) == True{} : Bool}
-  %Equal.sym(Bytes(), String.drop(f, 0n), f, wl.drop_0(f)) :
-    {Nat.is_le(Bytes.len(f), Bytes.len(_)) == True{} : Bool}
-  wl.le_refl(Bytes.len(f))
-
-law wl.fsend_whole.at:
+law wl.fsend_part.at:
   for +rd: List<&2, Rd>
   for +now: Nat
   for +fs: List<&2, Fil>
   for +o: Bytes()
   for +f: Bytes()
-  for +en: {U32.to_nat(U32.from_nat(Bytes.len(f))) == Bytes.len(f) : Nat}
-  {(eager(rd, now, fs, Bytes.append(o, w.fbytes(f, 0, U32.from_nat(Bytes.len(f))))),
-      (f, w.fsend.cut(Nat.is_le(U32.to_nat(U32.from_nat(Bytes.len(f))),
-        Bytes.len(String.drop(f, 0n))), Done{Unit{}}))) ==
-    (eager(rd, now, fs, Bytes.append(o, f)), (f, Done{Unit{}})) :
+  for +off: U32
+  for +len: U32
+  for ep: {wl.part(f, off, len) == True{} : Bool}
+  {(eager(rd, now, fs, Bytes.append(o, w.fbytes(f, off, len))),
+      (f, w.fsend.cut(Nat.is_le(U32.to_nat(len), Bytes.len(String.drop(f, U32.to_nat(off)))),
+        Done{Unit{}}))) ==
+    (eager(rd, now, fs, Bytes.append(o, w.fbytes(f, off, len))), (f, Done{Unit{}})) :
     World & Bytes() & Result<&1, &1, U32 & String, Unit>}
 
-def wl.fsend_whole.at(rd, now, fs, o, f, en):
-  %Equal.sym(Bytes(), w.fbytes(f, 0, U32.from_nat(Bytes.len(f))), f, wl.fbytes_all(f, en)) :
-    {(eager(rd, now, fs, Bytes.append(o, _)),
-      (f, w.fsend.cut(Nat.is_le(U32.to_nat(U32.from_nat(Bytes.len(f))),
-        Bytes.len(String.drop(f, 0n))), Done{Unit{}}))) ==
-      (eager(rd, now, fs, Bytes.append(o, f)), (f, Done{Unit{}})) :
-      World & Bytes() & Result<&1, &1, U32 & String, Unit>}
-  %Equal.sym(Bool, Nat.is_le(U32.to_nat(U32.from_nat(Bytes.len(f))),
-      Bytes.len(String.drop(f, 0n))), True{}, wl.fall_le(f, en)) :
-    {(eager(rd, now, fs, Bytes.append(o, f)), (f, w.fsend.cut(_, Done{Unit{}}))) ==
-      (eager(rd, now, fs, Bytes.append(o, f)), (f, Done{Unit{}})) :
+def wl.fsend_part.at(rd, now, fs, o, f, off, len, ep):
+  %Equal.sym(Bool, Nat.is_le(U32.to_nat(len), Bytes.len(String.drop(f, U32.to_nat(off)))), True{},
+    wl.part_le(f, off, len, ep)) :
+    {(eager(rd, now, fs, Bytes.append(o, w.fbytes(f, off, len))), (f, w.fsend.cut(_, Done{Unit{}}))) ==
+      (eager(rd, now, fs, Bytes.append(o, w.fbytes(f, off, len))), (f, Done{Unit{}})) :
       World & Bytes() & Result<&1, &1, U32 & String, Unit>}
   {==}
 
-# a sendfile of a whole file to a peer that takes everything puts the
-# file on the wire after what was there, and succeeds
-law wl.fsend_whole:
+# a sendfile of a part the file holds, to a peer that takes everything,
+# puts the part on the wire after what was there, and succeeds
+law wl.fsend_part:
   for +rd: List<&2, Rd>
   for +now: Nat
   for +fs: List<&2, Fil>
   for +o: Bytes()
   for +f: Bytes()
+  for +off: U32
+  for +len: U32
   for +ms: U32
-  for en: {U32.to_nat(U32.from_nat(Bytes.len(f))) == Bytes.len(f) : Nat}
-  {w.fsend(eager(rd, now, fs, o), f, 0, U32.from_nat(Bytes.len(f)), ms) ==
-    (eager(rd, now, fs, Bytes.append(o, f)), (f, Done{Unit{}})) :
+  for ep: {wl.part(f, off, len) == True{} : Bool}
+  {w.fsend(eager(rd, now, fs, o), f, off, len, ms) ==
+    (eager(rd, now, fs, Bytes.append(o, w.fbytes(f, off, len))), (f, Done{Unit{}})) :
     World & Bytes() & Result<&1, &1, U32 & String, Unit>}
 
-def wl.fsend_whole(rd, now, fs, o, f, ms, en):
+def wl.fsend_part(rd, now, fs, o, f, off, len, ms, ep):
   Equal.trans(World & Bytes() & Result<&1, &1, U32 & String, Unit>,
-    w.fsend(eager(rd, now, fs, o), f, 0, U32.from_nat(Bytes.len(f)), ms),
-    (eager(rd, now, fs, Bytes.append(o, w.fbytes(f, 0, U32.from_nat(Bytes.len(f))))),
-      (f, w.fsend.cut(Nat.is_le(U32.to_nat(U32.from_nat(Bytes.len(f))),
-        Bytes.len(String.drop(f, 0n))), Done{Unit{}}))),
-    (eager(rd, now, fs, Bytes.append(o, f)), (f, Done{Unit{}})),
-    fsend_served(rd, now, fs, o, f, 0, U32.from_nat(Bytes.len(f)), ms),
-    wl.fsend_whole.at(rd, now, fs, o, f, en))
+    w.fsend(eager(rd, now, fs, o), f, off, len, ms),
+    (eager(rd, now, fs, Bytes.append(o, w.fbytes(f, off, len))),
+      (f, w.fsend.cut(Nat.is_le(U32.to_nat(len), Bytes.len(String.drop(f, U32.to_nat(off)))),
+        Done{Unit{}}))),
+    (eager(rd, now, fs, Bytes.append(o, w.fbytes(f, off, len))), (f, Done{Unit{}})),
+    fsend_served(rd, now, fs, o, f, off, len, ms),
+    wl.fsend_part.at(rd, now, fs, o, f, off, len, ep))
 
 law wl.headed_wire:
   for +ms: U32
   for +f: Bytes()
+  for +off: U32
+  for +len: U32
   for +rd: List<&2, Rd>
   for +now: Nat
   for +fs: List<&2, Fil>
   for +o: Bytes()
-  for en: {U32.to_nat(U32.from_nat(Bytes.len(f))) == Bytes.len(f) : Nat}
-  {sim.headed(ms, f, U32.from_nat(Bytes.len(f)), sent(rd, now, fs, o)) ==
-    L.Em{eager(rd, now, fs, Bytes.append(o, f)), "", True{}} : L.Em<World>}
+  for ep: {wl.part(f, off, len) == True{} : Bool}
+  {sim.headed(ms, f, off, len, sent(rd, now, fs, o)) ==
+    L.Em{eager(rd, now, fs, Bytes.append(o, w.fbytes(f, off, len))), "", True{}} : L.Em<World>}
 
-def wl.headed_wire(ms, f, rd, now, fs, o, en):
+def wl.headed_wire(ms, f, off, len, rd, now, fs, o, ep):
   %Equal.sym(World & Bytes() & Result<&1, &1, U32 & String, Unit>,
-    w.fsend(eager(rd, now, fs, o), f, 0, U32.from_nat(Bytes.len(f)), ms),
-    (eager(rd, now, fs, Bytes.append(o, f)), (f, Done{Unit{}})),
-    wl.fsend_whole(rd, now, fs, o, f, ms, en)) :
-    {sim.fsent(_) == L.Em{eager(rd, now, fs, Bytes.append(o, f)), "", True{}} : L.Em<World>}
+    w.fsend(eager(rd, now, fs, o), f, off, len, ms),
+    (eager(rd, now, fs, Bytes.append(o, w.fbytes(f, off, len))), (f, Done{Unit{}})),
+    wl.fsend_part(rd, now, fs, o, f, off, len, ms, ep)) :
+    {sim.fsent(_) == L.Em{eager(rd, now, fs, Bytes.append(o, w.fbytes(f, off, len))), "", True{}} :
+      L.Em<World>}
   {==}
 
 def wl.eq_refl(+n: Nat) -> {Nat.is_eq(n, n) == True{} : Bool}:
@@ -2950,78 +2986,69 @@ def wl.take_n(f, en):
 law wl.whole_n:
   for +f: Bytes()
   for +en: {U32.to_nat(U32.from_nat(Bytes.len(f))) == Bytes.len(f) : Nat}
-  {Nat.is_eq(Bytes.len(String.take(f, U32.to_nat(U32.from_nat(Bytes.len(f))))),
-    U32.to_nat(U32.from_nat(Bytes.len(f)))) == True{} : Bool}
+  {Nat.is_eq(Bytes.len(f), U32.to_nat(U32.from_nat(Bytes.len(f)))) == True{} : Bool}
 
 def wl.whole_n(f, en):
-  %Equal.sym(Bytes(), String.take(f, U32.to_nat(U32.from_nat(Bytes.len(f)))), f, wl.take_n(f, en)) :
-    {Nat.is_eq(Bytes.len(_), U32.to_nat(U32.from_nat(Bytes.len(f)))) == True{} : Bool}
   %Equal.sym(Nat, U32.to_nat(U32.from_nat(Bytes.len(f))), Bytes.len(f), en) :
     {Nat.is_eq(Bytes.len(f), _) == True{} : Bool}
   wl.eq_refl(Bytes.len(f))
 
-law wl.read_wire.at:
-  for +f: Bytes()
-  for +rd: List<&2, Rd>
-  for +now: Nat
-  for +fs: List<&2, Fil>
-  for +out: Bytes()
-  for +pre: Bytes()
-  for +en: {U32.to_nat(U32.from_nat(Bytes.len(f))) == Bytes.len(f) : Nat}
-  {L.Em{eager(rd, now, fs, Bytes.append(out,
-      Bytes.append(pre, String.take(f, U32.to_nat(U32.from_nat(Bytes.len(f))))))), "",
-      Nat.is_eq(Bytes.len(String.take(f, U32.to_nat(U32.from_nat(Bytes.len(f))))),
-        U32.to_nat(U32.from_nat(Bytes.len(f))))} ==
-    L.Em{eager(rd, now, fs, Bytes.append(Bytes.append(out, pre), f)), "", True{}} : L.Em<World>}
-
-def wl.read_wire.at(f, rd, now, fs, out, pre, en):
-  %Equal.sym(Bool, Nat.is_eq(Bytes.len(String.take(f, U32.to_nat(U32.from_nat(Bytes.len(f))))),
-      U32.to_nat(U32.from_nat(Bytes.len(f)))), True{}, wl.whole_n(f, en)) :
-    {L.Em{eager(rd, now, fs, Bytes.append(out,
-      Bytes.append(pre, String.take(f, U32.to_nat(U32.from_nat(Bytes.len(f))))))), "", _} ==
-      L.Em{eager(rd, now, fs, Bytes.append(Bytes.append(out, pre), f)), "", True{}} : L.Em<World>}
-  %Equal.sym(Bytes(), String.take(f, U32.to_nat(U32.from_nat(Bytes.len(f)))), f, wl.take_n(f, en)) :
-    {L.Em{eager(rd, now, fs, Bytes.append(out, Bytes.append(pre, _))), "", True{}} ==
-      L.Em{eager(rd, now, fs, Bytes.append(Bytes.append(out, pre), f)), "", True{}} : L.Em<World>}
-  Equal.cong(Bytes(), L.Em<World>, y => L.Em{eager(rd, now, fs, y), "", True{}},
-    Bytes.append(out, Bytes.append(pre, f)), Bytes.append(Bytes.append(out, pre), f),
-    Equal.sym(Bytes(), Bytes.append(Bytes.append(out, pre), f), Bytes.append(out, Bytes.append(pre, f)),
-      wl.app_assoc(out, pre, f)))
-
-# a small file: read whole, and on the wire with its head in one send
+# a small file: read whole, and its part on the wire with its head in
+# one send
 law wl.read_wire:
   for +ms: U32
   for +f: Bytes()
+  for +off: U32
+  for +len: U32
   for +rd: List<&2, Rd>
   for +now: Nat
   for +fs: List<&2, Fil>
   for +out: Bytes()
   for +pre: Bytes()
   for +en: {U32.to_nat(U32.from_nat(Bytes.len(f))) == Bytes.len(f) : Nat}
-  {sim.read(ms, w.fread(f, U32.from_nat(Bytes.len(f))), U32.from_nat(Bytes.len(f)),
+  for ep: {wl.part(f, off, len) == True{} : Bool}
+  {sim.read(ms, w.fread(f, U32.from_nat(Bytes.len(f))), U32.from_nat(Bytes.len(f)), off, len,
       eager(rd, now, fs, out), pre) ==
-    L.Em{eager(rd, now, fs, Bytes.append(Bytes.append(out, pre), f)), "", True{}} : L.Em<World>}
+    L.Em{eager(rd, now, fs, Bytes.append(Bytes.append(out, pre), w.fbytes(f, off, len))), "", True{}} :
+    L.Em<World>}
 
-def wl.read_wire(ms, f, rd, now, fs, out, pre, en):
-  Equal.trans(L.Em<World>,
-    L.page.blk(World, w.tx(eager(rd, now, fs, out),
-        Bytes.append(pre, String.take(f, U32.to_nat(U32.from_nat(Bytes.len(f))))), ms),
-      Nat.is_eq(Bytes.len(String.take(f, U32.to_nat(U32.from_nat(Bytes.len(f))))),
-        U32.to_nat(U32.from_nat(Bytes.len(f))))),
-    L.Em{eager(rd, now, fs, Bytes.append(out,
-        Bytes.append(pre, String.take(f, U32.to_nat(U32.from_nat(Bytes.len(f))))))), "",
-      Nat.is_eq(Bytes.len(String.take(f, U32.to_nat(U32.from_nat(Bytes.len(f))))),
-        U32.to_nat(U32.from_nat(Bytes.len(f))))},
-    L.Em{eager(rd, now, fs, Bytes.append(Bytes.append(out, pre), f)), "", True{}},
-    wl.blk_eager(rd, now, fs, out,
-      Bytes.append(pre, String.take(f, U32.to_nat(U32.from_nat(Bytes.len(f))))),
-      Nat.is_eq(Bytes.len(String.take(f, U32.to_nat(U32.from_nat(Bytes.len(f))))),
-        U32.to_nat(U32.from_nat(Bytes.len(f)))), ms),
-    wl.read_wire.at(f, rd, now, fs, out, pre, en))
+def wl.read_wire(ms, f, off, len, rd, now, fs, out, pre, en, ep):
+  %Equal.sym(Bytes(), String.take(f, U32.to_nat(U32.from_nat(Bytes.len(f)))), f, wl.take_n(f, en)) :
+    {L.page.blk(World, w.tx(eager(rd, now, fs, out),
+      Bytes.append(pre, Bytes.slice(_, U32.to_nat(off), U32.to_nat(len))), ms),
+      Bool.and(Nat.is_eq(Bytes.len(_), U32.to_nat(U32.from_nat(Bytes.len(f)))),
+        Nat.is_eq(Bytes.len(Bytes.slice(_, U32.to_nat(off), U32.to_nat(len))), U32.to_nat(len)))) ==
+      L.Em{eager(rd, now, fs, Bytes.append(Bytes.append(out, pre), w.fbytes(f, off, len))), "",
+        True{}} : L.Em<World>}
+  %Equal.sym(Bool, Nat.is_eq(Bytes.len(f), U32.to_nat(U32.from_nat(Bytes.len(f)))), True{},
+    wl.whole_n(f, en)) :
+    {L.page.blk(World, w.tx(eager(rd, now, fs, out), Bytes.append(pre, w.fbytes(f, off, len)), ms),
+      Bool.and(_, wl.part(f, off, len))) ==
+      L.Em{eager(rd, now, fs, Bytes.append(Bytes.append(out, pre), w.fbytes(f, off, len))), "",
+        True{}} : L.Em<World>}
+  %Equal.sym(Bool, wl.part(f, off, len), True{}, ep) :
+    {L.page.blk(World, w.tx(eager(rd, now, fs, out), Bytes.append(pre, w.fbytes(f, off, len)), ms),
+      Bool.and(True{}, _)) ==
+      L.Em{eager(rd, now, fs, Bytes.append(Bytes.append(out, pre), w.fbytes(f, off, len))), "",
+        True{}} : L.Em<World>}
+  %Equal.sym(L.Em<World>, L.page.blk(World, w.tx(eager(rd, now, fs, out),
+      Bytes.append(pre, w.fbytes(f, off, len)), ms), True{}),
+    L.Em{eager(rd, now, fs, Bytes.append(out, Bytes.append(pre, w.fbytes(f, off, len)))), "", True{}},
+    wl.blk_eager(rd, now, fs, out, Bytes.append(pre, w.fbytes(f, off, len)), True{}, ms)) :
+    {_ == L.Em{eager(rd, now, fs, Bytes.append(Bytes.append(out, pre), w.fbytes(f, off, len))), "",
+      True{}} : L.Em<World>}
+  Equal.cong(Bytes(), L.Em<World>, y => L.Em{eager(rd, now, fs, y), "", True{}},
+    Bytes.append(out, Bytes.append(pre, w.fbytes(f, off, len))),
+    Bytes.append(Bytes.append(out, pre), w.fbytes(f, off, len)),
+    Equal.sym(Bytes(), Bytes.append(Bytes.append(out, pre), w.fbytes(f, off, len)),
+      Bytes.append(out, Bytes.append(pre, w.fbytes(f, off, len))),
+      wl.app_assoc(out, pre, w.fbytes(f, off, len))))
 
 law wl.body_wire:
   for +ms: U32
   for +f: Bytes()
+  for +off: U32
+  for +len: U32
   for +rd: List<&2, Rd>
   for +now: Nat
   for +fs: List<&2, Fil>
@@ -3029,24 +3056,26 @@ law wl.body_wire:
   for +pre: Bytes()
   for small: Bool
   for +en: {U32.to_nat(U32.from_nat(Bytes.len(f))) == Bytes.len(f) : Nat}
-  {sim.body(ms, f, U32.from_nat(Bytes.len(f)), eager(rd, now, fs, out), pre, small) ==
-    L.Em{eager(rd, now, fs, Bytes.append(Bytes.append(out, pre), f)), "", True{}} : L.Em<World>}
+  for +ep: {wl.part(f, off, len) == True{} : Bool}
+  {sim.body(ms, f, U32.from_nat(Bytes.len(f)), off, len, eager(rd, now, fs, out), pre, small) ==
+    L.Em{eager(rd, now, fs, Bytes.append(Bytes.append(out, pre), w.fbytes(f, off, len))), "", True{}} :
+    L.Em<World>}
 
-def wl.body_wire(ms, f, rd, now, fs, out, pre, small, en):
+def wl.body_wire(ms, f, off, len, rd, now, fs, out, pre, small, en, ep):
   match small:
     case True{}:
-      wl.read_wire(ms, f, rd, now, fs, out, pre, en)
+      wl.read_wire(ms, f, off, len, rd, now, fs, out, pre, en, ep)
     case False{}:
       %Equal.sym(L.Put(World), w.tx(eager(rd, now, fs, out), pre, ms),
         sent(rd, now, fs, Bytes.append(out, pre)), wl.tx_eager(rd, now, fs, out, pre, ms)) :
-        {sim.headed(ms, f, U32.from_nat(Bytes.len(f)), _) ==
-          L.Em{eager(rd, now, fs, Bytes.append(Bytes.append(out, pre), f)), "", True{}} :
-          L.Em<World>}
-      wl.headed_wire(ms, f, rd, now, fs, Bytes.append(out, pre), en)
+        {sim.headed(ms, f, off, len, _) ==
+          L.Em{eager(rd, now, fs, Bytes.append(Bytes.append(out, pre), w.fbytes(f, off, len))), "",
+            True{}} : L.Em<World>}
+      wl.headed_wire(ms, f, off, len, rd, now, fs, Bytes.append(out, pre), ep)
 
 law page_wire:
   for ~shut: Bool -> Bytes() -> Bytes()
-  for ~fhead: Bytes() -> U32 -> Bytes()
+  for ~fhead: Bytes() -> List<&2, Wr.Field> -> Bool -> U32 -> U32 -> L.Fr
   for ~miss: Bool -> Bytes()
   for ~lnote: Bytes() -> Bytes() -> String
   for ~lsize: Bytes() -> Bytes() -> U32 -> String
@@ -3054,6 +3083,7 @@ law page_wire:
   for root: Bytes()
   for path: Bytes()
   for +ct: Bytes()
+  for +ask: List<&2, Wr.Field>
   for may: Maybe<&2, Bytes()>
   for +sh: Bool
   for +rd: List<&2, Rd>
@@ -3062,25 +3092,33 @@ law page_wire:
   for +out: Bytes()
   for +acc: Bytes()
   for +body: Bytes()
+  for +hd: Bytes()
+  for +off: U32
+  for +len: U32
   for ef: {w.find(fs, path) == Done{body} : Result<&1, &1, U32 & String, Bytes()>}
   for +en: {U32.to_nat(U32.from_nat(Bytes.len(body))) == Bytes.len(body) : Nat}
-  {sim.page(~shut, ~fhead, ~miss, ~lnote, ~lsize, ms, root, path, ct, False{}, may, sh,
+  for efr: {fhead(ct, ask, False{}, U32.from_nat(Bytes.len(body)), 0) == L.Fr{hd, off, len} : L.Fr}
+  for +ep: {wl.part(body, off, len) == True{} : Bool}
+  {sim.page(~shut, ~fhead, ~miss, ~lnote, ~lsize, ms, root, path, ct, ask, False{}, may, sh,
       L.Em{eager(rd, now, fs, out), acc, True{}}) ==
-    L.Em{eager(rd, now, fs, Bytes.append(Bytes.append(out,
-      Bytes.append(acc, shut(sh, fhead(ct, U32.from_nat(Bytes.len(body)))))), body)), "",
-      True{}} : L.Em<World>}
+    L.Em{eager(rd, now, fs, Bytes.append(Bytes.append(out, Bytes.append(acc, shut(sh, hd))),
+      w.fbytes(body, off, len))), "", True{}} : L.Em<World>}
 
-def page_wire(shut, fhead, miss, lnote, lsize, ms, root, path, ct, may, sh, rd, now, fs, out, acc,
-  body, ef, en):
+def page_wire(shut, fhead, miss, lnote, lsize, ms, root, path, ct, ask, may, sh, rd, now, fs, out,
+  acc, body, hd, off, len, ef, en, efr, ep):
   %Equal.sym(Result<&1, &1, U32 & String, Bytes()>, w.find(fs, path), Done{body}, ef) :
-    {sim.opened(~shut, ~fhead, ~miss, ~lnote, ~lsize, ms, (eager(rd, now, fs, out), _), ct,
+    {sim.opened(~shut, ~fhead, ~miss, ~lnote, ~lsize, ms, (eager(rd, now, fs, out), _), ct, ask,
         False{}, may, sh, acc) ==
-      L.Em{eager(rd, now, fs, Bytes.append(Bytes.append(out,
-        Bytes.append(acc, shut(sh, fhead(ct, U32.from_nat(Bytes.len(body)))))), body)), "",
-        True{}} : L.Em<World>}
-  wl.body_wire(ms, body, rd, now, fs, out,
-    Bytes.append(acc, shut(sh, fhead(ct, U32.from_nat(Bytes.len(body))))),
-    U32.is_lt(U32.from_nat(Bytes.len(body)), L.page.small()), en)
+      L.Em{eager(rd, now, fs, Bytes.append(Bytes.append(out, Bytes.append(acc, shut(sh, hd))),
+        w.fbytes(body, off, len))), "", True{}} : L.Em<World>}
+  %Equal.sym(L.Fr, fhead(ct, ask, False{}, U32.from_nat(Bytes.len(body)), 0), L.Fr{hd, off, len},
+    efr) :
+    {sim.framed(~shut, ~lsize, ms, body, U32.from_nat(Bytes.len(body)), _, False{}, may, sh,
+        eager(rd, now, fs, out), acc) ==
+      L.Em{eager(rd, now, fs, Bytes.append(Bytes.append(out, Bytes.append(acc, shut(sh, hd))),
+        w.fbytes(body, off, len))), "", True{}} : L.Em<World>}
+  wl.body_wire(ms, body, off, len, rd, now, fs, out, Bytes.append(acc, shut(sh, hd)),
+    U32.is_lt(U32.from_nat(Bytes.len(body)), L.page.small()), en, ep)
 
 # LAW: nothing after a failed sendfile. A file's body that did not all
 # go out -- the send failed or stalled, or the file came up short --
@@ -3099,12 +3137,13 @@ def page_fail(s, f, e):
 law page_head_fail:
   for +ms: U32
   for f: Bytes()
-  for n: U32
+  for off: U32
+  for len: U32
   for s: World
   for e: U32 & String
-  {sim.headed(ms, f, n, (s, Fail{e})) == L.Em{s, "", False{}} : L.Em<World>}
+  {sim.headed(ms, f, off, len, (s, Fail{e})) == L.Em{s, "", False{}} : L.Em<World>}
 
-def page_head_fail(ms, f, n, s, e):
+def page_head_fail(ms, f, off, len, s, e):
   {==}
 
 # ... and a small file's read that came back short ends it too, after
@@ -3128,15 +3167,53 @@ law page_read_short:
   for f: Bytes()
   for +bs: Bytes()
   for +n: U32
+  for +off: U32
+  for +len: U32
   for +s: World
   for +pre: Bytes()
   for e: {Nat.is_eq(Bytes.len(bs), U32.to_nat(n)) == False{} : Bool}
-  {em.ok(sim.read(ms, (f, Done{bs}), n, s, pre)) == False{} : Bool}
+  {em.ok(sim.read(ms, (f, Done{bs}), n, off, len, s, pre)) == False{} : Bool}
 
-def page_read_short(ms, f, bs, n, s, pre, e):
+def page_read_short(ms, f, bs, n, off, len, s, pre, e):
   %Equal.sym(Bool, Nat.is_eq(Bytes.len(bs), U32.to_nat(n)), False{}, e) :
-    {em.ok(L.page.blk(World, w.tx(s, Bytes.append(pre, bs), ms), _)) == False{} : Bool}
-  wl.blk_short(w.tx(s, Bytes.append(pre, bs), ms))
+    {em.ok(L.page.blk(World, w.tx(s, Bytes.append(pre, Bytes.slice(bs, U32.to_nat(off),
+      U32.to_nat(len))), ms), Bool.and(_, Nat.is_eq(Bytes.len(Bytes.slice(bs, U32.to_nat(off),
+        U32.to_nat(len))), U32.to_nat(len))))) == False{} : Bool}
+  wl.blk_short(w.tx(s, Bytes.append(pre, Bytes.slice(bs, U32.to_nat(off), U32.to_nat(len))), ms))
+
+# ... and so does one whose part the file does not hold: a head's length
+# is never followed by fewer bytes and then more
+law page_part_short:
+  for +ms: U32
+  for f: Bytes()
+  for +bs: Bytes()
+  for +n: U32
+  for +off: U32
+  for +len: U32
+  for +s: World
+  for +pre: Bytes()
+  for e: {Nat.is_eq(Bytes.len(Bytes.slice(bs, U32.to_nat(off), U32.to_nat(len))), U32.to_nat(len)) ==
+    False{} : Bool}
+  {em.ok(sim.read(ms, (f, Done{bs}), n, off, len, s, pre)) == False{} : Bool}
+
+def wl.and_false(a: Bool) -> {Bool.and(a, False{}) == False{} : Bool}:
+  match a:
+    case True{}:
+      {==}
+    case False{}:
+      {==}
+
+def page_part_short(ms, f, bs, n, off, len, s, pre, e):
+  %Equal.sym(Bool, Nat.is_eq(Bytes.len(Bytes.slice(bs, U32.to_nat(off), U32.to_nat(len))),
+    U32.to_nat(len)), False{}, e) :
+    {em.ok(L.page.blk(World, w.tx(s, Bytes.append(pre, Bytes.slice(bs, U32.to_nat(off),
+      U32.to_nat(len))), ms), Bool.and(Nat.is_eq(Bytes.len(bs), U32.to_nat(n)), _))) == False{} :
+      Bool}
+  %Equal.sym(Bool, Bool.and(Nat.is_eq(Bytes.len(bs), U32.to_nat(n)), False{}), False{},
+    wl.and_false(Nat.is_eq(Bytes.len(bs), U32.to_nat(n)))) :
+    {em.ok(L.page.blk(World, w.tx(s, Bytes.append(pre, Bytes.slice(bs, U32.to_nat(off),
+      U32.to_nat(len))), ms), _)) == False{} : Bool}
+  wl.blk_short(w.tx(s, Bytes.append(pre, Bytes.slice(bs, U32.to_nat(off), U32.to_nat(len))), ms))
 
 law fread_model:
   for +f: Bytes()

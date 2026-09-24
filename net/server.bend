@@ -325,8 +325,12 @@ def miss(head: Bool) -> Bytes():
   Http.write(head, False{}, True{}, 404, [Http.Header{"content-type", "text/plain; charset=utf-8"}],
     "404 Not Found\n")
 
-def fhead(pre: Bytes(), n: U32) -> Bytes():
-  Bytes.concat([pre, U32.show(n), "\r\nconnection: keep-alive\r\n\r\n"])
+# a file's head and all of it: this server answers no condition or range
+def fhead.all(pre: Bytes(), +n: U32) -> L.Fr:
+  L.Fr{Bytes.concat([pre, U32.show(n), "\r\nconnection: keep-alive\r\n\r\n"]), 0, n}
+
+def fhead(pre: Bytes(), ask: List<&2, Wr.Field>, head: Bool, n: U32, mt: U32) -> L.Fr:
+  fhead.all(pre, n)
 
 def sent.ok(m: L.Put(Socket)) -> Socket & Bool:
   (s, r) = m
@@ -498,8 +502,8 @@ def file.shut(closing: Bool, g: L.Seg) -> List<&2, L.Seg>:
 
 def file.segs(+head: Bool, +closing: Bool, +v10: Bool, hs: List<&2, Http.Header>, g: L.Seg) -> List<&2, L.Seg>:
   match g:
-    case L.Page{root, path, ct, h}:
-      file.shut(closing, L.Page{root, path, Http.fhead.pre(ct, hs), h})
+    case L.Page{root, path, ct, ask, h}:
+      file.shut(closing, L.Page{root, path, Http.fhead.pre(ct, hs), ask, h})
     case _:
       [L.Raw{Http.write(head, closing, v10, 404, [Http.Header{"content-type", "text/plain; charset=utf-8"}],
         "404 Not Found\n")}]

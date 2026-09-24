@@ -12,6 +12,7 @@ import ./b64.bend as B64
 import ./ws.bend as Ws
 import ./spec.bend as Spec
 import ./world.bend as W
+import ./cond.bend as C
 
 # LAW: chunking does not change the parse. Feeding a chunk and then
 # another one lands exactly where feeding the two joined would have.
@@ -983,12 +984,439 @@ law page_is_spec:
   for head: Bool
   {Eng.page(root, t, head) == Eng.page.spec(root, Bytes.to_list(t), head) : L.Seg}
 
-# LAW: a file's head, kept ready per type, is the head reply.n.head
-# builds from the type's name, for every extension and every length.
+# LAW: a file's head, kept ready per type, is the head mime.pre builds
+# from the type's name, for every extension; and the reply to a request
+# that asks nothing of the file (no condition, no range) is all of it,
+# after a 200 head that states its length, its mtime, its entity-tag and
+# that ranges of it are served, whatever the size and the mtime, GET or
+# HEAD (cond.bend's hd.full.is says those bytes piece by piece).
 law file_head_is_built:
   for +e: Bytes()
+  for head: Bool
   for +n: U32
-  {Eng.h.fhead(Eng.mime.head(e), n) == Eng.reply.n.head("200 OK", Eng.mime.name(e), n) : Bytes()}
+  for +mt: U32
+  {Eng.h.fhead(Eng.mime.head(e), Nil{}, head, n, mt) ==
+    L.Fr{C.hd.full.is(Eng.mime.pre(Eng.mime.name(e)), n, mt), 0, n} : L.Fr}
+
+# Conditional and range requests
+# ==============================
+#
+# cond.bend decides what a GET or HEAD of a file gets from the request's
+# fields and the file's size and mtime (RFC 9110 8.8, 13, 14). These laws
+# say it, for every size and every mtime unless a vector says otherwise.
+
+# LAW: Last-Modified reads back. Every time whose year IMF-fixdate's
+# four digits hold (every year before 10000: every 32-bit mtime, the
+# last being in 2106) is written as an IMF-fixdate that date.read reads
+# as that same time: the calendar, the digits, the weekday and month
+# names and the reader agree.
+law date_round_trip:
+  for +t: Nat
+  for +ey: {C.year.ok(t) == True{} : Bool}
+  {C.date.read(C.date.fmt(t)) == Some{t} : Maybe<&2, Nat>}
+
+# LAW: the calendar, by known dates (days since 1970-01-01, and the hour,
+# minute and second): RFC 9110's own example; two leap days, 2000 being
+# a leap year though a century; 2100 not being one; the epoch; the last
+# 32-bit second.
+law date_rfc_example:
+  {Bytes.concat(C.date.ds(9075n, 8n, 49n, 37n)) == "Sun, 06 Nov 1994 08:49:37 GMT" : Bytes()}
+
+law date_leap_2000:
+  {Bytes.concat(C.date.ds(11016n, 0n, 0n, 0n)) == "Tue, 29 Feb 2000 00:00:00 GMT" : Bytes()}
+
+law date_leap_2024:
+  {Bytes.concat(C.date.ds(19782n, 12n, 34n, 56n)) == "Thu, 29 Feb 2024 12:34:56 GMT" : Bytes()}
+
+law date_no_leap_2100:
+  {Bytes.concat(C.date.ds(47541n, 0n, 0n, 0n)) == "Mon, 01 Mar 2100 00:00:00 GMT" : Bytes()}
+
+law date_epoch:
+  {Bytes.concat(C.date.ds(0n, 0n, 0n, 0n)) == "Thu, 01 Jan 1970 00:00:00 GMT" : Bytes()}
+
+law date_year_end:
+  {Bytes.concat(C.date.ds(1095n, 23n, 59n, 59n)) == "Sun, 31 Dec 1972 23:59:59 GMT" : Bytes()}
+
+law date_last_u32:
+  {Bytes.concat(C.date.ds(49710n, 6n, 28n, 15n)) == "Sun, 07 Feb 2106 06:28:15 GMT" : Bytes()}
+
+# LAW: the three forms a recipient accepts (RFC 9110 5.6.7) read as the
+# same date, and the calendar places it; a day no month has, an hour 24,
+# a year before 1970 and what is not a date at all read as nothing.
+law read_imf:
+  {C.dt.is(C.run(C.imf.toks(), Some{(C.dt0(), "Sun, 06 Nov 1994 08:49:37 GMT")}), 6n, 10n, 1994n, 8n, 49n, 37n) ==
+    True{} : Bool}
+
+law read_rfc850:
+  {C.dt.is(C.run(C.rfc850.toks(), Some{(C.dt0(), "Sunday, 06-Nov-94 08:49:37 GMT")}), 6n, 10n, 1994n, 8n, 49n, 37n) ==
+    True{} : Bool}
+
+law read_asctime:
+  {C.dt.is(C.run(C.asctime.toks(), Some{(C.dt0(), "Sun Nov  6 08:49:37 1994")}), 6n, 10n, 1994n, 8n, 49n, 37n) ==
+    True{} : Bool}
+
+law days_rfc_example:
+  {C.mdays(C.mlens(C.leap(24n)), 10n, 5n) == Some{309n} : Maybe<&2, Nat>}
+
+law days_leap_2000:
+  {C.mdays(C.mlens(C.leap(30n)), 1n, 28n) == Some{59n} : Maybe<&2, Nat>}
+
+law no_feb_30:
+  {C.days.of(54n, (1n, 29n)) == None{} : Maybe<&2, Nat>}
+
+law no_feb_29_2100:
+  {C.days.of(130n, (1n, 28n)) == None{} : Maybe<&2, Nat>}
+
+law no_hour_24:
+  {C.stamp(2024n, 1n, 29n, 24n, 34n, 56n) == None{} : Maybe<&2, Nat>}
+
+law not_a_date:
+  {C.date.read("yesterday") == None{} : Maybe<&2, Nat>}
+
+law before_epoch:
+  {C.date.read("Sun, 06 Nov 1969 08:49:37 GMT") == None{} : Maybe<&2, Nat>}
+
+# LAW: the entity-tag is nginx's, the mtime and the size in hex; a list of
+# tags matches weakly (W/ or not) wherever the file's tag is in it, "*"
+# matches any file, and strongly only the tag as sent.
+law etag_hex:
+  {C.etag.of(255, 4096) == "\"ff-1000\"" : Bytes()}
+
+law etag_zero:
+  {C.etag.of(0, 0) == "\"0-0\"" : Bytes()}
+
+law tags_same:
+  {C.tags.hit("\"ff-1000\"", "\"ff-1000\"", False{}) == True{} : Bool}
+
+law tags_weak:
+  {C.tags.hit("W/\"ff-1000\"", "\"ff-1000\"", False{}) == True{} : Bool}
+
+law tags_weak_not_strong:
+  {C.tags.hit("W/\"ff-1000\"", "\"ff-1000\"", True{}) == False{} : Bool}
+
+law tags_in_list:
+  {C.tags.hit("\"x\", W/\"ff-1000\"", "\"ff-1000\"", False{}) == True{} : Bool}
+
+law tags_other:
+  {C.tags.hit("\"ff-1001\"", "\"ff-1000\"", False{}) == False{} : Bool}
+
+law tags_unquoted:
+  {C.tags.hit("ff-1000", "\"ff-1000\"", False{}) == False{} : Bool}
+
+law tags_star:
+  {C.tags.hit("*", "\"ff-1000\"", True{}) == True{} : Bool}
+
+# LAW: the fields read: the six the decision reads, by name, their values
+# trimmed; a list field's lines joined, a single one's first kept; any
+# other field passed by.
+law ask_read:
+  {C.ask.of([Wr.Field{"host", " x"}, Wr.Field{"range", " bytes=0-4"}, Wr.Field{"if-none-match", " \"a\" "},
+    Wr.Field{"if-none-match", "\"b\""}, Wr.Field{"range", "bytes=9-"}, Wr.Field{"if-modified-since", " x"}]) ==
+    C.Ask{None{}, None{}, Some{"\"a\", \"b\""}, Some{"x"}, Some{"bytes=0-4"}, None{}} : C.Ask}
+
+# LAW: the heads, built in place, are their pieces joined: a 304 states
+# the validators and no length (it has no body), and a 206 its type, the
+# length of its part, the Content-Range of it and the validators.
+law same_head_is_built:
+  for +mt: U32
+  for +n: U32
+  {C.hd.same(mt, n) == C.hd.same.is(mt, n) : Bytes()}
+
+law part_head_is_built:
+  for +ct: Bytes()
+  for +a: Nat
+  for +b: Nat
+  for +n: U32
+  for +mt: U32
+  {C.hd.part(ct, a, b, n, mt) == C.hd.part.is(ct, a, b, n, mt) : Bytes()}
+
+# LAW: the heads, byte for byte, for a 10-byte text file last written at
+# the epoch: the 200, the 304, the 206 of bytes 2 to 5, the 416 (with its
+# line of text) and the 412 of a HEAD (without).
+law head_vectors:
+  {[C.hd.full("HTTP/1.1 200 OK\r\ncontent-type: text/plain\r\ncontent-length: ", 10, 0),
+    C.hd.same(0, 10),
+    C.hd.part("HTTP/1.1 200 OK\r\ncontent-type: text/plain\r\ncontent-length: ", 2n, 5n, 10, 0),
+    C.hd.nopart(10, False{}), C.hd.fails(True{})] ==
+    ["HTTP/1.1 200 OK\r\ncontent-type: text/plain\r\ncontent-length: 10\r\nlast-modified: Thu, 01 Jan 1970 00:00:00 GMT\r\netag: \"0-a\"\r\naccept-ranges: bytes\r\nconnection: keep-alive\r\n\r\n",
+      "HTTP/1.1 304 Not Modified\r\nlast-modified: Thu, 01 Jan 1970 00:00:00 GMT\r\netag: \"0-a\"\r\nconnection: keep-alive\r\n\r\n",
+      "HTTP/1.1 206 Partial Content\r\ncontent-type: text/plain\r\ncontent-length: 4\r\ncontent-range: bytes 2-5/10\r\nlast-modified: Thu, 01 Jan 1970 00:00:00 GMT\r\netag: \"0-a\"\r\nconnection: keep-alive\r\n\r\n",
+      "HTTP/1.1 416 Range Not Satisfiable\r\ncontent-type: text/plain\r\ncontent-length: 22\r\ncontent-range: bytes */10\r\nconnection: keep-alive\r\n\r\nrange not satisfiable\n",
+      "HTTP/1.1 412 Precondition Failed\r\ncontent-type: text/plain\r\ncontent-length: 20\r\nconnection: keep-alive\r\n\r\n"] :
+    List<&2, Bytes()>}
+
+# LAW: a 304 is its head and nothing else: no byte of the file follows it,
+# GET or HEAD.
+law not_modified_no_body:
+  for ct: Bytes()
+  for fs: List<&2, Wr.Field>
+  for head: Bool
+  for +n: U32
+  for +mt: U32
+  for e: {C.decide(C.ask.of(fs), mt, n) == C.Same{} : C.Got}
+  {Eng.h.fhead(ct, fs, head, n, mt) == L.Fr{C.hd.same.is(mt, n), 0, 0} : L.Fr}
+
+# LAW: If-None-Match wins: with it present, If-Modified-Since is not read,
+# whatever it says (RFC 9110 13.1.3).
+law inm_over_ims:
+  for im: Maybe<&2, Bytes()>
+  for ius: Maybe<&2, Bytes()>
+  for v: Bytes()
+  for ims1: Maybe<&2, Bytes()>
+  for ims2: Maybe<&2, Bytes()>
+  for rg: Maybe<&2, Bytes()>
+  for ir: Maybe<&2, Bytes()>
+  for +mt: U32
+  for +n: U32
+  {C.decide(C.Ask{im, ius, Some{v}, ims1, rg, ir}, mt, n) ==
+    C.decide(C.Ask{im, ius, Some{v}, ims2, rg, ir}, mt, n) : C.Got}
+
+# LAW: a list that names the file's tag (weakly), or "*", is a 304, for a
+# GET or a HEAD, whatever the request's other fields but the
+# preconditions.
+law tag_hit_not_modified:
+  for v: Bytes()
+  for ims: Maybe<&2, Bytes()>
+  for rg: Maybe<&2, Bytes()>
+  for ir: Maybe<&2, Bytes()>
+  for +mt: U32
+  for +n: U32
+  for e: {C.tags.hit(v, C.etag.of(mt, n), False{}) == True{} : Bool}
+  {C.decide(C.Ask{None{}, None{}, Some{v}, ims, rg, ir}, mt, n) == C.Same{} : C.Got}
+
+law star_not_modified:
+  for ims: Maybe<&2, Bytes()>
+  for rg: Maybe<&2, Bytes()>
+  for ir: Maybe<&2, Bytes()>
+  for +mt: U32
+  for +n: U32
+  {C.decide(C.Ask{None{}, None{}, Some{"*"}, ims, rg, ir}, mt, n) == C.Same{} : C.Got}
+
+# LAW: If-Modified-Since: a date at or after the mtime is a 304; the
+# file's own Last-Modified, sent back, is one; a date before it, or one
+# that does not read, is as if the field were absent.
+law ims_not_modified:
+  for v: Bytes()
+  for rg: Maybe<&2, Bytes()>
+  for ir: Maybe<&2, Bytes()>
+  for +mt: U32
+  for +n: U32
+  for d: Nat
+  for e: {C.date.read(v) == Some{d} : Maybe<&2, Nat>}
+  for le: {Nat.is_le(U32.to_nat(mt), d) == True{} : Bool}
+  {C.decide(C.Ask{None{}, None{}, None{}, Some{v}, rg, ir}, mt, n) == C.Same{} : C.Got}
+
+law ims_echo:
+  for rg: Maybe<&2, Bytes()>
+  for ir: Maybe<&2, Bytes()>
+  for +mt: U32
+  for +n: U32
+  for +ey: {C.year.ok(U32.to_nat(mt)) == True{} : Bool}
+  {C.decide(C.Ask{None{}, None{}, None{}, Some{C.date.fmt(U32.to_nat(mt))}, rg, ir}, mt, n) == C.Same{} : C.Got}
+
+law ims_changed:
+  for v: Bytes()
+  for rg: Maybe<&2, Bytes()>
+  for ir: Maybe<&2, Bytes()>
+  for +mt: U32
+  for +n: U32
+  for d: Nat
+  for e: {C.date.read(v) == Some{d} : Maybe<&2, Nat>}
+  for gt: {Nat.is_le(U32.to_nat(mt), d) == False{} : Bool}
+  {C.decide(C.Ask{None{}, None{}, None{}, Some{v}, rg, ir}, mt, n) ==
+    C.decide(C.Ask{None{}, None{}, None{}, None{}, rg, ir}, mt, n) : C.Got}
+
+law ims_unreadable:
+  for v: Bytes()
+  for rg: Maybe<&2, Bytes()>
+  for ir: Maybe<&2, Bytes()>
+  for +mt: U32
+  for +n: U32
+  for e: {C.date.read(v) == None{} : Maybe<&2, Nat>}
+  {C.decide(C.Ask{None{}, None{}, None{}, Some{v}, rg, ir}, mt, n) ==
+    C.decide(C.Ask{None{}, None{}, None{}, None{}, rg, ir}, mt, n) : C.Got}
+
+# LAW: the preconditions: If-Match that does not name the file's tag
+# (strongly) is a 412, and so is If-Unmodified-Since before the mtime;
+# one that does not read is as if absent.
+law if_match_fails:
+  for v: Bytes()
+  for ius: Maybe<&2, Bytes()>
+  for inm: Maybe<&2, Bytes()>
+  for ims: Maybe<&2, Bytes()>
+  for rg: Maybe<&2, Bytes()>
+  for ir: Maybe<&2, Bytes()>
+  for +mt: U32
+  for +n: U32
+  for e: {C.tags.hit(v, C.etag.of(mt, n), True{}) == False{} : Bool}
+  {C.decide(C.Ask{Some{v}, ius, inm, ims, rg, ir}, mt, n) == C.Fails{} : C.Got}
+
+law ius_fails:
+  for v: Bytes()
+  for inm: Maybe<&2, Bytes()>
+  for ims: Maybe<&2, Bytes()>
+  for rg: Maybe<&2, Bytes()>
+  for ir: Maybe<&2, Bytes()>
+  for +mt: U32
+  for +n: U32
+  for d: Nat
+  for e: {C.date.read(v) == Some{d} : Maybe<&2, Nat>}
+  for gt: {Nat.is_le(U32.to_nat(mt), d) == False{} : Bool}
+  {C.decide(C.Ask{None{}, Some{v}, inm, ims, rg, ir}, mt, n) == C.Fails{} : C.Got}
+
+law ius_unreadable:
+  for v: Bytes()
+  for inm: Maybe<&2, Bytes()>
+  for ims: Maybe<&2, Bytes()>
+  for rg: Maybe<&2, Bytes()>
+  for ir: Maybe<&2, Bytes()>
+  for +mt: U32
+  for +n: U32
+  for e: {C.date.read(v) == None{} : Maybe<&2, Nat>}
+  {C.decide(C.Ask{None{}, Some{v}, inm, ims, rg, ir}, mt, n) ==
+    C.decide(C.Ask{None{}, None{}, inm, ims, rg, ir}, mt, n) : C.Got}
+
+# LAW: a range is satisfiable exactly when its first byte is in the file:
+# a first-pos at or past the end is none, one before it is a range from
+# there to the last-pos or the end, whichever is first; a suffix of zero
+# is none, and of k is the last k bytes, or the whole file when shorter.
+law range_from_unsat:
+  for a: Nat
+  for mb: Maybe<&2, Nat>
+  for +n: Nat
+  for e: {Nat.is_lt(a, n) == False{} : Bool}
+  {C.want(C.From{a, mb}, n) == C.Unsat{} : C.Want}
+
+law range_from:
+  for +a: Nat
+  for +n: Nat
+  for e: {Nat.is_lt(a, n) == True{} : Bool}
+  {C.want(C.From{a, None{}}, n) == C.Span{a, Nat.sub(n, 1n)} : C.Want}
+
+law range_from_to:
+  for +a: Nat
+  for +b: Nat
+  for +n: Nat
+  for e: {Nat.is_lt(a, n) == True{} : Bool}
+  for le: {Nat.is_le(a, b) == True{} : Bool}
+  {C.want(C.From{a, Some{b}}, n) == C.Span{a, Nat.min(b, Nat.sub(n, 1n))} : C.Want}
+
+law range_suffix_zero:
+  for +n: Nat
+  {C.want(C.Last{0n}, n) == C.Unsat{} : C.Want}
+
+law range_suffix:
+  for +j: Nat
+  for +m: Nat
+  {C.want(C.Last{1n+j}, 1n+m) == C.Span{Nat.sub(m, Nat.min(j, m)), m} : C.Want}
+
+law range_vectors:
+  {[C.want(C.Last{50n}, 100n), C.want(C.Last{200n}, 100n), C.want(C.From{0n, Some{500n}}, 100n),
+    C.want(C.From{100n, None{}}, 100n), C.want(C.From{99n, None{}}, 100n), C.want(C.From{5n, Some{9n}}, 100n)] ==
+    [C.Span{50n, 99n}, C.Span{0n, 99n}, C.Span{0n, 99n}, C.Unsat{}, C.Span{99n, 99n}, C.Span{5n, 9n}] :
+    List<&2, C.Want>}
+
+# LAW: every range the decision serves is in the file: its first byte at
+# or before its last, and its last before the file's end. So the 206's
+# Content-Range "bytes a-b/n" never names a byte the file lacks.
+law part_in_file:
+  for k: C.Ask
+  for +mt: U32
+  for +n: U32
+  for a: Nat
+  for b: Nat
+  for e: {C.decide(k, mt, n) == C.Part{a, b} : C.Got}
+  {Nat.is_le(a, b) == True{} : Bool} & {Nat.is_lt(b, U32.to_nat(n)) == True{} : Bool}
+
+# LAW: the Range field: one satisfiable range is its 206; none satisfiable
+# is a 416; two or more satisfiable are the whole file (a multipart reply
+# is one this engine does not make); a field that is not a ranges-
+# specifier is ignored; If-Range lets the range through only when it is
+# the file's validator.
+law one_range:
+  for v: Bytes()
+  for sp: C.Spec
+  for +mt: U32
+  for +n: U32
+  for +p: Nat
+  for a: Nat
+  for b: Nat
+  for e: {C.rg.parse(v) == Some{[sp]} : Maybe<&2, List<&2, C.Spec>>}
+  for w: {C.want(sp, 1n+p) == C.Span{a, b} : C.Want}
+  {C.part(Some{v}, None{}, mt, n, 1n+p) == C.Part{a, b} : C.Got}
+
+law no_range:
+  for v: Bytes()
+  for sp: C.Spec
+  for +mt: U32
+  for +n: U32
+  for +p: Nat
+  for e: {C.rg.parse(v) == Some{[sp]} : Maybe<&2, List<&2, C.Spec>>}
+  for w: {C.want(sp, 1n+p) == C.Unsat{} : C.Want}
+  {C.part(Some{v}, None{}, mt, n, 1n+p) == C.NoPart{} : C.Got}
+
+law two_ranges:
+  for v: Bytes()
+  for s1: C.Spec
+  for s2: C.Spec
+  for +mt: U32
+  for +n: U32
+  for +p: Nat
+  for a: Nat
+  for b: Nat
+  for c: Nat
+  for d: Nat
+  for e: {C.rg.parse(v) == Some{[s1, s2]} : Maybe<&2, List<&2, C.Spec>>}
+  for w1: {C.want(s1, 1n+p) == C.Span{a, b} : C.Want}
+  for w2: {C.want(s2, 1n+p) == C.Span{c, d} : C.Want}
+  {C.part(Some{v}, None{}, mt, n, 1n+p) == C.Full{} : C.Got}
+
+law range_ignored:
+  for v: Bytes()
+  for n: Nat
+  for ir: Maybe<&2, Bytes()>
+  for +mt: U32
+  for +n32: U32
+  for e: {C.rg.parse(v) == None{} : Maybe<&2, List<&2, C.Spec>>}
+  {C.part(Some{v}, ir, mt, n32, n) == C.Full{} : C.Got}
+
+law if_range_stale:
+  for v: Bytes()
+  for w: Bytes()
+  for +mt: U32
+  for +n: U32
+  for +p: Nat
+  for e: {C.ir.ok(w, mt, n) == False{} : Bool}
+  {C.part(Some{v}, Some{w}, mt, n, 1n+p) == C.Full{} : C.Got}
+
+law if_range_fresh:
+  for v: Bytes()
+  for w: Bytes()
+  for +mt: U32
+  for +n: U32
+  for +p: Nat
+  for e: {C.ir.ok(w, mt, n) == True{} : Bool}
+  {C.part(Some{v}, Some{w}, mt, n, 1n+p) == C.part(Some{v}, None{}, mt, n, 1n+p) : C.Got}
+
+law parse_vectors:
+  {[C.rg.parse("bytes=0-4"), C.rg.parse("bytes=5-"), C.rg.parse("bytes=-5"), C.rg.parse("Bytes=0-1, 4-5"),
+    C.rg.parse("bytes=0-1,"), C.rg.parse("bytes=5-3"), C.rg.parse("bytes=abc"), C.rg.parse("bytes="),
+    C.rg.parse("items=0-1"), C.rg.parse("bytes=0 - 5")] ==
+    [Some{[C.From{0n, Some{4n}}]}, Some{[C.From{5n, None{}}]}, Some{[C.Last{5n}]},
+      Some{[C.From{0n, Some{1n}}, C.From{4n, Some{5n}}]}, Some{[C.From{0n, Some{1n}}]}, None{}, None{},
+      None{}, None{}, None{}] : List<&2, Maybe<&2, List<&2, C.Spec>>>}
+
+# LAW: a 206 frames the part it names: its head says the part's length
+# and "bytes a-b/n", and what follows it is b + 1 - a bytes from a.
+law part_frame:
+  for +ct: Bytes()
+  for head: Bool
+  for +a: Nat
+  for +b: Nat
+  for +n: U32
+  for +mt: U32
+  {C.fr.of(C.Part{a, b}, ct, head, n, mt) ==
+    L.Fr{C.hd.part.is(ct, a, b, n, mt), U32.from_nat(a), U32.from_nat(Nat.sub(1n+b, a))} : L.Fr}
 
 # LAW: SHA-1 is SHA-1. The three vectors of RFC 3174, computed by the
 # checker through a Bend that shifts one bit at a time.
@@ -1554,22 +1982,26 @@ law page_fine:
   for root: Bytes()
   for path: Bytes()
   for ct: Bytes()
+  for ask: List<&2, Wr.Field>
   for head: Bool
   for may: Maybe<&2, Bytes()>
   for sh: Bool
   for st: L.Em<WW.World>
-  {WW.em.fine(W.sim.page(ms, root, path, ct, head, may, sh, st)) == True{} : Bool}
+  {WW.em.fine(W.sim.page(ms, root, path, ct, ask, head, may, sh, st)) == True{} : Bool}
 
 # LAW: a file's bytes. At a peer that takes what it is sent, a GET of a
 # file the root has (under 4 GiB) puts on the wire what waited in front
-# of it, the file's head, and then the file's own bytes, every one and
-# nothing else, by sendfile; and a sendfile or a head that did not go
+# of it, the head h.fhead framed from the file's size and what the
+# request asked, and then the part of the file it named -- the whole
+# file, a range, or nothing -- every byte of that part and nothing else,
+# by sendfile or with the head; and a sendfile or a head that did not go
 # out ends the connection with nothing after it.
 law page_wire:
   for +ms: U32
   for root: Bytes()
   for path: Bytes()
   for +ct: Bytes()
+  for +ask: List<&2, Wr.Field>
   for may: Maybe<&2, Bytes()>
   for +sh: Bool
   for +rd: List<&2, WW.Rd>
@@ -1578,12 +2010,49 @@ law page_wire:
   for +out: Bytes()
   for +acc: Bytes()
   for +body: Bytes()
+  for +hd: Bytes()
+  for +off: U32
+  for +len: U32
   for ef: {WW.w.find(fs, path) == Done{body} : Result<&1, &1, U32 & String, Bytes()>}
-  for en: {U32.to_nat(U32.from_nat(Bytes.len(body))) == Bytes.len(body) : Nat}
-  {W.sim.page(ms, root, path, ct, False{}, may, sh, L.Em{WW.eager(rd, now, fs, out), acc, True{}}) ==
-    L.Em{WW.eager(rd, now, fs, Bytes.append(Bytes.append(out,
-      Bytes.append(acc, Eng.h.shut(sh, Eng.h.fhead(ct, U32.from_nat(Bytes.len(body)))))), body)),
-      "", True{}} : L.Em<WW.World>}
+  for +en: {U32.to_nat(U32.from_nat(Bytes.len(body))) == Bytes.len(body) : Nat}
+  for efr: {Eng.h.fhead(ct, ask, False{}, U32.from_nat(Bytes.len(body)), 0) == L.Fr{hd, off, len} : L.Fr}
+  for +ep: {WW.wl.part(body, off, len) == True{} : Bool}
+  {W.sim.page(ms, root, path, ct, ask, False{}, may, sh, L.Em{WW.eager(rd, now, fs, out), acc, True{}}) ==
+    L.Em{WW.eager(rd, now, fs, Bytes.append(Bytes.append(out, Bytes.append(acc, Eng.h.shut(sh, hd))),
+      WW.w.fbytes(body, off, len))), "", True{}} : L.Em<WW.World>}
+
+# LAW: a range's bytes. At a peer that takes what it is sent, a GET of a
+# file the root has (under 4 GiB) that the request's fields decide is the
+# range a to b puts on the wire what waited in front of it, the 206 head
+# that names that range, and then exactly the file's bytes a to b, every
+# one and nothing else. (That a and b are in the file is part_in_file;
+# that the numbers fit a 32-bit offset and length is en, ea and el, as
+# page_wire has en.)
+law range_wire:
+  for +ms: U32
+  for root: Bytes()
+  for path: Bytes()
+  for +ct: Bytes()
+  for +ask: List<&2, Wr.Field>
+  for may: Maybe<&2, Bytes()>
+  for +sh: Bool
+  for +rd: List<&2, WW.Rd>
+  for +now: Nat
+  for +fs: List<&2, WW.Fil>
+  for +out: Bytes()
+  for +acc: Bytes()
+  for +body: Bytes()
+  for +a: Nat
+  for +b: Nat
+  for ef: {WW.w.find(fs, path) == Done{body} : Result<&1, &1, U32 & String, Bytes()>}
+  for +en: {U32.to_nat(U32.from_nat(Bytes.len(body))) == Bytes.len(body) : Nat}
+  for +er: {C.decide(C.ask.of(ask), 0, U32.from_nat(Bytes.len(body))) == C.Part{a, b} : C.Got}
+  for +ea: {U32.to_nat(U32.from_nat(a)) == a : Nat}
+  for +el: {U32.to_nat(U32.from_nat(Nat.sub(1n+b, a))) == Nat.sub(1n+b, a) : Nat}
+  {W.sim.page(ms, root, path, ct, ask, False{}, may, sh, L.Em{WW.eager(rd, now, fs, out), acc, True{}}) ==
+    L.Em{WW.eager(rd, now, fs, Bytes.append(Bytes.append(out, Bytes.append(acc,
+      Eng.h.shut(sh, C.hd.part.is(ct, a, b, U32.from_nat(Bytes.len(body)), 0)))),
+      String.take(String.drop(body, a), Nat.sub(1n+b, a)))), "", True{}} : L.Em<WW.World>}
 
 law page_fail:
   for s: WW.World
@@ -1594,10 +2063,11 @@ law page_fail:
 law page_head_fail:
   for +ms: U32
   for f: Bytes()
-  for n: U32
+  for off: U32
+  for len: U32
   for s: WW.World
   for e: U32 & String
-  {WW.sim.headed(ms, f, n, (s, Fail{e})) == L.Em{s, "", False{}} : L.Em<WW.World>}
+  {WW.sim.headed(ms, f, off, len, (s, Fail{e})) == L.Em{s, "", False{}} : L.Em<WW.World>}
 
 # LAW: bounded buffering, the head. A read that leaves a head in
 # progress leaves it with at most head.cap() bytes since the read it
@@ -1838,8 +2308,10 @@ law gz_page_untaken:
   for +root: Bytes()
   for +path: Bytes()
   for +ct: Bytes()
+  for +ask: List<&2, Wr.Field>
   for +h: Bool
-  {Eng.z.seg(g, False{}, head, L.Page{root, path, ct, h}) == L.Page{root, path, vhead(g, ct), h} : L.Seg}
+  {Eng.z.seg(g, False{}, head, L.Page{root, path, ct, ask, h}) == L.Page{root, path, vhead(g, ct), ask, h} :
+    L.Seg}
 
 # the same for a fixed reply: its bytes, or its head, the vary line and
 # its body, when it could have been compressed
@@ -1873,20 +2345,20 @@ def gz6() -> Eng.Gz:
   Eng.Gz{True{}, 6n, 0n, False{}}
 
 law gz_vectors:
-  {Eng.z.seg(gz6(), True{}, False{}, L.Page{"www", "a.html", Eng.mime.head("html"), False{}}) ==
+  {Eng.z.seg(gz6(), True{}, False{}, L.Page{"www", "a.html", Eng.mime.head("html"), Nil{}, False{}}) ==
     L.Page{"www", "\u{1}6-a.html",
       "HTTP/1.1 200 OK\r\ncontent-type: text/html; charset=utf-8\r\ncontent-encoding: gzip\r\nvary: accept-encoding\r\ncontent-length: ",
-      False{}} : L.Seg} &
-  {Eng.z.seg(gz6(), False{}, False{}, L.Page{"www", "a.html", Eng.mime.head("html"), False{}}) ==
+      Nil{}, False{}} : L.Seg} &
+  {Eng.z.seg(gz6(), False{}, False{}, L.Page{"www", "a.html", Eng.mime.head("html"), Nil{}, False{}}) ==
     L.Page{"www", "a.html",
       "HTTP/1.1 200 OK\r\ncontent-type: text/html; charset=utf-8\r\nvary: accept-encoding\r\ncontent-length: ",
-      False{}} : L.Seg} &
-  {Eng.z.seg(gz6(), True{}, True{}, L.Page{"www", "a.html", Eng.mime.head("html"), True{}}) ==
+      Nil{}, False{}} : L.Seg} &
+  {Eng.z.seg(gz6(), True{}, True{}, L.Page{"www", "a.html", Eng.mime.head("html"), Nil{}, True{}}) ==
     L.Page{"www", "a.html",
       "HTTP/1.1 200 OK\r\ncontent-type: text/html; charset=utf-8\r\nvary: accept-encoding\r\ncontent-length: ",
-      True{}} : L.Seg} &
-  {Eng.z.seg(gz6(), True{}, False{}, L.Page{"www", "a.png", Eng.mime.head("png"), False{}}) ==
-    L.Page{"www", "a.png", Eng.mime.head("png"), False{}} : L.Seg} &
+      Nil{}, True{}} : L.Seg} &
+  {Eng.z.seg(gz6(), True{}, False{}, L.Page{"www", "a.png", Eng.mime.head("png"), Nil{}, False{}}) ==
+    L.Page{"www", "a.png", Eng.mime.head("png"), Nil{}, False{}} : L.Seg} &
   {Eng.z.raw(gz6(), False{}, False{}, Eng.resp.root()) ==
     "HTTP/1.1 200 OK\r\ncontent-type: text/plain\r\ncontent-length: 10\r\nconnection: keep-alive\r\nvary: accept-encoding\r\n\r\nbend-http\n" : Bytes()} &
   {Eng.z.raw(gz6(), True{}, False{}, Eng.resp.missing()) == Eng.resp.missing() : Bytes()}

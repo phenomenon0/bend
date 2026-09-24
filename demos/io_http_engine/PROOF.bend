@@ -19,6 +19,7 @@ import ./b64.bend as B64
 import ./ws.bend as Ws
 import ./spec.bend as Spec
 import ./world.bend as W
+import ./cond.bend as C
 import ./LAWS.bend as Laws
 
 def Laws.feed_split(a, b, p):
@@ -2482,38 +2483,38 @@ def pg.fin(root: Bytes(), +r: Bytes(), head: Bool, +c0: U32, k: Eng.Cut,
   lead: {pg.cut.lead(k) == True{} : Bool}, j: {pg.cut.join(k) == Bytes.to_list(r) : List<&2, U32>},
   +ok: {Eng.fnames.ok(False{}, Eng.segs.out(k)) == True{} : Bool},
   x: {Eng.ext.buf(r, Nil{}) == pg.cut.ext(k, Nil{}) : List<&2, U32>}) ->
-  {L.Page{root, r, Eng.mime.head(Bytes.from_list(Eng.ext.buf(r, Nil{}))), head} ==
+  {L.Page{root, r, Eng.mime.head(Bytes.from_list(Eng.ext.buf(r, Nil{}))), Nil{}, head} ==
     Eng.page.pick(root, Eng.fnames.guard(False{}, Eng.norm(Eng.segs.out(Eng.segs.at(True{}, c0, k)))), head) :
     L.Seg}:
   match k:
     case Eng.Cut{Nil{}, rs}:
-      no({L.Page{root, r, Eng.mime.head(Bytes.from_list(Eng.ext.buf(r, Nil{}))), head} ==
+      no({L.Page{root, r, Eng.mime.head(Bytes.from_list(Eng.ext.buf(r, Nil{}))), Nil{}, head} ==
         Eng.page.pick(root, Eng.fnames.guard(False{}, Eng.norm(Eng.segs.out(Eng.segs.at(True{}, c0,
           Eng.Cut{Nil{}, rs})))), head) : L.Seg}, lead)
     case Eng.Cut{Con{+h, +u}, +rs}:
       %Equal.sym(Maybe<&2, List<&2, List<&2, U32>>>, Eng.norm(Con{Con{h, u}, rs}), Some{Con{Con{h, u}, rs}},
         pg.norm(Con{Con{h, u}, rs}, ok)) :
-        {L.Page{root, r, Eng.mime.head(Bytes.from_list(Eng.ext.buf(r, Nil{}))), head} ==
+        {L.Page{root, r, Eng.mime.head(Bytes.from_list(Eng.ext.buf(r, Nil{}))), Nil{}, head} ==
           Eng.page.pick(root, Eng.fnames.guard(False{}, _), head) : L.Seg}
       %Equal.sym(Bool, Eng.fnames.ok(False{}, Con{Con{h, u}, rs}), True{}, ok) :
-        {L.Page{root, r, Eng.mime.head(Bytes.from_list(Eng.ext.buf(r, Nil{}))), head} ==
+        {L.Page{root, r, Eng.mime.head(Bytes.from_list(Eng.ext.buf(r, Nil{}))), Nil{}, head} ==
           Eng.page.pick(root, Eng.fnames.keep(Con{Con{h, u}, rs}, _), head) : L.Seg}
       %Equal.sym(List<&2, U32>, pg.cut.join(Eng.Cut{Con{h, u}, rs}), Bytes.to_list(r), j) :
-        {L.Page{root, r, Eng.mime.head(Bytes.from_list(Eng.ext.buf(r, Nil{}))), head} ==
+        {L.Page{root, r, Eng.mime.head(Bytes.from_list(Eng.ext.buf(r, Nil{}))), Nil{}, head} ==
           L.Page{root, Bytes.from_list(_),
-            Eng.mime.head(Bytes.from_list(Eng.ext.go(Eng.last(rs, Con{h, u}), Nil{}))), head} : L.Seg}
+            Eng.mime.head(Bytes.from_list(Eng.ext.go(Eng.last(rs, Con{h, u}), Nil{}))), Nil{}, head} : L.Seg}
       %Equal.sym(Bytes(), Bytes.from_list(Bytes.to_list(r)), r, pg.ft(r)) :
-        {L.Page{root, r, Eng.mime.head(Bytes.from_list(Eng.ext.buf(r, Nil{}))), head} ==
-          L.Page{root, _, Eng.mime.head(Bytes.from_list(Eng.ext.go(Eng.last(rs, Con{h, u}), Nil{}))), head} :
+        {L.Page{root, r, Eng.mime.head(Bytes.from_list(Eng.ext.buf(r, Nil{}))), Nil{}, head} ==
+          L.Page{root, _, Eng.mime.head(Bytes.from_list(Eng.ext.go(Eng.last(rs, Con{h, u}), Nil{}))), Nil{}, head} :
           L.Seg}
       %Equal.sym(List<&2, U32>, Eng.ext.buf(r, Nil{}), pg.cut.ext(Eng.Cut{Con{h, u}, rs}, Nil{}), x) :
-        {L.Page{root, r, Eng.mime.head(Bytes.from_list(_)), head} ==
-          L.Page{root, r, Eng.mime.head(Bytes.from_list(Eng.ext.go(Eng.last(rs, Con{h, u}), Nil{}))), head} :
+        {L.Page{root, r, Eng.mime.head(Bytes.from_list(_)), Nil{}, head} ==
+          L.Page{root, r, Eng.mime.head(Bytes.from_list(Eng.ext.go(Eng.last(rs, Con{h, u}), Nil{}))), Nil{}, head} :
           L.Seg}
       %Equal.sym(List<&2, U32>, pg.ext.tail(rs, Con{h, u}, Nil{}), Eng.ext.go(Eng.last(rs, Con{h, u}), Nil{}),
         pg.last(rs, Con{h, u})) :
-        {L.Page{root, r, Eng.mime.head(Bytes.from_list(_)), head} ==
-          L.Page{root, r, Eng.mime.head(Bytes.from_list(Eng.ext.go(Eng.last(rs, Con{h, u}), Nil{}))), head} :
+        {L.Page{root, r, Eng.mime.head(Bytes.from_list(_)), Nil{}, head} ==
+          L.Page{root, r, Eng.mime.head(Bytes.from_list(Eng.ext.go(Eng.last(rs, Con{h, u}), Nil{}))), Nil{}, head} :
           L.Seg}
       {==}
 
@@ -2525,25 +2526,25 @@ def pg.fast.at(root: Bytes(), +c0: U32, +r: Bytes(), head: Bool,
   +er = Bool.and_r(Bool.and(Eng.clean.pick(Eng.ctl(c0), c0), U32.is_eq(c0, 47)), Eng.fast.go(r, True{}), e)
   %Equal.sym(Bool, U32.is_eq(c0, 47), True{}, Bool.and_r(Eng.clean.pick(Eng.ctl(c0), c0), U32.is_eq(c0, 47), ea)) :
     {L.Page{root, String.drop(r, 0n),
-      Eng.mime.head(Bytes.from_list(Eng.ext.buf(r, Eng.ext.step(Nil{}, c0, Bool.or(U32.is_eq(c0, 46), _))))), head} ==
+      Eng.mime.head(Bytes.from_list(Eng.ext.buf(r, Eng.ext.step(Nil{}, c0, Bool.or(U32.is_eq(c0, 46), _))))), Nil{}, head} ==
       Eng.page.pick(root, Eng.fnames.gate(Eng.clean.go(Bytes.to_list(r), Eng.clean.pick(Eng.ctl(c0), c0)),
         Eng.fnames.guard(False{}, Eng.norm(Eng.segs.out(Eng.segs.at(_, c0, pg.K(r)))))), head) : L.Seg}
   %Equal.sym(Bool, Bool.or(U32.is_eq(c0, 46), True{}), True{}, Bool.or_true(U32.is_eq(c0, 46))) :
     {L.Page{root, String.drop(r, 0n),
-      Eng.mime.head(Bytes.from_list(Eng.ext.buf(r, Eng.ext.step(Nil{}, c0, _)))), head} ==
+      Eng.mime.head(Bytes.from_list(Eng.ext.buf(r, Eng.ext.step(Nil{}, c0, _)))), Nil{}, head} ==
       Eng.page.pick(root, Eng.fnames.gate(Eng.clean.go(Bytes.to_list(r), Eng.clean.pick(Eng.ctl(c0), c0)),
         Eng.fnames.guard(False{}, Eng.norm(Eng.segs.out(Eng.segs.at(True{}, c0, pg.K(r)))))), head) : L.Seg}
   %Equal.sym(Bool, Eng.clean.pick(Eng.ctl(c0), c0), True{},
     Bool.and_l(Eng.clean.pick(Eng.ctl(c0), c0), U32.is_eq(c0, 47), ea)) :
-    {L.Page{root, String.drop(r, 0n), Eng.mime.head(Bytes.from_list(Eng.ext.buf(r, Nil{}))), head} ==
+    {L.Page{root, String.drop(r, 0n), Eng.mime.head(Bytes.from_list(Eng.ext.buf(r, Nil{}))), Nil{}, head} ==
       Eng.page.pick(root, Eng.fnames.gate(Eng.clean.go(Bytes.to_list(r), _),
         Eng.fnames.guard(False{}, Eng.norm(Eng.segs.out(Eng.segs.at(True{}, c0, pg.K(r)))))), head) : L.Seg}
   %Equal.sym(Bool, Eng.clean.go(Bytes.to_list(r), True{}), True{}, pg.clean(r, True{})(er)) :
-    {L.Page{root, String.drop(r, 0n), Eng.mime.head(Bytes.from_list(Eng.ext.buf(r, Nil{}))), head} ==
+    {L.Page{root, String.drop(r, 0n), Eng.mime.head(Bytes.from_list(Eng.ext.buf(r, Nil{}))), Nil{}, head} ==
       Eng.page.pick(root, Eng.fnames.gate(_,
         Eng.fnames.guard(False{}, Eng.norm(Eng.segs.out(Eng.segs.at(True{}, c0, pg.K(r)))))), head) : L.Seg}
   %Equal.sym(Bytes(), String.drop(r, 0n), r, pg.drop0(r)) :
-    {L.Page{root, _, Eng.mime.head(Bytes.from_list(Eng.ext.buf(r, Nil{}))), head} ==
+    {L.Page{root, _, Eng.mime.head(Bytes.from_list(Eng.ext.buf(r, Nil{}))), Nil{}, head} ==
       Eng.page.pick(root, Eng.fnames.guard(False{}, Eng.norm(Eng.segs.out(Eng.segs.at(True{}, c0, pg.K(r))))), head) :
       L.Seg}
   pg.fin(root, r, head, c0, pg.K(r), pg.lead(r)(er), pg.join(r, True{})(er), pg.ok(r, True{})(er),
@@ -2572,42 +2573,2146 @@ def Laws.page_is_spec(root, t, head):
   pg.page(root, t, head, Eng.fast(t))({==})
 
 
+# Heads built in place are their pieces
+# =====================================
+#
+# A writer f appends s: whatever the buffer a, f(a) is a followed by s.
+# Writers compose, each appending after the last, and a chain of them
+# appends its pieces joined; so each head cond.bend grows in place is the
+# list of pieces hd.*.is names, joined.
+def cd.app_assoc(+a: Bytes(), -b: Bytes(), -c: Bytes()) ->
+  {Bytes.append(Bytes.append(a, b), c) == Bytes.append(a, Bytes.append(b, c)) : Bytes()}:
+  match a:
+    case SNil{}:
+      {==}
+    case SCon{+h, +t}:
+      %cd.app_assoc(t, b, c) : {SCon{h, Bytes.append(Bytes.append(t, b), c)} == SCon{h, _} : Bytes()}
+      {==}
+
+def cd.Is(-f: Bytes() -> Bytes(), -s: Bytes()) -> Type:
+  @+a: Bytes() -> {f(a) == Bytes.append(a, s) : Bytes()}
+
+def cd.cmp(f: Bytes() -> Bytes(), -s: Bytes(), -g: Bytes() -> Bytes(), -t: Bytes(),
+  wf: cd.Is(f, s), wg: cd.Is(g, t)) -> cd.Is(a => g(f(a)), Bytes.append(s, t)):
+  +a => Equal.trans(Bytes(), g(f(a)), Bytes.append(f(a), t), Bytes.append(a, Bytes.append(s, t)),
+    wg(f(a)),
+    Equal.trans(Bytes(), Bytes.append(f(a), t), Bytes.append(Bytes.append(a, s), t),
+      Bytes.append(a, Bytes.append(s, t)),
+      Equal.cong(Bytes(), Bytes(), x => Bytes.append(x, t), f(a), Bytes.append(a, s), wf(a)),
+      cd.app_assoc(a, s, t)))
+
+def cd.id() -> cd.Is(a => a, ""):
+  +a => Equal.sym(Bytes(), Bytes.append(a, ""), a, WW.wl.app_nil(a))
+
+def cd.push(-c: U32) -> cd.Is(a => Bytes.push(a, c), SCon{Chr{c}, SNil{}}):
+  +a => {==}
+
+def cd.app(-s: Bytes()) -> cd.Is(a => Bytes.append(a, s), s):
+  +a => {==}
+
+# a writer's pieces are what it writes into nothing
+def cd.fix(f: Bytes() -> Bytes(), -s: Bytes(), w: cd.Is(f, s), w2: cd.Is(f, s)) -> cd.Is(f, f("")):
+  +a => %Equal.sym(Bytes(), f(""), s, w2("")) : {f(a) == Bytes.append(a, _) : Bytes()}
+    w(a)
+
+def cd.p2.qr(ab: Nat & Nat) -> cd.Is(a => C.p2.qr(a, ab), C.d2.qr(ab)):
+  match ab:
+    case (x, y):
+      +a => cd.app_assoc(a, SCon{Chr{C.dig(x)}, SNil{}}, SCon{Chr{C.dig(y)}, SNil{}})
+
+def cd.p2(+n: Nat) -> cd.Is(a => C.p2(a, n), C.d2(n)):
+  cd.p2.qr(Nat.divmod(n, 10n))
+
+def cd.num.go(+f: Nat, +b: Nat, qr: Nat & Nat) -> cd.Is(a => C.num.go(f, b, a, qr), C.num.go(f, b, "", qr)):
+  match f:
+    case 0n:
+      cd.id()
+    case 1n+g:
+      match qr:
+        case (+q, +r):
+          match q:
+            case 0n:
+              cd.push(C.hdig(r))
+            case 1n+p:
+              cd.cmp(a => C.num.go(g, b, a, Nat.divmod(1n+p, b)), C.num.go(g, b, "", Nat.divmod(1n+p, b)),
+                a => Bytes.push(a, C.hdig(r)), SCon{Chr{C.hdig(r)}, SNil{}},
+                cd.num.go(g, b, Nat.divmod(1n+p, b)), cd.push(C.hdig(r)))
+
+def cd.num(+n: Nat) -> cd.Is(a => C.num.into(a, n), C.num(n)):
+  cd.num.go(20n, 10n, Nat.divmod(n, 10n))
+
+def cd.hex.go(+f: Nat, on: Bool, +x: U32) -> cd.Is(a => C.hex.go(f, on, x, a), C.hex.go(f, on, x, "")):
+  match f:
+    case 0n:
+      cd.id()
+    case 1n+g:
+      match on:
+        case True{}:
+          +a => Equal.trans(Bytes(),
+            C.hex.go(g, True{}, x, Bytes.push(a, C.hdig(U32.to_nat(C.nib(x, g))))),
+            Bytes.append(Bytes.push(a, C.hdig(U32.to_nat(C.nib(x, g)))), C.hex.go(g, True{}, x, "")),
+            Bytes.append(a, C.hex.go(g, True{}, x, Bytes.push("", C.hdig(U32.to_nat(C.nib(x, g)))))),
+            cd.hex.go(g, True{}, x)(Bytes.push(a, C.hdig(U32.to_nat(C.nib(x, g))))),
+            Equal.trans(Bytes(),
+              Bytes.append(Bytes.push(a, C.hdig(U32.to_nat(C.nib(x, g)))), C.hex.go(g, True{}, x, "")),
+              Bytes.append(a, Bytes.append(SCon{Chr{C.hdig(U32.to_nat(C.nib(x, g)))}, SNil{}}, C.hex.go(g, True{}, x, ""))),
+              Bytes.append(a, C.hex.go(g, True{}, x, Bytes.push("", C.hdig(U32.to_nat(C.nib(x, g)))))),
+              cd.app_assoc(a, SCon{Chr{C.hdig(U32.to_nat(C.nib(x, g)))}, SNil{}}, C.hex.go(g, True{}, x, "")),
+              Equal.cong(Bytes(), Bytes(), y => Bytes.append(a, y),
+                Bytes.append(SCon{Chr{C.hdig(U32.to_nat(C.nib(x, g)))}, SNil{}}, C.hex.go(g, True{}, x, "")),
+                C.hex.go(g, True{}, x, Bytes.push("", C.hdig(U32.to_nat(C.nib(x, g))))),
+                Equal.sym(Bytes(),
+                  C.hex.go(g, True{}, x, Bytes.push("", C.hdig(U32.to_nat(C.nib(x, g))))),
+                  Bytes.append(SCon{Chr{C.hdig(U32.to_nat(C.nib(x, g)))}, SNil{}}, C.hex.go(g, True{}, x, "")),
+                  cd.hex.go(g, True{}, x)(SCon{Chr{C.hdig(U32.to_nat(C.nib(x, g)))}, SNil{}})))))
+        case False{}:
+          cd.hex.go(g, C.hex.on(x, g), x)
+
+def cd.hex(+x: U32) -> cd.Is(a => C.hex(a, x), C.hex("", x)):
+  cd.hex.go(8n, C.hex.on(x, 8n), x)
+
+def cd.etag(+mt: U32, +n: U32) -> cd.Is(a => C.etag.into(a, mt, n), C.etag.of(mt, n)):
+  cd.fix(a => C.etag.into(a, mt, n), Bytes.append(SCon{Chr{34}, SNil{}}, Bytes.append(C.hex("", mt), Bytes.append(SCon{Chr{45}, SNil{}}, Bytes.append(C.hex("", n), SCon{Chr{34}, SNil{}})))),
+    cd.cmp(z => Bytes.push(z, 34), SCon{Chr{34}, SNil{}},
+      z => Bytes.push(C.hex(Bytes.push(C.hex(z, mt), 45), n), 34), Bytes.append(C.hex("", mt), Bytes.append(SCon{Chr{45}, SNil{}}, Bytes.append(C.hex("", n), SCon{Chr{34}, SNil{}}))),
+      cd.push(34),
+      cd.cmp(z => C.hex(z, mt), C.hex("", mt),
+        z => Bytes.push(C.hex(Bytes.push(z, 45), n), 34), Bytes.append(SCon{Chr{45}, SNil{}}, Bytes.append(C.hex("", n), SCon{Chr{34}, SNil{}})),
+        cd.hex(mt),
+        cd.cmp(z => Bytes.push(z, 45), SCon{Chr{45}, SNil{}},
+          z => Bytes.push(C.hex(z, n), 34), Bytes.append(C.hex("", n), SCon{Chr{34}, SNil{}}),
+          cd.push(45),
+          cd.cmp(z => C.hex(z, n), C.hex("", n),
+            z => Bytes.push(z, 34), SCon{Chr{34}, SNil{}},
+            cd.hex(n),
+            cd.push(34))))),
+    cd.cmp(z => Bytes.push(z, 34), SCon{Chr{34}, SNil{}},
+      z => Bytes.push(C.hex(Bytes.push(C.hex(z, mt), 45), n), 34), Bytes.append(C.hex("", mt), Bytes.append(SCon{Chr{45}, SNil{}}, Bytes.append(C.hex("", n), SCon{Chr{34}, SNil{}}))),
+      cd.push(34),
+      cd.cmp(z => C.hex(z, mt), C.hex("", mt),
+        z => Bytes.push(C.hex(Bytes.push(z, 45), n), 34), Bytes.append(SCon{Chr{45}, SNil{}}, Bytes.append(C.hex("", n), SCon{Chr{34}, SNil{}})),
+        cd.hex(mt),
+        cd.cmp(z => Bytes.push(z, 45), SCon{Chr{45}, SNil{}},
+          z => Bytes.push(C.hex(z, n), 34), Bytes.append(C.hex("", n), SCon{Chr{34}, SNil{}}),
+          cd.push(45),
+          cd.cmp(z => C.hex(z, n), C.hex("", n),
+            z => Bytes.push(z, 34), SCon{Chr{34}, SNil{}},
+            cd.hex(n),
+            cd.push(34))))))
+
+def cd.y(yy: Nat & Nat, -tf: Bytes() -> Bytes(), -ts: List<&2, Bytes()>, wt: cd.Is(tf, Bytes.concat(ts))) ->
+  cd.Is(a => tf(C.di.y(a, yy)), Bytes.concat(C.date.y(yy, ts))):
+  match yy:
+    case (+p, +q):
+      cd.cmp(z => C.p2(z, p), C.d2(p),
+        z => tf(Bytes.push(C.p2(z, q), 32)), Bytes.append(C.d2(q), Bytes.append(SCon{Chr{32}, SNil{}}, Bytes.concat(ts))),
+        cd.p2(p),
+        cd.cmp(z => C.p2(z, q), C.d2(q),
+          z => tf(Bytes.push(z, 32)), Bytes.append(SCon{Chr{32}, SNil{}}, Bytes.concat(ts)),
+          cd.p2(q),
+          cd.cmp(z => Bytes.push(z, 32), SCon{Chr{32}, SNil{}},
+            z => tf(z), Bytes.concat(ts),
+            cd.push(32),
+            wt)))
+
+def cd.ymd.jd(+k: Nat, jd: Nat & Nat, -tf: Bytes() -> Bytes(), -ts: List<&2, Bytes()>,
+  wt: cd.Is(tf, Bytes.concat(ts))) ->
+  cd.Is(a => tf(C.di.ymd(a, (k, jd))), Bytes.concat(C.date.ymd((k, jd), ts))):
+  match jd:
+    case (+j, +d):
+      cd.cmp(z => C.p2(z, 1n+d), C.d2(1n+d),
+        z => tf(C.di.y(Bytes.append(Bytes.push(z, 32), C.nth(C.monc(), j)), Nat.divmod(Nat.add(k, 1970n), 100n))), Bytes.append(SCon{Chr{32}, SNil{}}, Bytes.append(C.nth(C.monc(), j), Bytes.concat(C.date.y(Nat.divmod(Nat.add(k, 1970n), 100n), ts)))),
+        cd.p2(1n+d),
+        cd.cmp(z => Bytes.push(z, 32), SCon{Chr{32}, SNil{}},
+          z => tf(C.di.y(Bytes.append(z, C.nth(C.monc(), j)), Nat.divmod(Nat.add(k, 1970n), 100n))), Bytes.append(C.nth(C.monc(), j), Bytes.concat(C.date.y(Nat.divmod(Nat.add(k, 1970n), 100n), ts))),
+          cd.push(32),
+          cd.cmp(z => Bytes.append(z, C.nth(C.monc(), j)), C.nth(C.monc(), j),
+            z => tf(C.di.y(z, Nat.divmod(Nat.add(k, 1970n), 100n))), Bytes.concat(C.date.y(Nat.divmod(Nat.add(k, 1970n), 100n), ts)),
+            cd.app(C.nth(C.monc(), j)),
+            cd.y(Nat.divmod(Nat.add(k, 1970n), 100n), tf, ts, wt))))
+
+def cd.ymd(kjd: Nat & Nat & Nat, -tf: Bytes() -> Bytes(), -ts: List<&2, Bytes()>, wt: cd.Is(tf, Bytes.concat(ts))) ->
+  cd.Is(a => tf(C.di.ymd(a, kjd)), Bytes.concat(C.date.ymd(kjd, ts))):
+  match kjd:
+    case (+k, jd):
+      cd.ymd.jd(k, jd, tf, ts, wt)
+
+def cd.ds(+days: Nat, +h: Nat, +m: Nat, +x: Nat) ->
+  cd.Is(a => C.di.ds(a, days, h, m, x), Bytes.concat(C.date.ds(days, h, m, x))):
+  cd.cmp(z => Bytes.append(z, C.nth(C.wkc(), Nat.mod(Nat.add(4n, days), 7n))), C.nth(C.wkc(), Nat.mod(Nat.add(4n, days), 7n)),
+    z => Bytes.append(C.p2(Bytes.push(C.p2(Bytes.push(C.p2(C.di.ymd(z, C.civil(days)), h), 58), m), 58), x), " GMT"), Bytes.concat(C.date.ymd(C.civil(days), [C.d2(h), ":", C.d2(m), ":", C.d2(x), " GMT"])),
+    cd.app(C.nth(C.wkc(), Nat.mod(Nat.add(4n, days), 7n))),
+    cd.ymd(C.civil(days), b => Bytes.append(C.p2(Bytes.push(C.p2(Bytes.push(C.p2(b, h), 58), m), 58), x), " GMT"), [C.d2(h), ":", C.d2(m), ":", C.d2(x), " GMT"],
+    cd.cmp(z => C.p2(z, h), C.d2(h),
+      z => Bytes.append(C.p2(Bytes.push(C.p2(Bytes.push(z, 58), m), 58), x), " GMT"), Bytes.append(SCon{Chr{58}, SNil{}}, Bytes.append(C.d2(m), Bytes.append(SCon{Chr{58}, SNil{}}, Bytes.append(C.d2(x), Bytes.append(" GMT", ""))))),
+      cd.p2(h),
+      cd.cmp(z => Bytes.push(z, 58), SCon{Chr{58}, SNil{}},
+        z => Bytes.append(C.p2(Bytes.push(C.p2(z, m), 58), x), " GMT"), Bytes.append(C.d2(m), Bytes.append(SCon{Chr{58}, SNil{}}, Bytes.append(C.d2(x), Bytes.append(" GMT", "")))),
+        cd.push(58),
+        cd.cmp(z => C.p2(z, m), C.d2(m),
+          z => Bytes.append(C.p2(Bytes.push(z, 58), x), " GMT"), Bytes.append(SCon{Chr{58}, SNil{}}, Bytes.append(C.d2(x), Bytes.append(" GMT", ""))),
+          cd.p2(m),
+          cd.cmp(z => Bytes.push(z, 58), SCon{Chr{58}, SNil{}},
+            z => Bytes.append(C.p2(z, x), " GMT"), Bytes.append(C.d2(x), Bytes.append(" GMT", "")),
+            cd.push(58),
+            cd.cmp(z => C.p2(z, x), C.d2(x),
+              z => Bytes.append(z, " GMT"), Bytes.append(" GMT", ""),
+              cd.p2(x),
+              cd.cmp(z => Bytes.append(z, " GMT"), " GMT",
+                z => z, "",
+                cd.app(" GMT"),
+                cd.id()))))))))
+
+def cd.q3(+m: Nat, +x: Nat, dh: Nat & Nat) -> cd.Is(a => C.di.q3(a, m, x, dh), C.date.q3(m, x, dh)):
+  match dh:
+    case (+days, +h):
+      cd.ds(days, h, m, x)
+
+def cd.q2(+x: Nat, hm: Nat & Nat) -> cd.Is(a => C.di.q2(a, x, hm), C.date.q2(x, hm)):
+  match hm:
+    case (+hs, +m):
+      cd.q3(m, x, Nat.divmod(hs, 24n))
+
+def cd.q1(mx: Nat & Nat) -> cd.Is(a => C.di.q1(a, mx), C.date.q1(mx)):
+  match mx:
+    case (+ms, +x):
+      cd.q2(x, Nat.divmod(ms, 60n))
+
+def cd.date(+t: Nat) -> cd.Is(a => C.date.into(a, t), C.date.fmt(t)):
+  cd.q1(Nat.divmod(t, 60n))
+
+def cd.vals(+mt: U32, +n: U32, -tf: Bytes() -> Bytes(), -ts: List<&2, Bytes()>, wt: cd.Is(tf, Bytes.concat(ts))) ->
+  cd.Is(a => tf(C.vals(a, mt, n)), Bytes.concat(C.vals.is(mt, n, ts))):
+  cd.cmp(z => Bytes.append(z, "\r\nlast-modified: "), "\r\nlast-modified: ",
+    z => tf(C.etag.into(Bytes.append(C.date.into(z, U32.to_nat(mt)), "\r\netag: "), mt, n)), Bytes.append(C.date.fmt(U32.to_nat(mt)), Bytes.append("\r\netag: ", Bytes.append(C.etag.of(mt, n), Bytes.concat(ts)))),
+    cd.app("\r\nlast-modified: "),
+    cd.cmp(z => C.date.into(z, U32.to_nat(mt)), C.date.fmt(U32.to_nat(mt)),
+      z => tf(C.etag.into(Bytes.append(z, "\r\netag: "), mt, n)), Bytes.append("\r\netag: ", Bytes.append(C.etag.of(mt, n), Bytes.concat(ts))),
+      cd.date(U32.to_nat(mt)),
+      cd.cmp(z => Bytes.append(z, "\r\netag: "), "\r\netag: ",
+        z => tf(C.etag.into(z, mt, n)), Bytes.append(C.etag.of(mt, n), Bytes.concat(ts)),
+        cd.app("\r\netag: "),
+        cd.cmp(z => C.etag.into(z, mt, n), C.etag.of(mt, n),
+          z => tf(z), Bytes.concat(ts),
+          cd.etag(mt, n),
+          wt))))
+
+def cd.full(ct: Bytes(), +n: U32, +mt: U32) -> {C.hd.full(ct, n, mt) == C.hd.full.is(ct, n, mt) : Bytes()}:
+  (cd.cmp(z => Bytes.append(z, ct), ct,
+      z => Bytes.append(C.vals(C.num.into(z, U32.to_nat(n)), mt, n), C.ranges()), Bytes.append(C.num(U32.to_nat(n)), Bytes.concat(C.vals.is(mt, n, [C.ranges()]))),
+      cd.app(ct),
+      cd.cmp(z => C.num.into(z, U32.to_nat(n)), C.num(U32.to_nat(n)),
+        z => Bytes.append(C.vals(z, mt, n), C.ranges()), Bytes.concat(C.vals.is(mt, n, [C.ranges()])),
+        cd.num(U32.to_nat(n)),
+        cd.vals(mt, n, b => Bytes.append(b, C.ranges()), [C.ranges()],
+      cd.cmp(z => Bytes.append(z, C.ranges()), C.ranges(),
+        z => z, "",
+        cd.app(C.ranges()),
+        cd.id())))))("")
+
+def cd.same(+mt: U32, +n: U32) -> {C.hd.same(mt, n) == C.hd.same.is(mt, n) : Bytes()}:
+  (cd.cmp(z => Bytes.append(z, "HTTP/1.1 304 Not Modified"), "HTTP/1.1 304 Not Modified",
+      z => Bytes.append(C.vals(z, mt, n), C.ka()), Bytes.concat(C.vals.is(mt, n, [C.ka()])),
+      cd.app("HTTP/1.1 304 Not Modified"),
+      cd.vals(mt, n, b => Bytes.append(b, C.ka()), [C.ka()],
+      cd.cmp(z => Bytes.append(z, C.ka()), C.ka(),
+        z => z, "",
+        cd.app(C.ka()),
+        cd.id()))))("")
+
+def cd.part(+ct: Bytes(), +a: Nat, +b: Nat, +n: U32, +mt: U32) ->
+  {C.hd.part(ct, a, b, n, mt) == C.hd.part.is(ct, a, b, n, mt) : Bytes()}:
+  (cd.cmp(z => Bytes.append(z, "HTTP/1.1 206 Partial Content\r\n"), "HTTP/1.1 206 Partial Content\r\n",
+      z => Bytes.append(C.vals(Bytes.append(Bytes.append(Bytes.append(z, Bytes.drop(ct, 17n)), C.num(Nat.sub(1n+b, a))), Bytes.concat(C.crange(a, b, U32.to_nat(n)))), mt, n), C.ka()), Bytes.append(Bytes.drop(ct, 17n), Bytes.append(C.num(Nat.sub(1n+b, a)), Bytes.append(Bytes.concat(C.crange(a, b, U32.to_nat(n))), Bytes.concat(C.vals.is(mt, n, [C.ka()]))))),
+      cd.app("HTTP/1.1 206 Partial Content\r\n"),
+      cd.cmp(z => Bytes.append(z, Bytes.drop(ct, 17n)), Bytes.drop(ct, 17n),
+        z => Bytes.append(C.vals(Bytes.append(Bytes.append(z, C.num(Nat.sub(1n+b, a))), Bytes.concat(C.crange(a, b, U32.to_nat(n)))), mt, n), C.ka()), Bytes.append(C.num(Nat.sub(1n+b, a)), Bytes.append(Bytes.concat(C.crange(a, b, U32.to_nat(n))), Bytes.concat(C.vals.is(mt, n, [C.ka()])))),
+        cd.app(Bytes.drop(ct, 17n)),
+        cd.cmp(z => Bytes.append(z, C.num(Nat.sub(1n+b, a))), C.num(Nat.sub(1n+b, a)),
+          z => Bytes.append(C.vals(Bytes.append(z, Bytes.concat(C.crange(a, b, U32.to_nat(n)))), mt, n), C.ka()), Bytes.append(Bytes.concat(C.crange(a, b, U32.to_nat(n))), Bytes.concat(C.vals.is(mt, n, [C.ka()]))),
+          cd.app(C.num(Nat.sub(1n+b, a))),
+          cd.cmp(z => Bytes.append(z, Bytes.concat(C.crange(a, b, U32.to_nat(n)))), Bytes.concat(C.crange(a, b, U32.to_nat(n))),
+            z => Bytes.append(C.vals(z, mt, n), C.ka()), Bytes.concat(C.vals.is(mt, n, [C.ka()])),
+            cd.app(Bytes.concat(C.crange(a, b, U32.to_nat(n)))),
+            cd.vals(mt, n, b => Bytes.append(b, C.ka()), [C.ka()],
+      cd.cmp(z => Bytes.append(z, C.ka()), C.ka(),
+        z => z, "",
+        cd.app(C.ka()),
+        cd.id())))))))("")
+
 # file_head_is_built: every row of the table, and the row for what no
-# row names, keeps its head equal to the built one; so does whichever
-# row the lookup lands on
-def pg.FH(+n: U32, m: Eng.Mime) -> Type:
-  {Eng.h.fhead(Eng.mime.head.of(m), n) == Eng.reply.n.head("200 OK", Eng.mime.name.of(m), n) : Bytes()}
+# row names, keeps the head mime.pre builds from its type's name; so
+# does whichever row the lookup lands on. A request that asks nothing
+# of the file is decided Full, and the head built in place is hd.full.is.
+def pg.FH(m: Eng.Mime) -> Type:
+  {Eng.mime.head.of(m) == Eng.mime.pre(Eng.mime.name.of(m)) : Bytes()}
 
-def pg.FHS(+n: U32, tbl: List<&2, Eng.Mime>) -> Type:
-  match tbl:
-    case Nil{}:
-      pg.FH(n, Eng.mime.other())
-    case Con{m, t}:
-      pg.FH(n, m) & pg.FHS(n, t)
-
-def pg.fh.table(+n: U32) -> pg.FHS(n, Eng.mime.table()):
-  ({==}, ({==}, ({==}, ({==}, ({==}, ({==}, ({==}, ({==}, ({==}, ({==}, ({==}, ({==}, ({==}, ({==},
-    {==}))))))))))))))
-
-def pg.fh.at(+n: U32, hit: Bool, m: Eng.Mime, rest: Eng.Mime, a: pg.FH(n, m), b: pg.FH(n, rest)) ->
-  pg.FH(n, Eng.mime.find.at(hit, m, rest)):
+def pg.fh.row(hit: Bool, m: Eng.Mime, a: pg.FH(m)) -> pg.FH(Eng.mime.row(hit, m)):
   match hit:
     case True{}:
       a
     case False{}:
-      b
+      {==}
 
-def pg.fh.find(+n: U32, tbl: List<&2, Eng.Mime>, +e: Bytes(), all: pg.FHS(n, tbl)) ->
-  pg.FH(n, Eng.mime.find(tbl, e)):
-  match tbl:
+def pg.fh.at.pdf(hit: Bool, +k: U32, +e: Bytes()) -> pg.FH(Eng.mime.at.pdf(hit, k, e)):
+  match hit:
+    case True{}:
+      pg.fh.row(Eng.bytes.eq(e, "pdf"), Eng.mime.pdf(), {==})
+    case False{}:
+      {==}
+
+def pg.fh.at.wasm(hit: Bool, +k: U32, +e: Bytes()) -> pg.FH(Eng.mime.at.wasm(hit, k, e)):
+  match hit:
+    case True{}:
+      pg.fh.row(Eng.bytes.eq(e, "wasm"), Eng.mime.wasm(), {==})
+    case False{}:
+      pg.fh.at.pdf(U32.is_eq(k, 7366147), k, e)
+
+def pg.fh.at.ico(hit: Bool, +k: U32, +e: Bytes()) -> pg.FH(Eng.mime.at.ico(hit, k, e)):
+  match hit:
+    case True{}:
+      pg.fh.row(Eng.bytes.eq(e, "ico"), Eng.mime.ico(), {==})
+    case False{}:
+      pg.fh.at.wasm(U32.is_eq(k, 7826692), k, e)
+
+def pg.fh.at.gif(hit: Bool, +k: U32, +e: Bytes()) -> pg.FH(Eng.mime.at.gif(hit, k, e)):
+  match hit:
+    case True{}:
+      pg.fh.row(Eng.bytes.eq(e, "gif"), Eng.mime.gif(), {==})
+    case False{}:
+      pg.fh.at.ico(U32.is_eq(k, 6909699), k, e)
+
+def pg.fh.at.jpeg(hit: Bool, +k: U32, +e: Bytes()) -> pg.FH(Eng.mime.at.jpeg(hit, k, e)):
+  match hit:
+    case True{}:
+      pg.fh.row(Eng.bytes.eq(e, "jpeg"), Eng.mime.jpeg(), {==})
+    case False{}:
+      pg.fh.at.gif(U32.is_eq(k, 6776323), k, e)
+
+def pg.fh.at.jpg(hit: Bool, +k: U32, +e: Bytes()) -> pg.FH(Eng.mime.at.jpg(hit, k, e)):
+  match hit:
+    case True{}:
+      pg.fh.row(Eng.bytes.eq(e, "jpg"), Eng.mime.jpg(), {==})
+    case False{}:
+      pg.fh.at.jpeg(U32.is_eq(k, 6973188), k, e)
+
+def pg.fh.at.png(hit: Bool, +k: U32, +e: Bytes()) -> pg.FH(Eng.mime.at.png(hit, k, e)):
+  match hit:
+    case True{}:
+      pg.fh.row(Eng.bytes.eq(e, "png"), Eng.mime.png(), {==})
+    case False{}:
+      pg.fh.at.jpg(U32.is_eq(k, 6973187), k, e)
+
+def pg.fh.at.svg(hit: Bool, +k: U32, +e: Bytes()) -> pg.FH(Eng.mime.at.svg(hit, k, e)):
+  match hit:
+    case True{}:
+      pg.fh.row(Eng.bytes.eq(e, "svg"), Eng.mime.svg(), {==})
+    case False{}:
+      pg.fh.at.png(U32.is_eq(k, 7366403), k, e)
+
+def pg.fh.at.txt(hit: Bool, +k: U32, +e: Bytes()) -> pg.FH(Eng.mime.at.txt(hit, k, e)):
+  match hit:
+    case True{}:
+      pg.fh.row(Eng.bytes.eq(e, "txt"), Eng.mime.txt(), {==})
+    case False{}:
+      pg.fh.at.svg(U32.is_eq(k, 7563011), k, e)
+
+def pg.fh.at.json(hit: Bool, +k: U32, +e: Bytes()) -> pg.FH(Eng.mime.at.json(hit, k, e)):
+  match hit:
+    case True{}:
+      pg.fh.row(Eng.bytes.eq(e, "json"), Eng.mime.json(), {==})
+    case False{}:
+      pg.fh.at.txt(U32.is_eq(k, 7631875), k, e)
+
+def pg.fh.at.js(hit: Bool, +k: U32, +e: Bytes()) -> pg.FH(Eng.mime.at.js(hit, k, e)):
+  match hit:
+    case True{}:
+      pg.fh.row(Eng.bytes.eq(e, "js"), Eng.mime.js(), {==})
+    case False{}:
+      pg.fh.at.json(U32.is_eq(k, 6974980), k, e)
+
+def pg.fh.at.css(hit: Bool, +k: U32, +e: Bytes()) -> pg.FH(Eng.mime.at.css(hit, k, e)):
+  match hit:
+    case True{}:
+      pg.fh.row(Eng.bytes.eq(e, "css"), Eng.mime.css(), {==})
+    case False{}:
+      pg.fh.at.js(U32.is_eq(k, 6976258), k, e)
+
+def pg.fh.at.htm(hit: Bool, +k: U32, +e: Bytes()) -> pg.FH(Eng.mime.at.htm(hit, k, e)):
+  match hit:
+    case True{}:
+      pg.fh.row(Eng.bytes.eq(e, "htm"), Eng.mime.htm(), {==})
+    case False{}:
+      pg.fh.at.css(U32.is_eq(k, 6517507), k, e)
+
+def pg.fh.at.html(hit: Bool, +k: U32, +e: Bytes()) -> pg.FH(Eng.mime.at.html(hit, k, e)):
+  match hit:
+    case True{}:
+      pg.fh.row(Eng.bytes.eq(e, "html"), Eng.mime.html(), {==})
+    case False{}:
+      pg.fh.at.htm(U32.is_eq(k, 6843651), k, e)
+
+def pg.fh.at(+k: U32, +e: Bytes()) -> pg.FH(Eng.mime.at(k, e)):
+  pg.fh.at.html(U32.is_eq(k, 6843396), k, e)
+
+def Laws.file_head_is_built(e, head, n, mt):
+  %pg.fh.at(Eng.mime.key(e), e) :
+    {Eng.h.fhead(Eng.mime.head(e), Nil{}, head, n, mt) == L.Fr{C.hd.full.is(_, n, mt), 0, n} : L.Fr}
+  %cd.full(Eng.mime.head(e), n, mt) : {Eng.h.fhead(Eng.mime.head(e), Nil{}, head, n, mt) == L.Fr{_, 0, n} : L.Fr}
+  {==}
+
+# Conditional and range requests
+# ==============================
+#
+# The proofs of cond.bend's laws: Nat and division as they need them,
+# the calendar there and back, the date's pieces read by their tokens,
+# the round trip, and the ranges in the file.
+
+# Nat, as the proofs of cond.bend need it
+# ========================================
+
+def cp.no(-g: Type, e: {False{} == True{} : Bool}) -> g:
+  Bool.no(g, e)
+
+def cp.add_zero(+a: Nat) -> {Nat.add(a, 0n) == a : Nat}:
+  match a:
+    case 0n:
+      {==}
+    case 1n+p:
+      Equal.cong(Nat, Nat, x => 1n+x, Nat.add(p, 0n), p, cp.add_zero(p))
+
+def cp.add_succ(+a: Nat, +b: Nat) -> {Nat.add(a, 1n+b) == 1n+Nat.add(a, b) : Nat}:
+  match a:
+    case 0n:
+      {==}
+    case 1n+p:
+      Equal.cong(Nat, Nat, x => 1n+x, Nat.add(p, 1n+b), 1n+Nat.add(p, b), cp.add_succ(p, b))
+
+def cp.add_comm(+a: Nat, +b: Nat) -> {Nat.add(a, b) == Nat.add(b, a) : Nat}:
+  match a:
+    case 0n:
+      Equal.sym(Nat, Nat.add(b, 0n), b, cp.add_zero(b))
+    case 1n+p:
+      %Equal.sym(Nat, Nat.add(b, 1n+p), 1n+Nat.add(b, p), cp.add_succ(b, p)) :
+        {1n+Nat.add(p, b) == _ : Nat}
+      Equal.cong(Nat, Nat, x => 1n+x, Nat.add(p, b), Nat.add(b, p), cp.add_comm(p, b))
+
+def cp.add_assoc(+a: Nat, +b: Nat, +c: Nat) ->
+  {Nat.add(Nat.add(a, b), c) == Nat.add(a, Nat.add(b, c)) : Nat}:
+  match a:
+    case 0n:
+      {==}
+    case 1n+p:
+      Equal.cong(Nat, Nat, x => 1n+x, Nat.add(Nat.add(p, b), c), Nat.add(p, Nat.add(b, c)),
+        cp.add_assoc(p, b, c))
+
+def cp.le0(+b: Nat) -> {Nat.is_le(0n, b) == True{} : Bool}:
+  match b:
+    case 0n:
+      {==}
+    case 1n+q:
+      {==}
+
+def cp.le_succ(+n: Nat) -> {Nat.is_le(n, 1n+n) == True{} : Bool}:
+  match n:
+    case 0n:
+      {==}
+    case 1n+p:
+      cp.le_succ(p)
+
+# a <= a + b
+def cp.le_add(+a: Nat, +b: Nat) -> {Nat.is_le(a, Nat.add(a, b)) == True{} : Bool}:
+  match a:
+    case 0n:
+      cp.le0(b)
+    case 1n+p:
+      cp.le_add(p, b)
+
+# b <= a + b
+def cp.le_add_l(+a: Nat, +b: Nat) -> {Nat.is_le(b, Nat.add(a, b)) == True{} : Bool}:
+  %Equal.sym(Nat, Nat.add(a, b), Nat.add(b, a), cp.add_comm(a, b)) :
+    {Nat.is_le(b, _) == True{} : Bool}
+  cp.le_add(b, a)
+
+def cp.le_refl(+n: Nat) -> {Nat.is_le(n, n) == True{} : Bool}:
+  match n:
+    case 0n:
+      {==}
+    case 1n+p:
+      cp.le_refl(p)
+
+# l <= r: l + (r - l) is r
+def cp.add_sub(+l: Nat, +r: Nat, e: {Nat.is_le(l, r) == True{} : Bool}) ->
+  {Nat.add(l, Nat.sub(r, l)) == r : Nat}:
+  match l r:
+    case 0n 0n:
+      {==}
+    case 0n 1n+q:
+      {==}
+    case 1n+p 0n:
+      cp.no({Nat.add(1n+p, Nat.sub(0n, 1n+p)) == 0n : Nat}, e)
+    case 1n+p 1n+q:
+      Equal.cong(Nat, Nat, x => 1n+x, Nat.add(p, Nat.sub(q, p)), q, cp.add_sub(p, q, e))
+
+def cp.sub_zero(+a: Nat) -> {Nat.sub(a, 0n) == a : Nat}:
+  match a:
+    case 0n:
+      {==}
+    case 1n+p:
+      {==}
+
+# a - b <= a
+def cp.sub_le(+a: Nat, +b: Nat) -> {Nat.is_le(Nat.sub(a, b), a) == True{} : Bool}:
+  match a b:
+    case 0n 0n:
+      {==}
+    case 0n 1n+q:
+      {==}
+    case 1n+p 0n:
+      cp.le_refl(p)
+    case 1n+p 1n+q:
+      Nat.is_le_trans(Nat.sub(p, q), p, 1n+p, cp.sub_le(p, q), cp.le_succ(p))
+
+# Division
+# ========
+#
+# Nat.divmod(a, b) is a quotient and a remainder: q * b + r is a, and r is
+# below b. Its walk counts a down, and a countdown m from b - 1 beside a
+# remainder r so far, their sum b - 1 throughout.
+def cp.dm(+b: Nat, +a: Nat, p: Nat & Nat) -> Type:
+  (q, r) = p
+  {Nat.add(Nat.mul(q, b), r) == a : Nat} & {Nat.is_lt(r, b) == True{} : Bool}
+
+def cp.dm.lt(+r: Nat, +m: Nat, +bp: Nat, inv: {Nat.add(m, r) == bp : Nat}) ->
+  {Nat.is_lt(r, 1n+bp) == True{} : Bool}:
+  %Equal.sym(Bool, Nat.is_lt(r, 1n+bp), Nat.is_le(r, bp), Nat.lt_succ(r, bp)) : {_ == True{} : Bool}
+  %inv : {Nat.is_le(r, _) == True{} : Bool}
+  cp.le_add_l(m, r)
+
+def cp.dm.e0(+M: Nat, +bp: Nat, +np: Nat) ->
+  {Nat.add(Nat.add(Nat.add(1n+bp, M), 0n), np) == Nat.add(Nat.add(M, bp), 1n+np) : Nat}:
+  %Equal.sym(Nat, Nat.add(Nat.add(1n+bp, M), 0n), Nat.add(1n+bp, M), cp.add_zero(Nat.add(1n+bp, M))) :
+    {Nat.add(_, np) == Nat.add(Nat.add(M, bp), 1n+np) : Nat}
+  %Equal.sym(Nat, Nat.add(Nat.add(M, bp), 1n+np), 1n+Nat.add(Nat.add(M, bp), np),
+    cp.add_succ(Nat.add(M, bp), np)) :
+    {1n+Nat.add(Nat.add(bp, M), np) == _ : Nat}
+  %cp.add_comm(bp, M) : {1n+Nat.add(Nat.add(bp, M), np) == 1n+Nat.add(_, np) : Nat}
+  {==}
+
+# with r the countdown's full length: the step that closes a quotient
+def cp.dm.e0r(+M: Nat, +r: Nat, +bp: Nat, +np: Nat, inv: {r == bp : Nat}) ->
+  {Nat.add(Nat.add(M, r), 1n+np) == Nat.add(Nat.add(Nat.add(1n+bp, M), 0n), np) : Nat}:
+  %Equal.sym(Nat, r, bp, inv) : {Nat.add(Nat.add(M, _), 1n+np) == Nat.add(Nat.add(Nat.add(1n+bp, M), 0n), np) : Nat}
+  Equal.sym(Nat, Nat.add(Nat.add(Nat.add(1n+bp, M), 0n), np), Nat.add(Nat.add(M, bp), 1n+np),
+    cp.dm.e0(M, bp, np))
+
+def cp.dm.e1(+M: Nat, +r: Nat, +np: Nat) ->
+  {Nat.add(Nat.add(M, 1n+r), np) == Nat.add(Nat.add(M, r), 1n+np) : Nat}:
+  %Equal.sym(Nat, Nat.add(M, 1n+r), 1n+Nat.add(M, r), cp.add_succ(M, r)) :
+    {Nat.add(_, np) == Nat.add(Nat.add(M, r), 1n+np) : Nat}
+  Equal.sym(Nat, Nat.add(Nat.add(M, r), 1n+np), 1n+Nat.add(Nat.add(M, r), np),
+    cp.add_succ(Nat.add(M, r), np))
+
+law cp.dm_go:
+  for +n: Nat
+  for +m: Nat
+  for +d: Nat
+  for +r: Nat
+  for +bp: Nat
+  for +inv: {Nat.add(m, r) == bp : Nat}
+  cp.dm(1n+bp, Nat.add(Nat.add(Nat.mul(d, 1n+bp), r), n), Nat.divmod.go(n, m, d, r))
+
+def cp.dm_go(n, m, d, r, bp, inv):
+  match n:
+    case 0n:
+      (Equal.sym(Nat, Nat.add(Nat.add(Nat.mul(d, 1n+bp), r), 0n), Nat.add(Nat.mul(d, 1n+bp), r),
+        cp.add_zero(Nat.add(Nat.mul(d, 1n+bp), r))), cp.dm.lt(r, m, bp, inv))
+    case 1n+np:
+      match m:
+        case 0n:
+          %Equal.sym(Nat, Nat.add(Nat.add(Nat.mul(d, 1n+bp), r), 1n+np),
+            Nat.add(Nat.add(Nat.mul(1n+d, 1n+bp), 0n), np),
+            cp.dm.e0r(Nat.mul(d, 1n+bp), r, bp, np, inv)) :
+            cp.dm(1n+bp, _, Nat.divmod.go(np, r, 1n+d, 0n))
+          cp.dm_go(np, r, 1n+d, 0n, bp, Equal.trans(Nat, Nat.add(r, 0n), r, bp, cp.add_zero(r), inv))
+        case 1n+mp:
+          %cp.dm.e1(Nat.mul(d, 1n+bp), r, np) :
+            cp.dm(1n+bp, _, Nat.divmod.go(np, mp, d, 1n+r))
+          cp.dm_go(np, mp, d, 1n+r, bp,
+            Equal.trans(Nat, Nat.add(mp, 1n+r), 1n+Nat.add(mp, r), bp, cp.add_succ(mp, r), inv))
+
+# LAW: a quotient and a remainder, for every a and every b
+def cp.divmod(+a: Nat, +bp: Nat) -> cp.dm(1n+bp, a, Nat.divmod(a, 1n+bp)):
+  cp.dm_go(a, bp, 0n, 0n, bp, cp.add_zero(bp))
+
+# b + x <= b + y is x <= y
+def cp.le_addl(+b: Nat, +x: Nat, +y: Nat) ->
+  {Nat.is_le(Nat.add(b, x), Nat.add(b, y)) == Nat.is_le(x, y) : Bool}:
+  match b:
+    case 0n:
+      {==}
+    case 1n+p:
+      cp.le_addl(p, x, y)
+
+# k <= q: k * b <= q * b
+def cp.mul_le(+k: Nat, +q: Nat, +b: Nat, e: {Nat.is_le(k, q) == True{} : Bool}) ->
+  {Nat.is_le(Nat.mul(k, b), Nat.mul(q, b)) == True{} : Bool}:
+  match k:
+    case 0n:
+      cp.le0(Nat.mul(q, b))
+    case 1n+kp:
+      match q:
+        case 0n:
+          cp.no({Nat.is_le(Nat.mul(1n+kp, b), Nat.mul(0n, b)) == True{} : Bool}, e)
+        case 1n+qp:
+          %Equal.sym(Bool, Nat.is_le(Nat.add(b, Nat.mul(kp, b)), Nat.add(b, Nat.mul(qp, b))),
+            Nat.is_le(Nat.mul(kp, b), Nat.mul(qp, b)), cp.le_addl(b, Nat.mul(kp, b), Nat.mul(qp, b))) :
+            {_ == True{} : Bool}
+          cp.mul_le(kp, qp, b, e)
+
+# not a < b: b <= a
+def cp.nlt(+a: Nat, +b: Nat, e: {Nat.is_lt(a, b) == False{} : Bool}) -> {Nat.is_le(b, a) == True{} : Bool}:
+  %Nat.lt_flip(a, b) : {_ == True{} : Bool}
+  %Equal.sym(Bool, Nat.is_lt(a, b), False{}, e) : {Bool.not(_) == True{} : Bool}
+  {==}
+
+# a < b and b <= a cannot both hold
+def cp.lt_le_no(-g: Type, +a: Nat, +b: Nat, lt: {Nat.is_lt(a, b) == True{} : Bool},
+  le: {Nat.is_le(b, a) == True{} : Bool}) -> g:
+  cp.no(g, Equal.trans(Bool, False{}, Nat.is_lt(a, b), True{},
+    Equal.trans(Bool, False{}, Bool.not(Nat.is_le(b, a)), Nat.is_lt(a, b),
+      Equal.cong(Bool, Bool, Bool.not, True{}, Nat.is_le(b, a), Equal.sym(Bool, Nat.is_le(b, a), True{}, le)),
+      Nat.le_flip(b, a)),
+    lt))
+
+# a quotient is below k when its dividend is below k * b
+def cp.qb.at(c: Bool, +q: Nat, +r: Nat, +a: Nat, +k: Nat, +b: Nat,
+  eq: {Nat.add(Nat.mul(q, b), r) == a : Nat}, lt: {Nat.is_lt(a, Nat.mul(k, b)) == True{} : Bool}) ->
+  {Nat.is_lt(q, k) == c : Bool} -> {Nat.is_lt(q, k) == True{} : Bool}:
+  match c:
+    case True{}:
+      e => e
+    case False{}:
+      e => cp.lt_le_no({Nat.is_lt(q, k) == True{} : Bool}, a, Nat.mul(k, b), lt,
+        Nat.is_le_trans(Nat.mul(k, b), Nat.mul(q, b), a, cp.mul_le(k, q, b, cp.nlt(q, k, e)),
+          %eq : {Nat.is_le(Nat.mul(q, b), _) == True{} : Bool}
+          cp.le_add(Nat.mul(q, b), r)))
+
+def cp.qb(+q: Nat, +r: Nat, +a: Nat, +k: Nat, +b: Nat,
+  eq: {Nat.add(Nat.mul(q, b), r) == a : Nat}, lt: {Nat.is_lt(a, Nat.mul(k, b)) == True{} : Bool}) ->
+  {Nat.is_lt(q, k) == True{} : Bool}:
+  cp.qb.at(Nat.is_lt(q, k), q, r, a, k, b, eq, lt)({==})
+
+# x < 0 is never so
+def cp.lt0(+x: Nat) -> {Nat.is_lt(x, 0n) == False{} : Bool}:
+  match x:
+    case 0n:
+      {==}
+    case 1n+p:
+      {==}
+
+def cp.lt0.no(-g: Type, +x: Nat, lt: {Nat.is_lt(x, 0n) == True{} : Bool}) -> g:
+  cp.no(g, Equal.trans(Bool, False{}, Nat.is_lt(x, 0n), True{}, Equal.sym(Bool, Nat.is_lt(x, 0n), False{}, cp.lt0(x)), lt))
+
+# Digits read back
+# ================
+#
+# A digit written is read as itself: ten cases, each computed, and past
+# nine the bound refutes itself.
+def cp.dg(+a: Nat, +r: Bytes(), lt: {Nat.is_lt(a, 10n) == True{} : Bool}) ->
+  {C.rd.dig(SCon{Chr{C.dig(a)}, r}) == Some{(a, r)} : Maybe<&1, Nat & Bytes()>}:
+  match a:
+    case 0n:
+      {==}
+    case 1n+a1:
+      match a1:
+        case 0n:
+          {==}
+        case 1n+a2:
+          match a2:
+            case 0n:
+              {==}
+            case 1n+a3:
+              match a3:
+                case 0n:
+                  {==}
+                case 1n+a4:
+                  match a4:
+                    case 0n:
+                      {==}
+                    case 1n+a5:
+                      match a5:
+                        case 0n:
+                          {==}
+                        case 1n+a6:
+                          match a6:
+                            case 0n:
+                              {==}
+                            case 1n+a7:
+                              match a7:
+                                case 0n:
+                                  {==}
+                                case 1n+a8:
+                                  match a8:
+                                    case 0n:
+                                      {==}
+                                    case 1n+a9:
+                                      match a9:
+                                        case 0n:
+                                          {==}
+                                        case 1n+a10:
+                                          cp.lt0.no({C.rd.dig(SCon{Chr{C.dig(10n+a10)}, r}) == Some{(10n+a10, r)} : Maybe<&1, Nat & Bytes()>}, a10, lt)
+
+# two digits written are read as their number, for every number under 100
+def cp.d2.ab(+a: Nat, +b: Nat, +n: Nat, +r: Bytes(), eq: {Nat.add(Nat.mul(a, 10n), b) == n : Nat},
+  la: {Nat.is_lt(a, 10n) == True{} : Bool}, lb: {Nat.is_lt(b, 10n) == True{} : Bool}) ->
+  {C.rd.d2(Bytes.append(C.d2.qr((a, b)), r)) == Some{(n, r)} : Maybe<&1, Nat & Bytes()>}:
+  %Equal.sym(Maybe<&1, Nat & Bytes()>, C.rd.dig(SCon{Chr{C.dig(a)}, SCon{Chr{C.dig(b)}, r}}),
+    Some{(a, SCon{Chr{C.dig(b)}, r})}, cp.dg(a, SCon{Chr{C.dig(b)}, r}, la)) :
+    {C.rd.d2.a(_) == Some{(n, r)} : Maybe<&1, Nat & Bytes()>}
+  %Equal.sym(Maybe<&1, Nat & Bytes()>, C.rd.dig(SCon{Chr{C.dig(b)}, r}), Some{(b, r)}, cp.dg(b, r, lb)) :
+    {C.rd.d2.b(a, _) == Some{(n, r)} : Maybe<&1, Nat & Bytes()>}
+  %eq : {Some{(Nat.add(Nat.mul(a, 10n), b), r)} == Some{(_, r)} : Maybe<&1, Nat & Bytes()>}
+  {==}
+
+def cp.d2.qr(p: Nat & Nat, +n: Nat, +r: Bytes(), dm: cp.dm(10n, n, p),
+  lt: {Nat.is_lt(n, 100n) == True{} : Bool}) ->
+  {C.rd.d2(Bytes.append(C.d2.qr(p), r)) == Some{(n, r)} : Maybe<&1, Nat & Bytes()>}:
+  (+a, +b) = p
+  (+eq, lb) = dm
+  cp.d2.ab(a, b, n, r, eq, cp.qb(a, b, n, 10n, 10n, eq, lt), lb)
+
+law cp.d2:
+  for +n: Nat
+  for +r: Bytes()
+  for lt: {Nat.is_lt(n, 100n) == True{} : Bool}
+  {C.rd.d2(Bytes.append(C.d2(n), r)) == Some{(n, r)} : Maybe<&1, Nat & Bytes()>}
+
+def cp.d2(n, r, lt):
+  cp.d2.qr(Nat.divmod(n, 10n), n, r, cp.divmod(n, 9n), lt)
+
+# The calendar read back
+# ======================
+
+def cp.sum(ls: List<&2, Nat>) -> Nat:
+  match ls:
     case Nil{}:
-      all
-    case Con{+m, +t}:
-      (a, rest) = all
-      pg.fh.at(n, Eng.bytes.eq(Eng.mime.ext(m), e), m, Eng.mime.find(t, e), a, pg.fh.find(n, t, e, rest))
+      0n
+    case Con{l, t}:
+      Nat.add(l, cp.sum(t))
 
-def Laws.file_head_is_built(e, n):
-  pg.fh.find(n, Eng.mime.table(), e, pg.fh.table(n))
+# rem < l + s and l <= rem: rem - l < s
+def cp.sub_lt(+l: Nat, +rem: Nat, +s: Nat, lt: {Nat.is_lt(rem, Nat.add(l, s)) == True{} : Bool},
+  le: {Nat.is_le(l, rem) == True{} : Bool}) -> {Nat.is_lt(Nat.sub(rem, l), s) == True{} : Bool}:
+  match l:
+    case 0n:
+      %Equal.sym(Nat, Nat.sub(rem, 0n), rem, cp.sub_zero(rem)) : {Nat.is_lt(_, s) == True{} : Bool}
+      lt
+    case 1n+lp:
+      match rem:
+        case 0n:
+          cp.no({Nat.is_lt(Nat.sub(0n, 1n+lp), s) == True{} : Bool}, le)
+        case 1n+rp:
+          cp.sub_lt(lp, rp, s, lt, le)
+
+# a month walked one on: its place is one on, its day the same, and the
+# days before it are the first month's more
+def cp.mon.up(+l: Nat, +ls: List<&2, Nat>, jd: Nat & Nat, +x: Nat,
+  e: {C.mdays.p(ls, jd) == Some{x} : Maybe<&2, Nat>}) ->
+  {C.mdays.p(Con{l, ls}, C.mon.up(jd)) == Some{Nat.add(l, x)} : Maybe<&2, Nat>}:
+  (j, d) = jd
+  %Equal.sym(Maybe<&2, Nat>, C.mdays(ls, j, d), Some{x}, e) : {C.mdays.add(l, _) == Some{Nat.add(l, x)} : Maybe<&2, Nat>}
+  {==}
+
+def cp.lt_add0(+rem: Nat, +l: Nat, lt: {Nat.is_lt(rem, Nat.add(l, 0n)) == True{} : Bool}) ->
+  {Nat.is_lt(rem, l) == True{} : Bool}:
+  %cp.add_zero(l) : {Nat.is_lt(rem, _) == True{} : Bool}
+  lt
+
+# a day of the months, walked month by month, is the days before its
+# month and its day
+law cp.mon:
+  for +t: List<&2, Nat>
+  for +l: Nat
+  for +rem: Nat
+  for +c: Bool
+  for +ec: {Nat.is_lt(rem, l) == c : Bool}
+  for +lt: {Nat.is_lt(rem, Nat.add(l, cp.sum(t))) == True{} : Bool}
+  {C.mdays.p(Con{l, t}, C.mon(t, l, c, rem)) == Some{rem} : Maybe<&2, Nat>}
+
+def cp.mon(t, l, rem, c, ec, lt):
+  match t:
+    case Nil{}:
+      %Equal.sym(Bool, Nat.is_lt(rem, l), True{}, cp.lt_add0(rem, l, lt)) :
+        {C.mdays.fit(_, rem) == Some{rem} : Maybe<&2, Nat>}
+      {==}
+    case Con{+l2, +t2}:
+      match c:
+        case True{}:
+          %Equal.sym(Bool, Nat.is_lt(rem, l), True{}, ec) :
+            {C.mdays.fit(_, rem) == Some{rem} : Maybe<&2, Nat>}
+          {==}
+        case False{}:
+          +le = cp.nlt(rem, l, ec)
+          +r2 = Nat.sub(rem, l)
+          %cp.add_sub(l, rem, le) :
+            {C.mdays.p(Con{l, Con{l2, t2}}, C.mon.up(C.mon(t2, l2, Nat.is_lt(r2, l2), r2))) == Some{_} :
+              Maybe<&2, Nat>}
+          cp.mon.up(l, Con{l2, t2}, C.mon(t2, l2, Nat.is_lt(r2, l2), r2), r2,
+            cp.mon(t2, l2, r2, Nat.is_lt(r2, l2), {==}, cp.sub_lt(l, rem, Nat.add(l2, cp.sum(t2)), lt, le)))
+
+def cp.cd(kjd: Nat & Nat & Nat) -> Maybe<&2, Nat>:
+  (k, jd) = kjd
+  C.days.of(k, jd)
+
+# the day rem of year k, when the year has it: its month and its day are
+# the days before them in that year
+def cp.cal.mon(+lp: Bool, +k: Nat, +rem: Nat, el: {C.leap(k) == lp : Bool},
+  lt: {Nat.is_lt(rem, C.ylen.of(lp)) == True{} : Bool}) ->
+  {C.days.of(k, C.mon.of(C.mlens(C.leap(k)), rem)) == Some{Nat.add(C.before(k), rem)} : Maybe<&2, Nat>}:
+  match lp:
+    case True{}:
+      %Equal.sym(Bool, C.leap(k), True{}, el) :
+        {C.mdays.add(C.before(k), C.mdays.p(C.mlens(_), C.mon.of(C.mlens(_), rem))) ==
+          Some{Nat.add(C.before(k), rem)} : Maybe<&2, Nat>}
+      %Equal.sym(Maybe<&2, Nat>,
+        C.mdays.p(C.mlens(True{}), C.mon([29n, 31n, 30n, 31n, 30n, 31n, 31n, 30n, 31n, 30n, 31n], 31n,
+          Nat.is_lt(rem, 31n), rem)), Some{rem},
+        cp.mon([29n, 31n, 30n, 31n, 30n, 31n, 31n, 30n, 31n, 30n, 31n], 31n, rem, Nat.is_lt(rem, 31n), {==},
+          lt)) :
+        {C.mdays.add(C.before(k), _) == Some{Nat.add(C.before(k), rem)} : Maybe<&2, Nat>}
+      {==}
+    case False{}:
+      %Equal.sym(Bool, C.leap(k), False{}, el) :
+        {C.mdays.add(C.before(k), C.mdays.p(C.mlens(_), C.mon.of(C.mlens(_), rem))) ==
+          Some{Nat.add(C.before(k), rem)} : Maybe<&2, Nat>}
+      %Equal.sym(Maybe<&2, Nat>,
+        C.mdays.p(C.mlens(False{}), C.mon([28n, 31n, 30n, 31n, 30n, 31n, 31n, 30n, 31n, 30n, 31n], 31n,
+          Nat.is_lt(rem, 31n), rem)), Some{rem},
+        cp.mon([28n, 31n, 30n, 31n, 30n, 31n, 31n, 30n, 31n, 30n, 31n], 31n, rem, Nat.is_lt(rem, 31n), {==},
+          lt)) :
+        {C.mdays.add(C.before(k), _) == Some{Nat.add(C.before(k), rem)} : Maybe<&2, Nat>}
+      {==}
+
+# a year is at least a day: its length is one more than something
+def cp.ylen.pos(+lp: Bool) -> {C.ylen.of(lp) == 1n+Nat.sub(C.ylen.of(lp), 1n) : Nat}:
+  match lp:
+    case True{}:
+      {==}
+    case False{}:
+      {==}
+
+# rem < 2 + g and y = 1 + yp: rem < y + (1 + g)
+def cp.lt_two(+rem: Nat, +gp: Nat, +yp: Nat, lt: {Nat.is_lt(rem, 1n+1n+gp) == True{} : Bool}) ->
+  {Nat.is_lt(rem, Nat.add(1n+yp, 1n+gp)) == True{} : Bool}:
+  Nat.is_lt_le_trans(rem, 1n+1n+gp, Nat.add(1n+yp, 1n+gp), lt, cp.le_add_l(yp, 1n+gp))
+
+# past year k: the days before year k + 1 and what is left are the days
+# before year k and all of rem
+def cp.cal.skip(+b: Nat, +y: Nat, +rem: Nat, le: {Nat.is_le(y, rem) == True{} : Bool}) ->
+  {Nat.add(Nat.add(b, y), Nat.sub(rem, y)) == Nat.add(b, rem) : Nat}:
+  %Equal.sym(Nat, Nat.add(Nat.add(b, y), Nat.sub(rem, y)), Nat.add(b, Nat.add(y, Nat.sub(rem, y))),
+    cp.add_assoc(b, y, Nat.sub(rem, y))) : {_ == Nat.add(b, rem) : Nat}
+  Equal.cong(Nat, Nat, x => Nat.add(b, x), Nat.add(y, Nat.sub(rem, y)), rem, cp.add_sub(y, rem, le))
+
+# the walk of the years: from year k with rem days to go, what it lands
+# on is the days before year k and rem, when the fuel covers rem
+law cp.cal:
+  for +g: Nat
+  for +rem: Nat
+  for +k: Nat
+  for +c: Bool
+  for +ec: {Nat.is_lt(rem, C.ylen(k)) == c : Bool}
+  for +fuel: {Nat.is_lt(rem, 1n+g) == True{} : Bool}
+  {cp.cd(C.cal(1n+g, c, rem, k, C.ylen(k))) == Some{Nat.add(C.before(k), rem)} : Maybe<&2, Nat>}
+
+# year k has at least 365 days, so a first day of it is within it
+def cp.cal.first(+lp: Bool) -> {Nat.is_lt(0n, C.ylen.of(lp)) == True{} : Bool}:
+  match lp:
+    case True{}:
+      {==}
+    case False{}:
+      {==}
+
+def cp.cal.zero(-g: Type, +rem: Nat, +k: Nat, ec: {Nat.is_lt(rem, C.ylen(k)) == False{} : Bool},
+  fuel: {Nat.is_lt(rem, 1n) == True{} : Bool}) -> g:
+  match rem:
+    case 0n:
+      cp.no(g, Equal.trans(Bool, False{}, Nat.is_lt(0n, C.ylen(k)), True{},
+        Equal.sym(Bool, Nat.is_lt(0n, C.ylen(k)), False{}, ec), cp.cal.first(C.leap(k))))
+    case 1n+rp:
+      cp.lt0.no(g, rp, fuel)
+
+def cp.cal(g, rem, k, c, ec, fuel):
+  match g:
+    case 0n:
+      match c:
+        case True{}:
+          cp.cal.mon(C.leap(k), k, rem, {==}, ec)
+        case False{}:
+          cp.cal.zero({cp.cd(C.cal(1n, False{}, rem, k, C.ylen(k))) == Some{Nat.add(C.before(k), rem)} :
+            Maybe<&2, Nat>}, rem, k, ec, fuel)
+    case 1n+gp:
+      match c:
+        case True{}:
+          cp.cal.mon(C.leap(k), k, rem, {==}, ec)
+        case False{}:
+          +le = cp.nlt(rem, C.ylen(k), ec)
+          +r2 = Nat.sub(rem, C.ylen(k))
+          %cp.cal.skip(C.before(k), C.ylen(k), rem, le) :
+            {cp.cd(C.cal(1n+gp, Nat.is_lt(r2, C.ylen(1n+k)), r2, 1n+k, C.ylen(1n+k))) == Some{_} :
+              Maybe<&2, Nat>}
+          cp.cal(gp, r2, 1n+k, Nat.is_lt(r2, C.ylen(1n+k)), {==},
+            cp.sub_lt(C.ylen(k), rem, 1n+gp,
+              %Equal.sym(Nat, C.ylen.of(C.leap(k)), 1n+Nat.sub(C.ylen.of(C.leap(k)), 1n),
+                cp.ylen.pos(C.leap(k))) : {Nat.is_lt(rem, Nat.add(_, 1n+gp)) == True{} : Bool}
+              cp.lt_two(rem, gp, Nat.sub(C.ylen(k), 1n), fuel),
+              le))
+
+def cp.lt_self(+r: Nat) -> {Nat.is_lt(r, 1n+r) == True{} : Bool}:
+  %Equal.sym(Bool, Nat.is_lt(r, 1n+r), Nat.is_le(r, r), Nat.lt_succ(r, r)) : {_ == True{} : Bool}
+  cp.le_refl(r)
+
+# a walk started at year k, b days in, with days - b to go
+# the rest of a day's walk, a year at a time from year k with r days to
+# go: the days before year k and r
+def cp.cf(+k: Nat, +r: Nat) -> {cp.cd(C.civil.from((k, r))) == Some{Nat.add(C.before(k), r)} : Maybe<&2, Nat>}:
+  cp.cal(r, r, k, Nat.is_lt(r, C.ylen(k)), {==}, cp.lt_self(r))
+
+# four years on: the days before them are the days before the first and
+# the four years' lengths
+def cp.four(q: Nat) -> Nat:
+  match q:
+    case 0n:
+      0n
+    case 1n+p:
+      1n+1n+1n+1n+cp.four(p)
+
+def cp.S4(+k: Nat) -> Nat:
+  Nat.add(C.ylen(k), Nat.add(C.ylen(1n+k), Nat.add(C.ylen(1n+1n+k), C.ylen(1n+1n+1n+k))))
+
+def cp.b4(+k: Nat) -> {C.before(1n+1n+1n+1n+k) == Nat.add(C.before(k), cp.S4(k)) : Nat}:
+  Equal.trans(Nat,
+    Nat.add(Nat.add(Nat.add(Nat.add(C.before(k), C.ylen(k)), C.ylen(1n+k)), C.ylen(1n+1n+k)), C.ylen(1n+1n+1n+k)),
+    Nat.add(Nat.add(Nat.add(C.before(k), C.ylen(k)), C.ylen(1n+k)), Nat.add(C.ylen(1n+1n+k), C.ylen(1n+1n+1n+k))),
+    Nat.add(C.before(k), cp.S4(k)),
+    cp.add_assoc(Nat.add(Nat.add(C.before(k), C.ylen(k)), C.ylen(1n+k)), C.ylen(1n+1n+k), C.ylen(1n+1n+1n+k)),
+    Equal.trans(Nat,
+      Nat.add(Nat.add(Nat.add(C.before(k), C.ylen(k)), C.ylen(1n+k)), Nat.add(C.ylen(1n+1n+k), C.ylen(1n+1n+1n+k))),
+      Nat.add(Nat.add(C.before(k), C.ylen(k)), Nat.add(C.ylen(1n+k), Nat.add(C.ylen(1n+1n+k), C.ylen(1n+1n+1n+k)))),
+      Nat.add(C.before(k), cp.S4(k)),
+      cp.add_assoc(Nat.add(C.before(k), C.ylen(k)), C.ylen(1n+k), Nat.add(C.ylen(1n+1n+k), C.ylen(1n+1n+1n+k))),
+      cp.add_assoc(C.before(k), C.ylen(k), Nat.add(C.ylen(1n+k), Nat.add(C.ylen(1n+1n+k), C.ylen(1n+1n+1n+k))))))
+
+# each of the first 32 blocks from 1970 has 1461 days, counted by the
+# checker block by block
+def cp.s4(q0: Nat, lt: {Nat.is_lt(q0, 32n) == True{} : Bool}) -> {cp.S4(cp.four(q0)) == 1461n : Nat}:
+  match q0:
+    case 0n:
+      {==}
+    case 1n+q1:
+      match q1:
+        case 0n:
+          {==}
+        case 1n+q2:
+          match q2:
+            case 0n:
+              {==}
+            case 1n+q3:
+              match q3:
+                case 0n:
+                  {==}
+                case 1n+q4:
+                  match q4:
+                    case 0n:
+                      {==}
+                    case 1n+q5:
+                      match q5:
+                        case 0n:
+                          {==}
+                        case 1n+q6:
+                          match q6:
+                            case 0n:
+                              {==}
+                            case 1n+q7:
+                              match q7:
+                                case 0n:
+                                  {==}
+                                case 1n+q8:
+                                  match q8:
+                                    case 0n:
+                                      {==}
+                                    case 1n+q9:
+                                      match q9:
+                                        case 0n:
+                                          {==}
+                                        case 1n+q10:
+                                          match q10:
+                                            case 0n:
+                                              {==}
+                                            case 1n+q11:
+                                              match q11:
+                                                case 0n:
+                                                  {==}
+                                                case 1n+q12:
+                                                  match q12:
+                                                    case 0n:
+                                                      {==}
+                                                    case 1n+q13:
+                                                      match q13:
+                                                        case 0n:
+                                                          {==}
+                                                        case 1n+q14:
+                                                          match q14:
+                                                            case 0n:
+                                                              {==}
+                                                            case 1n+q15:
+                                                              match q15:
+                                                                case 0n:
+                                                                  {==}
+                                                                case 1n+q16:
+                                                                  match q16:
+                                                                    case 0n:
+                                                                      {==}
+                                                                    case 1n+q17:
+                                                                      match q17:
+                                                                        case 0n:
+                                                                          {==}
+                                                                        case 1n+q18:
+                                                                          match q18:
+                                                                            case 0n:
+                                                                              {==}
+                                                                            case 1n+q19:
+                                                                              match q19:
+                                                                                case 0n:
+                                                                                  {==}
+                                                                                case 1n+q20:
+                                                                                  match q20:
+                                                                                    case 0n:
+                                                                                      {==}
+                                                                                    case 1n+q21:
+                                                                                      match q21:
+                                                                                        case 0n:
+                                                                                          {==}
+                                                                                        case 1n+q22:
+                                                                                          match q22:
+                                                                                            case 0n:
+                                                                                              {==}
+                                                                                            case 1n+q23:
+                                                                                              match q23:
+                                                                                                case 0n:
+                                                                                                  {==}
+                                                                                                case 1n+q24:
+                                                                                                  match q24:
+                                                                                                    case 0n:
+                                                                                                      {==}
+                                                                                                    case 1n+q25:
+                                                                                                      match q25:
+                                                                                                        case 0n:
+                                                                                                          {==}
+                                                                                                        case 1n+q26:
+                                                                                                          match q26:
+                                                                                                            case 0n:
+                                                                                                              {==}
+                                                                                                            case 1n+q27:
+                                                                                                              match q27:
+                                                                                                                case 0n:
+                                                                                                                  {==}
+                                                                                                                case 1n+q28:
+                                                                                                                  match q28:
+                                                                                                                    case 0n:
+                                                                                                                      {==}
+                                                                                                                    case 1n+q29:
+                                                                                                                      match q29:
+                                                                                                                        case 0n:
+                                                                                                                          {==}
+                                                                                                                        case 1n+q30:
+                                                                                                                          match q30:
+                                                                                                                            case 0n:
+                                                                                                                              {==}
+                                                                                                                            case 1n+q31:
+                                                                                                                              match q31:
+                                                                                                                                case 0n:
+                                                                                                                                  {==}
+                                                                                                                                case 1n+q32:
+                                                                                                                                  cp.lt0.no({cp.S4(cp.four(1n+1n+1n+1n+1n+1n+1n+1n+1n+1n+1n+1n+1n+1n+1n+1n+1n+1n+1n+1n+1n+1n+1n+1n+1n+1n+1n+1n+1n+1n+1n+1n+q32)) == 1461n : Nat}, q32, lt)
+
+def cp.s4k(+q: Nat, +k: Nat, ek: {k == cp.four(q) : Nat}, lt: {Nat.is_lt(q, 32n) == True{} : Bool}) ->
+  {cp.S4(k) == 1461n : Nat}:
+  %Equal.sym(Nat, k, cp.four(q), ek) : {cp.S4(_) == 1461n : Nat}
+  cp.s4(q, lt)
+
+# the walk by blocks: from block q (year k, the four(q)th), rem days to
+# go, what it lands on is the days before year k and rem
+def cp.blk(f: Nat, ok: Bool, +q: Nat, +k: Nat, +rem: Nat, +ek: {k == cp.four(q) : Nat},
+  +eok: {Bool.and(Nat.is_lt(q, 32n), Nat.is_le(1461n, rem)) == ok : Bool}) ->
+  {cp.cd(C.civil.from(C.blk(f, ok, q, k, rem))) == Some{Nat.add(C.before(k), rem)} : Maybe<&2, Nat>}:
+  match f:
+    case 0n:
+      cp.cf(k, rem)
+    case 1n+g:
+      match ok:
+        case False{}:
+          cp.cf(k, rem)
+        case True{}:
+          +lt = Bool.and_l(Nat.is_lt(q, 32n), Nat.is_le(1461n, rem), eok)
+          +le = Bool.and_r(Nat.is_lt(q, 32n), Nat.is_le(1461n, rem), eok)
+          %cp.cal.skip(C.before(k), 1461n, rem, le) :
+            {cp.cd(C.civil.from(C.blk(g, Nat.is_lt(1n+q, 32n) && Nat.is_le(1461n, Nat.sub(rem, 1461n)), 1n+q,
+              1n+1n+1n+1n+k, Nat.sub(rem, 1461n)))) == Some{_} : Maybe<&2, Nat>}
+          %cp.s4k(q, k, ek, lt) :
+            {cp.cd(C.civil.from(C.blk(g, Nat.is_lt(1n+q, 32n) && Nat.is_le(1461n, Nat.sub(rem, 1461n)), 1n+q,
+              1n+1n+1n+1n+k, Nat.sub(rem, 1461n)))) == Some{Nat.add(Nat.add(C.before(k), _), Nat.sub(rem, 1461n))} :
+              Maybe<&2, Nat>}
+          %cp.b4(k) :
+            {cp.cd(C.civil.from(C.blk(g, Nat.is_lt(1n+q, 32n) && Nat.is_le(1461n, Nat.sub(rem, 1461n)), 1n+q,
+              1n+1n+1n+1n+k, Nat.sub(rem, 1461n)))) == Some{Nat.add(_, Nat.sub(rem, 1461n))} : Maybe<&2, Nat>}
+          cp.blk(g, Nat.is_lt(1n+q, 32n) && Nat.is_le(1461n, Nat.sub(rem, 1461n)), 1n+q, 1n+1n+1n+1n+k,
+            Nat.sub(rem, 1461n),
+            Equal.cong(Nat, Nat, x => 1n+1n+1n+1n+x, k, cp.four(q), ek), {==})
+
+# LAW: every day, placed in the calendar, is the days before its year,
+# its month and its day
+def cp.civil(+days: Nat) -> {cp.cd(C.civil(days)) == Some{days} : Maybe<&2, Nat>}:
+  cp.blk(32n, Nat.is_lt(0n, 32n) && Nat.is_le(1461n, days), 0n, 0n, days, {==}, {==})
+
+# a month and a day the months have are within them: the month one of
+# them, the day before its month's end
+def cp.ns(-g: Type, +x: Nat, e: {None{} == Some{x} : Maybe<&2, Nat>}) -> g:
+  cp.no(g, Equal.cong(Maybe<&2, Nat>, Bool, m => Maybe.is_some(&2, Nat, m), None{}, Some{x}, e))
+
+def cp.all_le(ls: List<&2, Nat>, +b: Nat) -> Bool:
+  match ls:
+    case Nil{}:
+      True{}
+    case Con{+l, t}:
+      Nat.is_le(l, b) && cp.all_le(t, b)
+
+def cp.fit.at(c: Bool, +d: Nat, +l: Nat, +x: Nat) -> {Nat.is_lt(d, l) == c : Bool} ->
+  {C.mdays.fit(c, d) == Some{x} : Maybe<&2, Nat>} -> {Nat.is_lt(d, l) == True{} : Bool}:
+  match c:
+    case True{}:
+      ec => e => ec
+    case False{}:
+      ec => e => cp.ns({Nat.is_lt(d, l) == True{} : Bool}, x, e)
+
+law cp.mdays_in:
+  for +ls: List<&2, Nat>
+  for +j: Nat
+  for +d: Nat
+  for +x: Nat
+  for +al: {cp.all_le(ls, 31n) == True{} : Bool}
+  for e: {C.mdays(ls, j, d) == Some{x} : Maybe<&2, Nat>}
+  {Nat.is_lt(j, List.length(&2, Nat, ls)) == True{} : Bool} & {Nat.is_lt(d, 31n) == True{} : Bool}
+
+def cp.madd(m: Maybe<&2, Nat>, +l: Nat, +t: List<&2, Nat>, +i: Nat, +d: Nat, +x: Nat,
+  ih: @y: Nat -> {C.mdays(t, i, d) == Some{y} : Maybe<&2, Nat>} ->
+    {Nat.is_lt(i, List.length(&2, Nat, t)) == True{} : Bool} & {Nat.is_lt(d, 31n) == True{} : Bool}) ->
+  {C.mdays(t, i, d) == m : Maybe<&2, Nat>} ->
+  {C.mdays.add(l, m) == Some{x} : Maybe<&2, Nat>} ->
+  {Nat.is_lt(i, List.length(&2, Nat, t)) == True{} : Bool} & {Nat.is_lt(d, 31n) == True{} : Bool}:
+  match m:
+    case None{}:
+      em => e => cp.ns({Nat.is_lt(i, List.length(&2, Nat, t)) == True{} : Bool} &
+        {Nat.is_lt(d, 31n) == True{} : Bool}, x, e)
+    case Some{y}:
+      em => e => ih(y, em)
+
+def cp.mdays_in(ls, j, d, x, al, e):
+  match ls:
+    case Nil{}:
+      cp.ns({Nat.is_lt(j, 0n) == True{} : Bool} & {Nat.is_lt(d, 31n) == True{} : Bool}, x, e)
+    case Con{+l, +t}:
+      match j:
+        case 0n:
+          ({==}, Nat.is_lt_le_trans(d, l, 31n,
+            cp.fit.at(Nat.is_lt(d, l), d, l, x)({==})(e),
+            Bool.and_l(Nat.is_le(l, 31n), cp.all_le(t, 31n), al)))
+        case 1n+i:
+          cp.madd(C.mdays(t, i, d), l, t, i, d, x,
+            y => ey => cp.mdays_in(t, i, d, y, Bool.and_r(Nat.is_le(l, 31n), cp.all_le(t, 31n), al), ey))({==})(e)
+
+# a name written is read as its place in its list: each place computed,
+# and past the list's end the bound refutes itself
+def cp.nm.wk(+i: Nat, +r: Bytes(), lt: {Nat.is_lt(i, 7n) == True{} : Bool}) ->
+  {C.rd.name(Bytes.append(C.nth(C.wkc(), i), r), C.wkc()) == Some{(i, r)} : Maybe<&1, Nat & Bytes()>}:
+  match i:
+    case 0n:
+      {==}
+    case 1n+i1:
+      match i1:
+        case 0n:
+          {==}
+        case 1n+i2:
+          match i2:
+            case 0n:
+              {==}
+            case 1n+i3:
+              match i3:
+                case 0n:
+                  {==}
+                case 1n+i4:
+                  match i4:
+                    case 0n:
+                      {==}
+                    case 1n+i5:
+                      match i5:
+                        case 0n:
+                          {==}
+                        case 1n+i6:
+                          match i6:
+                            case 0n:
+                              {==}
+                            case 1n+i7:
+                              cp.lt0.no({C.rd.name(Bytes.append(C.nth(C.wkc(), 7n+i7), r), C.wkc()) == Some{(7n+i7, r)} : Maybe<&1, Nat & Bytes()>}, i7, lt)
+
+def cp.nm.mo(+i: Nat, +r: Bytes(), lt: {Nat.is_lt(i, 12n) == True{} : Bool}) ->
+  {C.rd.name(Bytes.append(C.nth(C.monc(), i), r), C.monc()) == Some{(i, r)} : Maybe<&1, Nat & Bytes()>}:
+  match i:
+    case 0n:
+      {==}
+    case 1n+i1:
+      match i1:
+        case 0n:
+          {==}
+        case 1n+i2:
+          match i2:
+            case 0n:
+              {==}
+            case 1n+i3:
+              match i3:
+                case 0n:
+                  {==}
+                case 1n+i4:
+                  match i4:
+                    case 0n:
+                      {==}
+                    case 1n+i5:
+                      match i5:
+                        case 0n:
+                          {==}
+                        case 1n+i6:
+                          match i6:
+                            case 0n:
+                              {==}
+                            case 1n+i7:
+                              match i7:
+                                case 0n:
+                                  {==}
+                                case 1n+i8:
+                                  match i8:
+                                    case 0n:
+                                      {==}
+                                    case 1n+i9:
+                                      match i9:
+                                        case 0n:
+                                          {==}
+                                        case 1n+i10:
+                                          match i10:
+                                            case 0n:
+                                              {==}
+                                            case 1n+i11:
+                                              match i11:
+                                                case 0n:
+                                                  {==}
+                                                case 1n+i12:
+                                                  cp.lt0.no({C.rd.name(Bytes.append(C.nth(C.monc(), 12n+i12), r), C.monc()) == Some{(12n+i12, r)} : Maybe<&1, Nat & Bytes()>}, i12, lt)
+
+# The token walk over pieces
+# ==========================
+#
+# A date's text is pieces, each read by one token as one value. When
+# every piece reads so, the walk over their text is the walk after them,
+# with every value put in its slot: by induction over the pieces.
+type cp.Cell is Data:
+  cp.Cell{t: C.Tok, p: Bytes(), v: Nat}
+
+def cp.cput(dt: C.Dt, c: cp.Cell) -> C.Dt:
+  match c:
+    case cp.Cell{t, p, v}:
+      match t:
+        case C.TName{xs, sl}:
+          C.dt.put(dt, sl, v)
+        case C.TLit{q}:
+          dt
+        case C.TD2{sl}:
+          C.dt.put(dt, sl, v)
+        case C.TSd{sl}:
+          C.dt.put(dt, sl, v)
+
+def cp.cok(+c: cp.Cell) -> Type:
+  match c:
+    case cp.Cell{+t, +p, +v}:
+      @r: Bytes() -> @dt: C.Dt ->
+        {C.tok.read(t, Bytes.append(p, r), dt) == Some{(cp.cput(dt, cp.Cell{t, p, v}), r)} :
+          Maybe<&1, C.Dt & Bytes()>}
+
+def cp.All(+cs: List<&2, cp.Cell>) -> Type:
+  match cs:
+    case Nil{}:
+      Unit
+    case Con{+c, +t}:
+      cp.cok(c) & cp.All(t)
+
+def cp.toks(cs: List<&2, cp.Cell>, tail: List<&2, C.Tok>) -> List<&2, C.Tok>:
+  match cs:
+    case Nil{}:
+      tail
+    case Con{c, t}:
+      match c:
+        case cp.Cell{tk, p, v}:
+          Con{tk, cp.toks(t, tail)}
+
+def cp.text(cs: List<&2, cp.Cell>, r: Bytes()) -> Bytes():
+  match cs:
+    case Nil{}:
+      r
+    case Con{c, t}:
+      match c:
+        case cp.Cell{tk, p, v}:
+          Bytes.append(p, cp.text(t, r))
+
+def cp.fold(cs: List<&2, cp.Cell>, dt: C.Dt) -> C.Dt:
+  match cs:
+    case Nil{}:
+      dt
+    case Con{+c, t}:
+      cp.fold(t, cp.cput(dt, c))
+
+law cp.run_cells:
+  for +cs: List<&2, cp.Cell>
+  for +tail: List<&2, C.Tok>
+  for +dt: C.Dt
+  for +r: Bytes()
+  for all: cp.All(cs)
+  {C.run(cp.toks(cs, tail), Some{(dt, cp.text(cs, r))}) == C.run(tail, Some{(cp.fold(cs, dt), r)}) :
+    Maybe<&2, C.Dt>}
+
+def cp.run_cells(cs, tail, dt, r, all):
+  match cs:
+    case Nil{}:
+      {==}
+    case Con{+c, +t}:
+      match c:
+        case cp.Cell{+tk, +p, +v}:
+          (ok, rest) = all
+          %Equal.sym(Maybe<&1, C.Dt & Bytes()>, C.tok.read(tk, Bytes.append(p, cp.text(t, r)), dt),
+            Some{(cp.cput(dt, cp.Cell{tk, p, v}), cp.text(t, r))}, ok(cp.text(t, r), dt)) :
+            {C.run(cp.toks(t, tail), _) == C.run(tail, Some{(cp.fold(t, cp.cput(dt, cp.Cell{tk, p, v})), r)}) :
+              Maybe<&2, C.Dt>}
+          cp.run_cells(t, tail, cp.cput(dt, cp.Cell{tk, p, v}), r, rest)
+
+# The round trip
+# ==============
+#
+# What the reader makes of the date's fields is the time they came from:
+# the hour, minute and second are in range and fold back into the
+# seconds as they were split out of them; the year's two halves are the
+# year, 1970 or later, and its month and day are where the calendar
+# placed the day.
+# k + c - c is k
+def cp.sub_add_r(+k: Nat, +c: Nat) -> {Nat.sub(Nat.add(k, c), c) == k : Nat}:
+  %cp.add_comm(c, k) : {Nat.sub(_, c) == k : Nat}
+  WW.wl.sub_add(c, k)
+
+def cp.rt.stamp(+days: Nat, +t: Nat, +k: Nat, +j: Nat, +d: Nat, +yh: Nat, +yl: Nat,
+  +h: Nat, +hs: Nat, +m: Nat, +ms: Nat, +x: Nat,
+  eq1: {Nat.add(Nat.mul(ms, 60n), x) == t : Nat},
+  eq2: {Nat.add(Nat.mul(hs, 60n), m) == ms : Nat},
+  eq3: {Nat.add(Nat.mul(days, 24n), h) == hs : Nat},
+  eq4: {Nat.add(Nat.mul(yh, 100n), yl) == Nat.add(k, 1970n) : Nat},
+  ec: {C.days.of(k, (j, d)) == Some{days} : Maybe<&2, Nat>},
+  lh: {Nat.is_lt(h, 24n) == True{} : Bool}, lm: {Nat.is_lt(m, 60n) == True{} : Bool},
+  lx: {Nat.is_lt(x, 60n) == True{} : Bool}) ->
+  {C.stamp(Nat.add(yl, Nat.mul(yh, 100n)), j, 1n+d, h, m, x) == Some{t} : Maybe<&2, Nat>}:
+  %cp.add_comm(Nat.mul(yh, 100n), yl) : {C.stamp(_, j, 1n+d, h, m, x) == Some{t} : Maybe<&2, Nat>}
+  %Equal.sym(Nat, Nat.add(Nat.mul(yh, 100n), yl), Nat.add(k, 1970n), eq4) :
+    {C.stamp(_, j, 1n+d, h, m, x) == Some{t} : Maybe<&2, Nat>}
+  %Equal.sym(Bool, Nat.is_lt(h, 24n), True{}, lh) :
+    {C.stamp.ok(Bool.and(_, Bool.and(Nat.is_lt(m, 60n), Nat.is_lt(x, 60n))), Nat.add(k, 1970n), j, 1n+d, h,
+      m, x) == Some{t} : Maybe<&2, Nat>}
+  %Equal.sym(Bool, Nat.is_lt(m, 60n), True{}, lm) :
+    {C.stamp.ok(Bool.and(True{}, Bool.and(_, Nat.is_lt(x, 60n))), Nat.add(k, 1970n), j, 1n+d, h,
+      m, x) == Some{t} : Maybe<&2, Nat>}
+  %Equal.sym(Bool, Nat.is_lt(x, 60n), True{}, lx) :
+    {C.stamp.ok(Bool.and(True{}, Bool.and(True{}, _)), Nat.add(k, 1970n), j, 1n+d, h,
+      m, x) == Some{t} : Maybe<&2, Nat>}
+  %Equal.sym(Bool, Nat.is_le(1970n, Nat.add(k, 1970n)), True{}, cp.le_add_l(k, 1970n)) :
+    {C.stamp.go(_, Nat.add(k, 1970n), j, 1n+d, h, m, x) == Some{t} : Maybe<&2, Nat>}
+  %Equal.sym(Nat, Nat.sub(Nat.add(k, 1970n), 1970n), k, cp.sub_add_r(k, 1970n)) :
+    {C.stamp.at(C.days.of(_, (j, d)), h, m, x) == Some{t} : Maybe<&2, Nat>}
+  %Equal.sym(Maybe<&2, Nat>, C.days.of(k, (j, d)), Some{days}, ec) :
+    {C.stamp.at(_, h, m, x) == Some{t} : Maybe<&2, Nat>}
+  %eq1 : {Some{Nat.add(Nat.mul(Nat.add(Nat.mul(Nat.add(Nat.mul(days, 24n), h), 60n), m), 60n), x)} ==
+    Some{_} : Maybe<&2, Nat>}
+  %eq2 : {Some{Nat.add(Nat.mul(Nat.add(Nat.mul(Nat.add(Nat.mul(days, 24n), h), 60n), m), 60n), x)} ==
+    Some{Nat.add(Nat.mul(_, 60n), x)} : Maybe<&2, Nat>}
+  %eq3 : {Some{Nat.add(Nat.mul(Nat.add(Nat.mul(Nat.add(Nat.mul(days, 24n), h), 60n), m), 60n), x)} ==
+    Some{Nat.add(Nat.mul(Nat.add(Nat.mul(_, 60n), m), 60n), x)} : Maybe<&2, Nat>}
+  {==}
+
+# each piece of an IMF-fixdate is read by its token as its value
+def cp.ok.d2.at(sl: C.Sl, +n: Nat, lt: {Nat.is_lt(n, 100n) == True{} : Bool}, +r: Bytes(), dt: C.Dt) ->
+  {C.tok.read(C.TD2{sl}, Bytes.append(C.d2(n), r), dt) == Some{(C.dt.put(dt, sl, n), r)} :
+    Maybe<&1, C.Dt & Bytes()>}:
+  %Equal.sym(Maybe<&1, Nat & Bytes()>, C.rd.d2(Bytes.append(C.d2(n), r)), Some{(n, r)}, cp.d2(n, r, lt)) :
+    {C.tok.num(_, sl, dt) == Some{(C.dt.put(dt, sl, n), r)} : Maybe<&1, C.Dt & Bytes()>}
+  {==}
+
+def cp.ok.d2(+sl: C.Sl, +n: Nat, +lt: {Nat.is_lt(n, 100n) == True{} : Bool}) ->
+  cp.cok(cp.Cell{C.TD2{sl}, C.d2(n), n}):
+  r => dt => cp.ok.d2.at(sl, n, lt, r, dt)
+
+def cp.ok.wk.at(+w: Nat, lt: {Nat.is_lt(w, 7n) == True{} : Bool}, +r: Bytes(), dt: C.Dt) ->
+  {C.tok.read(C.TName{C.wkc(), C.SNone{}}, Bytes.append(C.nth(C.wkc(), w), r), dt) ==
+    Some{(C.dt.put(dt, C.SNone{}, w), r)} : Maybe<&1, C.Dt & Bytes()>}:
+  %Equal.sym(Maybe<&1, Nat & Bytes()>, C.rd.name(Bytes.append(C.nth(C.wkc(), w), r), C.wkc()), Some{(w, r)},
+    cp.nm.wk(w, r, lt)) :
+    {C.tok.num(_, C.SNone{}, dt) == Some{(C.dt.put(dt, C.SNone{}, w), r)} : Maybe<&1, C.Dt & Bytes()>}
+  {==}
+
+def cp.ok.wk(+w: Nat, +lt: {Nat.is_lt(w, 7n) == True{} : Bool}) ->
+  cp.cok(cp.Cell{C.TName{C.wkc(), C.SNone{}}, C.nth(C.wkc(), w), w}):
+  r => dt => cp.ok.wk.at(w, lt, r, dt)
+
+def cp.ok.mo.at(+j: Nat, lt: {Nat.is_lt(j, 12n) == True{} : Bool}, +r: Bytes(), dt: C.Dt) ->
+  {C.tok.read(C.TName{C.monc(), C.SMon{}}, Bytes.append(C.nth(C.monc(), j), r), dt) ==
+    Some{(C.dt.put(dt, C.SMon{}, j), r)} : Maybe<&1, C.Dt & Bytes()>}:
+  %Equal.sym(Maybe<&1, Nat & Bytes()>, C.rd.name(Bytes.append(C.nth(C.monc(), j), r), C.monc()), Some{(j, r)},
+    cp.nm.mo(j, r, lt)) :
+    {C.tok.num(_, C.SMon{}, dt) == Some{(C.dt.put(dt, C.SMon{}, j), r)} : Maybe<&1, C.Dt & Bytes()>}
+  {==}
+
+def cp.ok.mo(+j: Nat, +lt: {Nat.is_lt(j, 12n) == True{} : Bool}) ->
+  cp.cok(cp.Cell{C.TName{C.monc(), C.SMon{}}, C.nth(C.monc(), j), j}):
+  r => dt => cp.ok.mo.at(j, lt, r, dt)
+
+def cp.ok.lit.sp() -> cp.cok(cp.Cell{C.TLit{" "}, " ", 0n}):
+  r => dt => {==}
+
+def cp.ok.lit.c() -> cp.cok(cp.Cell{C.TLit{":"}, ":", 0n}):
+  r => dt => {==}
+
+def cp.ok.lit.gmt() -> cp.cok(cp.Cell{C.TLit{" GMT"}, " GMT", 0n}):
+  r => dt => {==}
+
+def cp.imf.cells(+w: Nat, +d1: Nat, +j: Nat, +yh: Nat, +yl: Nat, +h: Nat, +m: Nat, +x: Nat) ->
+  List<&2, cp.Cell>:
+  [cp.Cell{C.TName{C.wkc(), C.SNone{}}, C.nth(C.wkc(), w), w},
+    cp.Cell{C.TD2{C.SDay{}}, C.d2(d1), d1},
+    cp.Cell{C.TLit{" "}, " ", 0n},
+    cp.Cell{C.TName{C.monc(), C.SMon{}}, C.nth(C.monc(), j), j},
+    cp.Cell{C.TD2{C.SYh{}}, C.d2(yh), yh},
+    cp.Cell{C.TD2{C.SYl{}}, C.d2(yl), yl},
+    cp.Cell{C.TLit{" "}, " ", 0n},
+    cp.Cell{C.TD2{C.SH{}}, C.d2(h), h},
+    cp.Cell{C.TLit{":"}, ":", 0n},
+    cp.Cell{C.TD2{C.SM{}}, C.d2(m), m},
+    cp.Cell{C.TLit{":"}, ":", 0n},
+    cp.Cell{C.TD2{C.SS{}}, C.d2(x), x},
+    cp.Cell{C.TLit{" GMT"}, " GMT", 0n}]
+
+def cp.imf.all(+w: Nat, +d1: Nat, +j: Nat, +yh: Nat, +yl: Nat, +h: Nat, +m: Nat, +x: Nat,
+  +lw: {Nat.is_lt(w, 7n) == True{} : Bool}, +ld: {Nat.is_lt(d1, 100n) == True{} : Bool},
+  +lj: {Nat.is_lt(j, 12n) == True{} : Bool}, +lyh: {Nat.is_lt(yh, 100n) == True{} : Bool},
+  +lyl: {Nat.is_lt(yl, 100n) == True{} : Bool}, +lh: {Nat.is_lt(h, 100n) == True{} : Bool},
+  +lm: {Nat.is_lt(m, 100n) == True{} : Bool}, +lx: {Nat.is_lt(x, 100n) == True{} : Bool}) ->
+  cp.All(cp.imf.cells(w, d1, j, yh, yl, h, m, x)):
+  (cp.ok.wk(w, lw), (cp.ok.d2(C.SDay{}, d1, ld), (cp.ok.lit.sp(), (cp.ok.mo(j, lj),
+    (cp.ok.d2(C.SYh{}, yh, lyh), (cp.ok.d2(C.SYl{}, yl, lyl), (cp.ok.lit.sp(), (cp.ok.d2(C.SH{}, h, lh),
+      (cp.ok.lit.c(), (cp.ok.d2(C.SM{}, m, lm), (cp.ok.lit.c(), (cp.ok.d2(C.SS{}, x, lx),
+        (cp.ok.lit.gmt(), Unit{})))))))))))))
+
+# a month and a day the calendar has: January to December, and the day
+# below 31, since no month is longer
+def cp.ml.len(+lp: Bool) -> {List.length(&2, Nat, C.mlens(lp)) == 12n : Nat}:
+  match lp:
+    case True{}:
+      {==}
+    case False{}:
+      {==}
+
+def cp.ml.al(+lp: Bool) -> {cp.all_le(C.mlens(lp), 31n) == True{} : Bool}:
+  match lp:
+    case True{}:
+      {==}
+    case False{}:
+      {==}
+
+def cp.jd.ls(+ls: List<&2, Nat>, +l0: Nat, +j: Nat, +d: Nat, +x: Nat,
+  +al: {cp.all_le(ls, 31n) == True{} : Bool},
+  e: {C.mdays.add(l0, C.mdays(ls, j, d)) == Some{x} : Maybe<&2, Nat>}) ->
+  {Nat.is_lt(j, List.length(&2, Nat, ls)) == True{} : Bool} & {Nat.is_lt(d, 31n) == True{} : Bool}:
+  cp.madd(C.mdays(ls, j, d), l0, ls, j, d, x, y => ey => cp.mdays_in(ls, j, d, y, al, ey))({==})(e)
+
+def cp.jd(+k: Nat, +j: Nat, +d: Nat, +days: Nat,
+  ec: {C.days.of(k, (j, d)) == Some{days} : Maybe<&2, Nat>}) ->
+  {Nat.is_lt(j, 12n) == True{} : Bool} & {Nat.is_lt(d, 31n) == True{} : Bool}:
+  %cp.ml.len(C.leap(k)) : {Nat.is_lt(j, _) == True{} : Bool} & {Nat.is_lt(d, 31n) == True{} : Bool}
+  cp.jd.ls(C.mlens(C.leap(k)), C.before(k), j, d, days, cp.ml.al(C.leap(k)), ec)
+
+# the weekday is below 7
+def cp.rt.wk(+a: Nat, qr: Nat & Nat, dm: cp.dm(7n, a, qr)) -> {Nat.is_lt(Nat.mod.fin(qr), 7n) == True{} : Bool}:
+  match qr:
+    case (q, r):
+      (e, l) = dm
+      l
+
+# a Maybe that is Some is what Maybe.or keeps
+def cp.or.some(-a: Maybe<&2, Nat>, -b: Maybe<&2, Nat>, +t: Nat, e: {a == Some{t} : Maybe<&2, Nat>}) ->
+  {Maybe.or(&2, Nat, a, b) == Some{t} : Maybe<&2, Nat>}:
+  %Equal.sym(Maybe<&2, Nat>, a, Some{t}, e) : {Maybe.or(&2, Nat, _, b) == Some{t} : Maybe<&2, Nat>}
+  {==}
+
+def cp.rt.fin(+t: Nat, +days: Nat, +h: Nat, +m: Nat, +x: Nat, +ms: Nat, +hs: Nat, +k: Nat, +j: Nat,
+  +d: Nat, yy: Nat & Nat,
+  +eq1: {Nat.add(Nat.mul(ms, 60n), x) == t : Nat},
+  +eq2: {Nat.add(Nat.mul(hs, 60n), m) == ms : Nat},
+  +eq3: {Nat.add(Nat.mul(days, 24n), h) == hs : Nat},
+  +lh: {Nat.is_lt(h, 24n) == True{} : Bool}, +lm: {Nat.is_lt(m, 60n) == True{} : Bool},
+  +lx: {Nat.is_lt(x, 60n) == True{} : Bool},
+  +ec: {C.days.of(k, (j, d)) == Some{days} : Maybe<&2, Nat>},
+  +ey: {Nat.is_lt(C.year.hi(yy), 100n) == True{} : Bool},
+  dmy: cp.dm(100n, Nat.add(k, 1970n), yy),
+  +wl: {Nat.is_lt(Nat.mod(Nat.add(4n, days), 7n), 7n) == True{} : Bool},
+  jdb: {Nat.is_lt(j, 12n) == True{} : Bool} & {Nat.is_lt(d, 31n) == True{} : Bool}) ->
+  {C.rd.form(C.imf.toks(), Bytes.concat(Con{C.nth(C.wkc(), Nat.mod(Nat.add(4n, days), 7n)),
+    Con{C.d2(1n+d), Con{" ", Con{C.nth(C.monc(), j),
+      C.date.y(yy, [C.d2(h), ":", C.d2(m), ":", C.d2(x), " GMT"])}}}})) == Some{t} : Maybe<&2, Nat>}:
+  match yy:
+    case (+yh, +yl):
+      (+eq4, +lyl) = dmy
+      (+lj, +ld) = jdb
+      %Equal.sym(Maybe<&2, C.Dt>,
+        C.run(cp.toks(cp.imf.cells(Nat.mod(Nat.add(4n, days), 7n), 1n+d, j, yh, yl, h, m, x), Nil{}),
+          Some{(C.dt0(), cp.text(cp.imf.cells(Nat.mod(Nat.add(4n, days), 7n), 1n+d, j, yh, yl, h, m, x), ""))}),
+        C.run(Nil{}, Some{(cp.fold(cp.imf.cells(Nat.mod(Nat.add(4n, days), 7n), 1n+d, j, yh, yl, h, m, x),
+          C.dt0()), "")}),
+        cp.run_cells(cp.imf.cells(Nat.mod(Nat.add(4n, days), 7n), 1n+d, j, yh, yl, h, m, x), Nil{}, C.dt0(), "",
+          cp.imf.all(Nat.mod(Nat.add(4n, days), 7n), 1n+d, j, yh, yl, h, m, x, wl,
+            Nat.is_lt_le_trans(d, 31n, 99n, ld, {==}), lj,
+            ey, lyl,
+            Nat.is_lt_le_trans(h, 24n, 100n, lh, {==}), Nat.is_lt_le_trans(m, 60n, 100n, lm, {==}),
+            Nat.is_lt_le_trans(x, 60n, 100n, lx, {==})))) :
+        {C.dt.stamp(_) == Some{t} : Maybe<&2, Nat>}
+      cp.rt.stamp(days, t, k, j, d, yh, yl, h, hs, m, ms, x, eq1, eq2, eq3, eq4, ec, lh, lm, lx)
+
+def cp.rt.jd(+t: Nat, +ms: Nat, +x: Nat, +hs: Nat, +m: Nat, +days: Nat, +h: Nat,
+  +eq1: {Nat.add(Nat.mul(ms, 60n), x) == t : Nat},
+  +lx: {Nat.is_lt(x, 60n) == True{} : Bool},
+  +eq2: {Nat.add(Nat.mul(hs, 60n), m) == ms : Nat},
+  +lm: {Nat.is_lt(m, 60n) == True{} : Bool},
+  +eq3: {Nat.add(Nat.mul(days, 24n), h) == hs : Nat},
+  +lh: {Nat.is_lt(h, 24n) == True{} : Bool},
+  +k: Nat, jd: Nat & Nat,
+  +ec: {C.days.of(k, jd) == Some{days} : Maybe<&2, Nat>},
+  +ey: {Nat.is_lt(C.year.hi(Nat.divmod(Nat.add(k, 1970n), 100n)), 100n) == True{} : Bool},
+  +wl: {Nat.is_lt(Nat.mod(Nat.add(4n, days), 7n), 7n) == True{} : Bool}) ->
+  {C.rd.form(C.imf.toks(), Bytes.concat(Con{C.nth(C.wkc(), Nat.mod(Nat.add(4n, days), 7n)),
+    C.date.ymd((k, jd), [C.d2(h), ":", C.d2(m), ":", C.d2(x), " GMT"])})) == Some{t} : Maybe<&2, Nat>}:
+  match jd:
+    case (+j, +d):
+      cp.rt.fin(t, days, h, m, x, ms, hs, k, j, d, Nat.divmod(Nat.add(k, 1970n), 100n), eq1, eq2, eq3,
+        lh, lm, lx, ec, ey, cp.divmod(Nat.add(k, 1970n), 99n), wl, cp.jd(k, j, d, days, ec))
+
+def cp.rt.cal(+t: Nat, +ms: Nat, +x: Nat, +hs: Nat, +m: Nat, +days: Nat, +h: Nat,
+  +eq1: {Nat.add(Nat.mul(ms, 60n), x) == t : Nat},
+  +lx: {Nat.is_lt(x, 60n) == True{} : Bool},
+  +eq2: {Nat.add(Nat.mul(hs, 60n), m) == ms : Nat},
+  +lm: {Nat.is_lt(m, 60n) == True{} : Bool},
+  +eq3: {Nat.add(Nat.mul(days, 24n), h) == hs : Nat},
+  +lh: {Nat.is_lt(h, 24n) == True{} : Bool},
+  kjd: Nat & Nat & Nat,
+  +ec: {cp.cd(kjd) == Some{days} : Maybe<&2, Nat>},
+  +ey: {Nat.is_lt(C.year.hi(Nat.divmod(C.year.of(kjd), 100n)), 100n) == True{} : Bool},
+  +wl: {Nat.is_lt(Nat.mod(Nat.add(4n, days), 7n), 7n) == True{} : Bool}) ->
+  {C.rd.form(C.imf.toks(), Bytes.concat(Con{C.nth(C.wkc(), Nat.mod(Nat.add(4n, days), 7n)),
+    C.date.ymd(kjd, [C.d2(h), ":", C.d2(m), ":", C.d2(x), " GMT"])})) == Some{t} : Maybe<&2, Nat>}:
+  match kjd:
+    case (+k, jd):
+      cp.rt.jd(t, ms, x, hs, m, days, h, eq1, lx, eq2, lm, eq3, lh, k, jd, ec, ey, wl)
+
+def cp.rt.q3(+t: Nat, +ms: Nat, +x: Nat, +hs: Nat, +m: Nat,
+  +eq1: {Nat.add(Nat.mul(ms, 60n), x) == t : Nat},
+  +lx: {Nat.is_lt(x, 60n) == True{} : Bool},
+  +eq2: {Nat.add(Nat.mul(hs, 60n), m) == ms : Nat},
+  +lm: {Nat.is_lt(m, 60n) == True{} : Bool},
+  dh: Nat & Nat, dm: cp.dm(24n, hs, dh),
+  +ey: {Nat.is_lt(C.year.hi(Nat.divmod(C.year.q3(dh), 100n)), 100n) == True{} : Bool}) ->
+  {C.rd.form(C.imf.toks(), C.date.q3(m, x, dh)) == Some{t} : Maybe<&2, Nat>}:
+  match dh:
+    case (+days, +h):
+      (eq3, lh) = dm
+      cp.rt.cal(t, ms, x, hs, m, days, h, eq1, lx, eq2, lm, eq3, lh, C.civil(days), cp.civil(days), ey,
+        cp.rt.wk(Nat.add(4n, days), Nat.divmod(Nat.add(4n, days), 7n), cp.divmod(Nat.add(4n, days), 6n)))
+
+def cp.rt.q2(+t: Nat, +ms: Nat, +x: Nat,
+  +eq1: {Nat.add(Nat.mul(ms, 60n), x) == t : Nat},
+  +lx: {Nat.is_lt(x, 60n) == True{} : Bool},
+  hm: Nat & Nat, dm: cp.dm(60n, ms, hm),
+  +ey: {Nat.is_lt(C.year.hi(Nat.divmod(C.year.q2(hm), 100n)), 100n) == True{} : Bool}) ->
+  {C.rd.form(C.imf.toks(), C.date.q2(x, hm)) == Some{t} : Maybe<&2, Nat>}:
+  match hm:
+    case (+hs, +m):
+      (eq2, lm) = dm
+      cp.rt.q3(t, ms, x, hs, m, eq1, lx, eq2, lm, Nat.divmod(hs, 24n), cp.divmod(hs, 23n), ey)
+
+def cp.rt.q1(+t: Nat, mx: Nat & Nat, dm: cp.dm(60n, t, mx),
+  +ey: {Nat.is_lt(C.year.hi(Nat.divmod(C.year.q1(mx), 100n)), 100n) == True{} : Bool}) ->
+  {C.rd.form(C.imf.toks(), C.date.q1(mx)) == Some{t} : Maybe<&2, Nat>}:
+  match mx:
+    case (+ms, +x):
+      (eq1, lx) = dm
+      cp.rt.q2(t, ms, x, eq1, lx, Nat.divmod(ms, 60n), cp.divmod(ms, 59n), ey)
+
+# every time before the year 10000 is written as an IMF-fixdate that
+# reads back as itself
+def cp.date_rt(+t: Nat, +ey: {C.year.ok(t) == True{} : Bool}) ->
+  {C.date.read(C.date.fmt(t)) == Some{t} : Maybe<&2, Nat>}:
+  cp.or.some(C.rd.form(C.imf.toks(), C.date.fmt(t)),
+    Maybe.or(&2, Nat, C.rd.form(C.rfc850.toks(), C.date.fmt(t)), C.rd.form(C.asctime.toks(), C.date.fmt(t))),
+    t, cp.rt.q1(t, Nat.divmod(t, 60n), cp.divmod(t, 59n), ey))
+
+# Ranges are in the file
+# ======================
+#
+# What want gives is a range of the file, a <= b < n, whatever spec it is
+# handed; so is every Part the decision comes to, since each is a want's.
+def cq.W(w: C.Want, +n: Nat) -> Type:
+  match w:
+    case C.Span{a, b}:
+      {Nat.is_le(a, b) == True{} : Bool} & {Nat.is_lt(b, n) == True{} : Bool}
+    case C.Unsat{}:
+      Unit
+
+def cq.G(g: C.Got, +n: Nat) -> Type:
+  match g:
+    case C.Part{a, b}:
+      {Nat.is_le(a, b) == True{} : Bool} & {Nat.is_lt(b, n) == True{} : Bool}
+    case _:
+      Unit
+
+def cq.le_min(+a: Nat, +x: Nat, +y: Nat, ax: {Nat.is_le(a, x) == True{} : Bool},
+  ay: {Nat.is_le(a, y) == True{} : Bool}) -> {Nat.is_le(a, Nat.min(x, y)) == True{} : Bool}:
+  match a:
+    case 0n:
+      cp.le0(Nat.min(x, y))
+    case 1n+ap:
+      match x:
+        case 0n:
+          cp.no({Nat.is_le(1n+ap, Nat.min(0n, y)) == True{} : Bool}, ax)
+        case 1n+xp:
+          match y:
+            case 0n:
+              cp.no({Nat.is_le(1n+ap, Nat.min(1n+xp, 0n)) == True{} : Bool}, ay)
+            case 1n+yp:
+              cq.le_min(ap, xp, yp, ax, ay)
+
+def cq.min_le(+x: Nat, +y: Nat) -> {Nat.is_le(Nat.min(x, y), y) == True{} : Bool}:
+  match x:
+    case 0n:
+      cp.le0(y)
+    case 1n+xp:
+      match y:
+        case 0n:
+          {==}
+        case 1n+yp:
+          cq.min_le(xp, yp)
+
+def cq.want.from.none(c: Bool, +a: Nat, +m: Nat, e: {Nat.is_lt(a, 1n+m) == c : Bool}) ->
+  cq.W(C.want.from(c, a, m), 1n+m):
+  match c:
+    case True{}:
+      (%Nat.lt_succ(a, m) : {_ == True{} : Bool}
+        e, cp.lt_self(m))
+    case False{}:
+      Unit{}
+
+def cq.want.from.some(c: Bool, +a: Nat, +b2: Nat, +m: Nat,
+  +e: {Bool.and(Nat.is_lt(a, 1n+m), Nat.is_le(a, b2)) == c : Bool}) ->
+  cq.W(C.want.from(c, a, Nat.min(b2, m)), 1n+m):
+  match c:
+    case True{}:
+      (cq.le_min(a, b2, m, Bool.and_r(Nat.is_lt(a, 1n+m), Nat.is_le(a, b2), e),
+        %Nat.lt_succ(a, m) : {_ == True{} : Bool}
+          Bool.and_l(Nat.is_lt(a, 1n+m), Nat.is_le(a, b2), e)),
+        %Equal.sym(Bool, Nat.is_lt(Nat.min(b2, m), 1n+m), Nat.is_le(Nat.min(b2, m), m),
+          Nat.lt_succ(Nat.min(b2, m), m)) : {_ == True{} : Bool}
+          cq.min_le(b2, m))
+    case False{}:
+      Unit{}
+
+def cq.want.n(+a: Nat, b: Maybe<&2, Nat>, +n: Nat) -> cq.W(C.want(C.From{a, b}, n), n):
+  match b:
+    case None{}:
+      match n:
+        case 0n:
+          %Equal.sym(Bool, Nat.is_lt(a, 0n), False{}, cp.lt0(a)) : cq.W(C.want.from(_, a, Nat.sub(0n, 1n)), 0n)
+          Unit{}
+        case 1n+m:
+          %Equal.sym(Nat, Nat.sub(m, 0n), m, cp.sub_zero(m)) : cq.W(C.want.from(Nat.is_lt(a, 1n+m), a, _), 1n+m)
+          cq.want.from.none(Nat.is_lt(a, 1n+m), a, m, {==})
+    case Some{+b2}:
+      match n:
+        case 0n:
+          %Equal.sym(Bool, Nat.is_lt(a, 0n), False{}, cp.lt0(a)) : cq.W(C.want.from(Bool.and(_, Nat.is_le(a, b2)), a, Nat.min(b2, Nat.sub(0n, 1n))), 0n)
+          Unit{}
+        case 1n+m:
+          %Equal.sym(Nat, Nat.sub(m, 0n), m, cp.sub_zero(m)) :
+            cq.W(C.want.from(Bool.and(Nat.is_lt(a, 1n+m), Nat.is_le(a, b2)), a, Nat.min(b2, _)), 1n+m)
+          cq.want.from.some(Bool.and(Nat.is_lt(a, 1n+m), Nat.is_le(a, b2)), a, b2, m, {==})
+
+def cq.want.last(+n: Nat, +k: Nat) -> cq.W(C.want.last(n, k), n):
+  match n:
+    case 0n:
+      Unit{}
+    case 1n+m:
+      match k:
+        case 0n:
+          Unit{}
+        case 1n+j:
+          (cp.sub_le(m, Nat.min(j, m)), cp.lt_self(m))
+
+def cq.want(sp: C.Spec, +n: Nat) -> cq.W(C.want(sp, n), n):
+  match sp:
+    case C.From{+a, b}:
+      cq.want.n(a, b, n)
+    case C.Last{+k}:
+      cq.want.last(n, k)
+
+def cq.Ws(ws: List<&2, C.Want>, +n: Nat) -> Type:
+  match ws:
+    case Nil{}:
+      Unit
+    case Con{w, t}:
+      cq.W(w, n) & cq.Ws(t, n)
+
+def cq.Hp(ab: Nat & Nat, +n: Nat) -> Type:
+  (a, b) = ab
+  {Nat.is_le(a, b) == True{} : Bool} & {Nat.is_lt(b, n) == True{} : Bool}
+
+def cq.H(hit: Maybe<&1, Nat & Nat>, +n: Nat) -> Type:
+  match hit:
+    case None{}:
+      Unit
+    case Some{ab}:
+      cq.Hp(ab, n)
+
+def cq.one(p: Nat, ab: Nat & Nat, +n: Nat, h: cq.Hp(ab, n)) -> cq.G(C.got.one(p, ab), n):
+  match p:
+    case 0n:
+      match ab:
+        case (a, b):
+          h
+    case 1n+q:
+      Unit{}
+
+def cq.fin(hit: Maybe<&1, Nat & Nat>, +k: Nat, +n: Nat, h: cq.H(hit, n)) -> cq.G(C.got.fin(hit, k), n):
+  match hit:
+    case None{}:
+      Unit{}
+    case Some{ab}:
+      cq.one(Nat.sub(k, 1n), ab, n, h)
+
+def cq.of(ws: List<&2, C.Want>, hit: Maybe<&1, Nat & Nat>, +k: Nat, +n: Nat, al: cq.Ws(ws, n),
+  h: cq.H(hit, n)) -> cq.G(C.got.of(ws, hit, k), n):
+  match ws:
+    case Nil{}:
+      cq.fin(hit, k, n, h)
+    case Con{w, t}:
+      match w:
+        case C.Span{a, b}:
+          (aw, at) = al
+          cq.of(t, Some{(a, b)}, 1n+k, n, at, aw)
+        case C.Unsat{}:
+          (aw, at) = al
+          cq.of(t, hit, k, n, at, h)
+
+def cq.wants(sp: List<&2, C.Spec>, +n: Nat) -> cq.Ws(C.wants(sp, n), n):
+  match sp:
+    case Nil{}:
+      Unit{}
+    case Con{h, t}:
+      (cq.want(h, n), cq.wants(t, n))
+
+def cq.ranged(m: Maybe<&2, List<&2, C.Spec>>, +n: Nat) -> cq.G(C.ranged(m, n), n):
+  match m:
+    case None{}:
+      Unit{}
+    case Some{+sp}:
+      cq.of(C.wants(sp, n), None{}, 0n, n, cq.wants(sp, n), Unit{})
+
+def cq.pick(c: Bool, -x: C.Got, -y: C.Got, +n: Nat, gx: cq.G(x, n), gy: cq.G(y, n)) ->
+  cq.G(Bool.pick(C.Got, c, x, y), n):
+  match c:
+    case True{}:
+      gx
+    case False{}:
+      gy
+
+def cq.partgo(ir: Maybe<&2, Bytes()>, v: Bytes(), +mt32: U32, +n32: U32, +n: Nat) ->
+  cq.G(C.part.go(ir, v, mt32, n32, n), n):
+  match ir:
+    case None{}:
+      cq.ranged(C.rg.parse(v), n)
+    case Some{w}:
+      cq.pick(C.ir.ok(w, mt32, n32), C.ranged(C.rg.parse(v), n), C.Full{}, n, cq.ranged(C.rg.parse(v), n),
+        Unit{})
+
+def cq.part(rg: Maybe<&2, Bytes()>, ir: Maybe<&2, Bytes()>, +mt32: U32, +n32: U32, +n: Nat) ->
+  cq.G(C.part(rg, ir, mt32, n32, n), n):
+  match rg:
+    case None{}:
+      Unit{}
+    case Some{v}:
+      match n:
+        case 0n:
+          Unit{}
+        case 1n+p:
+          cq.partgo(ir, v, mt32, n32, 1n+p)
+
+def cq.ims(m: Maybe<&2, Nat>, +mt: Nat, -later: C.Got, +n: Nat, gl: cq.G(later, n)) ->
+  cq.G(C.ims.go(m, mt, later), n):
+  match m:
+    case None{}:
+      gl
+    case Some{d}:
+      cq.pick(Nat.is_le(mt, d), C.Same{}, later, n, Unit{}, gl)
+
+def cq.cond(inm: Maybe<&2, Bytes()>, ims: Maybe<&2, Bytes()>, +mt32: U32, +n32: U32, -later: C.Got, +n: Nat,
+  gl: cq.G(later, n)) -> cq.G(C.cond(inm, ims, mt32, n32, later), n):
+  match inm:
+    case Some{v}:
+      cq.pick(C.tags.hit(v, C.etag.of(mt32, n32), False{}), C.Same{}, later, n, Unit{}, gl)
+    case None{}:
+      match ims:
+        case None{}:
+          gl
+        case Some{v}:
+          cq.ims(C.date.read(v), U32.to_nat(mt32), later, n, gl)
+
+def cq.decide(k: C.Ask, +mt32: U32, +n32: U32) -> cq.G(C.decide(k, mt32, n32), U32.to_nat(n32)):
+  match k:
+    case C.Ask{im, ius, inm, ims, rg, ir}:
+      cq.pick(C.pre.ok(im, ius, mt32, n32), C.cond(inm, ims, mt32, n32, C.part(rg, ir, mt32, n32, U32.to_nat(n32))),
+        C.Fails{}, U32.to_nat(n32),
+        cq.cond(inm, ims, mt32, n32, C.part(rg, ir, mt32, n32, U32.to_nat(n32)), U32.to_nat(n32),
+          cq.part(rg, ir, mt32, n32, U32.to_nat(n32))), Unit{})
+
+def cq.part_in(k: C.Ask, +mt32: U32, +n32: U32, -a: Nat, -b: Nat,
+  e: {C.decide(k, mt32, n32) == C.Part{a, b} : C.Got}) ->
+  {Nat.is_le(a, b) == True{} : Bool} & {Nat.is_lt(b, U32.to_nat(n32)) == True{} : Bool}:
+  %e : cq.G(_, U32.to_nat(n32))
+  cq.decide(k, mt32, n32)
+
+# a range of the file is all there: bytes a to b of a file longer than b
+# are b + 1 - a of them
+def cq.le_s(+b: Nat, +n: Nat) -> {Nat.is_le(1n+b, n) == Nat.is_lt(b, n) : Bool}:
+  match b n:
+    case 0n 0n:
+      {==}
+    case 0n 1n+q:
+      cp.le0(q)
+    case 1n+p 0n:
+      {==}
+    case 1n+p 1n+q:
+      cq.le_s(p, q)
+
+def cq.drop_le(+s: Bytes(), +a: Nat, +l: Nat, e: {Nat.is_le(Nat.add(a, l), Bytes.len(s)) == True{} : Bool}) ->
+  {Nat.is_le(l, Bytes.len(String.drop(s, a))) == True{} : Bool}:
+  match s a:
+    case SNil{} 0n:
+      e
+    case SNil{} 1n+p:
+      cp.no({Nat.is_le(l, Bytes.len(String.drop(SNil{}, 1n+p))) == True{} : Bool}, e)
+    case SCon{h, t} 0n:
+      e
+    case SCon{h, +t} 1n+p:
+      cq.drop_le(t, p, l,
+        %Bytes.len.shift(t, 0n) : {Nat.is_le(1n+Nat.add(p, l), _) == True{} : Bool}
+        e)
+
+def cq.part_ep(+body: Bytes(), +a: Nat, +b: Nat,
+  ea: {U32.to_nat(U32.from_nat(a)) == a : Nat},
+  el: {U32.to_nat(U32.from_nat(Nat.sub(1n+b, a))) == Nat.sub(1n+b, a) : Nat},
+  le: {Nat.is_le(a, b) == True{} : Bool}, lt: {Nat.is_lt(b, Bytes.len(body)) == True{} : Bool}) ->
+  {WW.wl.part(body, U32.from_nat(a), U32.from_nat(Nat.sub(1n+b, a))) == True{} : Bool}:
+  %Equal.sym(Nat, U32.to_nat(U32.from_nat(a)), a, ea) :
+    {Nat.is_eq(Bytes.len(String.take(String.drop(body, _), U32.to_nat(U32.from_nat(Nat.sub(1n+b, a))))),
+      U32.to_nat(U32.from_nat(Nat.sub(1n+b, a)))) == True{} : Bool}
+  %Equal.sym(Nat, U32.to_nat(U32.from_nat(Nat.sub(1n+b, a))), Nat.sub(1n+b, a), el) :
+    {Nat.is_eq(Bytes.len(String.take(String.drop(body, a), _)), _) == True{} : Bool}
+  %Equal.sym(Bool, Nat.is_eq(Bytes.len(String.take(String.drop(body, a), Nat.sub(1n+b, a))), Nat.sub(1n+b, a)),
+    Nat.is_le(Nat.sub(1n+b, a), Bytes.len(String.drop(body, a))), WW.wl.eq_le(String.drop(body, a), Nat.sub(1n+b, a))) :
+    {_ == True{} : Bool}
+  cq.drop_le(body, a, Nat.sub(1n+b, a),
+    %Equal.sym(Nat, Nat.add(a, Nat.sub(1n+b, a)), 1n+b,
+      cp.add_sub(a, 1n+b, Nat.is_le_trans(a, b, 1n+b, le, cp.le_succ(b)))) :
+      {Nat.is_le(_, Bytes.len(body)) == True{} : Bool}
+    %Equal.sym(Bool, Nat.is_le(1n+b, Bytes.len(body)), Nat.is_lt(b, Bytes.len(body)), cq.le_s(b, Bytes.len(body))) :
+      {_ == True{} : Bool}
+    lt)
+
+def Laws.date_round_trip(t, ey):
+  cp.date_rt(t, ey)
+
+def Laws.date_rfc_example():
+  {==}
+
+def Laws.date_leap_2000():
+  {==}
+
+def Laws.date_leap_2024():
+  {==}
+
+def Laws.date_no_leap_2100():
+  {==}
+
+def Laws.date_epoch():
+  {==}
+
+def Laws.date_year_end():
+  {==}
+
+def Laws.date_last_u32():
+  {==}
+
+def Laws.read_imf():
+  {==}
+
+def Laws.read_rfc850():
+  {==}
+
+def Laws.read_asctime():
+  {==}
+
+def Laws.days_rfc_example():
+  {==}
+
+def Laws.days_leap_2000():
+  {==}
+
+def Laws.no_feb_30():
+  {==}
+
+def Laws.no_feb_29_2100():
+  {==}
+
+def Laws.no_hour_24():
+  {==}
+
+def Laws.not_a_date():
+  {==}
+
+def Laws.before_epoch():
+  {==}
+
+def Laws.etag_hex():
+  {==}
+
+def Laws.etag_zero():
+  {==}
+
+def Laws.tags_same():
+  {==}
+
+def Laws.tags_weak():
+  {==}
+
+def Laws.tags_weak_not_strong():
+  {==}
+
+def Laws.tags_in_list():
+  {==}
+
+def Laws.tags_other():
+  {==}
+
+def Laws.tags_unquoted():
+  {==}
+
+def Laws.tags_star():
+  {==}
+
+def Laws.ask_read():
+  {==}
+
+def Laws.same_head_is_built(mt, n):
+  cd.same(mt, n)
+
+def Laws.part_head_is_built(ct, a, b, n, mt):
+  cd.part(ct, a, b, n, mt)
+
+def Laws.head_vectors():
+  {==}
+
+def Laws.not_modified_no_body(ct, fs, head, n, mt, e):
+  %Equal.sym(C.Got, C.decide(C.ask.of(fs), mt, n), C.Same{}, e) :
+    {C.fr.of(_, ct, head, n, mt) == L.Fr{C.hd.same.is(mt, n), 0, 0} : L.Fr}
+  %cd.same(mt, n) : {L.Fr{C.hd.same(mt, n), 0, 0} == L.Fr{_, 0, 0} : L.Fr}
+  {==}
+
+def Laws.inm_over_ims(im, ius, v, ims1, ims2, rg, ir, mt, n):
+  {==}
+
+def Laws.tag_hit_not_modified(v, ims, rg, ir, mt, n, e):
+  %Equal.sym(Bool, C.tags.hit(v, C.etag.of(mt, n), False{}), True{}, e) :
+    {Bool.pick(C.Got, _, C.Same{}, C.part(rg, ir, mt, n, U32.to_nat(n))) == C.Same{} : C.Got}
+  {==}
+
+def Laws.star_not_modified(ims, rg, ir, mt, n):
+  {==}
+
+def Laws.ims_not_modified(v, rg, ir, mt, n, d, e, le):
+  %Equal.sym(Maybe<&2, Nat>, C.date.read(v), Some{d}, e) :
+    {C.ims.go(_, U32.to_nat(mt), C.part(rg, ir, mt, n, U32.to_nat(n))) == C.Same{} : C.Got}
+  %Equal.sym(Bool, Nat.is_le(U32.to_nat(mt), d), True{}, le) :
+    {Bool.pick(C.Got, _, C.Same{}, C.part(rg, ir, mt, n, U32.to_nat(n))) == C.Same{} : C.Got}
+  {==}
+
+def Laws.ims_echo(rg, ir, mt, n, ey):
+  Laws.ims_not_modified(C.date.fmt(U32.to_nat(mt)), rg, ir, mt, n, U32.to_nat(mt),
+    cp.date_rt(U32.to_nat(mt), ey), cp.le_refl(U32.to_nat(mt)))
+
+def Laws.ims_changed(v, rg, ir, mt, n, d, e, gt):
+  %Equal.sym(Maybe<&2, Nat>, C.date.read(v), Some{d}, e) :
+    {C.ims.go(_, U32.to_nat(mt), C.part(rg, ir, mt, n, U32.to_nat(n))) ==
+      C.part(rg, ir, mt, n, U32.to_nat(n)) : C.Got}
+  %Equal.sym(Bool, Nat.is_le(U32.to_nat(mt), d), False{}, gt) :
+    {Bool.pick(C.Got, _, C.Same{}, C.part(rg, ir, mt, n, U32.to_nat(n))) ==
+      C.part(rg, ir, mt, n, U32.to_nat(n)) : C.Got}
+  {==}
+
+def Laws.ims_unreadable(v, rg, ir, mt, n, e):
+  %Equal.sym(Maybe<&2, Nat>, C.date.read(v), None{}, e) :
+    {C.ims.go(_, U32.to_nat(mt), C.part(rg, ir, mt, n, U32.to_nat(n))) ==
+      C.part(rg, ir, mt, n, U32.to_nat(n)) : C.Got}
+  {==}
+
+def Laws.if_match_fails(v, ius, inm, ims, rg, ir, mt, n, e):
+  %Equal.sym(Bool, C.tags.hit(v, C.etag.of(mt, n), True{}), False{}, e) :
+    {Bool.pick(C.Got, _, C.cond(inm, ims, mt, n, C.part(rg, ir, mt, n, U32.to_nat(n))), C.Fails{}) ==
+      C.Fails{} : C.Got}
+  {==}
+
+def Laws.ius_fails(v, inm, ims, rg, ir, mt, n, d, e, gt):
+  %Equal.sym(Maybe<&2, Nat>, C.date.read(v), Some{d}, e) :
+    {Bool.pick(C.Got, C.pre.ius(_, U32.to_nat(mt)), C.cond(inm, ims, mt, n, C.part(rg, ir, mt, n, U32.to_nat(n))),
+      C.Fails{}) == C.Fails{} : C.Got}
+  %Equal.sym(Bool, Nat.is_le(U32.to_nat(mt), d), False{}, gt) :
+    {Bool.pick(C.Got, _, C.cond(inm, ims, mt, n, C.part(rg, ir, mt, n, U32.to_nat(n))), C.Fails{}) ==
+      C.Fails{} : C.Got}
+  {==}
+
+def Laws.ius_unreadable(v, inm, ims, rg, ir, mt, n, e):
+  %Equal.sym(Maybe<&2, Nat>, C.date.read(v), None{}, e) :
+    {Bool.pick(C.Got, C.pre.ius(_, U32.to_nat(mt)), C.cond(inm, ims, mt, n, C.part(rg, ir, mt, n, U32.to_nat(n))),
+      C.Fails{}) == C.cond(inm, ims, mt, n, C.part(rg, ir, mt, n, U32.to_nat(n))) : C.Got}
+  {==}
+
+def Laws.range_from_unsat(a, mb, n, e):
+  match mb:
+    case None{}:
+      %Equal.sym(Bool, Nat.is_lt(a, n), False{}, e) :
+        {C.want.from(_, a, Nat.sub(n, 1n)) == C.Unsat{} : C.Want}
+      {==}
+    case Some{b}:
+      %Equal.sym(Bool, Nat.is_lt(a, n), False{}, e) :
+        {C.want.from(Bool.and(_, Nat.is_le(a, b)), a, Nat.min(b, Nat.sub(n, 1n))) == C.Unsat{} : C.Want}
+      {==}
+
+def Laws.range_from(a, n, e):
+  %Equal.sym(Bool, Nat.is_lt(a, n), True{}, e) :
+    {C.want.from(_, a, Nat.sub(n, 1n)) == C.Span{a, Nat.sub(n, 1n)} : C.Want}
+  {==}
+
+def Laws.range_from_to(a, b, n, e, le):
+  %Equal.sym(Bool, Nat.is_lt(a, n), True{}, e) :
+    {C.want.from(Bool.and(_, Nat.is_le(a, b)), a, Nat.min(b, Nat.sub(n, 1n))) ==
+      C.Span{a, Nat.min(b, Nat.sub(n, 1n))} : C.Want}
+  %Equal.sym(Bool, Nat.is_le(a, b), True{}, le) :
+    {C.want.from(_, a, Nat.min(b, Nat.sub(n, 1n))) == C.Span{a, Nat.min(b, Nat.sub(n, 1n))} : C.Want}
+  {==}
+
+def Laws.range_suffix_zero(n):
+  match n:
+    case 0n:
+      {==}
+    case 1n+m:
+      {==}
+
+def Laws.range_suffix(j, m):
+  {==}
+
+def Laws.range_vectors():
+  {==}
+
+def Laws.part_in_file(k, mt, n, a, b, e):
+  cq.part_in(k, mt, n, a, b, e)
+
+def Laws.one_range(v, sp, mt, n, p, a, b, e, w):
+  %Equal.sym(Maybe<&2, List<&2, C.Spec>>, C.rg.parse(v), Some{[sp]}, e) :
+    {C.ranged(_, 1n+p) == C.Part{a, b} : C.Got}
+  %Equal.sym(C.Want, C.want(sp, 1n+p), C.Span{a, b}, w) :
+    {C.got.of(Con{_, Nil{}}, None{}, 0n) == C.Part{a, b} : C.Got}
+  {==}
+
+def Laws.no_range(v, sp, mt, n, p, e, w):
+  %Equal.sym(Maybe<&2, List<&2, C.Spec>>, C.rg.parse(v), Some{[sp]}, e) :
+    {C.ranged(_, 1n+p) == C.NoPart{} : C.Got}
+  %Equal.sym(C.Want, C.want(sp, 1n+p), C.Unsat{}, w) :
+    {C.got.of(Con{_, Nil{}}, None{}, 0n) == C.NoPart{} : C.Got}
+  {==}
+
+def Laws.two_ranges(v, s1, s2, mt, n, p, a, b, c, d, e, w1, w2):
+  %Equal.sym(Maybe<&2, List<&2, C.Spec>>, C.rg.parse(v), Some{[s1, s2]}, e) :
+    {C.ranged(_, 1n+p) == C.Full{} : C.Got}
+  %Equal.sym(C.Want, C.want(s1, 1n+p), C.Span{a, b}, w1) :
+    {C.got.of(Con{_, Con{C.want(s2, 1n+p), Nil{}}}, None{}, 0n) == C.Full{} : C.Got}
+  %Equal.sym(C.Want, C.want(s2, 1n+p), C.Span{c, d}, w2) :
+    {C.got.of(Con{C.Span{a, b}, Con{_, Nil{}}}, None{}, 0n) == C.Full{} : C.Got}
+  {==}
+
+def cq.pick_full(c: Bool) -> {Bool.pick(C.Got, c, C.Full{}, C.Full{}) == C.Full{} : C.Got}:
+  match c:
+    case True{}:
+      {==}
+    case False{}:
+      {==}
+
+def Laws.range_ignored(v, n, ir, mt, n32, e):
+  match n:
+    case 0n:
+      {==}
+    case 1n+p:
+      match ir:
+        case None{}:
+          %Equal.sym(Maybe<&2, List<&2, C.Spec>>, C.rg.parse(v), None{}, e) :
+            {C.ranged(_, 1n+p) == C.Full{} : C.Got}
+          {==}
+        case Some{w}:
+          %Equal.sym(Maybe<&2, List<&2, C.Spec>>, C.rg.parse(v), None{}, e) :
+            {Bool.pick(C.Got, C.ir.ok(w, mt, n32), C.ranged(_, 1n+p), C.Full{}) == C.Full{} : C.Got}
+          cq.pick_full(C.ir.ok(w, mt, n32))
+
+def Laws.if_range_stale(v, w, mt, n, p, e):
+  %Equal.sym(Bool, C.ir.ok(w, mt, n), False{}, e) :
+    {Bool.pick(C.Got, _, C.ranged(C.rg.parse(v), 1n+p), C.Full{}) == C.Full{} : C.Got}
+  {==}
+
+def Laws.if_range_fresh(v, w, mt, n, p, e):
+  %Equal.sym(Bool, C.ir.ok(w, mt, n), True{}, e) :
+    {Bool.pick(C.Got, _, C.ranged(C.rg.parse(v), 1n+p), C.Full{}) == C.ranged(C.rg.parse(v), 1n+p) : C.Got}
+  {==}
+
+def Laws.parse_vectors():
+  {==}
+
+def Laws.part_frame(ct, head, a, b, n, mt):
+  %cd.part(ct, a, b, n, mt) :
+    {L.Fr{C.hd.part(ct, a, b, n, mt), U32.from_nat(a), U32.from_nat(Nat.sub(1n+b, a))} ==
+      L.Fr{_, U32.from_nat(a), U32.from_nat(Nat.sub(1n+b, a))} : L.Fr}
+  {==}
 
 def Laws.sha1_empty():
   {==}
@@ -2870,18 +4975,57 @@ def Laws.hold_fine(ms, s, acc):
 def Laws.raw_fine(ms, may, bs, st):
   WW.raw_fine(~Eng.h.lnote, ms, may, bs, st)
 
-def Laws.page_fine(ms, root, path, ct, head, may, sh, st):
-  WW.page_fine(~Eng.h.shut, ~Eng.h.fhead, ~Eng.miss, ~Eng.h.lnote, ~Eng.h.lsize, ms, root, path, ct, head, may, sh, st)
+def Laws.page_fine(ms, root, path, ct, ask, head, may, sh, st):
+  WW.page_fine(~Eng.h.shut, ~Eng.h.fhead, ~Eng.miss, ~Eng.h.lnote, ~Eng.h.lsize, ms, root, path, ct, ask, head, may, sh, st)
 
-def Laws.page_wire(ms, root, path, ct, may, sh, rd, now, fs, out, acc, body, ef, en):
+def Laws.page_wire(ms, root, path, ct, ask, may, sh, rd, now, fs, out, acc, body, hd, off, len, ef, en, efr, ep):
   WW.page_wire(~Eng.h.shut, ~Eng.h.fhead, ~Eng.miss, ~Eng.h.lnote, ~Eng.h.lsize, ms, root, path,
-    ct, may, sh, rd, now, fs, out, acc, body, ef, en)
+    ct, ask, may, sh, rd, now, fs, out, acc, body, hd, off, len, ef, en, efr, ep)
+
+# range_wire: the decision's Part frames the file as page_wire needs it
+# (the head hd.part, the offset a, the length b + 1 - a), the part is all
+# in the file (part_in_file), and hd.part is hd.part.is
+def cq.range_ep(+body: Bytes(), +a: Nat, +b: Nat,
+  +ea: {U32.to_nat(U32.from_nat(a)) == a : Nat},
+  +el: {U32.to_nat(U32.from_nat(Nat.sub(1n+b, a))) == Nat.sub(1n+b, a) : Nat},
+  +en: {U32.to_nat(U32.from_nat(Bytes.len(body))) == Bytes.len(body) : Nat},
+  pin: {Nat.is_le(a, b) == True{} : Bool} & {Nat.is_lt(b, U32.to_nat(U32.from_nat(Bytes.len(body)))) == True{} : Bool}) ->
+  {WW.wl.part(body, U32.from_nat(a), U32.from_nat(Nat.sub(1n+b, a))) == True{} : Bool}:
+  (le, lt) = pin
+  cq.part_ep(body, a, b, ea, el, le,
+    %en : {Nat.is_lt(b, _) == True{} : Bool}
+    lt)
+
+def Laws.range_wire(ms, root, path, ct, ask, may, sh, rd, now, fs, out, acc, body, a, b, ef, en, er, ea, el):
+  %cd.part(ct, a, b, U32.from_nat(Bytes.len(body)), 0) :
+    {W.sim.page(ms, root, path, ct, ask, False{}, may, sh, L.Em{WW.eager(rd, now, fs, out), acc, True{}}) ==
+      L.Em{WW.eager(rd, now, fs, Bytes.append(Bytes.append(out, Bytes.append(acc, Eng.h.shut(sh, _))),
+        String.take(String.drop(body, a), Nat.sub(1n+b, a)))), "", True{}} : L.Em<WW.World>}
+  %ea :
+    {W.sim.page(ms, root, path, ct, ask, False{}, may, sh, L.Em{WW.eager(rd, now, fs, out), acc, True{}}) ==
+      L.Em{WW.eager(rd, now, fs, Bytes.append(Bytes.append(out, Bytes.append(acc,
+        Eng.h.shut(sh, C.hd.part(ct, a, b, U32.from_nat(Bytes.len(body)), 0)))),
+        String.take(String.drop(body, _), Nat.sub(1n+b, a)))), "", True{}} : L.Em<WW.World>}
+  %el :
+    {W.sim.page(ms, root, path, ct, ask, False{}, may, sh, L.Em{WW.eager(rd, now, fs, out), acc, True{}}) ==
+      L.Em{WW.eager(rd, now, fs, Bytes.append(Bytes.append(out, Bytes.append(acc,
+        Eng.h.shut(sh, C.hd.part(ct, a, b, U32.from_nat(Bytes.len(body)), 0)))),
+        String.take(String.drop(body, U32.to_nat(U32.from_nat(a))), _))), "", True{}} : L.Em<WW.World>}
+  Laws.page_wire(ms, root, path, ct, ask, may, sh, rd, now, fs, out, acc, body,
+    C.hd.part(ct, a, b, U32.from_nat(Bytes.len(body)), 0), U32.from_nat(a), U32.from_nat(Nat.sub(1n+b, a)),
+    ef, en,
+    %Equal.sym(C.Got, C.decide(C.ask.of(ask), 0, U32.from_nat(Bytes.len(body))), C.Part{a, b}, er) :
+      {C.fr.of(_, ct, False{}, U32.from_nat(Bytes.len(body)), 0) ==
+        L.Fr{C.hd.part(ct, a, b, U32.from_nat(Bytes.len(body)), 0), U32.from_nat(a),
+          U32.from_nat(Nat.sub(1n+b, a))} : L.Fr}
+    {==},
+    cq.range_ep(body, a, b, ea, el, en, cq.part_in(C.ask.of(ask), 0, U32.from_nat(Bytes.len(body)), a, b, er)))
 
 def Laws.page_fail(s, f, e):
   WW.page_fail(s, f, e)
 
-def Laws.page_head_fail(ms, f, n, s, e):
-  WW.page_head_fail(ms, f, n, s, e)
+def Laws.page_head_fail(ms, f, off, len, s, e):
+  WW.page_head_fail(ms, f, off, len, s, e)
 
 def Laws.accept_calm(k, evs, served, e):
   WW.accept_calm(k, evs, served, e)
@@ -9775,9 +11919,10 @@ def Laws.gz_keeps(on, fits, head, takes, e):
 
 # a file's segment for a peer that does not take gzip, whatever the
 # choice's other two booleans are
-def pg.u(+a: Bool, +b: Bool, +h: Bool, +g: Eng.Gz, +root: Bytes(), +path: Bytes(), +ct: Bytes()) ->
-  {Eng.z.page.at(Eng.z.pick(a, b, h, False{}), g, root, path, ct, h) ==
-    L.Page{root, path, Bool.pick(Bytes(), Bool.and(a, b), Eng.z.ins(ct, Eng.z.vl()), ct), h} : L.Seg}:
+def pg.u(+a: Bool, +b: Bool, +h: Bool, +g: Eng.Gz, +root: Bytes(), +path: Bytes(), +ct: Bytes(),
+  +ask: List<&2, Wr.Field>) ->
+  {Eng.z.page.at(Eng.z.pick(a, b, h, False{}), g, root, path, ct, ask, h) ==
+    L.Page{root, path, Bool.pick(Bytes(), Bool.and(a, b), Eng.z.ins(ct, Eng.z.vl()), ct), ask, h} : L.Seg}:
   match a b h:
     case True{} True{} True{}:
       {==}
@@ -9796,8 +11941,8 @@ def pg.u(+a: Bool, +b: Bool, +h: Bool, +g: Eng.Gz, +root: Bytes(), +path: Bytes(
     case False{} False{} False{}:
       {==}
 
-def Laws.gz_page_untaken(g, head, root, path, ct, h):
-  pg.u(Eng.gz.on(g), Bool.and(Eng.z.fits(ct), String.ends_with(ct, Eng.cl.tag())), h, g, root, path, ct)
+def Laws.gz_page_untaken(g, head, root, path, ct, ask, h):
+  pg.u(Eng.gz.on(g), Bool.and(Eng.z.fits(ct), String.ends_with(ct, Eng.cl.tag())), h, g, root, path, ct, ask)
 
 def rw.at(+a: Bool, +c: Bool, +head: Bool, +g: Eng.Gz, +h: Bytes(), +b: Bytes(), +bs: Bytes()) ->
   {Eng.z.raw.at(Eng.z.pick(a, c, head, False{}), g, h, b, bs) ==

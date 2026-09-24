@@ -47,8 +47,11 @@
 #   ~gap ~event        a stream: the wait between events, and the n-th
 #                      event from the end
 #   ~shut              a reply marked as its connection's last (Shut)
-#   ~fhead ~miss       a file's head, for its type and length, and the
-#                      reply when it cannot be opened
+#   ~fhead ~miss       a file's reply, for its type, what the request
+#                      asked of it (its fields: a part, a condition),
+#                      whether only the head is wanted, its size and its
+#                      mtime: the head, and the part of the file the body
+#                      is (Fr); and the reply when it cannot be opened
 #   ~lnote ~lsize      an access log line, for a reply and for a file
 #
 # The budgets are the loop's, and hold for every protocol: a read is at
@@ -58,6 +61,7 @@
 # idle time as its deadline; a connection reads at most conn.fuel()
 # times, and at most conn.waits() reads in a row that finish nothing.
 import Base
+import ./reader.bend as Wr
 
 # The interface's answers
 # =======================
@@ -79,14 +83,24 @@ def Put(S):
 
 # One piece of a reply: bytes as they are, a file to write when the
 # reply is written (the root, the path under it, as bytes that go to the
-# effect as they are, what ~fhead makes its head from, and whether only
-# the head is wanted), a note for the access log that the next piece
-# completes, or a mark that the next reply is the connection's last.
+# effect as they are, what ~fhead makes its head from, the request's
+# fields ~fhead reads -- which part of the file, on what condition --
+# and whether only the head is wanted), a note for the access log that
+# the next piece completes, or a mark that the next reply is the
+# connection's last.
 type Seg is Data:
   Raw{bs: Bytes()}
-  Page{root: Bytes(), path: Bytes(), ct: Bytes(), head: Bool}
+  Page{root: Bytes(), path: Bytes(), ct: Bytes(), ask: List<&2, Wr.Field>, head: Bool}
   Note{bs: Bytes()}
   Shut{}
+
+# A file's reply, as ~fhead frames it from the file's size and mtime:
+# its head, and the part of the file its body is, len bytes from off
+# (the whole file, a range of it, or nothing: a 304 or a 416, whose
+# head is all of it). The loop sends the head, then those bytes, and
+# only the head when the request was a HEAD.
+type Fr is Data:
+  Fr{hd: Bytes(), off: U32, len: U32}
 
 # What the connection does next: write these segments and read again,
 # read again without writing, write them and close, write them and keep
@@ -230,20 +244,21 @@ def page.headed(
   ~M: Type -> Type, ~pure: @-A: Type -> A -> M(A),
   ~bind: @-A: Type -> @-B: Type -> M(A) -> (A -> M(B)) -> M(B), ~S: Type, ~F: Type,
   ~fsend: S -> F -> U32 -> U32 -> U32 -> M(S & F & Result<&1, &1, U32 & String, Unit>),
-  ~fclose: F -> M(Unit), +ms: U32, f: F, n: U32, m: Put(S)
+  ~fclose: F -> M(Unit), +ms: U32, f: F, off: U32, len: U32, m: Put(S)
 ) -> M(Em<S>):
   (s, r) = m
   match r:
     case Fail{e}:
       bind(Unit, Em<S>, fclose(f), u => pure(Em<S>, Em{s, "", False{}}))
     case Done{u}:
-      bind(S & F & Result<&1, &1, U32 & String, Unit>, Em<S>, fsend(s, f, 0, n, ms), g =>
+      bind(S & F & Result<&1, &1, U32 & String, Unit>, Em<S>, fsend(s, f, off, len, ms), g =>
         page.fsent(~M, ~pure, ~bind, ~S, ~F, ~fclose, g))
 
-# A file under page.small() bytes is read whole, and goes out with its
-# head in the one send: a second send for the body would cost a small
-# file more than the copy the kernel spares. A read that comes back
-# short (the file shrank) ends the connection, after what it had.
+# A file under page.small() bytes is read whole, and its part goes out
+# with its head in the one send: a second send for the body would cost
+# a small file more than the copy the kernel spares. A read that comes
+# back short (the file shrank), or a part it does not hold, ends the
+# connection, after what it had.
 def page.small() -> U32:
   16384
 
@@ -255,16 +270,19 @@ def page.read(
   ~M: Type -> Type, ~pure: @-A: Type -> A -> M(A),
   ~bind: @-A: Type -> @-B: Type -> M(A) -> (A -> M(B)) -> M(B), ~S: Type, ~F: Type,
   ~tx: S -> Bytes() -> U32 -> M(Put(S)), ~fclose: F -> M(Unit), +ms: U32,
-  got: F & Result<&1, &1, U32 & String, Bytes()>, +n: U32, s: S, pre: Bytes()
+  got: F & Result<&1, &1, U32 & String, Bytes()>, +n: U32, +off: U32, +len: U32, s: S,
+  pre: Bytes()
 ) -> M(Em<S>):
   (f, r) = got
   match r:
     case Fail{e}:
       bind(Unit, Em<S>, fclose(f), u => pure(Em<S>, Em{s, "", False{}}))
     case Done{+bs}:
+      +part = Bytes.slice(bs, U32.to_nat(off), U32.to_nat(len))
       bind(Unit, Em<S>, fclose(f), u =>
-        bind(Put(S), Em<S>, tx(s, Bytes.append(pre, bs), ms), m =>
-          pure(Em<S>, page.blk(S, m, Nat.is_eq(Bytes.len(bs), U32.to_nat(n))))))
+        bind(Put(S), Em<S>, tx(s, Bytes.append(pre, part), ms), m =>
+          pure(Em<S>, page.blk(S, m, Nat.is_eq(Bytes.len(bs), U32.to_nat(n))
+            && Nat.is_eq(Bytes.len(part), U32.to_nat(len))))))
 
 def page.body(
   ~M: Type -> Type, ~pure: @-A: Type -> A -> M(A),
@@ -272,15 +290,16 @@ def page.body(
   ~tx: S -> Bytes() -> U32 -> M(Put(S)),
   ~fread: F -> U32 -> M(F & Result<&1, &1, U32 & String, Bytes()>),
   ~fsend: S -> F -> U32 -> U32 -> U32 -> M(S & F & Result<&1, &1, U32 & String, Unit>),
-  ~fclose: F -> M(Unit), +ms: U32, f: F, +n: U32, s: S, pre: Bytes(), small: Bool
+  ~fclose: F -> M(Unit), +ms: U32, f: F, +n: U32, +off: U32, +len: U32, s: S, pre: Bytes(),
+  small: Bool
 ) -> M(Em<S>):
   match small:
     case True{}:
       bind(F & Result<&1, &1, U32 & String, Bytes()>, Em<S>, fread(f, n), got =>
-        page.read(~M, ~pure, ~bind, ~S, ~F, ~tx, ~fclose, ms, got, n, s, pre))
+        page.read(~M, ~pure, ~bind, ~S, ~F, ~tx, ~fclose, ms, got, n, off, len, s, pre))
     case False{}:
       bind(Put(S), Em<S>, tx(s, pre, ms), m =>
-        page.headed(~M, ~pure, ~bind, ~S, ~F, ~fsend, ~fclose, ms, f, n, m))
+        page.headed(~M, ~pure, ~bind, ~S, ~F, ~fsend, ~fclose, ms, f, off, len, m))
 
 def page.start(
   ~M: Type -> Type, ~pure: @-A: Type -> A -> M(A),
@@ -289,7 +308,7 @@ def page.start(
   ~fread: F -> U32 -> M(F & Result<&1, &1, U32 & String, Bytes()>),
   ~fsend: S -> F -> U32 -> U32 -> U32 -> M(S & F & Result<&1, &1, U32 & String, Unit>),
   ~fclose: F -> M(Unit), ~lsize: Bytes() -> Bytes() -> U32 -> String, +ms: U32, f: F, +n: U32,
-  +hd: Bytes(), head: Bool, may: Maybe<&2, Bytes()>, s: S, acc: Bytes()
+  +off: U32, +len: U32, +hd: Bytes(), head: Bool, may: Maybe<&2, Bytes()>, s: S, acc: Bytes()
 ) -> M(Em<S>):
   match head:
     case True{}:
@@ -297,9 +316,24 @@ def page.start(
         bind(Unit, Em<S>, fclose(f), u2 =>
           send.hold(~M, ~pure, ~bind, ~S, ~tx, ms, s, Bytes.append(acc, hd))))
     case False{}:
-      bind(Unit, Em<S>, log.sized(~M, ~pure, ~bind, ~say, ~lsize, may, hd, n), u =>
-        page.body(~M, ~pure, ~bind, ~S, ~F, ~tx, ~fread, ~fsend, ~fclose, ms, f, n, s,
+      bind(Unit, Em<S>, log.sized(~M, ~pure, ~bind, ~say, ~lsize, may, hd, len), u =>
+        page.body(~M, ~pure, ~bind, ~S, ~F, ~tx, ~fread, ~fsend, ~fclose, ms, f, n, off, len, s,
           Bytes.append(acc, hd), U32.is_lt(n, page.small())))
+
+def page.framed(
+  ~M: Type -> Type, ~pure: @-A: Type -> A -> M(A),
+  ~bind: @-A: Type -> @-B: Type -> M(A) -> (A -> M(B)) -> M(B), ~S: Type, ~F: Type,
+  ~tx: S -> Bytes() -> U32 -> M(Put(S)), ~say: String -> M(Unit),
+  ~fread: F -> U32 -> M(F & Result<&1, &1, U32 & String, Bytes()>),
+  ~fsend: S -> F -> U32 -> U32 -> U32 -> M(S & F & Result<&1, &1, U32 & String, Unit>),
+  ~fclose: F -> M(Unit), ~shut: Bool -> Bytes() -> Bytes(),
+  ~lsize: Bytes() -> Bytes() -> U32 -> String, +ms: U32, f: F, +n: U32, fr: Fr, head: Bool,
+  may: Maybe<&2, Bytes()>, sh: Bool, s: S, acc: Bytes()
+) -> M(Em<S>):
+  match fr:
+    case Fr{hd, +off, +len}:
+      page.start(~M, ~pure, ~bind, ~S, ~F, ~tx, ~say, ~fread, ~fsend, ~fclose, ~lsize, ms, f, n,
+        off, len, shut(sh, hd), head, may, s, acc)
 
 def page.sized(
   ~M: Type -> Type, ~pure: @-A: Type -> A -> M(A),
@@ -308,10 +342,10 @@ def page.sized(
   ~fread: F -> U32 -> M(F & Result<&1, &1, U32 & String, Bytes()>),
   ~fsend: S -> F -> U32 -> U32 -> U32 -> M(S & F & Result<&1, &1, U32 & String, Unit>),
   ~fclose: F -> M(Unit), ~shut: Bool -> Bytes() -> Bytes(),
-  ~fhead: Bytes() -> U32 -> Bytes(), ~miss: Bool -> Bytes(),
+  ~fhead: Bytes() -> List<&2, Wr.Field> -> Bool -> U32 -> U32 -> Fr, ~miss: Bool -> Bytes(),
   ~lnote: Bytes() -> Bytes() -> String, ~lsize: Bytes() -> Bytes() -> U32 -> String, +ms: U32,
-  got: F & Result<&1, &1, U32 & String, U32>, ct: Bytes(), head: Bool,
-  may: Maybe<&2, Bytes()>, sh: Bool, s: S, acc: Bytes()
+  got: F & Result<&1, &1, U32 & String, U32 & U32>, ct: Bytes(), ask: List<&2, Wr.Field>,
+  +head: Bool, may: Maybe<&2, Bytes()>, +sh: Bool, s: S, acc: Bytes()
 ) -> M(Em<S>):
   (f, r) = got
   match r:
@@ -319,21 +353,22 @@ def page.sized(
       bind(Unit, Em<S>, fclose(f), u =>
         page.miss(~M, ~pure, ~bind, ~S, ~tx, ~say, ~shut, ~miss, ~lnote, ms, head, may, sh, s,
           acc))
-    case Done{+n}:
-      page.start(~M, ~pure, ~bind, ~S, ~F, ~tx, ~say, ~fread, ~fsend, ~fclose, ~lsize, ms, f, n,
-        shut(sh, fhead(ct, n)), head, may, s, acc)
+    case Done{nm}:
+      (+n, mt) = nm
+      page.framed(~M, ~pure, ~bind, ~S, ~F, ~tx, ~say, ~fread, ~fsend, ~fclose, ~shut, ~lsize, ms,
+        f, n, fhead(ct, ask, head, n, mt), head, may, sh, s, acc)
 
 def page.opened(
   ~M: Type -> Type, ~pure: @-A: Type -> A -> M(A),
   ~bind: @-A: Type -> @-B: Type -> M(A) -> (A -> M(B)) -> M(B), ~S: Type, ~F: Type,
   ~tx: S -> Bytes() -> U32 -> M(Put(S)), ~say: String -> M(Unit),
-  ~fsize: F -> M(F & Result<&1, &1, U32 & String, U32>),
+  ~fsize: F -> M(F & Result<&1, &1, U32 & String, U32 & U32>),
   ~fread: F -> U32 -> M(F & Result<&1, &1, U32 & String, Bytes()>),
   ~fsend: S -> F -> U32 -> U32 -> U32 -> M(S & F & Result<&1, &1, U32 & String, Unit>),
   ~fclose: F -> M(Unit), ~shut: Bool -> Bytes() -> Bytes(),
-  ~fhead: Bytes() -> U32 -> Bytes(), ~miss: Bool -> Bytes(),
+  ~fhead: Bytes() -> List<&2, Wr.Field> -> Bool -> U32 -> U32 -> Fr, ~miss: Bool -> Bytes(),
   ~lnote: Bytes() -> Bytes() -> String, ~lsize: Bytes() -> Bytes() -> U32 -> String, +ms: U32,
-  m: S & Result<&1, &1, U32 & String, F>, ct: Bytes(), head: Bool,
+  m: S & Result<&1, &1, U32 & String, F>, ct: Bytes(), ask: List<&2, Wr.Field>, head: Bool,
   may: Maybe<&2, Bytes()>, sh: Bool, acc: Bytes()
 ) -> M(Em<S>):
   (s, r) = m
@@ -341,22 +376,22 @@ def page.opened(
     case Fail{e}:
       page.miss(~M, ~pure, ~bind, ~S, ~tx, ~say, ~shut, ~miss, ~lnote, ms, head, may, sh, s, acc)
     case Done{f}:
-      bind(F & Result<&1, &1, U32 & String, U32>, Em<S>, fsize(f), got =>
+      bind(F & Result<&1, &1, U32 & String, U32 & U32>, Em<S>, fsize(f), got =>
         page.sized(~M, ~pure, ~bind, ~S, ~F, ~tx, ~say, ~fread, ~fsend, ~fclose, ~shut, ~fhead, ~miss,
-            ~lnote, ~lsize, ms, got, ct, head, may, sh, s, acc))
+            ~lnote, ~lsize, ms, got, ct, ask, head, may, sh, s, acc))
 
 def send.page(
   ~M: Type -> Type, ~pure: @-A: Type -> A -> M(A),
   ~bind: @-A: Type -> @-B: Type -> M(A) -> (A -> M(B)) -> M(B), ~S: Type, ~F: Type,
   ~tx: S -> Bytes() -> U32 -> M(Put(S)), ~say: String -> M(Unit),
   ~fopen: S -> String -> String -> M(S & Result<&1, &1, U32 & String, F>),
-  ~fsize: F -> M(F & Result<&1, &1, U32 & String, U32>),
+  ~fsize: F -> M(F & Result<&1, &1, U32 & String, U32 & U32>),
   ~fread: F -> U32 -> M(F & Result<&1, &1, U32 & String, Bytes()>),
   ~fsend: S -> F -> U32 -> U32 -> U32 -> M(S & F & Result<&1, &1, U32 & String, Unit>),
   ~fclose: F -> M(Unit), ~shut: Bool -> Bytes() -> Bytes(),
-  ~fhead: Bytes() -> U32 -> Bytes(), ~miss: Bool -> Bytes(),
+  ~fhead: Bytes() -> List<&2, Wr.Field> -> Bool -> U32 -> U32 -> Fr, ~miss: Bool -> Bytes(),
   ~lnote: Bytes() -> Bytes() -> String, ~lsize: Bytes() -> Bytes() -> U32 -> String, +ms: U32,
-  root: Bytes(), path: Bytes(), ct: Bytes(), head: Bool,
+  root: Bytes(), path: Bytes(), ct: Bytes(), ask: List<&2, Wr.Field>, head: Bool,
   may: Maybe<&2, Bytes()>, sh: Bool, st: Em<S>
 ) -> M(Em<S>):
   match st:
@@ -367,7 +402,7 @@ def send.page(
         case True{}:
           bind(S & Result<&1, &1, U32 & String, F>, Em<S>, fopen(s, root, path), m =>
             page.opened(~M, ~pure, ~bind, ~S, ~F, ~tx, ~say, ~fsize, ~fread, ~fsend, ~fclose, ~shut,
-                ~fhead, ~miss, ~lnote, ~lsize, ms, m, ct, head, may, sh, acc))
+                ~fhead, ~miss, ~lnote, ~lsize, ms, m, ct, ask, head, may, sh, acc))
 
 def send.raw(
   ~M: Type -> Type, ~pure: @-A: Type -> A -> M(A),
@@ -412,11 +447,11 @@ def send.go(
   ~bind: @-A: Type -> @-B: Type -> M(A) -> (A -> M(B)) -> M(B), ~S: Type, ~F: Type,
   ~tx: S -> Bytes() -> U32 -> M(Put(S)), ~say: String -> M(Unit),
   ~fopen: S -> String -> String -> M(S & Result<&1, &1, U32 & String, F>),
-  ~fsize: F -> M(F & Result<&1, &1, U32 & String, U32>),
+  ~fsize: F -> M(F & Result<&1, &1, U32 & String, U32 & U32>),
   ~fread: F -> U32 -> M(F & Result<&1, &1, U32 & String, Bytes()>),
   ~fsend: S -> F -> U32 -> U32 -> U32 -> M(S & F & Result<&1, &1, U32 & String, Unit>),
   ~fclose: F -> M(Unit), ~shut: Bool -> Bytes() -> Bytes(),
-  ~fhead: Bytes() -> U32 -> Bytes(), ~miss: Bool -> Bytes(),
+  ~fhead: Bytes() -> List<&2, Wr.Field> -> Bool -> U32 -> U32 -> Fr, ~miss: Bool -> Bytes(),
   ~lnote: Bytes() -> Bytes() -> String, ~lsize: Bytes() -> Bytes() -> U32 -> String,
   xs: List<&2, Seg>, +ms: U32, may: Maybe<&2, Bytes()>, sh: Bool, st: Em<S>
 ) -> M(Put(S)):
@@ -436,10 +471,10 @@ def send.go(
               shut(sh, bs), st), st2 =>
             send.go(~M, ~pure, ~bind, ~S, ~F, ~tx, ~say, ~fopen, ~fsize, ~fread, ~fsend, ~fclose, ~shut,
                 ~fhead, ~miss, ~lnote, ~lsize, t, ms, None{}, False{}, st2))
-        case Page{root, path, ct, head}:
+        case Page{root, path, ct, ask, head}:
           bind(Em<S>, Put(S),
             send.page(~M, ~pure, ~bind, ~S, ~F, ~tx, ~say, ~fopen, ~fsize, ~fread, ~fsend, ~fclose,
-                ~shut, ~fhead, ~miss, ~lnote, ~lsize, ms, root, path, ct, head, may, sh, st),
+                ~shut, ~fhead, ~miss, ~lnote, ~lsize, ms, root, path, ct, ask, head, may, sh, st),
             st2 =>
             send.go(~M, ~pure, ~bind, ~S, ~F, ~tx, ~say, ~fopen, ~fsize, ~fread, ~fsend, ~fclose, ~shut,
                 ~fhead, ~miss, ~lnote, ~lsize, t, ms, None{}, False{}, st2))
@@ -453,11 +488,11 @@ def send.segs(
   ~bind: @-A: Type -> @-B: Type -> M(A) -> (A -> M(B)) -> M(B), ~S: Type, ~F: Type,
   ~tx: S -> Bytes() -> U32 -> M(Put(S)), ~say: String -> M(Unit),
   ~fopen: S -> String -> String -> M(S & Result<&1, &1, U32 & String, F>),
-  ~fsize: F -> M(F & Result<&1, &1, U32 & String, U32>),
+  ~fsize: F -> M(F & Result<&1, &1, U32 & String, U32 & U32>),
   ~fread: F -> U32 -> M(F & Result<&1, &1, U32 & String, Bytes()>),
   ~fsend: S -> F -> U32 -> U32 -> U32 -> M(S & F & Result<&1, &1, U32 & String, Unit>),
   ~fclose: F -> M(Unit), ~shut: Bool -> Bytes() -> Bytes(),
-  ~fhead: Bytes() -> U32 -> Bytes(), ~miss: Bool -> Bytes(),
+  ~fhead: Bytes() -> List<&2, Wr.Field> -> Bool -> U32 -> U32 -> Fr, ~miss: Bool -> Bytes(),
   ~lnote: Bytes() -> Bytes() -> String, ~lsize: Bytes() -> Bytes() -> U32 -> String, s: S,
   xs: List<&2, Seg>, +ms: U32
 ) -> M(Put(S)):
@@ -812,13 +847,13 @@ def conn(
   ~rx: S -> U32 -> U32 -> M(Got(S)), ~tx: S -> Bytes() -> U32 -> M(Put(S)),
   ~clk: S -> M(S & Nat), ~nap: S -> U32 -> M(S), ~say: String -> M(Unit),
   ~fopen: S -> String -> String -> M(S & Result<&1, &1, U32 & String, F>),
-  ~fsize: F -> M(F & Result<&1, &1, U32 & String, U32>),
+  ~fsize: F -> M(F & Result<&1, &1, U32 & String, U32 & U32>),
   ~fread: F -> U32 -> M(F & Result<&1, &1, U32 & String, Bytes()>),
   ~fsend: S -> F -> U32 -> U32 -> U32 -> M(S & F & Result<&1, &1, U32 & String, Unit>),
   ~fclose: F -> M(Unit), ~E: Data, ~P: Data, ~U: Data, ~idle: E -> U32, ~hdms: E -> U32,
   ~plan: E -> Bytes() -> P -> Plan<P, U>, ~mid: P -> Bool, ~big: Bytes(),
   ~uplan: U -> Bytes() -> Plan<P, U>, ~gap: U32, ~event: U32 -> Bytes(),
-  ~shut: Bool -> Bytes() -> Bytes(), ~fhead: Bytes() -> U32 -> Bytes(),
+  ~shut: Bool -> Bytes() -> Bytes(), ~fhead: Bytes() -> List<&2, Wr.Field> -> Bool -> U32 -> U32 -> Fr,
   ~miss: Bool -> Bytes(), ~lnote: Bytes() -> Bytes() -> String,
   ~lsize: Bytes() -> Bytes() -> U32 -> String, f: Nat, +srv: E, sph: (S & Plan<P, U>) & Hw, w: Nat
 ) -> M(S):
@@ -890,13 +925,13 @@ def conn.start(
   ~rx: S -> U32 -> U32 -> M(Got(S)), ~tx: S -> Bytes() -> U32 -> M(Put(S)),
   ~clk: S -> M(S & Nat), ~nap: S -> U32 -> M(S), ~say: String -> M(Unit),
   ~fopen: S -> String -> String -> M(S & Result<&1, &1, U32 & String, F>),
-  ~fsize: F -> M(F & Result<&1, &1, U32 & String, U32>),
+  ~fsize: F -> M(F & Result<&1, &1, U32 & String, U32 & U32>),
   ~fread: F -> U32 -> M(F & Result<&1, &1, U32 & String, Bytes()>),
   ~fsend: S -> F -> U32 -> U32 -> U32 -> M(S & F & Result<&1, &1, U32 & String, Unit>),
   ~fclose: F -> M(Unit), ~E: Data, ~P: Data, ~U: Data, ~idle: E -> U32, ~hdms: E -> U32,
   ~plan: E -> Bytes() -> P -> Plan<P, U>, ~mid: P -> Bool, ~big: Bytes(),
   ~uplan: U -> Bytes() -> Plan<P, U>, ~gap: U32, ~event: U32 -> Bytes(),
-  ~shut: Bool -> Bytes() -> Bytes(), ~fhead: Bytes() -> U32 -> Bytes(),
+  ~shut: Bool -> Bytes() -> Bytes(), ~fhead: Bytes() -> List<&2, Wr.Field> -> Bool -> U32 -> U32 -> Fr,
   ~miss: Bool -> Bytes(), ~lnote: Bytes() -> Bytes() -> String,
   ~lsize: Bytes() -> Bytes() -> U32 -> String, +srv: E, p0: P, s: S
 ) -> M(S):
@@ -932,8 +967,8 @@ def no.event(n: U32) -> Bytes():
 def no.shut(sh: Bool, bs: Bytes()) -> Bytes():
   bs
 
-def no.fhead(ct: Bytes(), n: U32) -> Bytes():
-  ""
+def no.fhead(ct: Bytes(), ask: List<&2, Wr.Field>, head: Bool, n: U32, mt: U32) -> Fr:
+  Fr{"", 0, n}
 
 def no.miss(head: Bool) -> Bytes():
   ""
