@@ -1187,9 +1187,357 @@ def written(st: St) -> Nat:
         case O{out, keep, n, cap, t}:
           n
 
-# a whole raw deflate stream, at most cap bytes out
+
+# Inflate, fast
+# =============
+#
+# The machine steps a bit at a time and builds its state at every bit.
+# A whole stream is read faster where the machine is at the start of a
+# literal/length code: from there fi.dec reads a symbol whole, its code
+# (fi.walk: the machine's walk, cell by cell), its extra bits (fi.get:
+# the machine's Get) and its distance, with the same tables, the same
+# checks in the same order and the bits the machine would read, at the
+# same offsets; a copy reads the byte it copies where it lies (fi.copy,
+# copy.go's loop). Anything else -- an end of block, a code, length or
+# distance the machine refuses, a cap reached, the input's end -- is
+# left to the machine, which steps its bit. inflate_proof.bend proves the
+# driver (fi.drv) is the machine over the stream's bits, whatever the
+# stream, so D.inflate is finish(feed(s, new(cap))) (law inflate_fast).
+
+
+# the bit at bit r of byte q, as the machine reads it
+def fi.b(+s: Bytes(), +q: Nat, +r: Nat) -> Bool:
+  bit(Bytes.get(s, q), r)
+
+# the byte after that bit
+def fi.nq(+q: Nat, +r: Nat) -> Nat:
+  pick(Nat.is_eq(r, 7n), 1n+q, q)
+
+# whether byte q is there to read
+def fi.in(+s: Bytes(), +q: Nat) -> Bool:
+  Nat.is_lt(q, Bytes.len(s))
+
+# the cell the machine reads at node for the bit b (mode's Walk row)
+def fi.cell(+tab: String, +node: Nat, b: Bool) -> Nat:
+  U32.to_nat(Bytes.get(tab, Nat.add(Nat.double(node), Nat.bit(b, 0n))))
+
+# what a cell says, as walk reads it: go on from a node, a symbol, or
+# no code
+type Wn is Data:
+  WGo{n: Nat}
+  WSym{s: Nat}
+  WBad{}
+
+def fi.step.lr(q: Nat, leaf: Bool) -> Wn:
+  match leaf:
+    case True{}:
+      WSym{q}
+    case False{}:
+      WGo{q}
+
+def fi.step.at(zero: Bool, qr: Nat & Nat) -> Wn:
+  match zero:
+    case True{}:
+      WBad{}
+    case False{}:
+      (q, r) = qr
+      fi.step.lr(q, Nat.is_eq(r, 1n))
+
+def fi.step(+x: Nat) -> Wn:
+  fi.step.at(Nat.is_eq(x, 0n), Nat.divmod(x, 2n))
+
+# a code read from bit r of byte q: the symbol and where it ends, or
+# none (no code, the input ends, or k bits did not reach one)
+type Wk is Data:
+  WLeaf{s: Nat, q: Nat, r: Nat}
+  WStop{}
+
+def fi.walk(k: Nat, w: Wn, ok: Bool, +tab: String, +s: Bytes(), +q: Nat, +r: Nat) -> Wk:
+  match k w ok:
+    case _ WSym{sy} _:
+      WLeaf{sy, q, r}
+    case 1n+p WGo{n} True{}:
+      +q2 = fi.nq(q, r)
+      fi.walk(p, fi.step(fi.cell(tab, n, fi.b(s, q, r))), fi.in(s, q2), tab, s, q2, next_bp(r))
+    case _ _ _:
+      WStop{}
+
+# k bits more, as the machine's Get gathers them (newest first)
+type Gt is Data:
+  Gt{acc: List<&2, Bool>, q: Nat, r: Nat}
+  GStop{}
+
+def fi.get(k: Nat, ok: Bool, +s: Bytes(), +q: Nat, +r: Nat, acc: List<&2, Bool>) -> Gt:
+  match k ok:
+    case 0n _:
+      Gt{acc, q, r}
+    case 1n+p True{}:
+      +q2 = fi.nq(q, r)
+      fi.get(p, fi.in(s, q2), s, q2, next_bp(r), Con{fi.b(s, q, r), acc})
+    case 1n+p False{}:
+      GStop{}
+
+def fi.at(+s: String, +i: Nat) -> Nat:
+  U32.to_nat(Bytes.get(s, i))
+
+# The symbols
+# -----------
+#
+# The next symbol of a Huffman block, read whole the way sym, lit,
+# len_x, dist and copy read it: a literal, a copy, or one the fast
+# path leaves to the machine (an end of block, a refusal, the input's
+# end), with the position after it.
+
+type Dc is Data:
+  DLit{c: Nat, q: Nat, r: Nat}
+  DCopy{len: Nat, dist: Nat, q: Nat, r: Nat}
+  DStop{}
+
+def fi.cp(far: Bool, big: Bool, +len: Nat, +dist: Nat, +q: Nat, +r: Nat) -> Dc:
+  match far big:
+    case False{} False{}:
+      DCopy{len, dist, q, r}
+    case _ _:
+      DStop{}
+
+def fi.copy.ok(+len: Nat, +dist: Nat, +q: Nat, +r: Nat, +olen: Nat, +n: Nat, +cap: Nat) -> Dc:
+  fi.cp(Nat.is_lt(olen, dist), Nat.is_lt(cap, Nat.add(n, len)), len, dist, q, r)
+
+def fi.dist.g(g: Gt, +len: Nat, +base: Nat, +olen: Nat, +n: Nat, +cap: Nat) -> Dc:
+  match g:
+    case Gt{acc, +q, +r}:
+      fi.copy.ok(len, Nat.add(base, hval(acc, 0n)), q, r, olen, n, cap)
+    case GStop{}:
+      DStop{}
+
+def fi.dist_x(x: Nat, +base: Nat, +s: Bytes(), +len: Nat, +q: Nat, +r: Nat, +olen: Nat, +n: Nat,
+  +cap: Nat) -> Dc:
+  match x:
+    case 0n:
+      fi.copy.ok(len, base, q, r, olen, n, cap)
+    case 1n+p:
+      fi.dist.g(fi.get(1n+p, fi.in(s, q), s, q, r, Nil{}), len, base, olen, n, cap)
+
+def fi.dist(ok: Bool, +ds: Nat, +s: Bytes(), +len: Nat, +q: Nat, +r: Nat, +db: String, +dx: String,
+  +olen: Nat, +n: Nat, +cap: Nat) -> Dc:
+  match ok:
+    case True{}:
+      fi.dist_x(fi.at(dx, ds), fi.at(db, ds), s, len, q, r, olen, n, cap)
+    case False{}:
+      DStop{}
+
+def fi.dsym(wk: Wk, +s: Bytes(), +len: Nat, +db: String, +dx: String, +olen: Nat, +n: Nat, +cap: Nat) ->
+  Dc:
+  match wk:
+    case WLeaf{+ds, +q, +r}:
+      fi.dist(Nat.is_lt(ds, 30n), ds, s, len, q, r, db, dx, olen, n, cap)
+    case WStop{}:
+      DStop{}
+
+def fi.dwalk(+len: Nat, +s: Bytes(), +q: Nat, +r: Nat, +d: String, +db: String, +dx: String, +olen: Nat,
+  +n: Nat, +cap: Nat) -> Dc:
+  fi.dsym(fi.walk(16n, WGo{0n}, fi.in(s, q), d, s, q, r), s, len, db, dx, olen, n, cap)
+
+def fi.len.g(g: Gt, +base: Nat, +s: Bytes(), +d: String, +db: String, +dx: String, +olen: Nat,
+  +n: Nat, +cap: Nat) -> Dc:
+  match g:
+    case Gt{acc, +q, +r}:
+      fi.dwalk(Nat.add(base, hval(acc, 0n)), s, q, r, d, db, dx, olen, n, cap)
+    case GStop{}:
+      DStop{}
+
+def fi.len_x(x: Nat, +base: Nat, +s: Bytes(), +q: Nat, +r: Nat, +d: String, +db: String,
+  +dx: String, +olen: Nat, +n: Nat, +cap: Nat) -> Dc:
+  match x:
+    case 0n:
+      fi.dwalk(base, s, q, r, d, db, dx, olen, n, cap)
+    case 1n+p:
+      fi.len.g(fi.get(1n+p, fi.in(s, q), s, q, r, Nil{}), base, s, d, db, dx, olen, n, cap)
+
+def fi.lit.c(ok: Bool, +i: Nat, +s: Bytes(), +q: Nat, +r: Nat, +d: String, +lb: String, +lx: String,
+  +db: String, +dx: String, +olen: Nat, +n: Nat, +cap: Nat) -> Dc:
+  match ok:
+    case True{}:
+      fi.len_x(fi.at(lx, i), fi.at(lb, i), s, q, r, d, db, dx, olen, n, cap)
+    case False{}:
+      DStop{}
+
+def fi.lit.b(eob: Bool, +sy: Nat, +s: Bytes(), +q: Nat, +r: Nat, +d: String, +lb: String,
+  +lx: String, +db: String, +dx: String, +olen: Nat, +n: Nat, +cap: Nat) -> Dc:
+  match eob:
+    case True{}:
+      DStop{}
+    case False{}:
+      fi.lit.c(Nat.is_lt(sy, U32.to_nat(286)), Nat.sub(sy, U32.to_nat(257)), s, q, r, d, lb, lx, db, dx,
+        olen, n, cap)
+
+def fi.emit(ok: Bool, +sy: Nat, +q: Nat, +r: Nat) -> Dc:
+  match ok:
+    case True{}:
+      DLit{sy, q, r}
+    case False{}:
+      DStop{}
+
+def fi.lit(is_lit: Bool, +sy: Nat, +s: Bytes(), +q: Nat, +r: Nat, +d: String, +lb: String,
+  +lx: String, +db: String, +dx: String, +olen: Nat, +n: Nat, +cap: Nat) -> Dc:
+  match is_lit:
+    case True{}:
+      fi.emit(Nat.is_lt(n, cap), sy, q, r)
+    case False{}:
+      fi.lit.b(Nat.is_eq(sy, 256n), sy, s, q, r, d, lb, lx, db, dx, olen, n, cap)
+
+def fi.lsym(wk: Wk, +s: Bytes(), +d: String, +lb: String, +lx: String, +db: String, +dx: String,
+  +olen: Nat, +n: Nat, +cap: Nat) -> Dc:
+  match wk:
+    case WLeaf{+sy, +q, +r}:
+      fi.lit(Nat.is_lt(sy, 256n), sy, s, q, r, d, lb, lx, db, dx, olen, n, cap)
+    case WStop{}:
+      DStop{}
+
+# the next symbol at bit r of byte q, its code read with tab
+def fi.dec(+s: Bytes(), +q: Nat, +r: Nat, +tab: String, +d: String, +lb: String, +lx: String,
+  +db: String, +dx: String, +olen: Nat, +n: Nat, +cap: Nat) -> Dc:
+  fi.lsym(fi.walk(16n, WGo{0n}, fi.in(s, q), tab, s, q, r), s, d, lb, lx, db, dx, olen, n, cap)
+
+def fi.back(+o: Bytes(), +dist: Nat) -> U32:
+  Bytes.get(o, Nat.sub(Bytes.len(o), dist))
+
+# copy.go, with the byte read where it lies
+def fi.copy(len: Nat, +out: Bytes(), +dist: Nat) -> Bytes():
+  match len:
+    case 0n:
+      out
+    case 1n+p:
+      +c = fi.back(out, dist)
+      fi.copy(p, Bytes.push(out, c), dist)
+
+def fi.len(+o: Bytes()) -> Nat:
+  Bytes.len(o)
+
+# where the fast path stopped
+type Fr is Data:
+  Fr{q: Nat, r: Nat, out: Bytes(), n: Nat}
+
+# symbols until one is left to the machine
+def fi.run(k: Nat, dc: Dc, +s: Bytes(), +ll: String, +d: String, +lb: String, +lx: String,
+  +db: String, +dx: String, +q: Nat, +r: Nat, out: Bytes(), +n: Nat, +cap: Nat) -> Fr:
+  match k dc:
+    case 1n+p DLit{+c, +q2, +r2}:
+      +o2 = Bytes.push(out, U32.from_nat(c))
+      fi.run(p, fi.dec(s, q2, r2, ll, d, lb, lx, db, dx, fi.len(o2), 1n+n, cap), s, ll, d, lb, lx, db, dx,
+        q2, r2, o2, 1n+n, cap)
+    case 1n+p DCopy{+len, +dist, +q2, +r2}:
+      +o2 = fi.copy(len, out, dist)
+      fi.run(p, fi.dec(s, q2, r2, ll, d, lb, lx, db, dx, fi.len(o2), Nat.add(n, len), cap), s, ll, d, lb,
+        lx, db, dx, q2, r2, o2, Nat.add(n, len), cap)
+    case _ _:
+      Fr{q, r, out, n}
+
+# The driver
+# ----------
+
+# the bits of a stream, each byte's low first
+def fi.bits(s: Bytes()) -> List<&2, Bool>:
+  match s:
+    case SNil{}:
+      Nil{}
+    case SCon{Chr{c}, t}:
+      List.append(&2, Bool, unbyte(c), fi.bits(t))
+
+# the machine over bits
+def fi.bfeed(bs: List<&2, Bool>, st: St) -> St:
+  match bs:
+    case Nil{}:
+      st
+    case Con{b, t}:
+      fi.bfeed(t, bstep(st, b))
+
+# the rest of the input from bit r of its first byte, as bits
+def fi.rest(t: Bytes(), +r: Nat) -> List<&2, Bool>:
+  match t:
+    case SNil{}:
+      Nil{}
+    case SCon{Chr{c}, u}:
+      List.append(&2, Bool, List.drop(&2, Bool, unbyte(c), r), fi.bits(u))
+
+type Dv is Data:
+  Dv{q: Nat, r: Nat, st: St, go: Bool}
+
+# the machine a bit on
+def fi.bit(+s: Bytes(), +q: Nat, +r: Nat, st: St) -> Dv:
+  +q2 = fi.nq(q, r)
+  Dv{q2, next_bp(r), bstep(st, fi.b(s, q, r)), fi.in(s, q2)}
+
+def fi.fr(f: Fr, +s: Bytes(), last: Bool, +ll: String, +d: String, +keep: Nat, +cap: Nat, t: Tabs) -> Dv:
+  match f:
+    case Fr{+q, +r, out, n}:
+      Dv{q, r, St{lit_mode(Blk{last, ll, d}), O{out, keep, n, cap, t}, r}, fi.in(s, q)}
+
+# a first symbol read whole, and then the rest the fast path reads
+def fi.first(dc: Dc, +s: Bytes(), +q: Nat, +r: Nat, +tab: String, last: Bool, +ll: String, +d: String,
+  out: Bytes(), +keep: Nat, +n: Nat, +cap: Nat, fll: String, fd: String, +lb: String, +lx: String,
+  +db: String, +dx: String) -> Dv:
+  match dc:
+    case DStop{}:
+      fi.bit(s, q, r, St{Walk{0n, tab, SLit{Blk{last, ll, d}}}, O{out, keep, n, cap,
+        Tabs{fll, fd, lb, lx, db, dx}}, r})
+    case DLit{+c, +q2, +r2}:
+      +o2 = Bytes.push(out, U32.from_nat(c))
+      fi.fr(fi.run(Bytes.len(s), fi.dec(s, q2, r2, ll, d, lb, lx, db, dx, fi.len(o2), 1n+n, cap), s, ll, d,
+        lb, lx, db, dx, q2, r2, o2, 1n+n, cap), s, last, ll, d, keep, cap, Tabs{fll, fd, lb, lx, db, dx})
+    case DCopy{+len, +dist, +q2, +r2}:
+      +o2 = fi.copy(len, out, dist)
+      fi.fr(fi.run(Bytes.len(s), fi.dec(s, q2, r2, ll, d, lb, lx, db, dx, fi.len(o2), Nat.add(n, len), cap),
+        s, ll, d, lb, lx, db, dx, q2, r2, o2, Nat.add(n, len), cap), s, last, ll, d, keep, cap,
+        Tabs{fll, fd, lb, lx, db, dx})
+
+def fi.fast(+s: Bytes(), +q: Nat, +r: Nat, +tab: String, last: Bool, +ll: String, +d: String, o: O) ->
+  Dv:
+  match o:
+    case O{+out, +keep, +n, +cap, t}:
+      match t:
+        case Tabs{fll, fd, +lb, +lx, +db, +dx}:
+          fi.first(fi.dec(s, q, r, tab, d, lb, lx, db, dx, fi.len(out), n, cap), s, q, r, tab, last, ll, d,
+            out, keep, n, cap, fll, fd, lb, lx, db, dx)
+
+# at node 0 of a literal code at the machine's own bit, the fast path;
+# anywhere else, a bit
+def fi.at.bp(same: Bool, +s: Bytes(), +q: Nat, +r: Nat, +tab: String, last: Bool, +ll: String,
+  +d: String, o: O, +bp: Nat) -> Dv:
+  match same:
+    case True{}:
+      fi.fast(s, q, r, tab, last, ll, d, o)
+    case False{}:
+      fi.bit(s, q, r, St{Walk{0n, tab, SLit{Blk{last, ll, d}}}, o, bp})
+
+def fi.node(+s: Bytes(), +q: Nat, +r: Nat, st: St) -> Dv:
+  match st:
+    case St{m, o, +bp}:
+      match m:
+        case Walk{node, +tab, sk}:
+          match node sk:
+            case 0n SLit{blk}:
+              match blk:
+                case Blk{last, +ll, +d}:
+                  fi.at.bp(Nat.is_eq(bp, r), s, q, r, tab, last, ll, d, o, bp)
+            case _ _:
+              fi.bit(s, q, r, St{Walk{node, tab, sk}, o, bp})
+        case _:
+          fi.bit(s, q, r, St{m, o, bp})
+
+def fi.drv(k: Nat, +s: Bytes(), dv: Dv) -> St:
+  match k dv:
+    case 1n+p Dv{+q, +r, st, True{}}:
+      fi.drv(p, s, fi.node(s, q, r, st))
+    case 0n Dv{+q, +r, st, True{}}:
+      fi.bfeed(fi.rest(Bytes.drop(s, q), r), st)
+    case _ Dv{q, r, st, False{}}:
+      st
+
+# a whole raw deflate stream, at most cap bytes out: the machine over
+# it (law inflate_fast), driven by the fast path
 def inflate(cap: Nat, +s: Bytes()) -> Result<&2, &2, Why, Bytes()>:
-  finish(feed(s, new(cap)))
+  finish(fi.drv(Nat.add(Nat.mul(8n, Bytes.len(s)), 1n), s, Dv{0n, 0n, new(cap), fi.in(s, 0n)}))
 
 # Deflate
 # =======
