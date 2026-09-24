@@ -4254,6 +4254,9 @@ def Laws.same_head_is_built(mt, n):
 def Laws.part_head_is_built(ct, a, b, n, mt):
   cd.part(ct, a, b, n, mt)
 
+def Laws.head_vectors():
+  {==}
+
 def Laws.not_modified_no_body(ct, fs, head, n, mt, e):
   %Equal.sym(C.Got, C.decide(C.ask.of(fs), mt, n), C.Same{}, e) :
     {C.fr.of(_, ct, head, n, mt) == L.Fr{C.hd.same.is(mt, n), 0, 0} : L.Fr}

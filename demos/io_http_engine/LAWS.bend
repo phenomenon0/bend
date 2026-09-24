@@ -1129,6 +1129,21 @@ law part_head_is_built:
   for +mt: U32
   {C.hd.part(ct, a, b, n, mt) == C.hd.part.is(ct, a, b, n, mt) : Bytes()}
 
+# LAW: the heads, byte for byte, for a 10-byte text file last written at
+# the epoch: the 200, the 304, the 206 of bytes 2 to 5, the 416 (with its
+# line of text) and the 412 of a HEAD (without).
+law head_vectors:
+  {[C.hd.full("HTTP/1.1 200 OK\r\ncontent-type: text/plain\r\ncontent-length: ", 10, 0),
+    C.hd.same(0, 10),
+    C.hd.part("HTTP/1.1 200 OK\r\ncontent-type: text/plain\r\ncontent-length: ", 2n, 5n, 10, 0),
+    C.hd.nopart(10, False{}), C.hd.fails(True{})] ==
+    ["HTTP/1.1 200 OK\r\ncontent-type: text/plain\r\ncontent-length: 10\r\nlast-modified: Thu, 01 Jan 1970 00:00:00 GMT\r\netag: \"0-a\"\r\naccept-ranges: bytes\r\nconnection: keep-alive\r\n\r\n",
+      "HTTP/1.1 304 Not Modified\r\nlast-modified: Thu, 01 Jan 1970 00:00:00 GMT\r\netag: \"0-a\"\r\nconnection: keep-alive\r\n\r\n",
+      "HTTP/1.1 206 Partial Content\r\ncontent-type: text/plain\r\ncontent-length: 4\r\ncontent-range: bytes 2-5/10\r\nlast-modified: Thu, 01 Jan 1970 00:00:00 GMT\r\netag: \"0-a\"\r\nconnection: keep-alive\r\n\r\n",
+      "HTTP/1.1 416 Range Not Satisfiable\r\ncontent-type: text/plain\r\ncontent-length: 22\r\ncontent-range: bytes */10\r\nconnection: keep-alive\r\n\r\nrange not satisfiable\n",
+      "HTTP/1.1 412 Precondition Failed\r\ncontent-type: text/plain\r\ncontent-length: 20\r\nconnection: keep-alive\r\n\r\n"] :
+    List<&2, Bytes()>}
+
 # LAW: a 304 is its head and nothing else: no byte of the file follows it,
 # GET or HEAD.
 law not_modified_no_body:

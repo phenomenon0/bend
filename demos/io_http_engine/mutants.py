@@ -24,6 +24,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(HERE))
 LOOP = os.path.join(ROOT, 'wire', 'loop.bend')
 MAIN = os.path.join(HERE, 'main.bend')
+COND = os.path.join(HERE, 'cond.bend')
 WORLD = os.path.join(ROOT, 'wire', 'world.bend')
 
 # the world's mutants: (what, file, before, after). The loops are
@@ -79,17 +80,25 @@ MUTANTS = [
     '''      bind(Put(S), Em<S>, tx(s, pre, ms), m =>''',
     '''      bind(Put(S), Em<S>, tx(s, "", ms), m =>'''),
   ('a small file read short is taken as whole', LOOP,
-    '''          pure(Em<S>, page.blk(S, m, Nat.is_eq(Bytes.len(bs), U32.to_nat(n))))))''',
+    '''          pure(Em<S>, page.blk(S, m, Nat.is_eq(Bytes.len(bs), U32.to_nat(n))
+            && Nat.is_eq(Bytes.len(part), U32.to_nat(len))))))''',
     '''          pure(Em<S>, page.blk(S, m, True{}))))'''),
+  ('a small file\'s part that the read did not hold is taken as whole', LOOP,
+    '''          pure(Em<S>, page.blk(S, m, Nat.is_eq(Bytes.len(bs), U32.to_nat(n))
+            && Nat.is_eq(Bytes.len(part), U32.to_nat(len))))))''',
+    '''          pure(Em<S>, page.blk(S, m, Nat.is_eq(Bytes.len(bs), U32.to_nat(n))))))'''),
   ('a small file sent without its head', LOOP,
-    '''        bind(Put(S), Em<S>, tx(s, Bytes.append(pre, bs), ms), m =>''',
-    '''        bind(Put(S), Em<S>, tx(s, bs, ms), m =>'''),
-  ('a file sent from the wrong place: sendfile from its second byte', LOOP,
-    '''fsend(s, f, 0, n, ms), g =>''',
-    '''fsend(s, f, 1, n, ms), g =>'''),
+    '''        bind(Put(S), Em<S>, tx(s, Bytes.append(pre, part), ms), m =>''',
+    '''        bind(Put(S), Em<S>, tx(s, part, ms), m =>'''),
+  ('a small file\'s part cut from its first byte, not from the range\'s', LOOP,
+    '''      +part = Bytes.slice(bs, U32.to_nat(off), U32.to_nat(len))''',
+    '''      +part = Bytes.slice(bs, 0n, U32.to_nat(len))'''),
+  ('a file sent from the wrong place: sendfile from a byte after its part', LOOP,
+    '''fsend(s, f, off, len, ms), g =>''',
+    '''fsend(s, f, (off + 1 : U32), len, ms), g =>'''),
   ('a file sent a byte short of the length its head promised', LOOP,
-    '''fsend(s, f, 0, n, ms), g =>''',
-    '''fsend(s, f, 0, (n - 1 : U32), ms), g =>'''),
+    '''fsend(s, f, off, len, ms), g =>''',
+    '''fsend(s, f, off, (len - 1 : U32), ms), g =>'''),
   ('a sendfile that failed or came up short is taken as whole', LOOP,
     '''    pure(Em<S>, Em{s, "", Result.is_done(&1, &1, U32 & String, Unit, r)}))''',
     '''    pure(Em<S>, Em{s, "", True{}}))'''),
@@ -132,6 +141,80 @@ MUTANTS = [
   ('the memo answers for a key it was not asked', WORLD,
     '''      memo.find.at(same(k, key) && Nat.is_lt(now, Nat.add(at, ttl)), got,''',
     '''      memo.find.at(Nat.is_lt(now, Nat.add(at, ttl)), got,'''),
+  # cond.bend: the conditional and range decision, its heads, the date
+  ('a 304 carries the file after its head', COND,
+    '''      L.Fr{hd.same(mt32, n32), 0, 0}''',
+    '''      L.Fr{hd.same(mt32, n32), 0, n32}'''),
+  ('a 304 states a Content-Length', COND,
+    '''  Bytes.append(vals(Bytes.append("", "HTTP/1.1 304 Not Modified"), mt32, n32), ka())''',
+    '''  Bytes.append(vals(Bytes.append("", "HTTP/1.1 304 Not Modified\\r\\ncontent-length: 0"), mt32, n32), ka())'''),
+  ('If-Modified-Since read though If-None-Match is present', COND,
+    '''    case Some{v}:
+      Bool.pick(Got, tags.hit(v, etag.of(mt32, n32), False{}), Same{}, later)''',
+    '''    case Some{v}:
+      match ims:
+        case None{}:
+          Bool.pick(Got, tags.hit(v, etag.of(mt32, n32), False{}), Same{}, later)
+        case Some{w}:
+          ims.go(date.read(w), U32.to_nat(mt32),
+            Bool.pick(Got, tags.hit(v, etag.of(mt32, n32), False{}), Same{}, later))'''),
+  ('an unreadable If-Modified-Since is a 304', COND,
+    '''def ims.go(m: Maybe<&2, Nat>, +mt: Nat, later: Got) -> Got:
+  match m:
+    case None{}:
+      later''',
+    '''def ims.go(m: Maybe<&2, Nat>, +mt: Nat, later: Got) -> Got:
+  match m:
+    case None{}:
+      Same{}'''),
+  ('If-Unmodified-Since is never read', COND,
+    '''          pre.ius(date.read(v), U32.to_nat(mt32))''',
+    '''          True{}'''),
+  ('If-Match compared weakly', COND,
+    '''      tags.hit(v, etag.of(mt32, n32), True{})''',
+    '''      tags.hit(v, etag.of(mt32, n32), False{})'''),
+  ('If-Range ignored: a stale validator still gets the range', COND,
+    '''      Bool.pick(Got, ir.ok(v, mt32, n32), ranged(rg.parse(rg), n), Full{})''',
+    '''      ranged(rg.parse(rg), n)'''),
+  ('a last-pos past the end is one byte past it', COND,
+    '''          want.from(Nat.is_lt(a, n) && Nat.is_le(a, b2), a, Nat.min(b2, Nat.sub(n, 1n)))''',
+    '''          want.from(Nat.is_lt(a, n) && Nat.is_le(a, b2), a, Nat.min(b2, n))'''),
+  ('a first-pos at the end is satisfiable', COND,
+    '''          want.from(Nat.is_lt(a, n), a, Nat.sub(n, 1n))''',
+    '''          want.from(Nat.is_le(a, n), a, Nat.sub(n, 1n))'''),
+  ('a suffix range one byte too long', COND,
+    '''          Span{Nat.sub(m, Nat.min(j, m)), m}''',
+    '''          Span{Nat.sub(m, Nat.min(1n+j, m)), m}'''),
+  ('a range whose first-pos is past its last-pos is read', COND,
+    '''      Bool.pick(Rs & List<&2, Spec>, Nat.is_le(a, b), (RAfter{}, Con{From{a, Some{b}}, sp}),
+        (RBad{}, sp))''',
+    '''      (RAfter{}, Con{From{a, Some{b}}, sp})'''),
+  ('two ranges served as the first', COND,
+    '''    case 1n+q:
+      Full{}''',
+    '''    case 1n+q:
+      (a, b) = ab
+      Part{a, b}'''),
+  ('a 206 sends its part from the file\'s first byte', COND,
+    '''      L.Fr{hd.part(ct, a, b, n32, mt32), U32.from_nat(a), U32.from_nat(Nat.sub(1n+b, a))}''',
+    '''      L.Fr{hd.part(ct, a, b, n32, mt32), 0, U32.from_nat(Nat.sub(1n+b, a))}'''),
+  ('Content-Range names the byte after the last', COND,
+    '''  ["\\r\\ncontent-range: bytes ", num(a), "-", num(b), "/", num(n)]''',
+    '''  ["\\r\\ncontent-range: bytes ", num(a), "-", num(1n+b), "/", num(n)]'''),
+  ('the weekday a day late', COND,
+    '''  Con{nth(wkc(), Nat.mod(Nat.add(days, 4n), 7n)),''',
+    '''  Con{nth(wkc(), Nat.mod(Nat.add(days, 5n), 7n)),'''),
+  ('every fourth year a leap year', COND,
+    '''    case True{}:
+      leap.c(y)''',
+    '''    case True{}:
+      True{}'''),
+  ('a date read back a second late', COND,
+    '''      Some{Nat.add(Nat.mul(Nat.add(Nat.mul(Nat.add(Nat.mul(days, 24n), h), 60n), mi), 60n), x)}''',
+    '''      Some{Nat.add(Nat.mul(Nat.add(Nat.mul(Nat.add(Nat.mul(days, 24n), h), 60n), mi), 60n), 1n+x)}'''),
+  ('the entity-tag in decimal', COND,
+    '''  num.go(8n, 16n, acc, Nat.divmod(U32.to_nat(x), 16n))''',
+    '''  num.go(8n, 10n, acc, Nat.divmod(U32.to_nat(x), 10n))'''),
 ]
 
 # the framing's mutants: (what, file, before, after)
@@ -224,7 +307,7 @@ def strip(d):
 def main():
   bad = 0
   total = len(MUTANTS) + len(FRAMING)
-  origs = {f: open(f).read() for f in (LOOP, MAIN, WORLD)}
+  origs = {f: open(f).read() for f in (LOOP, MAIN, WORLD, COND)}
   try:
     for name, f, a, b in MUTANTS:
       orig = origs[f]
