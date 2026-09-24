@@ -21,8 +21,9 @@
 #
 # The opening handshake is ws_hs.bend's s.answer (ws_laws.bend's
 # srv_hs_*): a request that did not ask is a 426 (it may ask again on
-# the same connection); one that asked broken (not a GET, a key that is
-# not sixteen bytes in base64) is a 400; one that asked well gets the 101
+# the same connection); one that asked broken (a HEAD, a key that is
+# not sixteen bytes in base64) is a 400, and one with another method the
+# router's 405 (a ws route is a GET one); one that asked well gets the 101
 # with the Accept its key earns and the subprotocol chosen, when the
 # client offered it. No extension is ever agreed: permessage-deflate,
 # offered, is declined by not naming it (RFC 7692 5), and a frame with

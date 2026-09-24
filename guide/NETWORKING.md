@@ -1,9 +1,10 @@
 # Networking in Bend
 
 Bend's networking library is `net/`. It is an HTTP/1.1 server, an HTTP/1.1
-client, a WebSocket client and JSON bodies. Every timeout and limit is on from
-the start, and the promises that matter are proven in `net/LAWS.bend`. It does
-not do everything. What it does not do yet is listed at the end.
+client, a WebSocket client and server, and JSON bodies. Every timeout and limit
+is on from the start, and the promises that matter are proven in
+`net/LAWS.bend`. It does not do everything. What it does not do yet is listed
+at the end.
 
 Every snippet below is copied from a file in `net/examples/` that checks and
 builds. Those files sit in `net/examples/`, so they import the library as
@@ -470,6 +471,74 @@ def lost(c: Ws.Conn, e: Ws.Err) -> R():
 and `Ws.opts.max_msg` change the options. The whole program is
 `net/examples/ws_chat.bend`.
 
+### A WebSocket Server
+
+`net/ws_server.bend` adds WebSockets to the server: `WsServer.ws(pat, h)` is a
+route like `Server.get`, and it sits in the same list. `h` gets the request
+(its path and params, its query, its headers and cookies: authenticate there,
+and pick a subprotocol) and answers `WsServer.accept(proto, run)` or
+`WsServer.refuse(response)`. `run` gets a `Ws.Conn`, the client's own type:
+the same `Ws.recv`, `Ws.recv_for`, `Ws.send_text`, `Ws.send_bytes`, `Ws.ping`
+and `Ws.protocol`, the same messages. It hands the connection back when it is
+done; one handed back open is closed with 1000, and `Ws.end(c, code, reason)`
+closes it with a code of your own first. Serve the routes with
+`WsServer.serve.with(~E, ~routes, env, cfg)`, which makes them from `env` for
+each request:
+
+```python
+def routes(+hub: WsServer.Hub) -> List<&1, Server.Route>:
+  [Server.get("/", page), WsServer.ws("/room", r => enter(hub, r))]
+
+def main() -> IO(Unit):
+  do IO<Unit>:
+    +hub : WsServer.Hub <- WsServer.hub.new()
+    xs : List<String> <- IO.args()
+    WsServer.serve.with(~WsServer.Hub, ~routes, hub, Server.args(xs, Server.config(8765)))
+```
+
+`WsServer.choose(r, ["chat"])` is the first of your subprotocols the client
+offered (`""` for none), and the answer never names one it did not offer. A
+`Hub` is a room: `WsServer.join(hub)` makes a member with an inbox,
+`WsServer.publish(hub, msg)` puts a message in every member's inbox, and
+`WsServer.relay(me, c)` sends a member what came for it. A connection waits for
+its client in slices (`Ws.recv_for(c, 50)`) and relays between them, so the
+room reaches it within 50 ms:
+
+```python
+def talk(k: Nat, +hub: WsServer.Hub, +me: WsServer.Member, c: Ws.Conn) -> IO(Ws.Conn):
+  match k:
+    case 0n:
+      IO.pure(Ws.Conn, c)
+    case 1n+j:
+      IO.bind(Ws.Out(F.Msg), Ws.Conn, Ws.recv_for(c, 50), g => heard(hub, me, g, cc => talk(j, hub, me, cc)))
+
+# a client in the room: joined, talked with, and gone
+def member(+hub: WsServer.Hub, c: Ws.Conn) -> IO(Ws.Conn):
+  do IO<Ws.Conn>:
+    +me : WsServer.Member <- WsServer.join(hub)
+    c2 : Ws.Conn <- talk(Ws.big(), hub, me, c)
+    WsServer.leave(hub, me)
+    return c2
+```
+
+The server answers the opening handshake as RFC 6455 4.2.2 says: a GET that
+asked to upgrade with a good key gets the 101 and the Accept its key earns; a
+request that did not ask gets a 426 naming version 13 (a version other than 13
+too), and one that asked broken (a key that is not sixteen bytes in base64) a
+400. No extension is ever agreed: `permessage-deflate`, offered, is declined by
+not naming it. Then every frame the client sends must be masked (1002), a
+message is at most `max_msg` (1009), text must be UTF-8 (1007), a ping is
+answered as it comes, and the client's close is answered once. A client quiet
+for `ping` ms is pinged, and dropped with 1011 when `pong` ms more bring
+nothing. On SIGTERM, a `recv` sends 1001 (going away) and hands over the
+client's answer as `Closed`. `WsServer.ws.with(o, pat, h)` takes options:
+`WsServer.opts()` changed by `opts.max_msg`, `opts.keepalive(o, ping, pong)`,
+`opts.timeouts(o, recv, close, send)` and `opts.origins(o, [...])`, the
+`Origin` values a browser's request may carry (none named: any; a request with
+no `Origin` is not from a browser and passes; any other is a 403 before `h` is
+asked). The whole program is `net/examples/chat_server.bend`, and
+`net/examples/ws_echo.bend` is the echo the Autobahn suite runs against.
+
 ## The Defaults
 
 Every default is a bound. Each one exists so that a peer, slow or hostile,
@@ -494,6 +563,11 @@ cannot hold a resource forever.
 | client: TLS | verified (system store, or `ca`), name checked | `Tls` | no connection to a server that is not who the URL names |
 | WebSocket: connect, recv, close | 10 s, 30 s, 5 s | `ETime` | the same as the client's |
 | WebSocket: a message, the answer's head | 64 MiB, 16 KiB | 1009, `EHead` | a message is held in memory whole |
+| WebSocket server: a message | 1 MiB | 1009 | a message is held in memory whole |
+| WebSocket server: quiet, then no answer to the ping | 20 s, 20 s | a ping; then 1011 | a vanished client does not hold its connection |
+| WebSocket server: a recv, the closing handshake, a send | 60 s, 5 s, 10 s | `ETime`, closed | the same as the client's |
+| WebSocket server: SIGTERM | 1001 on each recv | the client's answer, or grace (5 s) | a deploy says goodbye |
+| WebSocket server: an inbox (`Hub`) | 1024 messages | the newest dropped | a member that never reads does not hold the room's traffic |
 
 A few rules are not numbers. A malformed request is a 400 that closes, and
 nothing after it on the connection is read. A response the server cannot write
@@ -519,10 +593,14 @@ parsed under the budget you pass, at most 64 containers deep.
 - the vectors: percent-encoding round-trips every byte, and the query, URL,
   Location and route pattern readings match the tables listed there.
 
-`net/ws_laws.bend` states the WebSocket client's, and `net/ws_proof.bend`
-proves them: every frame sent is masked, forbidden frames are refused with
-their close code, pings are answered, and the handshake is checked as RFC 6455
-says. To run them:
+`net/ws_laws.bend` states the WebSocket client's and server's, and
+`net/ws_proof.bend` proves them: every frame a client sends is masked and every
+frame a server sends is not, forbidden frames are refused with their close
+code (an unmasked one from a client with 1002), pings are answered, the
+handshake is checked as RFC 6455 says on both ends (the server's 101 for every
+request that asked well, a 400 or 426 for every other), the messages a server's
+handler receives are the spec's reassembly of the input however TCP cut it
+into reads, and a close is answered once. To run them:
 
 ```bash
 bend net/PROOF.bend            # prints: All terms check.
@@ -548,8 +626,8 @@ checked response writer that `respond_framed` is about (`net/README.md`).
   `wire/stream.bend` has the machinery, and `demos/io_sink` uses it, but
   `net/` does not yet.
 - Bodies past 1 MiB on the server. The engine's cap is the most.
-- A server-side Upgrade, so no WebSocket server in `net/`. The client is
-  there. The HTTP engine (`demos/io_http_engine`) has a `/ws` echo of its own.
+- WebSocket compression (`permessage-deflate`): offered, it is declined, on
+  both ends.
 - A deadline on the handler itself. A handler that never answers holds its
   connection.
 - HTTP/2 in `net/`. `demos/io_http2` is an HTTP/2 server of its own, not

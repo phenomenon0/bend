@@ -6,9 +6,15 @@
 # that does not turn, the Accept or the Upgrade or the Connection not
 # checked, an orphan continuation or a message inside another taken, a
 # bad close code taken, the cap not held, a ping not answered, the
-# server's end reading as the client's -- and net/ws_proof.bend must
-# refuse every one. Each runs in a scratch copy of what the proof
-# imports, and the copy is checked clean first.
+# server's end reading as the client's -- and, at the server's end
+# (net/ws_server.bend), an unmasked client frame read, a server frame
+# masked, the cap not held, a read's messages lost or assembled from
+# scratch, a close answered twice or written after, a ping not answered,
+# the key or the method not checked, a 200 for a request that did not
+# ask, the Accept or Connection: Upgrade wrong, a subprotocol not
+# offered named -- and net/ws_proof.bend must refuse every one. Each
+# runs in a scratch copy of what the proof imports, and the copy is
+# checked clean first.
 #
 #   python3 net/ws_mutants.py        (from the repo root)
 import os, shutil, subprocess, sys, tempfile
@@ -28,8 +34,10 @@ MUTANTS = [
     '''      c.len.go(cap, op, U32.and(b, 127), U32.is_eq(U32.and(b, 128), 128),''',
     '''      c.len.go(cap, op, U32.and(b, 127), False{},'''),
   ('a ping of 126 bytes is read', F,
-    '''        c.ctl(op) && U32.is_lt(125, U32.and(b, 127)), out)''',
-    '''        c.ctl(op) && U32.is_lt(126, U32.and(b, 127)), out)'''),
+    '''      c.len.go(cap, op, U32.and(b, 127), U32.is_eq(U32.and(b, 128), 128),
+        c.ctl(op) && U32.is_lt(125, U32.and(b, 127)), out)''',
+    '''      c.len.go(cap, op, U32.and(b, 127), U32.is_eq(U32.and(b, 128), 128),
+        c.ctl(op) && U32.is_lt(126, U32.and(b, 127)), out)'''),
   ('a reserved bit is let through', F,
     '''    case Cli{cap}:
       c.op.go(U32.and(b, 15), U32.is_zero(U32.and(b, 112)) && c.known(U32.and(b, 15)),''',
@@ -96,7 +104,82 @@ MUTANTS = [
       Fail{HExtension{}}''',
     '''    case True{}:
       j.proto(offered, proto)'''),
+
+  # the server's end (net/ws_server.bend)
+  ('the server reads an unmasked client frame', F,
+    '''      s.len.go(cap, op, U32.and(b, 127), U32.is_eq(U32.and(b, 128), 128),''',
+    '''      s.len.go(cap, op, U32.and(b, 127), True{},'''),
+  ('the server sets the mask bit on its frames', F,
+    '''Con{U32.and(len7(n), 127), len.ext(n)}''',
+    '''Con{U32.or(len7(n), 128), len.ext(n)}'''),
+  ('the server reads a frame past its cap', F,
+    '''      s.fits(op, n, out, U32.is_lt(cap, n))''',
+    '''      s.fits(op, n, out, False{})'''),
+  ('each read is assembled from scratch', F,
+    '''w2 => a2 => s.reads.go(cap, t, w2, a2))''',
+    '''w2 => a2 => s.reads.go(cap, t, w2, Idle{}))'''),
+  ("a read's messages are lost when the next read comes", F,
+    '''      List.append(&2, Act, xs, go(w, a))''',
+    '''      go(w, a)'''),
+  ("the peer's close is answered after this end's own", F,
+    '''  match sent:
+    case True{}:
+      None{}''',
+    '''  match sent:
+    case True{}:
+      match x:
+        case Bye{code, reason}:
+          Some{WClose{code}}
+        case _:
+          None{}'''),
+  ('the connection writes on after a close', F,
+    '''      s.put(s.out(sent, x), Bool.pick(List<&2, Wr>, s.stops(x), [], s.writes(sent, t)))''',
+    '''      s.put(s.out(sent, x), s.writes(sent, t))'''),
+  ('the server answers no ping', F,
+    '''        case Pong{body}:
+          Some{WPong{body}}''',
+    '''        case Pong{body}:
+          None{}'''),
+  ("the server's key is not checked", H,
+    '''  s.check.at(asked, get && asked && key.ok(key))''',
+    '''  s.check.at(asked, get && asked)'''),
+  ('the server upgrades a request that is not a GET', H,
+    '''  s.check.at(asked, get && asked && key.ok(key))''',
+    '''  s.check.at(asked, asked && key.ok(key))'''),
+  ('a request that did not ask is answered 200', H,
+    '''      Some{Bool.pick(U32, asked, 400, 426)}''',
+    '''      Some{Bool.pick(U32, asked, 400, 200)}'''),
+  ("the server's Accept is the key itself", H,
+    '''    ++ expect(key) ++ "\\r\\n" ++ s.proto.line(p) ++ "\\r\\n"''',
+    '''    ++ key ++ "\\r\\n" ++ s.proto.line(p) ++ "\\r\\n"'''),
+  ('the 101 leaves out Connection: Upgrade', H,
+    '''Upgrade: websocket\\r\\nConnection: Upgrade\\r\\nSec-WebSocket-Accept: "
+    ++ expect(key)''',
+    '''Upgrade: websocket\\r\\nSec-WebSocket-Accept: "
+    ++ expect(key)'''),
+  ('a subprotocol the client did not offer is named', H,
+    '''  Bool.pick(Bytes(), has(offered, proto) && Bool.not(String.is_empty(proto)), proto, "")''',
+    '''  Bool.pick(Bytes(), Bool.not(String.is_empty(proto)), proto, "")'''),
 ]
+
+
+# each lemma of ws_proof.bend, and the law it is on the way to: the
+# next law proven after it
+def lemmas():
+  out, pend = {}, []
+  for l in open(os.path.join(HERE, 'ws_proof.bend')):
+    if l.startswith('def '):
+      name = l[4:].split('(', 1)[0]
+      if name.startswith('Laws.'):
+        for p in pend:
+          out[p] = name[5:]
+        pend = []
+      else:
+        pend.append(name)
+  return out
+
+
+LEMMAS = lemmas()
 
 
 def check(top):
@@ -125,9 +208,15 @@ def one(i):
     out = check(top)
     if out == 'All terms check.':
       return (what, 'survived')
-    # a kill counts only when a law refuses it, not a parse or a type error
-    law = [l for l in out.split('\n') if l.startswith('Location: ws_laws.')]
-    return (what, ('killed by ' + law[0].split('.', 1)[1]) if law else 'ERROR ' + out[:300].replace('\n', ' '))
+    # a kill counts only when a law refuses it, or the proof of one (a
+    # lemma of ws_proof.bend on the way to it), not a parse or a type
+    # error in the code
+    locs = [l[len('Location: '):] for l in out.split('\n') if l.startswith('Location: ')]
+    if locs and locs[0].startswith('ws_laws.'):
+      return (what, 'killed by ' + locs[0].split('.', 1)[1])
+    if locs and locs[0] in LEMMAS:
+      return (what, 'killed by %s (its lemma %s)' % (LEMMAS[locs[0]], locs[0]))
+    return (what, 'ERROR ' + out[:300].replace('\n', ' '))
   finally:
     shutil.rmtree(top, ignore_errors=True)
 

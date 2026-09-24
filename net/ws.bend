@@ -633,7 +633,7 @@ def wait.by(sock: Socket, +st: St, +until: Nat, +now: Nat, e: End, again: Socket
       IO.bind(Socket & Result<&1, &1, U32 & String, Maybe<&1, Bytes()>>, Out(F.Msg),
         TCP.poll_buf(sock, 65536, left(until, now)), g => got(st, g, again))
     case Server{+ping, +pong, send, +seen, +pinged}:
-      IO.bind(Bool, Out(F.Msg), IO.signal_pending(15),
+      IO.bind(Bool, Out(F.Msg), IO.signal_seen(15),
         stop => srv.at(sock, st, until, now, ping, pong, seen, pinged, stop && Bool.not(st.sent(st)), again))
 
 # nothing queued: the framing broke (1002), or one read, waiting at

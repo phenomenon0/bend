@@ -5,8 +5,9 @@
 #   ./wsc ws://127.0.0.1:9002/echo t:hello r      # net/ws_cli.bend
 #
 # --max-msg N caps a message (1 MiB by default; 1009 past it), --ping-ms
-# and --pong-ms set the keepalive (0 for no pings), and a subprotocol
-# "echo" is chosen when the client offers it. The Autobahn test suite's
+# and --pong-ms set the keepalive (0 for no pings), --origin O lets a
+# browser in only from O, and a subprotocol "echo" is chosen when the
+# client offers it. The Autobahn test suite's
 # fuzzing client runs against it (net/ws_check.py --server).
 import Base
 import ../http.bend as Http
@@ -58,10 +59,13 @@ def page(r: Http.Request) -> IO(Http.Response):
 def num(+xs: List<&2, String>, +name: String, d: U32) -> U32:
   Maybe.default(&2, U32, U32.read(Server.flag.go(xs, name, "")), d)
 
+def origins(+o: String) -> List<&2, Bytes()>:
+  Bool.pick(List<&2, Bytes()>, String.is_empty(o), [], [o])
+
 def wopts(xs: List<String>) -> WsServer.Opts:
   +ys : List<&2, String> = Server.strs(xs)
-  WsServer.opts.keepalive(WsServer.opts.max_msg(WsServer.opts(), num(ys, "--max-msg", 1048576)),
-    num(ys, "--ping-ms", 20000), num(ys, "--pong-ms", 20000))
+  WsServer.opts.origins(WsServer.opts.keepalive(WsServer.opts.max_msg(WsServer.opts(), num(ys, "--max-msg", 1048576)),
+    num(ys, "--ping-ms", 20000), num(ys, "--pong-ms", 20000)), origins(Server.flag.go(ys, "--origin", "")))
 
 def routes(+o: WsServer.Opts) -> List<&1, Server.Route>:
   [Server.get("/", page), WsServer.ws.with(o, "/echo", open)]
