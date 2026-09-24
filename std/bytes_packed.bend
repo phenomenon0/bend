@@ -15,8 +15,17 @@ import ./bytes_spec.bend as Sp
 def get(+b: String, +i: Nat) -> U32:
   Bytes.get(b, i)
 
+def byte(m: Maybe<&2, Char>) -> U32:
+  Bytes.byte(m)
+
+def len.go(s: String, m: Nat) -> Nat:
+  String.length.go(s, m)
+
 def len(+b: String) -> Nat:
   Bytes.len(b)
+
+def len.shift(+s: String, +m: Nat) -> {len.go(s, 1n+m) == 1n+len.go(s, m) : Nat}:
+  Bytes.len.shift(s, m)
 
 def from_list(xs: List<&2, U32>) -> String:
   Bytes.from_list(xs)

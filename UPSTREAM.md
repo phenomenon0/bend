@@ -54,6 +54,9 @@ repro for each and the branch that fixes it, if any.
 | F05 | List.map takes List<&1, A> only (length, folds, for_each are generic) | LIMITATION | check | low | none | upstream/list_map_quant.bend |
 | F06 | a destructuring let of a call is refused, with the match rule's message | LIMITATION | check | low | none | upstream/let_computed.bend |
 | F07 | only Base imports by name: a second standard module needs a bend.ts change | LIMITATION | check | low | none | upstream/import_name.bend |
+| F08 | a library cannot use a name Base has (type Event, constructor Emit), nor a def named after its own file | LIMITATION | check | low | none | upstream/base_name.bend, self_prefix.bend |
+| F09 | Base's only bytes are a String, a list: a read by offset walks, so decoders that index (inflate) are quadratic | LIMITATION | all | med | none (ours: the packed Bytes natives) | upstream/string_index.bend |
+| F10 | the JS lane walks a String 10-20x slower than the C lane | PERF | js, interp for IO mains | med | none | upstream/js_string_scan.bend |
 
 Verified on canon `95317d95`: every U/F row above reads REPRO except
 U05, U07, U09, U12, U13 (FIXED: not on canon), U06p (a pure main's pick
@@ -399,6 +402,44 @@ connection refused). A connect to a black hole waits the kernel's ~75 s
 Not upstream: the rest of FRICTION.md is about our `net/` (middleware,
 `Client.fetch` timeouts, `Json.num`, flags, the Hub), and its SIGTERM
 items are U07 and U12 below.
+
+## F08-F10. From porting std/ to canon
+
+`std/` (CSV, JSON, text, dates, gzip) was written to run on canon's
+stock runtime; these are what the port hit. Each reads REPRO on canon
+`95317d95`; F08 and F10 were measured, F09 is Base's shape.
+
+- **F08 Base's names, and a file's own, are taken.** A library that
+  declares `type Event` with a constructor `Emit`, reached only through
+  its alias (`E.Event`), is refused: "a fresh name (duplicate
+  declaration: Event)" (`upstream/base_name.bend`, `base_name_lib.bend`).
+  Every tokenizer's `Event`, every machine's `Emit` step must be renamed
+  before it ports (std/json.bend says `Evt` and `Yield`). A def named
+  after its own file is the file's name without it: `self_prefix_lib.bend`
+  with `at` and `self_prefix_lib.at` is refused as a duplicate of
+  `self_prefix_lib.at` (`upstream/self_prefix.bend`; power/deflate.bend
+  had `at` beside `deflate.at`). A name's parts must also be words since
+  #1042: `utf8.4` is refused ("a name (words joined by dots)").
+- **F09 no indexed bytes.** `File.read_bytes` answers a `List<&2, U32>`
+  and a `String` is a cons list, so `String.get(s, i)` walks `i` cells.
+  `upstream/string_index.bend` sums a 16384-byte string by offset: 134M
+  steps, 0.46 s in the C lane where a walk by match takes well under a
+  millisecond, and four times that for twice the bytes. A scanner that
+  only reads forward can keep a cursor (std/bytes_list.bend's `Buf`), but
+  a decoder that reads back by offset cannot: std/gzip.bend inflates
+  30 KB in 16 s on canon (C lane), where this repo's packed bytes do
+  1 MB in 0.4 s. Array is O(1), but it is linear (`Type`) and power of
+  two, so it cannot be the byte string inside a `Data` state or a
+  `String` value. Suggest a `Bytes` type: a packed block with get, len,
+  slice and push, `Data`, what this repo's `File.read_buf` and
+  `TCP.recv_buf` hand back.
+- **F10 String walks in the JS lane.** A String is a JS string there
+  (`comp.ts:362`): a match takes it apart with `codePointAt` and
+  `slice(1)`, SCon builds with `+`, and `String.length` is
+  `[...s].length`. `upstream/js_string_scan.bend` walks a million
+  characters in 576 ms in JS and 68 ms in C. std/csv.bend reads
+  0.34 MB/s in canon's JS lane and 7.3 MB/s in its C lane; a 26 MB JSON
+  document does not finish in five minutes in JS (C: 8.7 s).
 
 ---
 

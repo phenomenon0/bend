@@ -34,6 +34,10 @@ lines its run must print, and the gates run on the mini cluster.
                         check and a release, on a localhost hub
     gates/_run.ts       the four gates with --gate
     demos/              one dir per demo
+    std/                the standard library that also runs on released Bend:
+                        csv, json, text, time, gzip, their laws and examples,
+                        over one byte interface (bytes.bend's import line
+                        picks bytes_list.bend, the default, or bytes_packed)
     net/                the networking library: HTTP server and client, JSON,
                         a WebSocket client; its laws, mutants and examples
     apps/               one dir per app built on net/ as a user would: the app,

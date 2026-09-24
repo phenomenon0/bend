@@ -19,6 +19,7 @@ this file says the same in more words, and maps the networking stack in full.
                         EFFECTS.md, NETWORKING.md (`bend guide networking`)
     power/              libraries in Bend: JSON, gzip and deflate, CSV, hashes,
                         search, numerics; some carry their own laws and proofs
+    std/                the standard library for released Bend and ours (below)
     tests/<ns>/         the tests; each ends in the `#|` lines its run prints
     bench/              the runtime and checker benchmarks; bench/proxy is a
                         framing harness that compares a Bend proxy with nginx
@@ -28,6 +29,33 @@ this file says the same in more words, and maps the networking stack in full.
     gates/              the repo's own checks (tests, perf, the file allow list)
     paper/, media/      the papers and the charts
     docs/omen/          working notes: plans, reviews, house style
+
+## The Standard Library
+
+`std/` is what a program on released Bend (canon's stock runtime) can
+import for CSV, JSON, text, dates and gzip; it runs on this repo's runtime
+too. `std/README.md` is its quick start, with examples that run on both.
+
+    std/bytes.bend                 the one byte interface; its import line picks
+      bytes_list.bend              plain Bend over canon's Base (the default)
+      bytes_packed.bend            this repo's packed Bytes natives
+      bytes_spec.bend              what the scans count, both implementations' laws
+    std/csv.bend                   RFC 4180 reader and writer (csv_spec, csv_laws, csv_proof)
+    std/json.bend, json_value.bend JSON events and trees, closed laws in json_value
+    std/text.bend, time.bend       UTF-8, numbers, splitting; UTC dates
+    std/deflate.bend, gzip.bend    RFC 1951 and 1952 (deflate_laws, inflate_proof,
+                                   deflate_proof; lemmas.bend holds the Base lemmas
+                                   canon lacks)
+    std/reader.bend                the reader kit, a copy of wire/reader.bend
+    std/examples/                  the README's snippets, whole, with their data
+    tests/std/                     the tests, csv_mutants.py, deflate_mutants.py,
+                                   readme.py (snippets verbatim, examples run) and
+                                   bench/run.py (--bend another checkout's compiler)
+
+The laws are stated against the interface, so `bend std/csv_proof.bend` and
+`bend std/deflate_proof.bend` print `All terms check.` with either
+implementation, on canon and here. power/ keeps its own copies over this
+repo's `Bytes()`.
 
 ## Networking
 

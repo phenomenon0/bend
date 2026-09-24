@@ -27,8 +27,24 @@ def byte(m: Maybe<&2, Char>) -> U32:
 def get(+b: String, +i: Nat) -> U32:
   byte(String.get(b, i))
 
+# the length, counted in an accumulator (a loop, as this repo's
+# String.length is: the proofs count with len.go and len.shift)
+def len.go(s: String, m: Nat) -> Nat:
+  match s:
+    case SNil{}:
+      m
+    case SCon{h, t}:
+      len.go(t, 1n+m)
+
 def len(+b: String) -> Nat:
-  String.length(b)
+  len.go(b, 0n)
+
+def len.shift(+s: String, +m: Nat) -> {len.go(s, 1n+m) == 1n+len.go(s, m) : Nat}:
+  match s:
+    case SNil{}:
+      {==}
+    case SCon{h, t}:
+      len.shift(t, 1n+m)
 
 def from_list(xs: List<&2, U32>) -> String:
   match xs:

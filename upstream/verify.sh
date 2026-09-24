@@ -302,4 +302,25 @@ want F04 && check F04 mutual 'a filled definition|a defined name'
 want F05 && check F05 list_map_quant 'expected : List<&1'
 want F06 && check F06 let_computed 'scrutinee'
 want F07 && check F07 import_name "an import \\('import Base'"
+want F08 && check F08 base_name 'duplicate declaration: Event'
+want F08 && check F08p self_prefix 'duplicate declaration: self_prefix_lib.at'
+if want F09; then
+  if has Bytes.get; then
+    say F09 - FIXED "Base has Bytes.get"
+  else
+    say F09 - REPRO "Base's bytes are a String: String.get walks i cells"
+  fi
+fi
+# F10: the same String walk in the JS lane and the C lane, timed
+if want F10; then
+  build js_string_scan "$HERE/js_string_scan.bend"
+  t0=$(date +%s%N); bun "$W/js_string_scan.js" > /dev/null 2>&1; t1=$(date +%s%N)
+  "$W/js_string_scan" > /dev/null 2>&1; t2=$(date +%s%N)
+  js=$(( (t1 - t0) / 1000000 )); c=$(( (t2 - t1) / 1000000 + 1 ))
+  if [ $js -gt $((5 * c)) ]; then
+    say F10 js REPRO "js ${js} ms, c ${c} ms"
+  else
+    say F10 js FIXED "js ${js} ms, c ${c} ms"
+  fi
+fi
 exit 0

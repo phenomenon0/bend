@@ -47,18 +47,11 @@
 # written (fixtoks), which deflate_proof.bend proves reads back as x.
 import Base
 import ./bytes.bend as By
+import ./lemmas.bend as Lm
 import ./reader.bend as Wr
 
 # Numbers and bits
 # ================
-
-# x's bits with b below them (this repo's Nat.bit)
-def nbit(b: Bool, x: Nat) -> Nat:
-  match b:
-    case False{}:
-      Nat.double(x)
-    case True{}:
-      1n+Nat.double(x)
 
 def K32() -> Nat:
   32768n
@@ -106,7 +99,7 @@ def val(bs: List<&2, Bool>) -> Nat:
     case Nil{}:
       0n
     case Con{b, t}:
-      nbit(b, val(t))
+      Lm.nat.bit(b, val(t))
 
 # the number whose bits, high first, are bs, after the bits v spells
 def hval(bs: List<&2, Bool>, v: Nat) -> Nat:
@@ -114,7 +107,7 @@ def hval(bs: List<&2, Bool>, v: Nat) -> Nat:
     case Nil{}:
       v
     case Con{b, t}:
-      hval(t, nbit(b, v))
+      hval(t, Lm.nat.bit(b, v))
 
 def revapp(xs: List<&2, Bool>, acc: List<&2, Bool>) -> List<&2, Bool>:
   match xs:
@@ -1119,7 +1112,7 @@ def mode(m: Mode, b: Bool, o: O, +bp: Nat) -> St:
         case 1n+p:
           St{Get{p, Con{b, acc}, k}, o, bp}
     case Walk{node, +tab, k}:
-      walk(tab, U32.to_nat(By.get(tab, Nat.add(Nat.double(node), nbit(b, 0n)))), k, o, bp)
+      walk(tab, U32.to_nat(By.get(tab, Nat.add(Nat.double(node), Lm.nat.bit(b, 0n)))), k, o, bp)
     case Skip{last}:
       stored_head(last, Nat.is_eq(bp, 0n), o, bp)
     case End{}:
@@ -1228,7 +1221,7 @@ def fi.in(+s: String, +q: Nat) -> Bool:
 
 # the cell the machine reads at node for the bit b (mode's Walk row)
 def fi.cell(+tab: String, +node: Nat, b: Bool) -> Nat:
-  U32.to_nat(By.get(tab, Nat.add(Nat.double(node), nbit(b, 0n))))
+  U32.to_nat(By.get(tab, Nat.add(Nat.double(node), Lm.nat.bit(b, 0n))))
 
 # what a cell says, as walk reads it: go on from a node, a symbol, or
 # no code

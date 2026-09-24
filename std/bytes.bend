@@ -29,6 +29,17 @@ def get(+b: String, +i: Nat) -> U32:
 def len(+b: String) -> Nat:
   Impl.len(b)
 
+# what get and len are, for proofs: get(b, i) is byte(String.get(b, i)),
+# len(b) is len.go(b, 0n)
+def byte(m: Maybe<&2, Char>) -> U32:
+  Impl.byte(m)
+
+def len.go(s: String, m: Nat) -> Nat:
+  Impl.len.go(s, m)
+
+def len.shift(+s: String, +m: Nat) -> {len.go(s, 1n+m) == 1n+len.go(s, m) : Nat}:
+  Impl.len.shift(s, m)
+
 def from_list(xs: List<&2, U32>) -> String:
   Impl.from_list(xs)
 
