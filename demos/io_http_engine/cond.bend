@@ -879,13 +879,20 @@ def want.from(ok: Bool, +a: Nat, b: Nat) -> Want:
     case False{}:
       Unsat{}
 
-def want.last(+k: Nat, +n: Nat) -> Want:
-  match k:
+def want.last(+n: Nat, +k: Nat) -> Want:
+  match n:
     case 0n:
       Unsat{}
-    case 1n+j:
-      Span{Nat.sub(n, Nat.min(1n+j, n)), Nat.sub(n, 1n)}
+    case 1n+m:
+      match k:
+        case 0n:
+          Unsat{}
+        case 1n+j:
+          Span{Nat.sub(m, Nat.min(j, m)), m}
 
+# (a first-pos past its last-pos never reaches here, rg.parse having
+# refused the field; want refuses it too, so that what it gives is a
+# range of the file whatever spec it is handed)
 def want(sp: Spec, +n: Nat) -> Want:
   match sp:
     case From{+a, b}:
@@ -893,9 +900,9 @@ def want(sp: Spec, +n: Nat) -> Want:
         case None{}:
           want.from(Nat.is_lt(a, n), a, Nat.sub(n, 1n))
         case Some{+b2}:
-          want.from(Nat.is_lt(a, n), a, Nat.min(b2, Nat.sub(n, 1n)))
+          want.from(Nat.is_lt(a, n) && Nat.is_le(a, b2), a, Nat.min(b2, Nat.sub(n, 1n)))
     case Last{k}:
-      want.last(k, n)
+      want.last(n, k)
 
 # What a request gets of a file: all of it (200), that it has not
 # changed (304), a range of it (206), that no range of it was one it has
