@@ -1267,6 +1267,11 @@ def Laws.late_framed(head, v10):
 def ws.426(+get: Bool, +key: Bytes(), +offered: List<&2, Bytes()>, +proto: Bytes()) ->
   {H.s.answer(get, False{}, key, offered, proto) == H.SNo{426} : H.Sv}:
   match get:
+    case True{}:
+      {==}
+    case False{}:
+      {==}
+
 # Response bodies, written as they are made
 # =========================================
 #

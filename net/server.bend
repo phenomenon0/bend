@@ -592,14 +592,15 @@ def segs.of(+head: Bool, +closing: Bool, +v10: Bool, r: Http.Response) -> List<&
 # requests follow through go.
 #
 # The handler has cfg's handler ms (30 s) from its first effect to answer
-# its Reply (IO.within) -- a plain route's response, a Sock route's
+# its Reply (IO.within): a plain route's response, or a Sock route's
 # answer (a WebSocket's accept or refusal, a Stream.get's whole response
-# or Pour); once a Pour's body or a Switch's session has begun, the
-# socket's own deadlines govern (each send within send ms): past that the answer is a 503 -- the server could not
-# handle it in time; not a 504, which says an upstream it went to as a
-# gateway did not answer -- that closes the connection, after what
-# waits, and whatever the handler answers later is dropped (LAWS.bend's
-# handler_late). Nothing preempts a handler: one that waits in an effect
+# or Pour). Past that the answer is a 503 -- the server could not handle
+# it in time; not a 504, which says an upstream it went to as a gateway
+# did not answer -- that closes the connection, after what waits, and
+# whatever the handler answers later is dropped (LAWS.bend's
+# handler_late). Once a Pour's body or a Switch's session has begun, the
+# handler's time is over and the socket's own deadlines govern (each send
+# within send ms). Nothing preempts a handler: one that waits in an effect
 # (a sleep, a channel, a socket) is let go at the deadline, and runs on
 # with its answer dropped (an answer after a wait and past the deadline
 # is dropped even when the loop had not yet woken the connection); one
