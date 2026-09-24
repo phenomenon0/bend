@@ -49,10 +49,19 @@
 #                   switch whatever its method (its handshake refuses
 #                   every one but GET with a 400); a plain one only as
 #                   GET's
+#   stream_head     a stream route's head is the engine reader's, and at
+#                   every blank line the reader stands at, the head the
+#                   stream takes is the one spec.bend's frame() walk
+#                   holds there, judged as RFC 9112 judges it, however
+#                   TCP cut the stream
 #
 # and the vectors: percent-encoding's round trip over every byte, the
 # query, URLs and Locations as the URL standard reads them (and where
-# bend-net refuses), the router's patterns, and the response check.
+# bend-net refuses), IPv6: its text as RFC 4291 reads it and RFC 5952
+# writes it, IP-literals in URLs (RFC 3986 3.2.2, RFC 6874's zones
+# refused) read, written back and read again to themselves, the Host
+# field and the origin (the pool's key) of one, the router's patterns,
+# and the response check.
 import Base
 import ../wire/reader.bend as Wr
 import ../wire/loop.bend as L
@@ -64,8 +73,10 @@ import ../demos/io_http_engine/main.bend as Eng
 import ../demos/io_http_engine/spec.bend as Spec
 import ../demos/io_proxy/core.bend as X
 import ../demos/io_proxy/LAWS.bend as PL
+import ../demos/io_http_engine/LAWS.bend as EL
 import ./http.bend as Http
 import ./url.bend as U
+import ./addr.bend as A
 import ./server.bend as Server
 import ./client.bend as Client
 import ./stream.bend as Stream
@@ -468,8 +479,8 @@ def url.of(r: Result<&2, &2, Bytes(), U.Url>) -> Bytes():
 
 # the URL standard's reading of each, or bend-net's refusal: of a user
 # or password, a port past 65535 or of 0, a scheme but http and https
-# (ws and wss by parse.ws, read as http and https), IPv6, and an empty
-# host (the standard would skip the third slash of http:///x)
+# (ws and wss by parse.ws, read as http and https), and an empty host
+# (the standard would skip the third slash of http:///x)
 law url_vectors:
   {[url.of(U.parse("http://Example.COM/a/./b/../c?x=1 2#frag")), url.of(U.parse("  HTTPS://h:8443  ")),
     url.of(U.parse("http://h:80/")), url.of(U.parse("https://h:443/p")), url.of(U.parse("http://h:/x")),
@@ -482,7 +493,7 @@ law url_vectors:
     == ["http://example.com/a/c?x=1%202", "https://h:8443/", "http://h/", "https://h/p", "http://h/x",
         "http://h/a/b", "http://h/x", "http://h/?q", "http://h/", "http://h/x", "http://h/a%20b%3Cc%3E",
         "http://h/x", "refused: credentials in a URL", "refused: bad port", "refused: bad port",
-        "refused: not a URL of this scheme", "refused: IPv6 addresses are not supported", "refused: bad host",
+        "refused: not a URL of this scheme", "http://[::1]/", "refused: bad host",
         "http://h_x/", "https://h/chat", "http://h:81/"] : List<&2, Bytes()>}
 
 def base() -> U.Url:
@@ -496,6 +507,141 @@ law resolve_vectors:
     url.of(U.resolve(base(), "mailto:x@y"))]
     == ["http://h/a/c", "http://h/x", "http://o:81/y", "http://h/a/b?z", "http://h/d", "https://t/", "http://h/a/b?q",
         "http://h/a/", "http://h/a/c", "refused: not a URL of this scheme"] : List<&2, Bytes()>}
+
+# IPv6
+# ====
+
+def canon(+s: Bytes()) -> Bytes():
+  Maybe.default(&2, Bytes(), A.canon(s), "none")
+
+# RFC 5952's text for every spelling of an address: its own examples
+# (4.1 no leading zeros, 4.2.1 "::" as long as it can be, 4.2.2 never for
+# one group, 4.2.3 the first of equal runs, 4.3 lowercase, 5 an
+# IPv4-mapped address dotted) and RFC 4291 2.2's forms (2.2.2 "::", 2.2.3
+# a dotted end); and what RFC 4291 does not write refused: a second "::",
+# too many groups or too few, a group past four digits, a dotted part not
+# RFC 3986's dec-octets or not at the end, an empty piece, a bare
+# IPv4 address
+law ip6_vectors:
+  {[canon("2001:db8:aaaa:bbbb:cccc:dddd:eeee:0001"), canon("2001:db8::0001"), canon("2001:db8:0:0:0:0:2:1"),
+    canon("2001:db8:0:1:1:1:1:1"), canon("2001:0:0:1:0:0:0:1"), canon("2001:db8:0:0:1:0:0:1"), canon("2001:DB8::1"),
+    canon("2001:db8:0:0:1::1"), canon("2001:db8::0:1:0:0:1"), canon("0:0:0:0:0:0:0:1"), canon("0:0:0:0:0:0:0:0"),
+    canon("::ffff:192.0.2.1"), canon("0:0:0:0:0:FFFF:C000:0201"), canon("FF01:0:0:0:0:0:0:101"),
+    canon("2001:DB8:0:0:8:800:200C:417A"), canon("::13.1.68.3"), canon("1:2:3:4:5:6:7::"), canon("::2:3:4:5:6:7:8"),
+    canon("1:2:3:4:5:6:1.2.3.4"), canon("1::2::3"), canon(":::"), canon("1:2:3:4:5:6:7:8:9"),
+    canon("1::2:3:4:5:6:7:8"), canon("1:2:3:4:5:6:7"), canon("12345::"), canon("::1.2.3.04"), canon("::256.1.1.1"),
+    canon("::1.2.3"), canon("1.2.3.4::"), canon("1.2.3.4"), canon(""), canon(":1::"), canon("1:"), canon("::g")]
+    == ["2001:db8:aaaa:bbbb:cccc:dddd:eeee:1", "2001:db8::1", "2001:db8::2:1", "2001:db8:0:1:1:1:1:1", "2001:0:0:1::1",
+        "2001:db8::1:0:0:1", "2001:db8::1", "2001:db8::1:0:0:1", "2001:db8::1:0:0:1", "::1", "::", "::ffff:192.0.2.1",
+        "::ffff:192.0.2.1", "ff01::101", "2001:db8::8:800:200c:417a", "::d01:4403", "1:2:3:4:5:6:7:0",
+        "0:2:3:4:5:6:7:8", "1:2:3:4:5:6:102:304", "none", "none", "none", "none", "none", "none", "none", "none",
+        "none", "none", "none", "none", "none", "none", "none"] : List<&2, Bytes()>}
+
+def back(+gs: List<&2, U32>) -> Maybe<&2, List<&2, U32>>:
+  A.parse(A.show(gs))
+
+# RFC 5952's text is read back as the address it was written from
+law ip6_round_trip:
+  {[back([0, 0, 0, 0, 0, 0, 0, 1]), back([0, 0, 0, 0, 0, 0, 0, 0]), back([8193, 3512, 0, 0, 1, 0, 0, 1]),
+    back([0, 0, 0, 0, 0, 65535, 49152, 513]), back([1, 0, 0, 0, 0, 0, 0, 0]), back([0, 1, 0, 1, 0, 1, 0, 1]),
+    back([65535, 65535, 65535, 65535, 65535, 65535, 65535, 65535]), back([0, 0, 1, 0, 0, 0, 1, 0]),
+    back([1, 2, 3, 4, 5, 6, 7, 0]), back([0, 0, 0, 0, 0, 0, 65535, 1])]
+    == [Some{[0, 0, 0, 0, 0, 0, 0, 1]}, Some{[0, 0, 0, 0, 0, 0, 0, 0]}, Some{[8193, 3512, 0, 0, 1, 0, 0, 1]},
+        Some{[0, 0, 0, 0, 0, 65535, 49152, 513]}, Some{[1, 0, 0, 0, 0, 0, 0, 0]}, Some{[0, 1, 0, 1, 0, 1, 0, 1]},
+        Some{[65535, 65535, 65535, 65535, 65535, 65535, 65535, 65535]}, Some{[0, 0, 1, 0, 0, 0, 1, 0]},
+        Some{[1, 2, 3, 4, 5, 6, 7, 0]}, Some{[0, 0, 0, 0, 0, 0, 65535, 1]}] : List<&2, Maybe<&2, List<&2, U32>>>}
+
+def must(r: Result<&2, &2, Bytes(), U.Url>) -> U.Url:
+  match r:
+    case Done{u}:
+      u
+    case Fail{m}:
+      U.Url{False{}, "", 0, ""}
+
+def v6.base() -> U.Url:
+  must(U.parse("http://[::1]:8080/a/b"))
+
+def wire(+s: Bytes()) -> Bytes():
+  Maybe.default(&2, Bytes(), Client.wire.of(Client.opts(), "GET", must(U.parse(s)), Nil{}, ""), "none")
+
+# IP-literals in URLs: RFC 3986 3.2.2's (and RFC 2732's examples), the
+# address written as RFC 5952 does, in its brackets, the scheme's port
+# dropped; and refused: a bracket not closed, a byte after it that is not
+# ':', a zone ID (RFC 6874), an IPvFuture, an empty or dotted literal,
+# credentials, port 0, an IPv6 address without brackets
+law literal_vectors:
+  {[url.of(U.parse("http://[::1]:8080/a")), url.of(U.parse("http://[::1]:80/")),
+    url.of(U.parse("https://[2001:DB8:0:0:1:0:0:1]/x")),
+    url.of(U.parse("http://[FEDC:BA98:7654:3210:FEDC:BA98:7654:3210]:80/index.html")),
+    url.of(U.parse("http://[1080:0:0:0:8:800:200C:417A]/index.html")), url.of(U.parse("http://[3ffe:2a00:100:7031::1]")),
+    url.of(U.parse("http://[::192.9.5.5]/ipng")), url.of(U.parse("http://[::FFFF:129.144.52.38]:80/index.html")),
+    url.of(U.parse("http://[2010:836B:4179::836B:4179]")), url.of(U.parse.ws("ws://[::1]:9001/x")),
+    url.of(U.parse("http://[::1")), url.of(U.parse("http://[::1]x/")), url.of(U.parse("http://[fe80::1%25eth0]/")),
+    url.of(U.parse("http://[v1.fe]/")), url.of(U.parse("http://[]/")), url.of(U.parse("http://[1.2.3.4]/")),
+    url.of(U.parse("http://u@[::1]/")), url.of(U.parse("http://[::1]:0/")), url.of(U.parse("http://::1/"))]
+    == ["http://[::1]:8080/a", "http://[::1]/", "https://[2001:db8::1:0:0:1]/x",
+        "http://[fedc:ba98:7654:3210:fedc:ba98:7654:3210]/index.html", "http://[1080::8:800:200c:417a]/index.html",
+        "http://[3ffe:2a00:100:7031::1]/", "http://[::c009:505]/ipng", "http://[::ffff:129.144.52.38]/index.html",
+        "http://[2010:836b:4179::836b:4179]/", "http://[::1]:9001/x", "refused: bad host", "refused: bad host",
+        "refused: IPv6 zone IDs are not supported", "refused: IPvFuture addresses are not supported",
+        "refused: bad IPv6 address", "refused: bad IPv6 address", "refused: credentials in a URL", "refused: bad port",
+        "refused: bad port"] : List<&2, Bytes()>}
+
+# a URL with an IP-literal, as written back, reads again as itself; and
+# a Location against one keeps its host
+law literal_round_trip:
+  {[url.of(U.parse("http://[::1]:8080/a")), url.of(U.parse("http://[::1]/")), url.of(U.parse("https://[2001:db8::1:0:0:1]/x")),
+    url.of(U.parse("http://[1080::8:800:200c:417a]/index.html")), url.of(U.parse("http://[::c009:505]/ipng")),
+    url.of(U.parse("http://[::ffff:129.144.52.38]/index.html")), url.of(U.parse("http://[2010:836b:4179::836b:4179]/")),
+    url.of(U.parse("http://[fedc:ba98:7654:3210:fedc:ba98:7654:3210]/index.html")),
+    url.of(U.resolve(v6.base(), "../c")), url.of(U.resolve(v6.base(), "//[::2]/z")), url.of(U.resolve(v6.base(), "?q"))]
+    == ["http://[::1]:8080/a", "http://[::1]/", "https://[2001:db8::1:0:0:1]/x", "http://[1080::8:800:200c:417a]/index.html",
+        "http://[::c009:505]/ipng", "http://[::ffff:129.144.52.38]/index.html", "http://[2010:836b:4179::836b:4179]/",
+        "http://[fedc:ba98:7654:3210:fedc:ba98:7654:3210]/index.html", "http://[::1]:8080/c", "http://[::2]/z",
+        "http://[::1]:8080/a/b?q"] : List<&2, Bytes()>}
+
+# the Host field of a request to an IP-literal (RFC 9110 7.2, RFC 3986
+# 3.2.2): the address in its brackets, canonical, the port when it is not
+# the scheme's
+law host_vectors:
+  {[wire("http://[::1]:8080/a?b"), wire("http://[::1]/"), wire("https://[2001:DB8::1]:443/"), wire("http://[0:0::1]:81/")]
+    == ["GET /a?b HTTP/1.1
+host: [::1]:8080
+user-agent: bend-net/1
+accept-encoding: gzip
+
+",
+        "GET / HTTP/1.1
+host: [::1]
+user-agent: bend-net/1
+accept-encoding: gzip
+
+",
+        "GET / HTTP/1.1
+host: [2001:db8::1]
+user-agent: bend-net/1
+accept-encoding: gzip
+
+",
+        "GET / HTTP/1.1
+host: [::1]:81
+user-agent: bend-net/1
+accept-encoding: gzip
+
+"] :
+    List<&2, Bytes()>}
+
+# the origin the client keys its pools by (and redirect_creds compares):
+# every spelling of one address and port is one origin, bracketed, apart
+# from the IPv4 address and from the same address on another port or
+# scheme
+law origin_vectors:
+  {[U.origin(must(U.parse("http://[::1]:8080/a"))), U.origin(must(U.parse("http://[0:0:0:0:0:0:0:1]:8080/b"))),
+    U.origin(must(U.parse("HTTP://[0::1]:8080"))), U.origin(must(U.parse("https://[::1]/"))),
+    U.origin(must(U.parse("http://[::1]/"))), U.origin(must(U.parse("http://[::ffff:127.0.0.1]:8080/"))),
+    U.origin(must(U.parse("http://127.0.0.1:8080/")))]
+    == ["http://[::1]:8080", "http://[::1]:8080", "http://[::1]:8080", "https://[::1]:443", "http://[::1]:80",
+        "http://[::ffff:127.0.0.1]:8080", "http://127.0.0.1:8080"] : List<&2, Bytes()>}
 
 # Streamed bodies
 # ===============
@@ -696,3 +842,100 @@ law ws_route_vectors:
     Server.pick([Server.Pat{Server.sock.methods(False{}, "POST"), "/ws"}], "POST", "/ws"),
     Server.pick([Server.Pat{Server.sock.methods(True{}, "HEAD"), "/ws"}], "HEAD", "/ws")] ==
     [Server.Hit{0n, []}, Server.NoMethod{["GET", "HEAD"]}, Server.Hit{0n, []}] : List<&2, Server.Pick>}
+
+# A stream route's head
+# =====================
+#
+# A stream route's head is read by the engine's reader, the one every
+# request the server takes is read by: Stream.cut feeds it each read a
+# piece at a time and stops where it stands at a head's blank line, the
+# CR read, and what the stream takes from it there is Stream.at.head --
+# the request, adapted as a handler's is, and the framing the engine
+# decides there before its body cap. The reference is spec.bend's frame()
+# walk of the same bytes: where it has read a head whole to its blank
+# line's CR (MEoh), that head, judged as RFC 9112 judges one -- one Host
+# (HTTP/1.0: at most one), one framing, a Transfer-Encoding only chunked
+# and never in HTTP/1.0, the Content-Lengths agreeing -- and adapted as
+# handler_framed spells out; anywhere else, no head.
+
+# how RFC 9112 frames the body of the head spec.bend holds, the body cap
+# aside (a streamed body has its own): no length and no coding is a
+# length of 0; refused, none
+def spec.frame(ok: Bool, b: Spec.Body) -> Maybe<&2, Stream.Frame>:
+  match ok b:
+    case False{} _:
+      None{}
+    case True{} Spec.BNone{}:
+      Some{Stream.FLen{0n}}
+    case True{} Spec.BLen{n}:
+      Some{Stream.FLen{U32.to_nat(n)}}
+    case True{} Spec.BChunked{}:
+      Some{Stream.FChunked{}}
+    case True{} Spec.BBad{}:
+      None{}
+
+# the head a stream is handed: the request as a handler is handed one
+# (its body empty), the framing, whether it is HTTP/1.0, whether it
+# closes after (it asked to, or it is HTTP/1.0 without keep-alive, or it
+# asked to upgrade), whether it is a HEAD
+def spec.head.hd(+ip: Bytes(), +r: Eng.Req, +cl: Bool, f: Stream.Frame, hd: Eng.Hd) -> Stream.Head:
+  match hd:
+    case Eng.Hd{+m, +v10, fs, cn}:
+      Stream.HOk{spec.req(ip, r), f, v10, cl, String.eq(m, "HEAD")}
+
+def spec.head.req(+ip: Bytes(), r: Eng.Req, f: Stream.Frame) -> Stream.Head:
+  match r:
+    case Eng.Req{m, t, b, +cl, +ws, k, +hd}:
+      spec.head.hd(ip, Eng.Req{m, t, b, cl, ws, k, hd}, cl || ws, f, hd)
+
+def spec.head.mk(+ip: Bytes(), r: Eng.Req, mf: Maybe<&2, Stream.Frame>) -> Stream.Head:
+  match mf:
+    case None{}:
+      Stream.HNo{}
+    case Some{f}:
+      spec.head.req(ip, r, f)
+
+def spec.head(+ip: Bytes(), h: Spec.Head) -> Stream.Head:
+  match h:
+    case Spec.Head{m, t, +l, cl, +hs, k, u, c, v, f, x}:
+      match f:
+        case Eng.Fx{+v10, ka, +te}:
+          spec.head.mk(ip, Spec.req(Spec.Head{m, t, l, cl, hs, k, u, c, v, Eng.Fx{v10, ka, te}, x}, Nil{}),
+            spec.frame(Spec.hosts.ok(v10, hs), Spec.body.of(te, v10, l)))
+
+# where spec.bend's walk stands at a head's blank line, the CR read: the
+# head; anywhere else, none
+def spec.at.head.m(+ip: Bytes(), mode: Spec.Mode) -> Maybe<&2, Stream.Head>:
+  match mode:
+    case Spec.MEoh{h}:
+      Some{spec.head(ip, h)}
+    case _:
+      None{}
+
+def spec.at.head(+ip: Bytes(), w: Spec.W) -> Maybe<&2, Stream.Head>:
+  match w:
+    case Spec.W{mode, out, since}:
+      spec.at.head.m(ip, mode)
+
+# the walk from a connection's first byte
+def spec.start() -> Spec.W:
+  Spec.W{Spec.MReq{Nil{}}, Nil{}, Nil{}}
+
+# LAW: a stream route's head is the RFC's. For every stream a client
+# sends, however TCP cuts it into reads, the engine's reader fed the
+# reads in turn stands at a head's blank line exactly where spec.bend's
+# frame() walk of the stream whole does -- after every request before
+# it, pipelined or not -- and the head the stream takes there is the
+# walk's: the method, the target, the version, every field, the framing
+# of the body (a length of any size, or chunked), and a refusal exactly
+# where the RFC refuses the head (a Host too many or too few, two
+# framings, a coding but chunked, one in HTTP/1.0, two lengths that
+# disagree). A line the RFC refuses -- a bare LF, a folded line, a space
+# before a colon, a length that is not digits -- never reaches a blank
+# line on either side. The head a stream reads is never one another
+# reader of the same bytes would read otherwise.
+law stream_head:
+  for +ip: Bytes()
+  for +rs: List<&2, Bytes()>
+  {Stream.at.head(ip, EL.reads(rs, Eng.p.new())) ==
+    spec.at.head(ip, Spec.walk(Bytes.to_list(Bytes.concat(rs)), spec.start())) : Maybe<&2, Stream.Head>}

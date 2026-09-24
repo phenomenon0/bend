@@ -5,11 +5,11 @@
 // until the socket is writable, and then SO_ERROR says how the connect ended.
 function tcp_connect(host, port, k) {
   const sys = io_sys();
-  const at = io_addr(host, Number(port));
+  const at = io_sa(host, Number(port));
   if (at === null) {
     return io_fail(22);
   }
-  const fd = sys.socket(2, 1, 0);
+  const fd = sys.socket(at.fam, 1, 0);
   if (fd < 0) {
     return io_fail(sys.errno());
   }
@@ -27,7 +27,7 @@ function tcp_connect(host, port, k) {
       sys.ptr(v), sys.ptr(l)) < 0 ? sys.errno() : v[0];
   };
   const set = sys.fcntl(fd, 4, sys.fcntl(fd, 3, 0) | (sys.mac ? 4 : 0x800));
-  const ok = set >= 0 && sys.connect(fd, sys.ptr(at), 16) >= 0;
+  const ok = set >= 0 && sys.connect(fd, sys.ptr(at.b), at.b.length) >= 0;
   const code = ok ? 0 : sys.errno();
   if (code !== (sys.mac ? 36 : 115)) {
     return end(code);

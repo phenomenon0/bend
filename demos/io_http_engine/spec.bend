@@ -484,12 +484,16 @@ type FLine is Data:
   FBad{}
 
 # Content-Length = 1*DIGIT (RFC 9112 6.3), OWS on either side. The
-# digits are read as a decimal left to right, and a length past the most
-# body this engine holds is refused at the digit that passes it: no
-# later digit brings it back, and the value read so far is never past
-# the cap, so ten times it plus a digit never wraps.
+# digits are read as a decimal left to right. A digit that comes when
+# the value so far is past len.top() is refused (no later digit brings
+# it back), so ten times the value plus a digit never wraps: a length is
+# at most 4294967289. The most body this engine holds, len.cap(), is
+# applied where the head ends (body.fit), once the whole head is read.
 def len.cap() -> U32:
   1048576
+
+def len.top() -> U32:
+  429496728
 
 def len.digit(v: U32, c: U32) -> U32:
   (v * 10 + (c - 48) : U32)
@@ -515,7 +519,7 @@ def is.digit(k: Eng.Cls) -> Bool:
 def dec.pick(dg: Bool, k: Eng.Cls, +c: U32, rest: List<&2, U32>, +v: U32, more: Dec) -> Dec:
   match dg:
     case True{}:
-      dec.big(U32.is_lt(len.cap(), len.digit(v, c)), more)
+      dec.big(U32.is_lt(len.top(), v), more)
     case False{}:
       DNum{v, SAt{k, c, rest}}
 
@@ -549,7 +553,7 @@ def len.num(d: Dec) -> FLine:
 
 def len.first(c: U32, rest: List<&2, U32>) -> FLine:
   +n = len.digit(0, c)
-  len.num(dec.big(U32.is_lt(len.cap(), n), dec(rest, n)))
+  len.num(dec.big(U32.is_lt(len.top(), 0), dec(rest, n)))
 
 def len.view(sp: Span) -> FLine:
   match sp:
@@ -1333,7 +1337,8 @@ def emit(h: Head, body: List<&2, U32>, out: List<&2, Eng.Req>) -> W:
 # a Transfer-Encoding with a Content-Length is refused, since two
 # framings are how a request is smuggled, and so is a Transfer-Encoding
 # in HTTP/1.0 (RFC 9112 6.1: faulty framing); chunked is a chunked body;
-# a length is a body of that length; neither is no body.
+# a length is a body of that length, at most len.cap() (body.fit);
+# neither is no body.
 def head.one(hs: Nat) -> Bool:
   match hs:
     case 0n:
@@ -1382,6 +1387,26 @@ def body.of(te: Bool, v10: Bool, l: Maybe<&2, U32>) -> Body:
     case True{} False{} Some{n}:
       BBad{}
 
+# the most body this engine holds: a length past it is refused where the
+# head ends (a chunked body is held to it as it comes)
+def body.fit.len(big: Bool, +n: U32) -> Body:
+  match big:
+    case True{}:
+      BBad{}
+    case False{}:
+      BLen{n}
+
+def body.fit(b: Body) -> Body:
+  match b:
+    case BNone{}:
+      BNone{}
+    case BLen{+n}:
+      body.fit.len(U32.is_lt(len.cap(), n), n)
+    case BChunked{}:
+      BChunked{}
+    case BBad{}:
+      BBad{}
+
 def head.body(z: Bool, +n: U32, h: Head, out: List<&2, Eng.Req>, s: List<&2, U32>) -> W:
   match z:
     case True{}:
@@ -1407,7 +1432,7 @@ def head.done(h: Head, out: List<&2, Eng.Req>, s: List<&2, U32>) -> W:
     case Head{m, t, +l, cl, +hs, k, u, c, v, f, x}:
       match f:
         case Eng.Fx{+v10, ka, +te}:
-          head.at(hosts.ok(v10, hs), body.of(te, v10, l),
+          head.at(hosts.ok(v10, hs), body.fit(body.of(te, v10, l)),
             Head{m, t, l, cl, hs, k, u, c, v, Eng.Fx{v10, ka, te}, x}, out, s)
 
 # a chunk's framing, one byte: where the grammar takes it (step), and

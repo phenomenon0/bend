@@ -1046,11 +1046,19 @@ def step.name(f: Fld, n: Bytes(), pd: Pend, out: List<&2, Req>) -> P:
       P{InLx{""}, pend.nm(pd, lows(n)), out}
 
 # the most body this engine will hold for one message. A length past it
-# is refused at the digit that crosses it, so an announced length is
-# never a way to make the engine allocate, and never wraps: the value
-# so far is at most this, so ten times it plus a digit fits a U32.
+# is refused where the head ends (body.fit), so an announced length is
+# never a way to make the engine allocate. It is not refused at its
+# digits: the head is read whole first, and then whoever reads the body
+# may cap it (a streamed body has a cap of its own, net/stream.bend).
 def body.cap() -> U32:
   1048576
+
+# the most a length's value so far may be when another digit comes: a
+# tenth of what a U32 holds, less one. Past it the digit is refused, so
+# ten times the value plus a digit never wraps, and a length is at most
+# 4294967289.
+def len.top() -> U32:
+  429496728
 
 def step.digit.go(+n: U32, pd: Pend, out: List<&2, Req>, big: Bool) -> P:
   match big:
@@ -1059,11 +1067,8 @@ def step.digit.go(+n: U32, pd: Pend, out: List<&2, Req>, big: Bool) -> P:
     case False{}:
       P{InL{n}, pd, out}
 
-def step.digit.n(+n: U32, pd: Pend, out: List<&2, Req>) -> P:
-  step.digit.go(n, pd, out, U32.is_lt(body.cap(), n))
-
-def step.digit(v: U32, c: U32, pd: Pend, out: List<&2, Req>) -> P:
-  step.digit.n((v * 10 + (c - 48) : U32), pd, out)
+def step.digit(+v: U32, c: U32, pd: Pend, out: List<&2, Req>) -> P:
+  step.digit.go((v * 10 + (c - 48) : U32), pd, out, U32.is_lt(len.top(), v))
 
 # a second Content-Length must say what the first did (RFC 9112 6.3)
 def step.clen.dup(pd: Pend, out: List<&2, Req>, agree: Bool) -> P:
@@ -1225,6 +1230,26 @@ def body.kind(te: Bool, v10: Bool, cl: Cl) -> Bd:
     case True{} False{} Has{v}:
       BdBad{}
 
+# the body's cap, applied where the head ends: a length past body.cap()
+# is refused (a chunked body is held to it as it comes)
+def body.fit.len(big: Bool, +v: U32) -> Bd:
+  match big:
+    case True{}:
+      BdBad{}
+    case False{}:
+      BdLen{v}
+
+def body.fit(bd: Bd) -> Bd:
+  match bd:
+    case BdNone{}:
+      BdNone{}
+    case BdLen{+v}:
+      body.fit.len(U32.is_lt(body.cap(), v), v)
+    case BdChunked{}:
+      BdChunked{}
+    case BdBad{}:
+      BdBad{}
+
 def step.head.at(pd: Pend, ok: Bool, bd: Bd, out: List<&2, Req>) -> P:
   match ok bd:
     case False{} _:
@@ -1241,14 +1266,26 @@ def step.head.at(pd: Pend, ok: Bool, bd: Bd, out: List<&2, Req>) -> P:
 def step.head.fx(pd: Pend, host: Hosts, cl: Cl, fx: Fx, out: List<&2, Req>) -> P:
   match fx:
     case Fx{+v10, ka, te}:
-      step.head.at(pd, hosts.ok(v10, host), body.kind(te, v10, cl), out)
+      step.head.at(pd, hosts.ok(v10, host), body.fit(body.kind(te, v10, cl)), out)
 
 # the blank line closes the head: a message with a Host too many or too
-# few is refused; then its body is framed as body.kind says
+# few is refused; then its body is framed as body.kind says, under the
+# body's cap (body.fit). head.frame is the same decision without the
+# cap, for a reader that takes the body itself (net/stream.bend).
 def step.head(pd: Pend, out: List<&2, Req>) -> P:
   match pd:
     case Pend{meth, path, +cl, close, +host, ws, +fx, hx, nx}:
       step.head.fx(Pend{meth, path, cl, close, host, ws, fx, hx, nx}, host, cl, fx, out)
+
+def head.frame.fx(host: Hosts, cl: Cl, fx: Fx) -> Bool & Bd:
+  match fx:
+    case Fx{+v10, ka, te}:
+      (hosts.ok(v10, host), body.kind(te, v10, cl))
+
+def head.frame(pd: Pend) -> Bool & Bd:
+  match pd:
+    case Pend{meth, path, cl, close, host, ws, fx, hx, nx}:
+      head.frame.fx(host, cl, fx)
 
 # A chunk's framing, one byte: where the grammar takes it, and the
 # budget. Every byte of a chunk line before its CR is paid from the

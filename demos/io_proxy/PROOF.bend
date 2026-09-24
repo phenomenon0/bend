@@ -278,10 +278,10 @@ def es.dgo(-n: U32, -pd: Eng.Pend, big: Bool) -> ES(Eng.step.digit.go(n, pd, Nil
 
 def oi.digit(+v: U32, +c: U32, -pd: Eng.Pend, -xo: List<&2, Eng.Req>, -oo: List<&2, Eng.Req>) ->
   {Eng.step.digit(v, c, pd, List.append(&2, Eng.Req, xo, oo)) == AO(Eng.step.digit(v, c, pd, xo), oo) : Eng.P}:
-  oi.dgo((v * 10 + (c - 48) : U32), pd, U32.is_lt(Eng.body.cap(), (v * 10 + (c - 48) : U32)), xo, oo)
+  oi.dgo((v * 10 + (c - 48) : U32), pd, U32.is_lt(Eng.len.top(), v), xo, oo)
 
 def es.digit(+v: U32, +c: U32, -pd: Eng.Pend) -> ES(Eng.step.digit(v, c, pd, Nil{})):
-  es.dgo((v * 10 + (c - 48) : U32), pd, U32.is_lt(Eng.body.cap(), (v * 10 + (c - 48) : U32)))
+  es.dgo((v * 10 + (c - 48) : U32), pd, U32.is_lt(Eng.len.top(), v))
 
 def oi.clen.dup(-pd: Eng.Pend, agree: Bool, -xo: List<&2, Eng.Req>, -oo: List<&2, Eng.Req>) ->
   {Eng.step.clen.dup(pd, List.append(&2, Eng.Req, xo, oo), agree) == AO(Eng.step.clen.dup(pd, xo, agree), oo) : Eng.P}:
@@ -411,13 +411,13 @@ def oi.head.fx(+pd: Eng.Pend, +host: Eng.Hosts, +cl: Eng.Cl, fx: Eng.Fx, -xo: Li
   {Eng.step.head.fx(pd, host, cl, fx, List.append(&2, Eng.Req, xo, oo)) == AO(Eng.step.head.fx(pd, host, cl, fx, xo), oo) : Eng.P}:
   match fx:
     case Eng.Fx{+v10, ka, te}:
-      oi.head.at(pd, Eng.hosts.ok(v10, host), Eng.body.kind(te, v10, cl), xo, oo)
+      oi.head.at(pd, Eng.hosts.ok(v10, host), Eng.body.fit(Eng.body.kind(te, v10, cl)), xo, oo)
 
 def es.head.fx(+pd: Eng.Pend, +host: Eng.Hosts, +cl: Eng.Cl, fx: Eng.Fx) ->
   ES(Eng.step.head.fx(pd, host, cl, fx, Nil{})):
   match fx:
     case Eng.Fx{+v10, ka, te}:
-      es.head.at(pd, Eng.hosts.ok(v10, host), Eng.body.kind(te, v10, cl))
+      es.head.at(pd, Eng.hosts.ok(v10, host), Eng.body.fit(Eng.body.kind(te, v10, cl)))
 
 def oi.head(pd: Eng.Pend, -xo: List<&2, Eng.Req>, -oo: List<&2, Eng.Req>) ->
   {Eng.step.head(pd, List.append(&2, Eng.Req, xo, oo)) == AO(Eng.step.head(pd, xo), oo) : Eng.P}:
@@ -2714,7 +2714,7 @@ def head.done.par(h: Spec.Head, -o: List<&2, Eng.Req>, -s: List<&2, U32>) ->
     case Spec.Head{m, t, +l, cl, +hs, k, u, c, v, f, hx}:
       match f:
         case Eng.Fx{+v10, ka, +te}:
-          head.at.par(Spec.hosts.ok(v10, hs), Spec.body.of(te, v10, l),
+          head.at.par(Spec.hosts.ok(v10, hs), Spec.body.fit(Spec.body.of(te, v10, l)),
             Spec.Head{m, t, l, cl, hs, k, u, c, v, Eng.Fx{v10, ka, te}, hx}, o, s)
 
 def chunk.paid.par(over: Bool, +h: Spec.Head, +at: Spec.At, +n: U32, +got: List<&2, U32>, +left: U32,
@@ -3021,7 +3021,7 @@ def head.done.shape(h: Spec.Head, -s: List<&2, U32>) ->
     case Spec.Head{m, t, +l, cl, +hs, k, u, c, v, f, hx}:
       match f:
         case Eng.Fx{+v10, ka, +te}:
-          head.at.shape(Spec.hosts.ok(v10, hs), Spec.body.of(te, v10, l),
+          head.at.shape(Spec.hosts.ok(v10, hs), Spec.body.fit(Spec.body.of(te, v10, l)),
             Spec.Head{m, t, l, cl, hs, k, u, c, v, Eng.Fx{v10, ka, te}, hx}, s)
 
 def chunk.paid.shape(over: Bool, +h: Spec.Head, +at: Spec.At, +n: U32, +got: List<&2, U32>, +left: U32,
@@ -4948,12 +4948,24 @@ def tail.z(z: Bool, +meth: Bytes(), +target: Bytes(), +x: Eng.Hx, body: Bytes(),
             Bytes.from_list(Bytes.to_list(SCon{Chr{c}, t})), False{}, False{}, "", Spec.hd(x, False{})},
           RQ(meth, target, x, SCon{Chr{c}, t}), rq.rt(meth, target, x, SCon{Chr{c}, t})))
 
-# a length: the body counted off by it
+# a Bool whose negation holds is False
+def not.t(b: Bool, h: {Bool.not(b) == True{} : Bool}) -> {b == False{} : Bool}:
+  match b:
+    case True{}:
+      no({True{} == False{} : Bool}, h)
+    case False{}:
+      {==}
+
+# a length: the body counted off by it (within the body's cap)
 def tail.len(+meth: Bytes(), +target: Bytes(), +x: Eng.Hx, +body: Bytes(), +n: U32, +o: List<&2, Eng.Req>, +s: List<&2, U32>,
+  hc: {Bool.not(U32.is_lt(Spec.len.cap(), n)) == True{} : Bool},
   hz: {X.same(U32.is_zero(n), String.is_empty(body)) == True{} : Bool},
   hn: {Nat.is_eq(U32.to_nat(n), Bytes.len(body)) == True{} : Bool}) ->
   {Spec.walk(Con{13, Con{10, Bytes.to_list(body)}}, Spec.W{Spec.MField{H2(meth, target, x, n), Nil{}}, o, s}) ==
     W.done(meth, target, x, body, o) : Spec.W}:
+  %Equal.sym(Bool, U32.is_lt(Spec.len.cap(), n), False{}, not.t(U32.is_lt(Spec.len.cap(), n), hc)) :
+    {Spec.walk(Bytes.to_list(body), Spec.head.at(True{}, Spec.body.fit.len(_, n), H2(meth, target, x, n), o,
+      Spec.snoc(Spec.snoc(s, 13), 10))) == W.done(meth, target, x, body, o) : Spec.W}
   tail.z(U32.is_zero(n), meth, target, x, body, n, o, Spec.snoc(Spec.snoc(s, 13), 10), hz, hn)
 
 # A request, read back whole
@@ -4997,6 +5009,7 @@ def E.tail(body: Bytes()) -> List<&2, U32>:
 def mw.cl.len(+meth: Bytes(), +target: Bytes(), +x: Eng.Hx, +body: Bytes(), +d: Bytes(), +n: U32, +ws: Bool, +o: List<&2, Eng.Req>,
   +s: List<&2, U32>, +ad: {X.ok.all(Spec.TVal{}, d) == True{} : Bool},
   hlv: {Spec.len.view(Spec.span(Spec.TOws{}, Con{32, Bytes.to_list(d)})) == Spec.FVal{Spec.VLen{n, ws}} : Spec.FLine},
+  hc: {Bool.not(U32.is_lt(Spec.len.cap(), n)) == True{} : Bool},
   hk: {X.same(U32.is_zero(n), String.is_empty(body)) == True{} : Bool} &
     {Nat.is_eq(U32.to_nat(n), Bytes.len(body)) == True{} : Bool}) ->
   {Spec.walk(List.append(&2, U32, FLl(Wr.Field{"content-length", d}), Con{13, Con{10, E.tail(body)}}),
@@ -5014,7 +5027,18 @@ def mw.cl.len(+meth: Bytes(), +target: Bytes(), +x: Eng.Hx, +body: Bytes(), +d: 
         Spec.len.view(Spec.span(Spec.TOws{}, Con{32, Bytes.to_list(d)})), Spec.FVal{Spec.VLen{n, ws}}, view.cl(d), hlv),
       {==}),
     tail.len(meth, target, x, body, n, o, Spec.snoc(Spec.snoc(List.append(&2, U32, s, FLl(Wr.Field{"content-length", d})), 13), 10),
-      hz, hn))
+      hc, hz, hn))
+
+def mw.cl.cap(+meth: Bytes(), +target: Bytes(), +x: Eng.Hx, +body: Bytes(), +d: Bytes(), +n: U32, +ws: Bool, +o: List<&2, Eng.Req>,
+  +s: List<&2, U32>, +ad: {X.ok.all(Spec.TVal{}, d) == True{} : Bool},
+  hlv: {Spec.len.view(Spec.span(Spec.TOws{}, Con{32, Bytes.to_list(d)})) == Spec.FVal{Spec.VLen{n, ws}} : Spec.FLine},
+  h3: {Bool.not(U32.is_lt(Spec.len.cap(), n)) == True{} : Bool} &
+    {(X.same(U32.is_zero(n), String.is_empty(body)) && Nat.is_eq(U32.to_nat(n), Bytes.len(body))) == True{} : Bool}) ->
+  {Spec.walk(List.append(&2, U32, FLl(Wr.Field{"content-length", d}), Con{13, Con{10, E.tail(body)}}),
+    Spec.W{Spec.MField{H1(meth, target, x), Nil{}}, o, s}) == W.done(meth, target, x, body, o) : Spec.W}:
+  (hc, hr) = h3
+  mw.cl.len(meth, target, x, body, d, n, ws, o, s, ad, hlv, hc,
+    and.split(X.same(U32.is_zero(n), String.is_empty(body)), Nat.is_eq(U32.to_nat(n), Bytes.len(body)), hr))
 
 def mw.cl.val(val: Spec.Val, +meth: Bytes(), +target: Bytes(), +x: Eng.Hx, +body: Bytes(), +d: Bytes(), +o: List<&2, Eng.Req>,
   +s: List<&2, U32>, +ad: {X.ok.all(Spec.TVal{}, d) == True{} : Bool},
@@ -5024,8 +5048,9 @@ def mw.cl.val(val: Spec.Val, +meth: Bytes(), +target: Bytes(), +x: Eng.Hx, +body
     Spec.W{Spec.MField{H1(meth, target, x), Nil{}}, o, s}) == W.done(meth, target, x, body, o) : Spec.W}:
   match val:
     case Spec.VLen{+n, +ws}:
-      mw.cl.len(meth, target, x, body, d, n, ws, o, s, ad, hlv,
-        and.split(X.same(U32.is_zero(n), String.is_empty(body)), Nat.is_eq(U32.to_nat(n), Bytes.len(body)), ak))
+      mw.cl.cap(meth, target, x, body, d, n, ws, o, s, ad, hlv,
+        and.split(Bool.not(U32.is_lt(Spec.len.cap(), n)),
+          X.same(U32.is_zero(n), String.is_empty(body)) && Nat.is_eq(U32.to_nat(n), Bytes.len(body)), ak))
     case Spec.VLen0{}:
       no({Spec.walk(List.append(&2, U32, FLl(Wr.Field{"content-length", d}), Con{13, Con{10, E.tail(body)}}),
         Spec.W{Spec.MField{H1(meth, target, x), Nil{}}, o, s}) == W.done(meth, target, x, body, o) : Spec.W}, ak)

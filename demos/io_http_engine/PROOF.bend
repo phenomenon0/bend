@@ -1772,6 +1772,12 @@ def Laws.refuse_wrap():
 def Laws.refuse_past_cap():
   {==}
 
+def Laws.past_cap_read_to_head_end():
+  {==}
+
+def Laws.refuse_past_top():
+  {==}
+
 def Laws.refuse_not_digits():
   {==}
 
@@ -8815,7 +8821,7 @@ def DIG.k(+k: Eng.Cls, +c: U32, +t: List<&2, U32>, +v: U32, +pd: Eng.Pend, +out:
   G.dig(k, c, t, v, pd, out):
   match k:
     case Eng.KDg{}:
-      K.dig1(U32.is_lt(1048576, Spec.len.digit(v, c)), Spec.len.digit(v, c), t, pd, out, ih(pt))
+      K.dig1(U32.is_lt(429496728, v), Spec.len.digit(v, c), t, pd, out, ih(pt))
     case Eng.KSp{}:
       %RS(t, SelLt{v}, "", pd, out) : LR.field(_, Spec.len.ws(v, Spec.span(Spec.TOws{}, t)), pd, out)
       K.lws(v, Spec.span(Spec.TOws{}, t), pd, out)(span.sw(Spec.TOws{}, t)(pt))
@@ -8862,7 +8868,7 @@ def K.len.at(+k: Eng.Cls, +c: U32, +rest: List<&2, U32>, +w: List<&2, U32>, +pd:
   pr: Plain(rest)) -> G.len(k, c, rest, w, pd, out):
   match k:
     case Eng.KDg{}:
-      K.dig1(U32.is_lt(1048576, Spec.len.digit(0, c)), Spec.len.digit(0, c), rest, pd, out,
+      K.dig1(U32.is_lt(429496728, 0), Spec.len.digit(0, c), rest, pd, out,
         DIG(rest, Spec.len.digit(0, c), pd, out)(pr))
     case Eng.KSp{}:
       no2(G.len(Eng.KSp{}, c, rest, w, pd, out), mx)
@@ -11241,7 +11247,7 @@ def pv.bd(x: PV) -> Eng.Bd:
     case PV{m, p, cl, close, host, u, fx, hx}:
       match fx:
         case Eng.Fx{v10, ka, te}:
-          Eng.body.kind(te, v10, cl)
+          Eng.body.fit(Eng.body.kind(te, v10, cl))
 
 def e.head(pd: Eng.Pend, -out: List<&2, Eng.Req>) ->
   {Eng.step.head(pd, out) == Eng.step.head.at(pd, pv.hostok(pv(pd)), pv.bd(pv(pd)), out) : Eng.P}:
@@ -11305,14 +11311,39 @@ def bok(te: Bool, v10: Bool, l: Maybe<&2, U32>) ->
     case False{} False{} Some{n}:
       {==}
 
+# the body's cap, the same on both sides
+def fit.len(big: Bool, +n: U32) -> {Eng.body.fit.len(big, n) == bdv(Spec.body.fit.len(big, n)) : Eng.Bd}:
+  match big:
+    case True{}:
+      {==}
+    case False{}:
+      {==}
+
+def fit.eq(b: Spec.Body) -> {Eng.body.fit(bdv(b)) == bdv(Spec.body.fit(b)) : Eng.Bd}:
+  match b:
+    case Spec.BNone{}:
+      {==}
+    case Spec.BLen{+n}:
+      fit.len(U32.is_lt(1048576, n), n)
+    case Spec.BChunked{}:
+      {==}
+    case Spec.BBad{}:
+      {==}
+
+def bfit(+te: Bool, +v10: Bool, +l: Maybe<&2, U32>) ->
+  {Eng.body.fit(Eng.body.kind(te, v10, clv(l))) == bdv(Spec.body.fit(Spec.body.of(te, v10, l))) : Eng.Bd}:
+  %Equal.sym(Eng.Bd, Eng.body.kind(te, v10, clv(l)), bdv(Spec.body.of(te, v10, l)), bok(te, v10, l)) :
+    {Eng.body.fit(_) == bdv(Spec.body.fit(Spec.body.of(te, v10, l))) : Eng.Bd}
+  fit.eq(Spec.body.of(te, v10, l))
+
 def head.eq(+v10: Bool, +te: Bool, +hs: Nat, +l: Maybe<&2, U32>, -pd: Eng.Pend, -out: List<&2, Eng.Req>) ->
-  {Eng.step.head.at(pd, Eng.hosts.ok(v10, hsat(hs)), Eng.body.kind(te, v10, clv(l)), out) ==
-    Eng.step.head.at(pd, Spec.hosts.ok(v10, hs), bdv(Spec.body.of(te, v10, l)), out) : Eng.P}:
+  {Eng.step.head.at(pd, Eng.hosts.ok(v10, hsat(hs)), Eng.body.fit(Eng.body.kind(te, v10, clv(l))), out) ==
+    Eng.step.head.at(pd, Spec.hosts.ok(v10, hs), bdv(Spec.body.fit(Spec.body.of(te, v10, l))), out) : Eng.P}:
   %hok(v10, hs) :
-    {Eng.step.head.at(pd, Eng.hosts.ok(v10, hsat(hs)), Eng.body.kind(te, v10, clv(l)), out) ==
-      Eng.step.head.at(pd, _, bdv(Spec.body.of(te, v10, l)), out) : Eng.P}
-  %bok(te, v10, l) :
-    {Eng.step.head.at(pd, Eng.hosts.ok(v10, hsat(hs)), Eng.body.kind(te, v10, clv(l)), out) ==
+    {Eng.step.head.at(pd, Eng.hosts.ok(v10, hsat(hs)), Eng.body.fit(Eng.body.kind(te, v10, clv(l))), out) ==
+      Eng.step.head.at(pd, _, bdv(Spec.body.fit(Spec.body.of(te, v10, l))), out) : Eng.P}
+  %bfit(te, v10, l) :
+    {Eng.step.head.at(pd, Eng.hosts.ok(v10, hsat(hs)), Eng.body.fit(Eng.body.kind(te, v10, clv(l))), out) ==
       Eng.step.head.at(pd, Eng.hosts.ok(v10, hsat(hs)), _, out) : Eng.P}
   {==}
 
@@ -11341,16 +11372,16 @@ def HEAD(+pd: Eng.Pend, h: Spec.Head, -p: Eng.P, +c: U32, +out: List<&2, Eng.Req
       match hf:
         case Eng.Fx{+v10, +ka, +te}:
           +pr2 = pr
-          HEAD.at(Spec.hosts.ok(v10, hs), Spec.body.of(te, v10, l), pd,
+          HEAD.at(Spec.hosts.ok(v10, hs), Spec.body.fit(Spec.body.of(te, v10, l)), pd,
             Spec.Head{hm, ht, l, hc, hs, hk, hu, hcu, hvb, Eng.Fx{v10, ka, te}, hxx}, p, c, out, since,
             Equal.trans(Eng.P, Eng.step(p, c), Eng.step.head(pd, out),
-              Eng.step.head.at(pd, Spec.hosts.ok(v10, hs), bdv(Spec.body.of(te, v10, l)), out), e,
+              Eng.step.head.at(pd, Spec.hosts.ok(v10, hs), bdv(Spec.body.fit(Spec.body.of(te, v10, l))), out), e,
               Equal.trans(Eng.P, Eng.step.head(pd, out), Eng.step.head.at(pd, pv.hostok(pv(pd)), pv.bd(pv(pd)), out),
-                Eng.step.head.at(pd, Spec.hosts.ok(v10, hs), bdv(Spec.body.of(te, v10, l)), out),
+                Eng.step.head.at(pd, Spec.hosts.ok(v10, hs), bdv(Spec.body.fit(Spec.body.of(te, v10, l))), out),
                 e.head(pd, out),
                 Equal.trans(Eng.P, Eng.step.head.at(pd, pv.hostok(pv(pd)), pv.bd(pv(pd)), out),
-                  Eng.step.head.at(pd, Eng.hosts.ok(v10, hsat(hs)), Eng.body.kind(te, v10, clv(l)), out),
-                  Eng.step.head.at(pd, Spec.hosts.ok(v10, hs), bdv(Spec.body.of(te, v10, l)), out),
+                  Eng.step.head.at(pd, Eng.hosts.ok(v10, hsat(hs)), Eng.body.fit(Eng.body.kind(te, v10, clv(l))), out),
+                  Eng.step.head.at(pd, Spec.hosts.ok(v10, hs), bdv(Spec.body.fit(Spec.body.of(te, v10, l))), out),
                   Equal.cong(PV, Eng.P, x => Eng.step.head.at(pd, pv.hostok(x), pv.bd(x), out), pv(pd),
                     hv(Spec.Head{hm, ht, l, hc, hs, hk, hu, hcu, hvb, Eng.Fx{v10, ka, te}, hxx}), pr2),
                   head.eq(v10, te, hs, l, pd, out)))),

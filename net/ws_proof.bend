@@ -246,6 +246,12 @@ def Laws.hs_request():
 def Laws.url_vectors():
   {==}
 
+def Laws.url_v6_vectors():
+  {==}
+
+def Laws.hs_request_v6():
+  {==}
+
 # The server's end
 # ================
 

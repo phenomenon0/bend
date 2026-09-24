@@ -268,18 +268,20 @@ static SSL_CTX* tls_make(const char* cert, const char* key, TlsAlpn* alpn, uint3
 // an effect is only compiled into a program that uses it, so one that
 // leans on another's C is one that does not build.
 static uint32_t tls_bind(const char* host, uint32_t port, int* out) {
-  int fd = socket(AF_INET, SOCK_STREAM, 0);
+  struct sockaddr_storage at;
+  socklen_t               len = 0;
+  int                     fam = io_sys_sa(host, port, &at, &len);
+  if (fam < 0) {
+    return EINVAL;
+  }
+  int fd = socket(fam, SOCK_STREAM, 0);
   if (fd < 0) {
     return (uint32_t)errno;
   }
   int one = 1;
   setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
-  struct sockaddr_in at;
-  if (io_sys_addr(host, port, &at) < 0) {
-    close(fd);
-    return EINVAL;
-  }
-  if (bind(fd, (struct sockaddr*)&at, sizeof(at)) < 0
+  io_sys_dual(fd, fam);
+  if (bind(fd, (struct sockaddr*)&at, len) < 0
     || listen(fd, SOMAXCONN) < 0
     || fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) | O_NONBLOCK) < 0) {
     uint32_t code = (uint32_t)errno;
@@ -335,8 +337,8 @@ static void __attribute__((constructor)) tls_listen_use(void) {
 }
 #endif
 
-// TLS.listen_on(host, port, cert, key): TLS.listen on the one dotted
-// IPv4 address named
+// TLS.listen_on(host, port, cert, key): TLS.listen on the one address
+// named, as TCP.listen_on reads it
 #ifdef CID_TLS_LISTEN_ON
 Term tls_listen_on_run(Env e, Term* f, IoWork* w) {
   u64   hn = 0;
@@ -398,7 +400,7 @@ static void __attribute__((constructor)) tls_listen_alpn_use(void) {
 #endif
 
 // TLS.connect(addr, port, name, alpn, ca, ms): a TCP connect to addr (a
-// dotted IPv4 address) and a TLS client handshake over it, both under
+// dotted IPv4 address or an IPv6 one) and a TLS client handshake over it, both under
 // one deadline of ms. The session is the one TLS.listen's sockets get,
 // so the byte effects carry it without knowing; unlike theirs, its
 // handshake is done here, so a peer that is not who it says it is fails
@@ -407,7 +409,9 @@ static void __attribute__((constructor)) tls_listen_alpn_use(void) {
 // The peer is verified: its chain against the system's store (ca "") or
 // against the one file of certificates ca names (a pin), and its name
 // against name -- a host name checked as RFC 6125 says and sent as SNI,
-// or an address literal checked against the certificate's addresses.
+// or an address literal (IPv4, or IPv6 without brackets) checked against
+// the certificate's IP addresses and never sent (RFC 6066 3: SNI names
+// hosts, not addresses).
 // alpn is what is offered, comma-separated ("" offers nothing); the
 // answer carries the protocol the server chose ("" for none). A peer
 // that closes without a close_notify is a failed read, never a FIN: a
@@ -586,7 +590,8 @@ static Term tls_connect_more(Env e, IoWork* w) {
 }
 
 Term tls_connect_run(Env e, Term* f, IoWork* w) {
-  struct sockaddr_in to;
+  struct sockaddr_storage to;
+  socklen_t               tn = 0;
   u64   an = 0, nn = 0, pn = 0, cn = 0;
   char* addr = io_cstr(e, f[0], &an);
   w->data = io_cstr(e, f[2], &nn);
@@ -599,7 +604,7 @@ Term tls_connect_run(Env e, Term* f, IoWork* w) {
   w->made = -1;
   w->hand = 0;
   bool bad = io_nul(addr, an) || io_nul(w->data, nn) || nn == 0 || io_nul(alpn, pn)
-    || io_nul(ca, cn) || io_sys_addr(addr, (u32)f[1], &to) != 0;
+    || io_nul(ca, cn) || io_sys_sa(addr, (u32)f[1], &to, &tn) < 0;
   free(addr);
   free(alpn);
   free(ca);
@@ -607,7 +612,7 @@ Term tls_connect_run(Env e, Term* f, IoWork* w) {
     return tls_connect_end(e, w, EINVAL, NULL);
   }
   u64 at = io_tick() + ((u64)f[5] == 0 ? 1 : (u64)f[5]) * 1000000ull;
-  int fd = socket(AF_INET, SOCK_STREAM, 0);
+  int fd = socket(to.ss_family, SOCK_STREAM, 0);
   if (fd < 0) {
     return tls_connect_end(e, w, errno, NULL);
   }
@@ -617,7 +622,7 @@ Term tls_connect_run(Env e, Term* f, IoWork* w) {
   if (fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) | O_NONBLOCK) < 0) {
     return tls_connect_end(e, w, errno, NULL);
   }
-  if (connect(fd, (struct sockaddr*)&to, sizeof(to)) == 0) {
+  if (connect(fd, (struct sockaddr*)&to, tn) == 0) {
     return tls_connect_open(e, w, at);
   }
   if (errno != EINPROGRESS) {

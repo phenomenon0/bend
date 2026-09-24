@@ -18,6 +18,8 @@
 # because it keeps the credentials only for the first origin. The
 # streamed bodies' laws lean on wire/http1's: drain_reads, reads_split,
 # feed_buf_is_feed, and walk.lem, the simulation resp_sim is made of.
+# stream_head leans on the engine's: STEP, the step of the simulation
+# frame_sim is made of, carried over every byte, and read where it ends.
 import Base
 import ../wire/reader.bend as Wr
 import ../wire/client.bend as C
@@ -29,6 +31,8 @@ import ../demos/io_http_engine/spec.bend as Spec
 import ../demos/io_proxy/core.bend as X
 import ../demos/io_proxy/LAWS.bend as PL
 import ../demos/io_proxy/PROOF.bend as PP
+import ../demos/io_http_engine/LAWS.bend as EL
+import ../demos/io_http_engine/PROOF.bend as EP
 import ../wire/http1/LAWS.bend as HL
 import ../wire/http1/PROOF.bend as HP
 import ./http.bend as Http
@@ -110,6 +114,27 @@ def Laws.url_vectors():
   {==}
 
 def Laws.resolve_vectors():
+  {==}
+
+# IPv6: the text, the IP-literals, the Host field and the origin, by
+# computation
+
+def Laws.ip6_vectors():
+  {==}
+
+def Laws.ip6_round_trip():
+  {==}
+
+def Laws.literal_vectors():
+  {==}
+
+def Laws.literal_round_trip():
+  {==}
+
+def Laws.host_vectors():
+  {==}
+
+def Laws.origin_vectors():
   {==}
 
 # The pool
@@ -1237,31 +1262,6 @@ def Laws.late_framed(head, v10):
 # WebSockets
 # ==========
 
-def no13.k(ky: Bytes(), +vr: Eng.Ver, h: {Eng.ver.is13(vr) == False{} : Bool}) ->
-  {Pair.fst(Bool, Bytes(), Eng.up.asked(Eng.Asks{ky, True{}, True{}, vr})) == False{} : Bool}:
-  match ky:
-    case SNil{}:
-      {==}
-    case SCon{c, t}:
-      h
-
-def no13.c(ky: Bytes(), cc: Bool, +vr: Eng.Ver, h: {Eng.ver.is13(vr) == False{} : Bool}) ->
-  {Pair.fst(Bool, Bytes(), Eng.up.asked(Eng.Asks{ky, True{}, cc, vr})) == False{} : Bool}:
-  match cc:
-    case False{}:
-      {==}
-    case True{}:
-      no13.k(ky, vr, h)
-
-# the engine's upgrade_needs_13, again here (its proof is not imported)
-def no13(ky: Bytes(), uu: Bool, cc: Bool, +vr: Eng.Ver, h: {Eng.ver.is13(vr) == False{} : Bool}) ->
-  {Pair.fst(Bool, Bytes(), Eng.up.asked(Eng.Asks{ky, uu, cc, vr})) == False{} : Bool}:
-  match uu:
-    case False{}:
-      {==}
-    case True{}:
-      no13.c(ky, cc, vr, h)
-
 def ws.426(+get: Bool, +key: Bytes(), +offered: List<&2, Bytes()>, +proto: Bytes()) ->
   {H.s.answer(get, False{}, key, offered, proto) == H.SNo{426} : H.Sv}:
   match get:
@@ -1271,7 +1271,7 @@ def ws.426(+get: Bool, +key: Bytes(), +offered: List<&2, Bytes()>, +proto: Bytes
       {==}
 
 def Laws.ws_version(key, up, cu, ver, h, get, offered, proto):
-  %Equal.sym(Bool, Pair.fst(Bool, Bytes(), Eng.up.asked(Eng.Asks{key, up, cu, ver})), False{}, no13(key, up, cu, ver, h)) :
+  %Equal.sym(Bool, Pair.fst(Bool, Bytes(), Eng.up.asked(Eng.Asks{key, up, cu, ver})), False{}, EP.no13(key, up, cu, ver, h)) :
     {H.s.answer(get, _, key, offered, proto) == H.SNo{426} : H.Sv}
   ws.426(get, key, offered, proto)
 
@@ -1280,3 +1280,287 @@ def Laws.ws_route_methods(up, m, pat, h):
 
 def Laws.ws_route_vectors():
   {==}
+
+# A stream route's head
+# =====================
+#
+# stream_head leans on the engine's own simulation (EP): the relation
+# REL its frame_sim is made of holds after every byte (STEP), and says,
+# for each place the walk can be, where the reader is. At a head's blank
+# line (MEoh) the reader is at CrL with a pending head that looks like
+# the walk's (PR); the request it makes is the walk's (REQ), and its
+# Hosts and framing are (hok, bok). Everywhere else the relation names a
+# state that is not CrL -- through the line lemmas for a request line or
+# a field line in progress, and Dead for a refusal -- so neither side has
+# a head.
+
+# the relation, after every byte of an input
+def sr.walk(bs: List<&2, U32>, +w: Spec.W, +p: Eng.P, s: EP.SR(p, w)) -> EP.SR(Eng.feed(bs, p), Spec.walk(bs, w)):
+  match bs:
+    case Nil{}:
+      s
+    case Con{+c, t}:
+      (pd, r) = s
+      sr.walk(t, Spec.next(w, c), Eng.step(p, c), EP.STEP(w, c, p, pd, r))
+
+# a reader equal to one with no head has none
+def by.p(+ip: Bytes(), -p: Eng.P, -x: Eng.P, -m: Maybe<&2, Stream.Head>, e: {p == x : Eng.P},
+  g: {Stream.at.head(ip, x) == m : Maybe<&2, Stream.Head>}) -> {Stream.at.head(ip, p) == m : Maybe<&2, Stream.Head>}:
+  Equal.trans(Maybe<&2, Stream.Head>, Stream.at.head(ip, p), Stream.at.head(ip, x), m,
+    Equal.cong(Eng.P, Maybe<&2, Stream.Head>, y => Stream.at.head(ip, y), p, x, e), g)
+
+def st.bad(-st: Eng.St, -pd: Eng.Pend, -o: List<&2, Eng.Req>, -out: List<&2, Eng.Req>,
+  d: {Eng.P{st, Eng.pend.new(), o} == Eng.P{Eng.Bad{}, Eng.pend.new(), out} : Eng.P}) -> {st == Eng.Bad{} : Eng.St}:
+  Equal.cong(Eng.P, Eng.St, y => EP.st.of(y), Eng.P{st, Eng.pend.new(), o}, Eng.P{Eng.Bad{}, Eng.pend.new(), out}, d)
+
+def dead.st(+ip: Bytes(), st: Eng.St, +pd: Eng.Pend, e: {st == Eng.Bad{} : Eng.St}) ->
+  {Stream.at.head.st(ip, st, pd) == None{} : Maybe<&2, Stream.Head>}:
+  %Equal.sym(Eng.St, st, Eng.Bad{}, e) : {Stream.at.head.st(ip, _, pd) == None{} : Maybe<&2, Stream.Head>}
+  {==}
+
+# a refused reader has no head
+def dead.none(+ip: Bytes(), q: Eng.P, -out: List<&2, Eng.Req>) -> EP.Dead(q, out) -> {Stream.at.head(ip, q) == None{} : Maybe<&2, Stream.Head>}:
+  match q:
+    case Eng.P{st, +pd, o}:
+      d => dead.st(ip, st, pd, st.bad(st, pd, o, out, d))
+
+# a request line in progress
+def none.req(+ip: Bytes(), v: Spec.RLine, +q: Eng.P, -out: List<&2, Eng.Req>) -> EP.LR.req(q, v, out) -> {Stream.at.head(ip, q) == None{} : Maybe<&2, Stream.Head>}:
+  match v:
+    case Spec.RNone{}:
+      lr => by.p(ip, q, Eng.P{Eng.Pre{}, Eng.pend.new(), out}, None{}, lr, {==})
+    case Spec.RMeth{m}:
+      lr => by.p(ip, q, Eng.P{Eng.InM{Bytes.from_list(m)}, Eng.pend.new(), out}, None{}, lr, {==})
+    case Spec.RTarget{m, t}:
+      lr => by.p(ip, q, Eng.P{Eng.InT{Bytes.from_list(t)}, EP.pd1(m), out}, None{}, lr, {==})
+    case Spec.RVer{m, t, v}:
+      lr => by.p(ip, q, Eng.P{Eng.InV{Bytes.from_list(v)}, EP.pd2(m, t), out}, None{}, lr, {==})
+    case Spec.RBad{}:
+      lr => dead.none(ip, q, out)(lr)
+
+def none.len(+ip: Bytes(), ws: Bool, +q: Eng.P, -n: U32, -pd: Eng.Pend, -out: List<&2, Eng.Req>) ->
+  EP.LR.len(q, n, ws, pd, out) -> {Stream.at.head(ip, q) == None{} : Maybe<&2, Stream.Head>}:
+  match ws:
+    case True{}:
+      lr => by.p(ip, q, Eng.P{Eng.InLt{n}, pd, out}, None{}, lr, {==})
+    case False{}:
+      lr => by.p(ip, q, Eng.P{Eng.InL{n}, pd, out}, None{}, lr, {==})
+
+# a field line's value in progress
+def none.val(+ip: Bytes(), val: Spec.Val, +q: Eng.P, -pd: Eng.Pend, -out: List<&2, Eng.Req>) ->
+  EP.LR.val(q, val, pd, out) -> {Stream.at.head(ip, q) == None{} : Maybe<&2, Stream.Head>}:
+  match val:
+    case Spec.VLen0{}:
+      lr => by.p(ip, q, Eng.P{Eng.InL0{}, pd, out}, None{}, lr, {==})
+    case Spec.VLen{n, ws}:
+      lr => none.len(ip, ws, q, n, pd, out)(lr)
+    case Spec.VConn{d, c}:
+      lr => by.p(ip, q, Eng.P{Eng.InLc{EP.lowb(c), Spec.named("close", d), Spec.named("upgrade", d),
+        Spec.named("keep-alive", d), Spec.lowall(d)}, pd, out}, None{}, lr, {==})
+    case Spec.VUp{d, c}:
+      lr => by.p(ip, q, Eng.P{Eng.InLu{EP.lowb(c), Spec.named("websocket", d)}, pd, out}, None{}, lr, {==})
+    case Spec.VKey0{}:
+      lr => by.p(ip, q, Eng.P{Eng.InLk0{}, pd, out}, None{}, lr, {==})
+    case Spec.VKey{k}:
+      lr => by.p(ip, q, Eng.P{Eng.InLk{Bytes.from_list(k)}, pd, out}, None{}, lr, {==})
+    case Spec.VVer{v}:
+      lr => by.p(ip, q, Eng.P{Eng.InLv{Bytes.from_list(v)}, pd, out}, None{}, lr, {==})
+    case Spec.VTe0{}:
+      lr => by.p(ip, q, Eng.P{Eng.InLe0{}, pd, out}, None{}, lr, {==})
+    case Spec.VTe{t}:
+      lr => by.p(ip, q, Eng.P{Eng.InLe{Bytes.from_list(t)}, pd, out}, None{}, lr, {==})
+    case Spec.VHost{n, v}:
+      lr => by.p(ip, q, Eng.P{Eng.InLx{Bytes.from_list(v)}, Eng.pend.nm(Eng.pend.host(pd), n), out}, None{}, lr, {==})
+    case Spec.VSkip{n, v}:
+      lr => by.p(ip, q, Eng.P{Eng.InLx{Bytes.from_list(v)}, Eng.pend.nm(pd, n), out}, None{}, lr, {==})
+
+# a field line in progress
+def none.field(+ip: Bytes(), v: Spec.FLine, +q: Eng.P, -pd: Eng.Pend, -out: List<&2, Eng.Req>) ->
+  EP.LR.field(q, v, pd, out) -> {Stream.at.head(ip, q) == None{} : Maybe<&2, Stream.Head>}:
+  match v:
+    case Spec.FEmpty{}:
+      lr => by.p(ip, q, Eng.P{Eng.Lin{}, pd, out}, None{}, lr, {==})
+    case Spec.FName{n}:
+      lr => by.p(ip, q, Eng.P{Eng.InN{Bytes.from_list(n)}, pd, out}, None{}, lr, {==})
+    case Spec.FVal{val}:
+      lr => none.val(ip, val, q, pd, out)(lr)
+    case Spec.FBad{}:
+      lr => dead.none(ip, q, out)(lr)
+
+# The head at the blank line
+# --------------------------
+
+# the engine's framing decision, read off what the pending head holds
+def hf.pv(x: EP.PV) -> Bool & Eng.Bd:
+  match x:
+    case EP.PV{m, p, cl, close, host, u, fx, hx}:
+      match fx:
+        case Eng.Fx{+v10, ka, te}:
+          (Eng.hosts.ok(v10, host), Eng.body.kind(te, v10, cl))
+
+def e.hf(pd: Eng.Pend) -> {Eng.head.frame(pd) == hf.pv(EP.pv(pd)) : Bool & Eng.Bd}:
+  match pd:
+    case Eng.Pend{m, p, cl, close, host, ws, fx, hx, nx}:
+      match fx:
+        case Eng.Fx{a, b, c}:
+          {==}
+
+# the engine's framing is the spec's, mapped
+def fr.eq(ok: Bool, b: Spec.Body) -> {Stream.head.frame(ok, EP.bdv(b)) == Laws.spec.frame(ok, b) : Maybe<&2, Stream.Frame>}:
+  match ok b:
+    case False{} x:
+      {==}
+    case True{} Spec.BNone{}:
+      {==}
+    case True{} Spec.BLen{n}:
+      {==}
+    case True{} Spec.BChunked{}:
+      {==}
+    case True{} Spec.BBad{}:
+      {==}
+
+# a head made from a request and a framing is the one the law spells out
+def mk.hd(+ip: Bytes(), +m: Eng.Meth, +t: Bytes(), +b: Bytes(), +cl: Bool, +ws: Bool, +k: Bytes(), +f: Stream.Frame,
+  hd: Eng.Hd) ->
+  {Stream.head.ok(ip, Eng.Req{m, t, b, cl, ws, k, hd}, f) == Laws.spec.head.req(ip, Eng.Req{m, t, b, cl, ws, k, hd}, f) :
+    Stream.Head}:
+  match hd:
+    case Eng.Hd{+mb, +v10, +fs, +cn}:
+      %req.eq(ip, Eng.Req{m, t, b, cl, ws, k, Eng.Hd{mb, v10, fs, cn}}) :
+        {Stream.HOk{Http.req.of(ip, Eng.Req{m, t, b, cl, ws, k, Eng.Hd{mb, v10, fs, cn}}), f, v10, cl || ws,
+          String.eq(mb, "HEAD")} ==
+          Stream.HOk{_, f, v10, cl || ws, String.eq(mb, "HEAD")} : Stream.Head}
+      {==}
+
+def mk.some(+ip: Bytes(), r: Eng.Req, f: Stream.Frame) ->
+  {Stream.head.ok(ip, r, f) == Laws.spec.head.req(ip, r, f) : Stream.Head}:
+  match r:
+    case Eng.Req{m, t, b, cl, ws, k, hd}:
+      mk.hd(ip, m, t, b, cl, ws, k, f, hd)
+
+def mk.eq(+ip: Bytes(), r: Eng.Req, mf: Maybe<&2, Stream.Frame>) ->
+  {Stream.head.mk(ip, r, mf) == Laws.spec.head.mk(ip, r, mf) : Stream.Head}:
+  match mf:
+    case None{}:
+      {==}
+    case Some{f}:
+      mk.some(ip, r, f)
+
+def HV(+ip: Bytes(), -pd: Eng.Pend, -h: Spec.Head) -> Type:
+  {Stream.head.of(ip, pd) == Laws.spec.head(ip, h) : Stream.Head}
+
+def pair.eq(+v10: Bool, +te: Bool, +hs: Nat, +l: Maybe<&2, U32>) ->
+  {(Eng.hosts.ok(v10, EP.hsat(hs)), Eng.body.kind(te, v10, EP.clv(l))) ==
+    (Spec.hosts.ok(v10, hs), EP.bdv(Spec.body.of(te, v10, l))) : Bool & Eng.Bd}:
+  %EP.hok(v10, hs) :
+    {(Eng.hosts.ok(v10, EP.hsat(hs)), Eng.body.kind(te, v10, EP.clv(l))) == (_, EP.bdv(Spec.body.of(te, v10, l))) :
+      Bool & Eng.Bd}
+  %EP.bok(te, v10, l) :
+    {(Eng.hosts.ok(v10, EP.hsat(hs)), Eng.body.kind(te, v10, EP.clv(l))) == (Eng.hosts.ok(v10, EP.hsat(hs)), _) :
+      Bool & Eng.Bd}
+  {==}
+
+def head.at.fx(+ip: Bytes(), +pd: Eng.Pend, +h: Spec.Head, +v10: Bool, +te: Bool, +hs: Nat, +l: Maybe<&2, U32>,
+  +pr: EP.PR(pd, h),
+  eh: {hf.pv(EP.hv(h)) == (Eng.hosts.ok(v10, EP.hsat(hs)), Eng.body.kind(te, v10, EP.clv(l))) : Bool & Eng.Bd}) ->
+  {Stream.head.pair(ip, Eng.pend.req(pd, ""), Eng.head.frame(pd)) ==
+    Stream.head.mk(ip, Spec.req(h, Nil{}), Laws.spec.frame(Spec.hosts.ok(v10, hs), Spec.body.of(te, v10, l))) :
+    Stream.Head}:
+  +fe = Equal.trans(Bool & Eng.Bd, Eng.head.frame(pd), hf.pv(EP.pv(pd)),
+    (Spec.hosts.ok(v10, hs), EP.bdv(Spec.body.of(te, v10, l))), e.hf(pd),
+    Equal.trans(Bool & Eng.Bd, hf.pv(EP.pv(pd)), hf.pv(EP.hv(h)), (Spec.hosts.ok(v10, hs), EP.bdv(Spec.body.of(te, v10, l))),
+      Equal.cong(EP.PV, Bool & Eng.Bd, x => hf.pv(x), EP.pv(pd), EP.hv(h), pr),
+      Equal.trans(Bool & Eng.Bd, hf.pv(EP.hv(h)), (Eng.hosts.ok(v10, EP.hsat(hs)), Eng.body.kind(te, v10, EP.clv(l))),
+        (Spec.hosts.ok(v10, hs), EP.bdv(Spec.body.of(te, v10, l))), eh, pair.eq(v10, te, hs, l))))
+  %EP.REQ(pd, h, Nil{}, pr) :
+    {Stream.head.pair(ip, _, Eng.head.frame(pd)) ==
+      Stream.head.mk(ip, Spec.req(h, Nil{}), Laws.spec.frame(Spec.hosts.ok(v10, hs), Spec.body.of(te, v10, l))) :
+      Stream.Head}
+  %Equal.sym(Bool & Eng.Bd, Eng.head.frame(pd), (Spec.hosts.ok(v10, hs), EP.bdv(Spec.body.of(te, v10, l))), fe) :
+    {Stream.head.pair(ip, Spec.req(h, Nil{}), _) ==
+      Stream.head.mk(ip, Spec.req(h, Nil{}), Laws.spec.frame(Spec.hosts.ok(v10, hs), Spec.body.of(te, v10, l))) :
+      Stream.Head}
+  %Equal.sym(Maybe<&2, Stream.Frame>, Stream.head.frame(Spec.hosts.ok(v10, hs), EP.bdv(Spec.body.of(te, v10, l))),
+    Laws.spec.frame(Spec.hosts.ok(v10, hs), Spec.body.of(te, v10, l)),
+    fr.eq(Spec.hosts.ok(v10, hs), Spec.body.of(te, v10, l))) :
+    {Stream.head.mk(ip, Spec.req(h, Nil{}), _) ==
+      Stream.head.mk(ip, Spec.req(h, Nil{}), Laws.spec.frame(Spec.hosts.ok(v10, hs), Spec.body.of(te, v10, l))) :
+      Stream.Head}
+  {==}
+
+# LEMMA: at the blank line, the reader's head is the walk's
+def head.at(+ip: Bytes(), +pd: Eng.Pend, h: Spec.Head) -> EP.PR(pd, h) -> HV(ip, pd, h):
+  match h:
+    case Spec.Head{+hm, +ht, +l, +hc, +hs, +hk, +hu, +hcu, +hvb, +hf, +hxx}:
+      match hf:
+        case Eng.Fx{+v10, +ka, +te}:
+          pr => Equal.trans(Stream.Head, Stream.head.of(ip, pd),
+            Stream.head.mk(ip, Spec.req(Spec.Head{hm, ht, l, hc, hs, hk, hu, hcu, hvb, Eng.Fx{v10, ka, te}, hxx}, Nil{}),
+              Laws.spec.frame(Spec.hosts.ok(v10, hs), Spec.body.of(te, v10, l))),
+            Laws.spec.head(ip, Spec.Head{hm, ht, l, hc, hs, hk, hu, hcu, hvb, Eng.Fx{v10, ka, te}, hxx}),
+            head.at.fx(ip, pd, Spec.Head{hm, ht, l, hc, hs, hk, hu, hcu, hvb, Eng.Fx{v10, ka, te}, hxx}, v10, te, hs, l,
+              pr, {==}),
+            mk.eq(ip, Spec.req(Spec.Head{hm, ht, l, hc, hs, hk, hu, hcu, hvb, Eng.Fx{v10, ka, te}, hxx}, Nil{}),
+              Laws.spec.frame(Spec.hosts.ok(v10, hs), Spec.body.of(te, v10, l))))
+
+# LEMMA: wherever the walk is, the reader has the head it has
+def view.m(+ip: Bytes(), mode: Spec.Mode, +p: Eng.P, +pd: Eng.Pend, +out: List<&2, Eng.Req>, +since: List<&2, U32>,
+  r: EP.REL.m(p, mode, out, since, pd)) ->
+  {Stream.at.head(ip, p) == Laws.spec.at.head.m(ip, mode) : Maybe<&2, Stream.Head>}:
+  match mode:
+    case Spec.MReq{+cur}:
+      (e1, r2) = r
+      (pl, bnd) = r2
+      by.p(ip, p, Eng.feed(cur, Eng.P{Eng.Pre{}, Eng.pend.new(), out}), None{}, e1,
+        none.req(ip, Spec.req.view(cur), Eng.feed(cur, Eng.P{Eng.Pre{}, Eng.pend.new(), out}), out)(EP.line.req(cur, out)(pl)))
+    case Spec.MBlank{}:
+      (e1, bnd) = r
+      by.p(ip, p, Eng.P{Eng.PreLf{}, Eng.pend.new(), out}, None{}, e1, {==})
+    case Spec.MField{h, +cur}:
+      (pr, r2) = r
+      (e1, r3) = r2
+      (pl, bnd) = r3
+      by.p(ip, p, Eng.feed(cur, Eng.P{Eng.Lin{}, pd, out}), None{}, e1,
+        none.field(ip, Spec.field.view(cur), Eng.feed(cur, Eng.P{Eng.Lin{}, pd, out}), pd, out)(EP.line.field(cur, pd, out)(pl)))
+    case Spec.MEol{h}:
+      (pr, r2) = r
+      (e1, bnd) = r2
+      by.p(ip, p, Eng.P{Eng.CrM{}, pd, out}, None{}, e1, {==})
+    case Spec.MEoh{+h}:
+      (pr, r2) = r
+      (e1, bnd) = r2
+      by.p(ip, p, Eng.P{Eng.CrL{}, pd, out}, Some{Laws.spec.head(ip, h)}, e1,
+        Equal.cong(Stream.Head, Maybe<&2, Stream.Head>, y => Some{y}, Stream.head.of(ip, pd), Laws.spec.head(ip, h),
+          head.at(ip, pd, h)(pr)))
+    case Spec.MBody{h, more, got}:
+      (pr, r2) = r
+      (e1, bnd) = r2
+      by.p(ip, p, Eng.P{Eng.Bod{more, Bytes.from_list(got)}, pd, out}, None{}, e1, {==})
+    case Spec.MChunk{h, at, n, got, left}:
+      (pr, r2) = r
+      (e1, bnd) = r2
+      by.p(ip, p, Eng.P{Eng.Chk{EP.at.eng(at), n, Bytes.from_list(got), left}, pd, out}, None{}, e1, {==})
+    case Spec.MData{h, more, got, left}:
+      (pr, r2) = r
+      (e1, bnd) = r2
+      by.p(ip, p, Eng.P{Eng.Chd{more, Bytes.from_list(got), left}, pd, out}, None{}, e1, {==})
+    case Spec.MUp{got}:
+      by.p(ip, p, Eng.P{Eng.Rest{Bytes.from_list(got)}, Eng.pend.new(), out}, None{}, r, {==})
+    case Spec.MBad{}:
+      dead.none(ip, p, out)(r)
+
+def view.sr(+ip: Bytes(), +p: Eng.P, w: Spec.W, s: EP.SR(p, w)) ->
+  {Stream.at.head(ip, p) == Laws.spec.at.head(ip, w) : Maybe<&2, Stream.Head>}:
+  match w:
+    case Spec.W{mode, +out, +since}:
+      (pd, r) = s
+      view.m(ip, mode, p, pd, out, since, r)
+
+def Laws.stream_head(ip, rs):
+  +l = Bytes.to_list(Bytes.concat(rs))
+  Equal.trans(Maybe<&2, Stream.Head>, Stream.at.head(ip, EL.reads(rs, Eng.p.new())), Stream.at.head(ip, Eng.feed(l, Eng.p.new())),
+    Laws.spec.at.head(ip, Spec.walk(l, Laws.spec.start())),
+    Equal.cong(Eng.P, Maybe<&2, Stream.Head>, y => Stream.at.head(ip, y), EL.reads(rs, Eng.p.new()), Eng.feed(l, Eng.p.new()),
+      EP.reads.is(rs, Eng.p.new())),
+    view.sr(ip, Eng.feed(l, Eng.p.new()), Spec.walk(l, Laws.spec.start()),
+      sr.walk(l, Laws.spec.start(), Eng.p.new(), (Eng.pend.new(), ({==}, (Unit{}, {==}))))))

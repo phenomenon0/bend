@@ -533,8 +533,20 @@ law refuse_wrap:
   {Eng.parse("GET /echo HTTP/1.1\r\nHost: x\r\nContent-Length: 4294967301\r\n\r\nhello") ==
     (Nil{}, True{}) : List<&2, Eng.Req> & Bool}
 
+# a length past the body's cap is refused where the head ends, not
+# before: the head is read whole first (a reader that takes the body
+# itself, net/stream.bend, judges it by the same head)
 law refuse_past_cap:
-  {Eng.parse("GET /echo HTTP/1.1\r\nHost: x\r\nContent-Length: 1048577\r\n") ==
+  {Eng.parse("GET /echo HTTP/1.1\r\nHost: x\r\nContent-Length: 1048577\r\n\r\n") ==
+    (Nil{}, True{}) : List<&2, Eng.Req> & Bool}
+
+law past_cap_read_to_head_end:
+  {Eng.parse("GET /echo HTTP/1.1\r\nHost: x\r\nContent-Length: 4294967289\r\n") ==
+    (Nil{}, False{}) : List<&2, Eng.Req> & Bool}
+
+# a length whose digits pass what a U32 holds is refused at the digit
+law refuse_past_top:
+  {Eng.parse("GET /echo HTTP/1.1\r\nHost: x\r\nContent-Length: 4294967290") ==
     (Nil{}, True{}) : List<&2, Eng.Req> & Bool}
 
 law refuse_not_digits:

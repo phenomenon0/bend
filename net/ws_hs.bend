@@ -3,7 +3,10 @@
 #
 # The URL parser takes ws:// and wss:// only, and is local to ws until
 # net/ has one URL type (a note for that unification: this one has no
-# userinfo, no IPv6 literal, no fragment, and refuses each).
+# userinfo and no fragment, and refuses each). Its host may be an IPv6
+# address in brackets (an IP-literal, RFC 3986 3.2.2), kept bracketed and
+# written as RFC 5952 does (net/addr.bend's literal), as the Host field
+# carries it.
 #
 # The answer is judged strictly (RFC 6455 4.1, the client's checks): a
 # status line HTTP/1.1 101; exactly one Upgrade, its value websocket
@@ -15,6 +18,7 @@
 # offered, once. Anything else is refused, with why (Hw).
 import Base
 import ../demos/io_http_engine/ws.bend as Ws
+import ./addr.bend as A
 
 # The URL
 # =======
@@ -65,10 +69,37 @@ def url.host(+tls: Bool, auth: String & Maybe<&2, String>, path: String) -> Mayb
   (host, port) = auth
   url.make(tls, host, path, url.port(tls, port))
 
+# an IP-literal's authority, after its '[': the address, "]", then
+# nothing or ':' and the port
+def url.lit.at(lit: Result<&2, &2, String, String>, ok: Bool, +tls: Bool, +a: String, path: String) -> Maybe<&2, Url>:
+  match lit ok:
+    case Done{h} True{}:
+      url.make(tls, h, path, url.port(tls, Bool.pick(Maybe<&2, String>, String.is_empty(a), None{}, Some{String.drop(a, 1n)})))
+    case _ _:
+      None{}
+
+def url.lit.go(+tls: Bool, +inside: String, after: Maybe<&2, String>, path: String) -> Maybe<&2, Url>:
+  match after:
+    case None{}:
+      None{}
+    case Some{+a}:
+      url.lit.at(A.literal(inside), String.is_empty(a) || String.starts_with(a, ":"), tls, a, path)
+
+def url.lit(+tls: Bool, r: String & Maybe<&2, String>, path: String) -> Maybe<&2, Url>:
+  (inside, after) = r
+  url.lit.go(tls, inside, after, path)
+
+def url.auth(v6: Bool, +tls: Bool, +auth: String, path: String) -> Maybe<&2, Url>:
+  match v6:
+    case False{}:
+      url.host(tls, cut(auth, 58), path)
+    case True{}:
+      url.lit(tls, cut(String.drop(auth, 1n), 93), path)
+
 # the authority and the resource: a path from its '/', with its query
 def url.rest(+tls: Bool, r: String & Maybe<&2, String>) -> Maybe<&2, Url>:
-  (auth, path) = r
-  url.host(tls, cut(auth, 58), "/" ++ Maybe.default(&2, String, path, ""))
+  (+auth, path) = r
+  url.auth(String.starts_with(auth, "["), tls, auth, "/" ++ Maybe.default(&2, String, path, ""))
 
 def url.slash(p: Maybe<&2, String>) -> Maybe<&2, String>:
   match p:

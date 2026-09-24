@@ -38,6 +38,7 @@ ordinary program.
       server.bend                  Server: serve, the configuration, the router, middleware
       client.bend                  Client: get, post, request, sessions, NetError
       url.bend                     URLs: parse, resolve, origin
+      addr.bend                    IPv6 text (RFC 4291/5952), IP-literals, connect to a name's addresses
       json.bend                    Json: JSON bodies
       stream.bend                  Stream: request bodies as streams (uploads), stream routes
       ws.bend                      Ws: the WebSocket client
@@ -90,6 +91,14 @@ or to write a server for another protocol.
 
 Each builds with `bend net/examples/NAME.bend -o NAME`. Its header says how to
 run it.
+
+### The Apps
+
+`apps/` holds whole programs built on `net/` the way a user would, without
+touching the library. `apps/uptime/` is an uptime monitor: probes on their own
+loops, a JSON API, a dashboard, live results over a WebSocket, webhooks, a
+log it replays on start. Its `check.py` runs it against fake targets, and its
+`FRICTION.md` ranks what the library and the language cost it to write.
 
 ### Laws, Proofs and Mutants
 

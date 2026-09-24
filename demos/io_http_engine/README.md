@@ -87,8 +87,10 @@ does no work per byte.
 What it accepts is deliberately small, because a framing disagreement
 is how requests get smuggled. HTTP/1.1 with exactly one Host, or
 HTTP/1.0 with at most one. A body framed one way: a Content-Length, all
-digits (refused at the digit that crosses the body cap, so it cannot
-wrap) and the same wherever it is repeated; or a Transfer-Encoding
+digits (refused at a digit that would take it past 4294967289, so it
+cannot wrap, and past the body cap where the head ends: the head is
+read whole first, for net/stream.bend, which takes the body itself) and
+the same wherever it is repeated; or a Transfer-Encoding
 whose value is `chunked`, exactly (case aside), once, and nothing else
 -- `chunked `, `xchunked`, `chunked, identity`, a second
 Transfer-Encoding, one with a Content-Length in either order (CL.TE,
@@ -797,7 +799,7 @@ are refused with the same 400; a chunked body's lines and data share
 one budget of 1 MiB; and a line
 the input stops inside is refused when a byte arrives that its token
 cannot hold (a control in a target, a letter in a length, a digit that
-takes a length past the cap), while a version, a field's name, a
+would wrap a length), while a version, a field's name, a
 second length and the Host count are judged whole, at their CR, colon
 or empty line -- which is where the engine judges them. Those are
 choices written into the reference and stated there, not derived.

@@ -1,7 +1,8 @@
 // TCP
 // ===
 
-// TCP.connect with a deadline: the socket is non-blocking for life, a
+// TCP.connect with a deadline, to a dotted IPv4 address or an IPv6 one:
+// the socket is non-blocking for life, a
 // connect that is not done at once parks on the socket becoming writable
 // and on the clock, and whichever comes first ends it. Writable, SO_ERROR
 // says how the connect went; the clock first, it is ETIMEDOUT and the
@@ -35,13 +36,14 @@ static Term tcp_connect_poll_more(Env e, IoWork* w) {
 }
 
 Term tcp_connect_poll_run(Env e, Term* f, IoWork* w) {
-  struct sockaddr_in at;
+  struct sockaddr_storage at;
+  socklen_t               len = 0;
   w->data = io_cstr(e, f[0], &w->size);
   w->made = -1;
-  if (io_nul(w->data, w->size) || io_sys_addr(w->data, (u32)f[1], &at) != 0) {
+  if (io_nul(w->data, w->size) || io_sys_sa(w->data, (u32)f[1], &at, &len) < 0) {
     return tcp_connect_poll_end(e, w, EINVAL);
   }
-  int fd = socket(AF_INET, SOCK_STREAM, 0);
+  int fd = socket(at.ss_family, SOCK_STREAM, 0);
   if (fd < 0) {
     return tcp_connect_poll_end(e, w, errno);
   }
@@ -51,7 +53,7 @@ Term tcp_connect_poll_run(Env e, Term* f, IoWork* w) {
   if (fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) | O_NONBLOCK) < 0) {
     return tcp_connect_poll_end(e, w, errno);
   }
-  if (connect(fd, (struct sockaddr*)&at, sizeof(at)) == 0) {
+  if (connect(fd, (struct sockaddr*)&at, len) == 0) {
     return tcp_connect_poll_end(e, w, 0);
   }
   if (errno != EINPROGRESS) {

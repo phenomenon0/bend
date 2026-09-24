@@ -9,12 +9,24 @@
 # a route that does not match; a pool that takes back a connection its
 # response closed; a redirect that keeps credentials, forgets a cookie,
 # or sends once more past its cap; percent-escapes and URLs read wrong;
+# an IPv6 address written with a "::" for one group, the last of equal
+# runs compressed, in uppercase, with leading zeros, mapped IPv4 in hex,
+# or read with a "::" for no group, a dotted part with a leading zero or
+# not at the end, a group of five digits; an IP-literal kept without its
+# brackets or as written, a zone ID not told apart, a byte after the
+# bracket ignored, a Host field or an origin (the pool's key) without
+# the brackets;
 # a streamed body read from past a read's first byte, a read dropped, a
 # length counted one too many, a chunked body given a budget of its own,
 # a reader that keeps the body instead of handing it on, a read kept
 # whatever came after the body or those bytes not counted, a connection
-# that goes on before its body ended or without the bytes after it --
-# and net/PROOF.bend must refuse every one. Each runs in a scratch
+# that goes on before its body ended or without the bytes after it; a
+# stream route's head read by a reader that takes a bare LF for a line's
+# end, takes a folded line, or takes two lengths that disagree, and a
+# head judged wrong at its blank line (no framing taken for chunked, the
+# Hosts unchecked, a length one too many, the head taken at a field
+# line's CR, an upgrade that does not close) -- and net/PROOF.bend must
+# refuse every one. Each runs in a scratch
 # copy of the tree the proof imports, where bend-proxy's proof (which
 # net/'s uses: rr.h, u32.eq, the list lemmas, and scan_is_spec and
 # frames_agree through them) is replaced by its statements left open:
@@ -31,7 +43,9 @@ ROOT = os.path.dirname(HERE)
 DIRS = ['net', 'wire', 'demos/io_http_engine', 'demos/io_proxy', 'power']
 
 H, S, C, U = 'net/http.bend', 'net/server.bend', 'net/client.bend', 'net/url.bend'
+A = 'net/addr.bend'
 B = 'net/stream.bend'
+E = 'demos/io_http_engine/main.bend'
 
 # (what, file, before, after)
 MUTANTS = [
@@ -154,8 +168,42 @@ MUTANTS = [
     '''  Bytes.append(esc.go(False{}, dots(Bool.pick(Bytes(), String.is_empty(path), "/", path)), ""),''',
     '''  Bytes.append(esc.go(False{}, Bool.pick(Bytes(), String.is_empty(path), "/", path), ""),'''),
   ('a user and password in a URL taken (url_vectors)', U,
-    '''  url.made(Nat.is_lt(Bytes.find_byte(auth, 0n, 64), Bytes.len(auth)), U32.is_eq(Bytes.get(auth, 0n), 91),''',
-    '''  url.made(False{}, U32.is_eq(Bytes.get(auth, 0n), 91),'''),
+    '''      url.made(Nat.is_lt(Bytes.find_byte(auth, 0n, 64), Bytes.len(auth)), port.of(''',
+    '''      url.made(False{}, port.of('''),
+  ('a lone zero group written as "::" (ip6_vectors)', A,
+    '''  Bool.pick(Bytes(), Nat.is_lt(bl, 2n), join(gs),''', '''  Bool.pick(Bytes(), Nat.is_lt(bl, 1n), join(gs),'''),
+  ('the last of equal zero runs written as "::" (ip6_vectors)', A,
+    '''      +end = Nat.is_lt(bl, cl) && Bool.not(z)''', '''      +end = Nat.is_le(bl, cl) && Bool.not(z)'''),
+  ('an address written in uppercase (ip6_vectors)', A,
+    '''(v + 87 : U32)''', '''(v + 55 : U32)'''),
+  ('a group written with its leading zeros (ip6_vectors)', A,
+    '''  Bool.pick(Bytes(), U32.is_le(4096, g), Bytes.from_list(''', '''  Bool.pick(Bytes(), True{}, Bytes.from_list('''),
+  ('an IPv4-mapped address written in hex (ip6_vectors)', A,
+    '''String.eq(join(List.take(&2, U32, gs, 6n)), "0:0:0:0:0:ffff")''', '''False{}'''),
+  ('a "::" read as no group at all (ip6_vectors)', A,
+    '''Nat.is_le(n, 7n)''', '''Nat.is_le(n, 8n)'''),
+  ('a dotted part with a leading zero read (ip6_vectors)', A,
+    '''
+    && (Nat.is_eq(n, 1n) || Bool.not(U32.is_eq(Bytes.get(s, 0n), 48))), octet.max''', ''', octet.max'''),
+  ('a dotted part read before a "::" (ip6_vectors)', A,
+    '''side.cons(one(tail && List.is_empty''', '''side.cons(one(List.is_empty'''),
+  ('a group of five digits read (ip6_vectors)', A,
+    '''Nat.is_le(Bytes.len(s), 4n)''', '''Nat.is_le(Bytes.len(s), 5n)'''),
+  ('an IP-literal kept without its brackets (literal_vectors, host_vectors, origin_vectors)', A,
+    '''      Done{Bytes.concat(["[", show(gs), "]"])}''', '''      Done{show(gs)}'''),
+  ('an IP-literal kept as written, not read (literal_vectors, origin_vectors)', U,
+    '''A.literal(String.take(String.drop(auth, 1n), Nat.sub(e, 1n)))''',
+    '''Done{Bytes.concat(["[", String.take(String.drop(auth, 1n), Nat.sub(e, 1n)), "]"])}'''),
+  ('a zone ID not told apart (literal_vectors)', A,
+    '''Nat.is_lt(Bytes.find_byte(s, 0n, 37), Bytes.len(s)), parse(s))''', '''False{}, parse(s))'''),
+  ('a byte after an IP-literal\'s bracket ignored (literal_vectors)', U,
+    '''(String.is_empty(after) || U32.is_eq(Bytes.get(after, 0n), 58))''', '''True{}'''),
+  ('the Host field without the brackets (host_vectors)', U,
+    '''U32.is_eq(p, dport(t)), h, Bytes.concat([h, ":", U32.show(p)]))''',
+    '''U32.is_eq(p, dport(t)), A.bare(h), Bytes.concat([A.bare(h), ":", U32.show(p)]))'''),
+  ('the origin, the pool\'s key, without the brackets (origin_vectors)', U,
+    '''Bool.pick(Bytes(), t, "https://", "http://"), h, ":", U32.show(p)])''',
+    '''Bool.pick(Bytes(), t, "https://", "http://"), A.bare(h), ":", U32.show(p)])'''),
   ('a streamed body read from past each read\'s first byte (stream_body)', B,
     '''  R.take(R.feed_buf(e, bs, p))''', '''  R.take(R.feed_buf(e, String.drop(bs, 1n), p))'''),
   ('a read of a streamed body dropped (stream_body)', B,
@@ -185,6 +233,35 @@ MUTANTS = [
     '''        case R.Final{r, x}:
           Some{x}''', '''        case R.Final{r, x}:
           Some{""}'''),
+  ('a head reader that takes a bare LF for a line\'s end (stream_head)', E,
+    '''    case InLx{v} KLf{}:
+      P{Bad{}, pd, out}''', '''    case InLx{v} KLf{}:
+      P{Lin{}, pend.fld(pd, v), out}'''),
+  ('a head reader that takes a folded line as more of the value (stream_head)', E,
+    '''    case Lin{} KDg{}:
+      P{InN{one(c)}, pd, out}
+    case Lin{} _:''', '''    case Lin{} KDg{}:
+      P{InN{one(c)}, pd, out}
+    case Lin{} KSp{}:
+      P{InLx{""}, pend.nm(pd, "x-folded"), out}
+    case Lin{} _:'''),
+  ('a head reader that takes two lengths that disagree, the first kept (stream_head)', E,
+    '''step.clen.dup(Pend{meth, path, Has{w}, close, host, ws, fx, hx, nx}, out, U32.is_eq(v, w))''',
+    '''step.clen.dup(Pend{meth, path, Has{w}, close, host, ws, fx, hx, nx}, out, True{})'''),
+  ('a head with no framing taken for chunked (stream_head)', B,
+    '''    case True{} Eng.BdNone{}:
+      Some{FLen{0n}}''', '''    case True{} Eng.BdNone{}:
+      Some{FChunked{}}'''),
+  ('a stream route\'s Hosts unchecked (stream_head)', B,
+    '''  head.mk(ip, r, head.frame(ok, bd))''', '''  head.mk(ip, r, head.frame(True{}, bd))'''),
+  ('a streamed length one too many (stream_head)', B,
+    '''      Some{FLen{U32.to_nat(v)}}''', '''      Some{FLen{1n+U32.to_nat(v)}}'''),
+  ('a head taken at a field line\'s CR (stream_head)', B,
+    '''    case Eng.CrL{}:
+      Some{head.of(ip, pd)}''', '''    case Eng.CrM{}:
+      Some{head.of(ip, pd)}'''),
+  ('a streamed request that asked to upgrade not closing (stream_head)', B,
+    '''f, Server.hd.v10(hd), cl || ws, Server.hd.head(hd)}''', '''f, Server.hd.v10(hd), cl, Server.hd.head(hd)}'''),
 ]
 
 # bend-proxy's proof, as net/PROOF.bend uses it: its statements, open
