@@ -324,3 +324,81 @@ will drift; regenerate rather than trust it.
 - **No `for`, no strings, no containers, no exceptions, no classes.** Each is
   refused by name rather than silently mis-run, which is the property worth
   keeping as the subset grows.
+
+## Review round (2026-09-23)
+
+A deep review against CPython 3.11.15 found five programs the VM ran to exit 0
+with the wrong output, which is the one thing a refusal-first lane may not do.
+Each one now faults or matches CPython, and each has a control in the battery:
+
+| program | before | now |
+|---|---|---|
+| `print(x)` with `x` never bound | `None` | `vm: a name read before assignment (NameError)` |
+| a local read before its store | `None` | `... (UnboundLocalError)` |
+| `print(f(1))` above `def f` | `1` | NameError: a module-level def is a store of `VFunc{k}` into its global where it stands, and a call loads its callee as `LOAD_GLOBAL` does |
+| `print(f)` | `None` | refused: functions as values are outside the subset |
+| `None == None` | `False` | `True` (`val_eq`: str by text, num by value, None with None) |
+
+Other fixes in the same round:
+- `0xbeef` and `0xE` were refused as floats. The literal walk now takes a digit of the base before the float markers.
+- Ints are capped at 2**48 − 1 on every lane. Past that, the JS lane died inside the runtime and the C lane would have wrapped at 2**64. The cap is checked on literals, `+` and `*`.
+- A def rebound to a non-function (`f = 3; f()`) faults at the call. Before, it silently called the def. Redefinition now binds in source order: `print(f())` between two `def f` prints `1`, then `2`.
+
+**The C lane did not build on a 15 GB host.** The emitter peaked above 14 GB on
+`vm.bend` and was OOM-killed. Bisecting by stubbing defs showed the cause:
+- `cexp`'s `match tag:` over eleven string literals. A string-literal match is emitted as a per-character 32-bit bit tree, with the arm bodies under it.
+- `prewalk`'s five-arm string match. After the first fix it nested past clang's 256-bracket limit.
+
+Both now classify the tag once with an `S.choose` chain into a nullary constructor (`EK`, `PK`) and match on that. The emitter now peaks at 2.4 GB, and C emission takes 15 s instead of never finishing.
+
+Battery: `VM PASS: 34, FAIL: 0` (7 fixtures × 3 lanes + check + mutation + 12
+refusals), on x86_64 with 4 cores and 15 GB. `fib(24)` on the C lane takes 0.95 s on this host. There is no pre-change C number on the same host, because the old file could not build here.
+Caps: `vm.bend` 27,059 / 64,000 ttok (25,453 before this round, so +1,606) and `vm_run.sh` 1,744 / 4,000. These were measured with
+js-tiktoken's cl100k ranks, because ttok's own BPE download is blocked on this host.
+They match `gates/repo.ts` exactly on the unmerged tree.
+
+## The fuzzer (2026-09-23)
+
+`python3 demos/python/fuzz_vm.py [--n 300] [--seed s] [--jobs 4] [--interp k]`
+checks the lane's contract instead of fixtures. It generates random programs in
+the subset and just past it. A program the VM runs to exit 0 must print
+CPython's bytes, and CPython must also exit 0. Every lane must agree. A non-zero
+exit must be the VM's own refusal or fault, never the runtime dying under it.
+Any finding is shrunk line by line and written to `tests/vm/_out/fuzz/`. Each
+program is a pure function of `(seed, index)`, so a finding replays.
+`VM_FUZZ=n bash demos/python/vm_run.sh` runs `n` programs after the battery.
+The file is `fuzz_vm.py`, not `vm_fuzz.py`, because the battery treats every
+`vm_*.py` as a fixture.
+
+About half the generated programs run cleanly on CPython. The rest raise on
+purpose (TypeError, IndexError, ZeroDivisionError, NameError, RecursionError),
+so the fault paths are exercised too. The first 300 programs found four problems
+that the fixtures had never reached:
+
+| finding | cause | now |
+|---|---|---|
+| `"\x41\101hi"` printed `AAihi` (a MISCOMPILE) | after a three-digit octal escape, the decoder dropped the next char | one exit for "octal ended" that handles the char in hand as MBody would; `vm_escapes.py` |
+| unbounded recursion ran for 56 s on C and timed out on JS | there was no depth limit; CPython raises at 999 calls in flight | a depth field on `VFrame`; call 1000 faults with `(RecursionError)`; `vm_deep.py` pins 998, a control pins 999 |
+| `u = print` reported a NameError that CPython never raises | a builtin read as a value fell through to an unset global | the 149 names of 3.11's `builtins` are refused by name |
+| `print("\x4")` ran | a one-digit `\x` escape was accepted; CPython rejects it | refused, with two controls |
+
+Found along the way, then implemented because they were cheap: string ordering
+(`<`, `<=`, `>`, `>=`, compared code point by code point as CPython does,
+`vm_order.py`), and `str * int` repetition (`vm_repeat.py`). A string stops at
+2**24 characters, whether it grows by `*` or by `+`, so an exponentially growing
+string is refused rather than exhausting memory.
+
+After the fixes, seeds 1 to 4 × 300 programs report `FUZZ PASS: 300, FAIL: 0`
+on the C and JS lanes, with the interpreter sampled on every 25th program for
+seeds 3 and 4. Battery: `VM PASS: 53, FAIL: 0`.
+
+What the table says comes next. Per 300 programs, these are the ones CPython
+ran and the VM refused:
+
+| refusal | per 300 | the fix |
+|---|---|---|
+| a negative result | 15–28 | signed ints (I64 with overflow checks) |
+| an int past 2**48 − 1 | 15–24 | the same move, up to 2**63; bigints stay later |
+| chained comparisons | 5–15 | a `DUP`/`ROT` pair so the middle operand is evaluated once |
+| the builtin print as a value | 3–6 | functions as values (`VFunc` is already there) |
+| wrong arity in a branch never taken | 1–5 | CPython checks arity at the call, so this check should move to runtime |

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# The ttok ledger. Upstream caps (gates/repo.ts): base.bend 24000, bend.ts
-# 41000, comp.ts 61000, main.ts 10000, each test 16000. First-class strings
+# The ttok ledger. Upstream caps (gates/repo.ts, 2.0.26): base.bend 32000,
+# bend.ts 44000, comp.ts 64000, main.ts 10000, each test 16000. First-class strings
 # land at 27,844 base tokens and 74,981 compiler tokens; their caps are the
 # next round thousand. The benchmark oracle also has its planned 1,200 cap.
 set -u
@@ -20,7 +20,7 @@ check() {
 }
 check bend2/base.bend 49777
 check bend2/bend.ts 44000
-check bend2/comp.ts 82900
+check bend2/comp.ts 84100
 check bend2/main.ts 10000
 for t in tests/f64/*.bend tests/strings/*.bend; do
   if [ "$t" = tests/strings/bench_words.bend ]; then
