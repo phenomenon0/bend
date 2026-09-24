@@ -1325,20 +1325,20 @@ def sent.failed(s: Sent, +e: Err) -> Sent:
     case Sent{m, f}:
       Sent{m, Some{e}}
 
-# the most one emit frames: Stream.write cuts longer writes into emits
-# of this, each framed at once
-def emit.max() -> Nat:
-  16384n
-
 # A chunk is 2^j bytes, j from 0 to 14, with its size in hex: a write is
 # cut into the chunks its length's bits say, the largest first, so every
 # size line is one of fifteen.
+def nth.size(j: Nat, ns: List<&2, Nat>) -> Nat:
+  match j ns:
+    case _ Nil{}:
+      0n
+    case 0n Con{n, t}:
+      n
+    case 1n+i Con{n, t}:
+      nth.size(i, t)
+
 def chunk.size(j: Nat) -> Nat:
-  match j:
-    case 0n:
-      1n
-    case 1n+i:
-      Nat.double(chunk.size(i))
+  nth.size(j, [1n, 2n, 4n, 8n, 16n, 32n, 64n, 128n, 256n, 512n, 1024n, 2048n, 4096n, 8192n, 16384n])
 
 def chunk.hexes() -> List<&2, Bytes()>:
   ["1", "2", "4", "8", "10", "20", "40", "80", "100", "200", "400", "800", "1000", "2000", "4000"]
@@ -1355,6 +1355,11 @@ def nth.hex(j: Nat, hs: List<&2, Bytes()>) -> Bytes():
 def chunk.hex(j: Nat) -> Bytes():
   nth.hex(j, chunk.hexes())
 
+# the most one emit frames: Stream.write cuts longer writes into emits
+# of this, each framed at once
+def emit.max() -> Nat:
+  16384n
+
 def chunks.at(fit: Bool, +j: Nat, +x: Bytes(), go: Bytes() -> Bytes()) -> Bytes():
   match fit:
     case True{}:
@@ -1368,9 +1373,9 @@ def chunks.at(fit: Bool, +j: Nat, +x: Bytes(), go: Bytes() -> Bytes()) -> Bytes(
 def chunks.go(j: Nat, +x: Bytes()) -> Bytes():
   match j:
     case 0n:
-      chunks.at(Nat.is_le(chunk.size(0n), Bytes.len(x)), 0n, x, t => "")
+      chunks.at(Nat.is_ge(Bytes.len(x), chunk.size(0n)), 0n, x, t => "")
     case 1n+(+i):
-      chunks.at(Nat.is_le(chunk.size(1n+i), Bytes.len(x)), 1n+i, x, t => chunks.go(i, t))
+      chunks.at(Nat.is_ge(Bytes.len(x), chunk.size(1n+i)), 1n+i, x, t => chunks.go(i, t))
 
 def chunks(+x: Bytes()) -> Bytes():
   chunks.go(14n, x)
@@ -1557,14 +1562,18 @@ def opening.none(+head: Bool, +closing: Bool, +v10: Bool, +code: U32, +nb: Bool,
     case X.RHead{+cd, +why, +fs, hl}:
       opening.none.at(nb, v10, head, head, closing, v10, code, cd, why, fs)
 
+# the check of a head with a length: rhd.ok, and the length as rvalid
+# reads it against a body of n bytes
+def len.check(+head: Bool, +code: U32, +cd: Bytes(), +why: Bytes(), fs: List<&2, Wr.Field>, +clen: Bytes(), +n: Nat) -> Bool:
+  rhd.ok(cd, code, why, fs) && len.ok(head, X.rbodyless(head, code), clen, n)
+
 # a declared length: a Content-Length (HEAD's too, none for 204 or 304)
 def opening.len(+head: Bool, +closing: Bool, +v10: Bool, +code: U32, +nb: Bool, +n: Nat, h: X.RHead) -> Bytes() & Sent:
   match h:
     case X.RHead{+cd, +why, +fs, hl}:
       +clen = Bool.pick(Bytes(), nb, "", Nat.show(n))
-      +bl = X.rbodyless(head, code)
-      opening.ok(rhd.ok(cd, code, why, fs) && len.ok(head, bl, clen, n), head, closing, v10,
-        rhd.bytes(cd, why, fs, clen, X.conn.val(closing, v10)), mode.body(bl, MLen{n}))
+      opening.ok(len.check(head, code, cd, why, fs, clen, n), head, closing, v10,
+        rhd.bytes(cd, why, fs, clen, X.conn.val(closing, v10)), mode.body(X.rbodyless(head, code), MLen{n}))
 
 def opening.at(+head: Bool, +closing: Bool, +v10: Bool, +code: U32, +nb: Bool, h: X.RHead, ln: Maybe<&2, Nat>) ->
   Bytes() & Sent:

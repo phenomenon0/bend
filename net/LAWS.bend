@@ -583,3 +583,211 @@ law stream_next:
   for +rs: List<&2, Bytes()>
   {Stream.next(Wr.drain.s(R.P, streamed(e, f, rs))) == spec.next(spec.body(e, f, Bytes.to_list(Bytes.concat(rs)))) :
     Maybe<&2, Bytes()>}
+
+# Streamed response bodies
+# ========================
+#
+# A response a handler writes as it goes (net/stream.bend's Stream.pour)
+# is written by a pure writer the IO runs: Stream.opening, the head and
+# the writer the body starts in; Stream.emit, the bytes a write goes out
+# as, and the writer after it; Stream.close, the bytes that end the body.
+# Stream.poured is a whole response as the server writes it, for every
+# list of writes: its head, each write's bytes, the end. The reference
+# is wire/http1/spec.bend's response(), as for respond_framed: how a
+# client that reads HTTP/1.1 as RFC 9112 does frames the bytes.
+
+# A reader's budget, as spec.bend's walk spends it on a chunked body: each
+# digit of a chunk's size costs one and must leave more than the size read
+# so far; a chunk's data costs its size; the last chunk's digit, one.
+def dig.step(g: R.Go, +n: U32, +left: U32, go: U32 -> U32 -> Bool) -> Bool:
+  match g:
+    case R.GDigit{+d}:
+      Bool.not(U32.is_le(left, (n * 16 + d : U32))) && go((n * 16 + d : U32), (left - 1 : U32))
+    case _:
+      False{}
+
+# a size line's digits, from at with the size so far n: each a digit, and
+# each paid for
+def dig.ok(ds: List<&2, U32>, at: R.At, +n: U32, +left: U32) -> Bool:
+  match ds:
+    case Nil{}:
+      True{}
+    case Con{+c, t}:
+      dig.step(R.chunk.step(at, R.xk.of(R.cls(c), c)), n, left, n2 => l2 => dig.ok(t, R.ASize{}, n2, l2))
+
+def dig.val.step(g: R.Go, +n: U32, go: U32 -> U32) -> U32:
+  match g:
+    case R.GDigit{+d}:
+      go((n * 16 + d : U32))
+    case _:
+      n
+
+# the size a line's digits say
+def dig.val(ds: List<&2, U32>, at: R.At, +n: U32) -> U32:
+  match ds:
+    case Nil{}:
+      n
+    case Con{+c, t}:
+      dig.val.step(R.chunk.step(at, R.xk.of(R.cls(c), c)), n, n2 => dig.val(t, R.ASize{}, n2))
+
+# the budget after a line's digits
+def dig.left(ds: List<&2, U32>, +left: U32) -> U32:
+  match ds:
+    case Nil{}:
+      left
+    case Con{c, t}:
+      dig.left(t, (left - 1 : U32))
+
+# the size line of a chunk of 2^j bytes
+def chunk.ds(+j: Nat) -> List<&2, U32>:
+  Bytes.to_list(Stream.chunk.hex(j))
+
+# a chunk of 2^j bytes: its size line paid for, and the budget after it
+# and its data
+def chunk.ok(+j: Nat, +left: U32) -> Bool:
+  dig.ok(chunk.ds(j), R.ASize0{}, 0, left)
+
+def chunk.left(+j: Nat, +left: U32) -> U32:
+  (dig.left(chunk.ds(j), left) - dig.val(chunk.ds(j), R.ASize0{}, 0) : U32)
+
+def ok.at(fit: Bool, +j: Nat, +n: Nat, +left: U32, go: Nat -> U32 -> Bool) -> Bool:
+  match fit:
+    case True{}:
+      chunk.ok(j, left) && go(Nat.sub(n, Stream.chunk.size(j)), chunk.left(j, left))
+    case False{}:
+      go(n, left)
+
+# a write of n bytes, cut as Stream.chunks.go cuts it: every chunk paid for
+def ok.go(j: Nat, +n: Nat, +left: U32) -> Bool:
+  match j:
+    case 0n:
+      ok.at(Nat.is_ge(n, Stream.chunk.size(0n)), 0n, n, left, n2 => l => True{})
+    case 1n+(+i):
+      ok.at(Nat.is_ge(n, Stream.chunk.size(1n+i)), 1n+i, n, left, n2 => l => ok.go(i, n2, l))
+
+def left.at(fit: Bool, +j: Nat, +n: Nat, +left: U32, go: Nat -> U32 -> U32) -> U32:
+  match fit:
+    case True{}:
+      go(Nat.sub(n, Stream.chunk.size(j)), chunk.left(j, left))
+    case False{}:
+      go(n, left)
+
+# and the budget after it
+def left.go(j: Nat, +n: Nat, +left: U32) -> U32:
+  match j:
+    case 0n:
+      left.at(Nat.is_ge(n, Stream.chunk.size(0n)), 0n, n, left, n2 => l => l)
+    case 1n+(+i):
+      left.at(Nat.is_ge(n, Stream.chunk.size(1n+i)), 1n+i, n, left, n2 => l => left.go(i, n2, l))
+
+# whether a reader's budget, left, covers a chunked body of the writes
+# ws: every write's chunks, then the last chunk (a budget of 256 MiB, a
+# client's, covers any body a little under it)
+def fits(ws: List<&2, Bytes()>, +left: U32) -> Bool:
+  match ws:
+    case Nil{}:
+      dig.ok([48], R.ASize0{}, 0, left)
+    case Con{+x, t}:
+      ok.go(14n, Bytes.len(x), left) && fits(t, left.go(14n, Bytes.len(x), left))
+
+# every write at most what one emit frames (Stream.write cuts them so)
+def small(ws: List<&2, Bytes()>) -> Bool:
+  match ws:
+    case Nil{}:
+      True{}
+    case Con{x, t}:
+      Nat.is_le(Bytes.len(x), Stream.emit.max()) && small(t)
+
+# the check a head passes to go out as it is (else the 500 goes)
+def pour.ok(+code: U32, h: X.RHead) -> Bool:
+  match h:
+    case X.RHead{+cd, +why, fs, hl}:
+      Stream.rhd.ok(cd, code, why, fs)
+
+def pour.ok.len(+code: U32, h: X.RHead, +n: Nat) -> Bool:
+  match h:
+    case X.RHead{+cd, +why, fs, hl}:
+      Stream.len.check(False{}, code, cd, why, fs, Bool.pick(Bytes(), U32.is_eq(code, 204) || U32.is_eq(code, 304), "",
+        Nat.show(n)), n)
+
+# LAW: a response written as it is made is one response. Whatever status
+# and fields a handler answers with, and whatever writes its producer
+# makes -- of any sizes, empty ones too -- the bytes the server writes
+# for a body of unknown length (chunked), read by wire/http1/spec.bend's
+# response(), are exactly one final response: the handler's status, its
+# body the writes joined in order (none for a 204 or 304), closing as the
+# server decided, and nothing after it; or the 500 when the head could
+# not be written as it was. For every body the reader's budget covers.
+law pour_chunked:
+  for +closing: Bool
+  for +code: U32
+  for +hs: List<&2, Http.Header>
+  for +ws: List<&2, Bytes()>
+  for sm: {small(ws) == True{} : Bool}
+  for fit: {fits(ws, R.ask.cap(X.rask(False{}))) == True{} : Bool}
+  {RS.response(X.rask(False{}), Bytes.to_list(Stream.poured(False{}, closing, False{}, code, hs, None{}, ws))) ==
+    sent(False{}, closing, code, pour.ok(code, Http.rhead(code, hs, "")), Bytes.concat(ws)) : R.Look}
+
+# LAW: a declared length is a Content-Length, and a producer whose writes
+# come to it writes exactly one response: to any request, HTTP/1.0 or
+# not, closing or not, the head and the writes read back as the one final
+# response with the handler's status and the writes joined as its body.
+law pour_length:
+  for +closing: Bool
+  for +v10: Bool
+  for +code: U32
+  for +hs: List<&2, Http.Header>
+  for +n: Nat
+  for +ws: List<&2, Bytes()>
+  for hn: {Nat.is_eq(Bytes.len(Bytes.concat(ws)), n) == True{} : Bool}
+  {RS.response(X.rask(False{}), Bytes.to_list(Stream.poured(False{}, closing, v10, code, hs, Some{n}, ws))) ==
+    sent(False{}, closing, code, pour.ok.len(code, Http.rhead(code, hs, ""), n), Bytes.concat(ws)) : R.Look}
+
+# LAW: a declared length is never written past. Whatever the writes --
+# more than declared, fewer, one too long -- the bytes a body of n bytes
+# goes out as are at most n: a write that would pass it goes out not at
+# all (and the connection closes after the response).
+law pour_capped:
+  for +n: Nat
+  for +ws: List<&2, Bytes()>
+  {Nat.is_le(Bytes.len(Stream.emits(ws, Stream.Sent{Stream.MLen{n}, None{}})), n) == True{} : Bool}
+
+# LAW: after a failure, nothing more is written. Once a writer has failed
+# -- the peer gone, a send stalled, a write past the length, the head
+# refused -- no write sends a byte, and neither does the body's end.
+law pour_quiet:
+  for m: Stream.Mode
+  for e: Stream.Err
+  for ws: List<&2, Bytes()>
+  {Stream.emits(ws, Stream.Sent{m, Some{e}}) == "" : Bytes()}
+
+# LAW: a write costs itself and a fixed framing. Whatever the writer's
+# state and whatever a write brings, what goes out for it is at most the
+# write and 120 bytes (fifteen chunks at most, each with a size line and
+# two line ends of eight bytes at most): the writer keeps no byte of one
+# write for later, so what a connection holds for a body is one write,
+# however long the body.
+law pour_bounded:
+  for st: Stream.Sent
+  for +x: Bytes()
+  {Nat.is_le(Bytes.len(Pair.snd(Stream.Sent, Bytes(), Stream.emit(st, x))), Nat.add(Bytes.len(x), 120n)) == True{} : Bool}
+
+# what goes out, closed: chunked, a length, HTTP/1.0 to the close, HEAD,
+# a write past a length, and the budget a small body takes
+law pour_vectors:
+  {[Stream.poured(False{}, False{}, False{}, 200, [Http.Header{"content-type", "text/csv"}], None{}, ["a,b\n", "", "c,d\n"]),
+    Stream.poured(False{}, True{}, False{}, 200, [], Some{3n}, ["ab", "c"]),
+    Stream.poured(False{}, False{}, True{}, 200, [], None{}, ["ab", "c"]),
+    Stream.poured(True{}, False{}, False{}, 200, [], None{}, ["ab", "c"]),
+    Stream.poured(False{}, False{}, False{}, 200, [], Some{2n}, ["a", "bc", "d"]),
+    Stream.chunks("0123456789")]
+    == ["HTTP/1.1 200 OK\r\ncontent-type: text/csv\r\ntransfer-encoding: chunked\r\n\r\n4\r\na,b\n\r\n4\r\nc,d\n\r\n0\r\n\r\n",
+        "HTTP/1.1 200 OK\r\ncontent-length: 3\r\nconnection: close\r\n\r\nabc",
+        "HTTP/1.1 200 OK\r\nconnection: close\r\n\r\nabc",
+        "HTTP/1.1 200 OK\r\ntransfer-encoding: chunked\r\n\r\n",
+        "HTTP/1.1 200 OK\r\ncontent-length: 2\r\n\r\na",
+        "8\r\n01234567\r\n2\r\n89\r\n"] : List<&2, Bytes()>}
+
+law fits_vectors:
+  {[fits(["hello", "", "world\n"], R.ask.cap(X.rask(False{}))), fits(["hello"], 4), fits(["hello"], 12)]
+    == [True{}, False{}, True{}] : List<&2, Bool>}
