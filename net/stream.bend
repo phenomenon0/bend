@@ -1,7 +1,9 @@
-# bend-net: request bodies as streams.
+# bend-net: bodies as streams -- a request's read as it comes, and a
+# response's written as it is made (the second half of this file).
 #
 #   Stream.serve(~app, ~uploads(), Stream.config(Server.config(8080)))
 #   Stream.serve.with(~E, ~app, ~uploads, env, cfg)
+#   Server.serve.routes(~E, ~rs, env, cfg), rs(env) with Stream.get(pat, h)
 #
 # A server that takes uploads: app answers every request as
 # Server.serve's does, its body whole, and uploads() is a table of

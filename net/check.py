@@ -675,6 +675,19 @@ def check_pour(export, events, relay, tmp):
     ok("pour: a client gone mid-body is an error to the producer (%s), within %.2f s, and the server goes on"
        % (line[0].split(": ", 1)[1] if line else "none", time.time() - t0),
        line and "closed the connection" in line[0] and get(port, "/").startswith(b"HTTP/1.1 200"), said)
+    s = socket.socket(); s.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 4096)
+    s.connect(("127.0.0.1", port))
+    s.sendall(b"GET /bytes?n=1000000000 HTTP/1.1\r\nHost: t\r\n\r\n")
+    t0, said = time.time(), ""
+    while time.time() - t0 < 25 and "stalled" not in said:
+        time.sleep(0.2)
+        said = open(errf).read()
+    dt = time.time() - t0
+    s.close()
+    line = [l for l in said.splitlines() if "bytes stopped after" in l and "stalled" in l]
+    n = int(line[0].split("after ")[1].split(":")[0]) if line else -1
+    ok("pour: a client that stops reading stops the producer (%d bytes written, the socket's buffers), then its send "
+       "stalls past the send time: ETime, after %.1f s" % (n, dt), line and 0 <= n < 64 << 20 and 9 < dt < 20, (said, dt))
     rport = PORT + 14
     rerr = os.path.join(tmp, "relay.err")
     rl = subprocess.Popen([relay, "--port", str(rport), "--upstream", "http://127.0.0.1:%d" % port], stdout=subprocess.DEVNULL,
