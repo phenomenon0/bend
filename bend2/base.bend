@@ -286,6 +286,17 @@ def TCP.accept(listener: Listener) ->
   import "./effs/tcp_accept.c"
   import "./effs/tcp_accept.js"
 
+# TCP.accept with a deadline: Some{socket} for a connection, None{} once
+# ms have passed with none (or after shedding an arrival it had no
+# descriptor for), so a loop that accepts can look up now and then. It
+# fails only for a listener that is no longer one: an error that belongs
+# to one connection (ECONNABORTED, ...) or to the moment (EMFILE,
+# ENFILE, ENOBUFS, ENOMEM) is answered by the effect itself.
+def TCP.accept_poll(listener: Listener, ms: U32) ->
+  IO(Listener & Result<&1, &1, U32 & String, Maybe<&1, Socket>>):
+  import "./effs/tcp_accept_poll.c"
+  import "./effs/tcp_accept_poll.js"
+
 def TCP.connect(host: String, port: U32) ->
   IO(Result<&1, &1, U32 & String, Socket>):
   import "./effs/tcp_connect.c"
