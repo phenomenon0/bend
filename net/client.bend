@@ -897,3 +897,65 @@ def get(url: Bytes()) -> IO(Res()):
 
 def post(url: Bytes(), ctype: Bytes(), body: Bytes()) -> IO(Res()):
   request(Req{"POST", url, [Http.Header{"content-type", ctype}], body}, opts())
+
+# A body as it comes
+# ==================
+#
+# Client.stream(~K, ~give, ~fin, url, opts, k) is a GET whose body is
+# handed to the consumer k as it arrives, never held whole:
+# give(k, bytes) answers the consumer and how many of the bytes it took
+# (all, or none to stop), and fin(k) is told the body ended. The socket
+# is not read while the consumer holds a window's worth (64 KiB) it has
+# not taken (wire/client.bend's fetch.stream, wire/stream.bend's laws),
+# so a slow consumer slows the server down. What comes back is the
+# consumer, and the response -- its status; no field (the head is read
+# by the framer only) and no body (the consumer had it) -- or why it
+# failed. A connection of its own, closed after; no redirect followed,
+# no gzip asked for; a body at most 256 MiB (the reader's budget); each
+# read within the exchange's timeout.
+
+def stream.res(+o: Opts, r: Result<&2, &2, C.Why, C.Got>) -> Res():
+  match r:
+    case Done{g}:
+      match g:
+        case C.Got{i, resp, extra, reuse}:
+          match resp:
+            case R.Resp{+code, v10, close, body}:
+              Done{Http.Response{code, Nil{}, Http.BBody{""}}}
+    case Fail{w}:
+      Fail{why.of(o, "", w)}
+
+def stream.got(~K: Type, +o: Opts, q: Socket & K & Result<&2, &2, C.Why, C.Got>) -> IO(K & Res()):
+  (s, kr) = q
+  (k, r) = kr
+  IO.bind(Unit, K & Res(), Socket.close(s), u => IO.pure(K & Res(), (k, stream.res(o, r))))
+
+def stream.dialed(~K: Type, ~give: K -> Bytes() -> IO(K & Nat), ~fin: K -> IO(K), +o: Opts, wire: Bytes(),
+  r: Result<&1, &1, NetError, Socket>, k: K) -> IO(K & Res()):
+  match r:
+    case Fail{e}:
+      IO.pure(K & Res(), (k, Fail{e}))
+    case Done{s}:
+      IO.bind(Socket & K & Result<&2, &2, C.Why, C.Got>, K & Res(),
+        C.fetch.stream(~K, ~give, ~fin, R.ask.new(False{}, 268435455), budget(o), 65536n, wire, s, k),
+        q => stream.got(~K, o, q))
+
+def stream.wire(~K: Type, ~give: K -> Bytes() -> IO(K & Nat), ~fin: K -> IO(K), +o: Opts, +u: U.Url,
+  w: Maybe<&2, Bytes()>, k: K) -> IO(K & Res()):
+  match w:
+    case None{}:
+      IO.pure(K & Res(), (k, Fail{Protocol{"the request's method or a field is malformed"}}))
+    case Some{+wire}:
+      IO.bind(Result<&1, &1, NetError, Socket>, K & Res(), dial(o, u), r => stream.dialed(~K, ~give, ~fin, o, wire, r, k))
+
+def stream.at(~K: Type, ~give: K -> Bytes() -> IO(K & Nat), ~fin: K -> IO(K), +o: Opts,
+  p: Result<&2, &2, Bytes(), U.Url>, k: K) -> IO(K & Res()):
+  match p:
+    case Fail{e}:
+      IO.pure(K & Res(), (k, Fail{BadUrl{e}}))
+    case Done{+u}:
+      stream.wire(~K, ~give, ~fin, o, u, wire.of(o, "GET", u, Nil{}, ""), k)
+
+# GET url, its body handed to k as it comes
+def stream(~K: Type, ~give: K -> Bytes() -> IO(K & Nat), ~fin: K -> IO(K), url: Bytes(), o: Opts, k: K) -> IO(K & Res()):
+  stream.at(~K, ~give, ~fin, with.gzip(o, False{}), U.parse(url), k)

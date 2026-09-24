@@ -1655,6 +1655,14 @@ def write(k: Sink, +x: Bytes()) -> IO(Wrote()):
     case Sink{s, st, +ms}:
       write.emit(s, emit.all(Bytes.len(x), st, x), ms)
 
+# Stop the body short: nothing more goes out, not its end, and the
+# connection closes after the response, so the client sees it cut (a
+# producer whose source failed, having sent a head that said 200)
+def abort(k: Sink) -> Sink:
+  match k:
+    case Sink{s, st, ms}:
+      Sink{s, sent.failed(st, EClosed{}), ms}
+
 # The response
 # ------------
 

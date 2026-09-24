@@ -23,7 +23,8 @@ memory, the stream's cap (413), a stalled body (408), a handler that
 returns without reading, 100-continue, pipelining after a streamed body;
 and streamed responses (export, events): chunked, 1 GB byte for byte in
 bounded memory, a declared length exact, short and long, HEAD, HTTP/1.0,
-a client gone mid-body, server-sent events with curl -N.
+a client gone mid-body, server-sent events with curl -N, a relay that
+streams a 100 MB upstream body end to end (relay_stream).
 WebSockets on the server: chat_server's room with two ws_chat clients
 (its broadcast), its page beside it, its 426 and 400, the 101's Accept
 and subprotocol, SIGTERM's 1001, and ws_echo from Python's websockets
@@ -609,7 +610,7 @@ def dechunk(b):
             return out, False
         b = b[2:]
 
-def check_pour(export, events, tmp):
+def check_pour(export, events, relay, tmp):
     port = PORT + 12
     errf = os.path.join(tmp, "export.err")
     p = subprocess.Popen([export, "--port", str(port)], stdout=subprocess.DEVNULL, stderr=open(errf, "w"))
@@ -674,6 +675,27 @@ def check_pour(export, events, tmp):
     ok("pour: a client gone mid-body is an error to the producer (%s), within %.2f s, and the server goes on"
        % (line[0].split(": ", 1)[1] if line else "none", time.time() - t0),
        line and "closed the connection" in line[0] and get(port, "/").startswith(b"HTTP/1.1 200"), said)
+    rport = PORT + 14
+    rerr = os.path.join(tmp, "relay.err")
+    rl = subprocess.Popen([relay, "--port", str(rport), "--upstream", "http://127.0.0.1:%d" % port], stdout=subprocess.DEVNULL,
+                          stderr=open(rerr, "w"))
+    PROCS.append(rl)
+    if not up(rport):
+        sys.exit("never listened: relay_stream")
+    N = 100 * 1000 * 1000
+    base = peak_kb(rl.pid)
+    with Peak(rl.pid) as pk:
+        t0 = time.time()
+        c = subprocess.run("curl -sS --fail 'http://127.0.0.1:%d/relay?path=/bytes%%3Fn%%3D%d' | sha256sum" % (rport, N), shell=True,
+                           capture_output=True, text=True, timeout=300)
+        dt = time.time() - t0
+    ok("pour: a relay streams end to end (Client.stream into Stream.pour): 100 MB byte for byte, the relay's peak RSS %d kB "
+       "(%d kB before), %.0f MB/s" % (pk.most, base, N / dt / 1e6),
+       c.returncode == 0 and c.stdout.split()[0] == pattern_sha(N) and pk.most < base + 16384, (c.returncode, c.stdout, c.stderr[-200:]))
+    r, eof = raw(rport, b"GET /relay?path=/nope HTTP/1.1\r\nHost: t\r\n\r\n")
+    ok("pour: an upstream's 404, after the relay's head went: the body cut short (no last chunk), the connection closed",
+       r.startswith(b"HTTP/1.1 200") and b"\r\n0\r\n\r\n" not in r and eof and "upstream answered 404" in open(rerr).read(), r)
+    stop(rl)
     stop(p)
     port = PORT + 13
     p = start([events, "--port", str(port), "--keepalive-ms", "200"], port)
@@ -791,7 +813,7 @@ def main():
         check_listen(hello, tmp)
         check_client(fetch_bin, hello, tmp)
         check_stream(bins["upload"], tmp)
-        check_pour(bins["export"], bins["events"], tmp)
+        check_pour(bins["export"], bins["events"], bins["relay_stream"], tmp)
         check_ws(bins["chat_server"], bins["ws_chat"], bins["ws_echo"])
     finally:
         for p in PROCS:

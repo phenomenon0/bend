@@ -302,6 +302,9 @@ def started(+keep: U32, +n: Nat, +ms: Nat, +now: Nat) -> IO(Stream.Reply):
 ```
 
 The whole programs are `net/examples/export.bend` and `net/examples/events.bend`.
+`Client.stream(~K, ~give, ~fin, url, opts, k)` hands a GET's body to a
+consumer as it comes; with a `Stream.Sink` as the consumer it relays a body
+end to end (`net/examples/relay_stream.bend`).
 
 ## Fetching
 
@@ -725,8 +728,8 @@ checked response writer that `respond_framed` is about (`net/README.md`).
 
 ## Not Built Yet
 
-- A client that reads a response body as it comes, so a relay can stream a
-  big upstream body end to end. `Client` holds a response whole (10 MiB at most).
+- A streamed client response's head before its body: `Client.stream` tells the
+  status once the body is through.
 - A streamed response on a stream route (an upload's answer) or to a method
   but GET.
 - A stream route's request pipelined behind another in one read is read whole,

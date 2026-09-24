@@ -90,6 +90,7 @@ or to write a server for another protocol.
     net/examples/upload.bend        uploads of any size to files, in bounded memory
     net/examples/export.bend        exports of any size (CSV, NDJSON, bytes), written as they are made
     net/examples/events.bend        server-sent events with keepalives
+    net/examples/relay_stream.bend  a relay that streams an upstream body end to end
 
 Each builds with `bend net/examples/NAME.bend -o NAME`. Its header says how to
 run it.

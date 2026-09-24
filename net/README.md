@@ -135,6 +135,13 @@ connections between requests. `NetError = Timeout | Refused | Dns | Tls
 | Protocol | TooLarge | Closed | BadUrl | TooManyRedirects | Io`.
 `Client.opts()` changed by `Client.with.connect/timeout/max_body/
 redirects/ca/gzip` (each a `U32` but `ca`, a file, and `gzip`, a `Bool`).
+`Client.stream(~K, ~give, ~fin, url, opts, k)` is a GET whose body goes to
+the consumer `k` as it arrives, never held whole (`give(k, bytes)` answers
+how many it took; the socket is not read while 64 KiB wait untaken): it
+answers the consumer and the status (no field, no body), on a connection
+of its own, no redirect followed, a body at most 256 MiB. With
+`Stream.pour` it relays a body end to end (`net/examples/relay_stream.bend`;
+`Stream.abort(k)` cuts the response short when the upstream fails).
 
 Results: an error is always reusable (`&2`), and so is a value that is
 `Data`: `Client.Res()` is `Result<&2, &2, NetError, Response>`. Only a
@@ -283,6 +290,7 @@ deadlines and limits, a stream route's head (checked by `check.py`).
     net/examples/ws_echo.bend      a WebSocket echo (the one Autobahn runs against)
     net/examples/export.bend       exports of any size: CSV, NDJSON, bytes, a declared length
     net/examples/events.bend       server-sent events with keepalives, and the page that listens
+    net/examples/relay_stream.bend a body fetched upstream passed on as it comes, end to end
 
 `guide/NETWORKING.md` (`bend guide networking`) walks through them.
 
@@ -314,10 +322,10 @@ second where the engine's literal `/health` answers 58k; with the
 response written as a literal the loop matches the engine, so the
 difference is the checked writer (`respond_framed`'s).
 
-Not yet: a client that reads a response body as it comes (so a relay
-streams end to end; wire/client.bend's fetch.stream has the loop), a
-streamed response on a stream route (an upload's answer) or to methods
-but GET, a chunked streamed body past 256 MiB, a stream route's request
+Not yet: a streamed client body's head before its body (Client.stream
+tells the status at the end, so a relay decides its own head first), and
+past 256 MiB; a streamed response on a stream route (an upload's answer)
+or to methods but GET; a chunked streamed body past 256 MiB; a stream route's request
 pipelined behind another in one read (read whole, under max_body), a
 deadline on the handler itself, WebSocket compression
 (permessage-deflate is declined).
