@@ -61,3 +61,39 @@ Fuzz seeds 1, 2 and 3 (300 modules each, interpreter sampled on 1 in 30): **268,
 Suite: `Translator PASS: 44` (the 40 in-repo items and `emit_join` on four lanes). The 16 mined demos need their source trees, as before. `bun gates/repo.ts` passes 56 / 56.
 
 Next, by the table: `None` in an Optional position other than a return (10 per 300); a loop that returns and also accumulates (7); `str` passed where `str | None` is declared, which needs an implicit `Some` at the call (6).
+
+## Optional arguments and narrowing (the next two rows)
+
+The first run after the join ranked the next gap: 22 of the refusals per 300 were one thing, an argument to an Optional parameter.
+- **`None` passed to an Optional parameter (11).** `None` took the *caller's* return type, so outside an Optional-returning def it was refused.
+- **A `str` passed for `str | None` (7+).** Python passes the value as it is. Bend needs the injection `Some`.
+
+Earlier I said the second case needed a kernel change. It does not, and nothing that grants was changed:
+- **`None` outside an Optional return** now elaborates as Optional of nothing yet, spelled `None`.
+- **`fit`/`fits` in `called`** set each argument at its parameter's type: `None` typed there, or `Some{value}` for a payload-typed value. The IR states both outright, and the kernel checks them with its existing `ILit` and `ISome` rules.
+- **The kernel's one change is a tightening.** `lit_ok` now grants `None` only at an Optional that has a payload type. A placeholder `None` that lands anywhere but a call argument is therefore refused by the kernel itself (`v = None` in a `str` def: "literal outside the contract"). It does not depend on the elaborator noticing. A tightening can only refuse more.
+
+The first probe then showed a wider gap: **an `if x is None:` statement narrowed nothing.** Only the expression form `x is None or E` narrowed, and `if not m` did so only on a regex match. The kernel's `IMaybe` rule was already general: any Optional name, the some-arm checked with the name rebound to its payload, and a none-arm that may not read it. So this is elaborator-only:
+- `no_match` also takes `X is None` on any Optional name;
+- the new `some_test` takes `X is not None`, where the body is the narrowed arm;
+- the some-arm binds the name at `inner(type)` rather than the match type hard-wired before.
+
+`emit_optional.bend` pins all four forms:
+
+```python
+def tag(s: str, suffix: str | None) -> str:
+    if suffix is None:
+        return s
+    return s + suffix          # -> match suffix: None -> s; Some{suffix} -> append
+
+def both(s: str) -> str:
+    return tag(s, None) + tag(s, "!") + ...   # -> tag(s, None{}), tag(s, Some{"!"})
+```
+
+`refuse.bend` moved in one line. `none type` (`return None` from a `str` def) is still refused, now as `type mismatch: (None) where (String) is expected`.
+
+**Fuzz** (the generator now also narrows: it uses the name as `str` after `if o is None: return`, and in the `is not None` body): seeds 1, 2 and 3 emit **284, 286 and 284** of 300, and every one holds C1 and C2. The Optional-argument refusals are gone from the table. What remains is structural:
+- a loop that returns and also accumulates (8 per 300);
+- a loop body with two accumulators (5).
+
+Both need a fold state that is a pair: a new IR type and a kernel rule. That is a separate lane, and it changes what the kernel grants.

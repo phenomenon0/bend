@@ -24,13 +24,18 @@ added bytes:
 | I64 / U64 / F64 | 100 | 11% |
 | File, Utf8, TCP, Char (streaming text) | 19 | 5% |
 
-**Regex is most of the delta, and it is a library, not a language feature.** It
-belongs where `power/` lives, in Zone B: pure Bend over Base, imported by the
-programs that want it. Moving it out of `base.bend` takes the fork's base from
-49,777 to 35,325 ttok and removes most of the merge surface. The cost is its
-seven native rows (`regex_exec`, `regex_match_at`, the Pike VM in `comp.ts`),
-which must be reachable from a module rather than from Base. That is the next
-lane, and it needs no one's permission.
+**Regex is most of the `base.bend` delta, but it is not the merge cost.**
+Measured on 2026-09-24:
+- `base.bend` merged clean in the 2.0.26 sync. All 11 conflicts were in `comp.ts`.
+- By a keyword count of the fork's added `comp.ts` lines (which undercounts lines inside larger blocks), regex is about 1.3k of 23.5k ttok. Strings are about 6.5k: the adaptive-width runtime, `str_*`, `TAG_STR`.
+- Regex's native matcher closure in Base is 39 items (3,442 ttok): the types, the reference Pike VM, and `Regex.exec`/`match_at`. The other 119 items (11,010 ttok) are compile/parse/API.
+- `intr_of` binds a native only to a Base def (`tld.b`) or a bodiless law. So the matcher must stay in Base, or regex silently falls back to the reference.
+
+Moving the 119 items to a module would buy about 11k ttok of cap headroom, and nothing is short of it. The costs:
+- every regex user imports it by path, including every program the translator emits for `re.search` (two emission pins move);
+- the merge surface stays as it is.
+
+**Not done.** The earlier claim here, that the move "removes most of the merge surface", was wrong.
 
 ## Upstream's stated terms
 
@@ -56,7 +61,7 @@ not made.
    but it depends on candidate 4's string representation.
 4. **Strings** (views, adaptive width, code points; 24% of base plus most of
    `comp.ts`'s delta). This is #795 again. Offer it only if upstream asks.
-5. **Regex.** Never offered. Move it to a library (above).
+5. **Regex.** Never offered. It stays in Base: see above for why moving it out does not pay.
 
 ## What stays forked, and why
 
