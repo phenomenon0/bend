@@ -1,7 +1,9 @@
-# bend-net: request bodies as streams.
+# bend-net: bodies as streams -- a request's read as it comes, and a
+# response's written as it is made (the second half of this file).
 #
 #   Stream.serve(~app, ~uploads(), Stream.config(Server.config(8080)))
 #   Stream.serve.with(~E, ~app, ~uploads, env, cfg)
+#   Server.serve.routes(~E, ~rs, env, cfg), rs(env) with Stream.get(pat, h)
 #
 # A server that takes uploads: app answers every request as
 # Server.serve's does, its body whole, and uploads() is a table of
@@ -75,6 +77,7 @@ import ../wire/reader.bend as Wr
 import ../wire/loop.bend as L
 import ../wire/effects.bend as Fx
 import ../wire/http1/resp.bend as R
+import ../wire/http1/spec.bend as RS
 import ../demos/io_http_engine/main.bend as Eng
 import ../demos/io_proxy/core.bend as X
 import ./http.bend as Http
@@ -227,26 +230,33 @@ def next(p: R.P) -> Maybe<&2, Bytes()>:
 
 # why a read failed: no byte within the progress time; the framing
 # refused the body; the body passed max_stream; the peer closed before
-# it ended; the read or a file failed
+# it ended; the read or a file failed. And why a write did (a response
+# body, below): a send made no progress within the send time; the
+# response could not be written as it was (the 500 went); a write past
+# the length it declared; the peer is gone; the response has no body (a
+# HEAD, a 204, a 304)
 type Err is Data:
   ETime{}
   EBad{}
   ELarge{}
   EClosed{}
   EIo{code: U32, msg: Bytes()}
+  ENone{}
 
 def err.show(e: Err) -> Bytes():
   match e:
     case ETime{}:
-      "the body stalled"
+      "the peer stalled"
     case EBad{}:
       "the body is malformed"
     case ELarge{}:
       "the body is too large"
     case EClosed{}:
-      "the peer closed before the body ended"
+      "the peer closed the connection"
     case EIo{c, m}:
       Bytes.append("i/o error: ", m)
+    case ENone{}:
+      "the response has no body"
 
 # what a Body knows beside the socket and the reader: the reader's
 # context, the progress time, whether a 100 Continue is owed before the
@@ -1136,3 +1146,606 @@ def unit.ups(~ups: List<&1, Route>, +u: Unit) -> List<&1, Route>:
 # serve app, and the stream routes ups, with cfg until SIGTERM
 def serve(~app: Server.Handler(), ~ups: List<&1, Route>, +cfg: Cfg) -> IO(Unit):
   serve.with(~Unit, ~Server.unit.app(~app), ~unit.ups(~ups), Unit{}, cfg)
+
+# Response bodies
+# ===============
+#
+# A response whose body the handler makes as it goes -- an export, an
+# event stream, a body relayed from elsewhere -- never held whole: a
+# route made by Stream.get(pat, h), h : Http.Request -> IO(Stream.Reply),
+# answers Stream.pour(status, fields, run) (the length unknown: chunked)
+# or Stream.pour.len(status, fields, n, run) (n bytes, a Content-Length),
+# and run : Stream.Sink -> IO(Stream.Sink) is the producer. A Sink is
+# affine, as a Body is: Stream.write(k, bytes) answers the Sink beside
+# Done, or why it failed (Stream.Err), and the producer hands the Sink
+# back when the body is over. The server writes the head before run
+# begins, each write as it comes, and the end after run returns:
+#
+#   the framing   chunked when the length is unknown (to HTTP/1.0, the
+#                 body runs to the close); a declared length is a
+#                 Content-Length, and a write past it is refused whole
+#                 (ELarge): nothing of it goes out, and the connection
+#                 closes after the response, as it does when the
+#                 producer returns short of the length
+#   backpressure  a write returns once its bytes are on the socket, each
+#                 send within the server's send time (10 s) or ETime: a
+#                 client that stops reading stops the producer
+#   the peer gone a send that fails is EClosed; after a failure every
+#                 write answers the same failure and sends nothing
+#   no body       to HEAD (and for a 204 or 304) the head goes out alone,
+#                 and every write answers ENone
+#
+# net/LAWS.bend proves, of the pure writer the IO runs (Stream.emit,
+# Stream.close, Stream.opening):
+#
+#   pour_chunked  a chunked response, read back by wire/http1's spec, is
+#                 one final response, the handler's status, its body the
+#                 writes joined, closing as the server said, nothing after
+#   pour_length   a declared length whose writes come to it, the same
+#   pour_capped   a declared length is never written past, whatever the
+#                 writes
+#   pour_quiet    after a failure nothing more is written, not the end
+#   pour_bounded  a write goes out as itself and at most a small, fixed
+#                 framing: the writer holds nothing between writes, so a
+#                 connection's memory is one write, however long the body
+#
+# Stream.events(~S, ~next, s, every, fields) is an event stream
+# (text/event-stream): next(s, every) is asked for the next event, and
+# answers one (Stream.event(name, data)), Stream.idle() when nothing came
+# within every ms (a comment goes out, which keeps proxies from timing
+# the stream out and finds a client that left), or Stream.over().
+
+# The writer
+# ----------
+
+# how the body is framed: chunked; a length, with what is left of it; to
+# the close; none at all
+type Mode is Data:
+  MChunked{}
+  MLen{left: Nat}
+  MRaw{}
+  MNone{}
+
+# the writer between writes: its framing, and the failure it ended in
+type Sent is Data:
+  Sent{mode: Mode, fail: Maybe<&2, Err>}
+
+def sent.fail(s: Sent) -> Maybe<&2, Err>:
+  match s:
+    case Sent{m, f}:
+      f
+
+def sent.failed(s: Sent, +e: Err) -> Sent:
+  match s:
+    case Sent{m, f}:
+      Sent{m, Some{e}}
+
+# A chunk is 2^j bytes, j from 0 to 14, with its size in hex: a write is
+# cut into the chunks its length's bits say, the largest first, so every
+# size line is one of fifteen.
+def nth.size(j: Nat, ns: List<&2, Nat>) -> Nat:
+  match j ns:
+    case _ Nil{}:
+      0n
+    case 0n Con{n, t}:
+      n
+    case 1n+i Con{n, t}:
+      nth.size(i, t)
+
+def chunk.size(j: Nat) -> Nat:
+  nth.size(j, [1n, 2n, 4n, 8n, 16n, 32n, 64n, 128n, 256n, 512n, 1024n, 2048n, 4096n, 8192n, 16384n])
+
+def chunk.hexes() -> List<&2, Bytes()>:
+  ["1", "2", "4", "8", "10", "20", "40", "80", "100", "200", "400", "800", "1000", "2000", "4000"]
+
+def nth.hex(j: Nat, hs: List<&2, Bytes()>) -> Bytes():
+  match j hs:
+    case _ Nil{}:
+      ""
+    case 0n Con{h, t}:
+      h
+    case 1n+i Con{h, t}:
+      nth.hex(i, t)
+
+def chunk.hex(j: Nat) -> Bytes():
+  nth.hex(j, chunk.hexes())
+
+# the most one emit frames: Stream.write cuts longer writes into emits
+# of this, each framed at once
+def emit.max() -> Nat:
+  16384n
+
+def chunks.at(fit: Bool, +j: Nat, +x: Bytes(), go: Bytes() -> Bytes()) -> Bytes():
+  match fit:
+    case True{}:
+      Bytes.append(chunk.hex(j), Bytes.append("\r\n", Bytes.append(String.take(x, chunk.size(j)),
+        Bytes.append("\r\n", go(String.drop(x, chunk.size(j)))))))
+    case False{}:
+      go(x)
+
+# x as chunks, a bit at a time from 2^j down: all of x when it is under
+# 2^(j+1) bytes
+def chunks.go(j: Nat, +x: Bytes()) -> Bytes():
+  match j:
+    case 0n:
+      chunks.at(Nat.is_ge(Bytes.len(x), chunk.size(0n)), 0n, x, t => "")
+    case 1n+(+i):
+      chunks.at(Nat.is_ge(Bytes.len(x), chunk.size(1n+i)), 1n+i, x, t => chunks.go(i, t))
+
+def chunks(+x: Bytes()) -> Bytes():
+  chunks.go(14n, x)
+
+# the body's last chunk
+def chunk.last() -> Bytes():
+  "0\r\n\r\n"
+
+def emit.len(ok: Bool, +left: Nat, +x: Bytes()) -> Sent & Bytes():
+  match ok:
+    case True{}:
+      (Sent{MLen{Nat.sub(left, Bytes.len(x))}, None{}}, x)
+    case False{}:
+      (Sent{MLen{left}, Some{ELarge{}}}, "")
+
+def emit.chunked(ok: Bool, +x: Bytes()) -> Sent & Bytes():
+  match ok:
+    case True{}:
+      (Sent{MChunked{}, None{}}, chunks(x))
+    case False{}:
+      (Sent{MChunked{}, Some{EBad{}}}, "")
+
+def emit.mode(m: Mode, +x: Bytes()) -> Sent & Bytes():
+  match m:
+    case MChunked{}:
+      emit.chunked(Nat.is_le(Bytes.len(x), emit.max()), x)
+    case MLen{+left}:
+      emit.len(Nat.is_le(Bytes.len(x), left), left, x)
+    case MRaw{}:
+      (Sent{MRaw{}, None{}}, x)
+    case MNone{}:
+      (Sent{MNone{}, Some{ENone{}}}, "")
+
+# a write: the bytes that go out for it, and the writer after it. A
+# writer that failed sends nothing more; a length is never written past
+def emit(st: Sent, +x: Bytes()) -> Sent & Bytes():
+  match st:
+    case Sent{m, f}:
+      match f:
+        case Some{e}:
+          (Sent{m, Some{e}}, "")
+        case None{}:
+          emit.mode(m, x)
+
+def close.mode(m: Mode) -> Bytes() & Bool:
+  match m:
+    case MChunked{}:
+      (chunk.last(), True{})
+    case MLen{left}:
+      ("", Nat.is_eq(left, 0n))
+    case MRaw{}:
+      ("", False{})
+    case MNone{}:
+      ("", True{})
+
+def close.at(m: Mode, f: Maybe<&2, Err>) -> Bytes() & Bool:
+  match f:
+    case Some{e}:
+      ("", False{})
+    case None{}:
+      close.mode(m)
+
+def close.none(m: Mode) -> Bool:
+  match m:
+    case MNone{}:
+      True{}
+    case _:
+      False{}
+
+def close.pick(nb: Bool, m: Mode, f: Maybe<&2, Err>) -> Bytes() & Bool:
+  match nb:
+    case True{}:
+      ("", True{})
+    case False{}:
+      close.at(m, f)
+
+# the body's end: the bytes that end it, and whether the response ended
+# as its framing said (else the connection closes after it). A response
+# with no body ended with its head, whatever was tried after
+def close(st: Sent) -> Bytes() & Bool:
+  match st:
+    case Sent{+m, f}:
+      close.pick(close.none(m), m, f)
+
+def emit.joined(+a: Bytes(), q: Sent & Bytes()) -> Sent & Bytes():
+  (st, b) = q
+  (st, Bytes.append(a, b))
+
+def emit.join(q: Sent & Bytes(), +rest: Bytes(), again: Sent -> Bytes() -> Sent & Bytes()) -> Sent & Bytes():
+  (st, a) = q
+  emit.joined(a, again(st, rest))
+
+def emit.cut(small: Bool, st: Sent, +x: Bytes(), again: Sent -> Bytes() -> Sent & Bytes()) -> Sent & Bytes():
+  match small:
+    case True{}:
+      emit(st, x)
+    case False{}:
+      emit.join(emit(st, String.take(x, emit.max())), String.drop(x, emit.max()), again)
+
+# a write of any length: emits of at most emit.max() bytes, their bytes
+# joined
+def emit.all(k: Nat, st: Sent, +x: Bytes()) -> Sent & Bytes():
+  match k:
+    case 0n:
+      emit(st, x)
+    case 1n+j:
+      emit.cut(Nat.is_le(Bytes.len(x), emit.max()), st, x, st2 => r => emit.all(j, st2, r))
+
+# The head
+# --------
+
+# the head as bend-proxy's rser writes one (demos/io_proxy/core.bend):
+# the status line, the fields, the length (none when ""), the
+# connection's fate, the blank line
+def rhd.bytes(+cd: Bytes(), +why: Bytes(), fs: List<&2, Wr.Field>, clen: Bytes(), +conn: Bytes()) -> Bytes():
+  Bytes.append(X.fls.put(X.rall(fs, clen, conn), Bytes.append(Bytes.append(Bytes.append(Bytes.append("HTTP/1.1 ", cd),
+    " "), why), "\r\n")), "\r\n")
+
+def te() -> List<&2, Wr.Field>:
+  [Wr.Field{"transfer-encoding", "chunked"}]
+
+# X.rok.len with the body's length for the body
+def len.at.n(v: RS.FLine, +bodyless: Bool, +n: Nat) -> Bool:
+  match v:
+    case RS.FVal{val}:
+      match val:
+        case RS.VLen{+m, ws}:
+          Bool.not(U32.is_lt(268435455, m)) && (bodyless ||
+            (X.same(U32.is_zero(m), Nat.is_eq(n, 0n)) && Nat.is_eq(U32.to_nat(m), n)))
+        case _:
+          False{}
+    case _:
+      False{}
+
+def len.ok(+head: Bool, +bodyless: Bool, clen: Bytes(), +n: Nat) -> Bool:
+  match clen:
+    case SNil{}:
+      bodyless
+    case SCon{c, t}:
+      +d : Bytes() = SCon{c, t}
+      X.rok.all(RS.TVal{}, d) && len.at.n(RS.len.view(X.rask(head), RS.span(RS.TOws{}, Con{32, Bytes.to_list(d)})),
+        bodyless, n)
+
+# what bend-proxy's rvalid asks of a head but its length: a status from
+# 200 to 599, the one the line says, a reason and field values with no
+# line end or control, names of token bytes none of which is the
+# framing's
+def rhd.ok(+cd: Bytes(), +code: U32, +why: Bytes(), fs: List<&2, Wr.Field>) -> Bool:
+  X.rok.code(cd, code) && X.rok.all(RS.TVal{}, why) && X.rok.fields(fs)
+
+# a head that failed the check: the server's 500 goes instead, and the
+# writer is failed (every write answers EBad)
+def opening.ok(ok: Bool, +head: Bool, +closing: Bool, +v10: Bool, +hb: Bytes(), +m: Mode) -> Bytes() & Sent:
+  match ok:
+    case True{}:
+      (hb, Sent{m, None{}})
+    case False{}:
+      (X.reply(Some{X.rsp.fin(head, 500, Http.e500.head(), Http.e500.body())}, head, closing, v10),
+        Sent{MNone{}, Some{EBad{}}})
+
+def mode.body(+head: Bool, m: Mode) -> Mode:
+  Bool.pick(Mode, head, MNone{}, m)
+
+def opening.none.at(bn: Bool, bv: Bool, bh: Bool, +head: Bool, +closing: Bool, +v10: Bool, +code: U32, +cd: Bytes(),
+  +why: Bytes(), +fs: List<&2, Wr.Field>) -> Bytes() & Sent:
+  match bn bv bh:
+    case True{} _ _:
+      opening.ok(rhd.ok(cd, code, why, fs), head, closing, v10, rhd.bytes(cd, why, fs, "", X.conn.val(closing, v10)),
+        MNone{})
+    case False{} True{} False{}:
+      opening.ok(rhd.ok(cd, code, why, fs), head, True{}, v10, rhd.bytes(cd, why, fs, "", X.conn.val(True{}, v10)),
+        MRaw{})
+    case False{} True{} True{}:
+      opening.ok(rhd.ok(cd, code, why, fs), head, closing, v10, rhd.bytes(cd, why, fs, "", X.conn.val(closing, v10)),
+        MNone{})
+    case False{} False{} _:
+      opening.ok(rhd.ok(cd, code, why, fs), head, closing, v10,
+        rhd.bytes(cd, why, List.append(&2, Wr.Field, fs, te()), "", X.conn.val(closing, v10)), mode.body(head, MChunked{}))
+
+# the length unknown: chunked, or to HTTP/1.0 (which reads no chunk) a
+# body that runs to the close; a 204 or 304 has none
+def opening.none(+head: Bool, +closing: Bool, +v10: Bool, +code: U32, +nb: Bool, h: X.RHead) -> Bytes() & Sent:
+  match h:
+    case X.RHead{+cd, +why, +fs, hl}:
+      opening.none.at(nb, v10, head, head, closing, v10, code, cd, why, fs)
+
+# the check of a head with a length: rhd.ok, and the length as rvalid
+# reads it against a body of n bytes
+def len.check(+head: Bool, +code: U32, +cd: Bytes(), +why: Bytes(), fs: List<&2, Wr.Field>, +clen: Bytes(), +n: Nat) -> Bool:
+  rhd.ok(cd, code, why, fs) && len.ok(head, X.rbodyless(head, code), clen, n)
+
+# a declared length: a Content-Length (HEAD's too, none for 204 or 304)
+def opening.len(+head: Bool, +closing: Bool, +v10: Bool, +code: U32, +nb: Bool, +n: Nat, h: X.RHead) -> Bytes() & Sent:
+  match h:
+    case X.RHead{+cd, +why, +fs, hl}:
+      +clen = Bool.pick(Bytes(), nb, "", Nat.show(n))
+      opening.ok(len.check(head, code, cd, why, fs, clen, n), head, closing, v10,
+        rhd.bytes(cd, why, fs, clen, X.conn.val(closing, v10)), mode.body(X.rbodyless(head, code), MLen{n}))
+
+def opening.at(+head: Bool, +closing: Bool, +v10: Bool, +code: U32, +nb: Bool, h: X.RHead, ln: Maybe<&2, Nat>) ->
+  Bytes() & Sent:
+  match ln:
+    case None{}:
+      opening.none(head, closing, v10, code, nb, h)
+    case Some{+n}:
+      opening.len(head, closing, v10, code, nb, n, h)
+
+# the head a response goes out with, and the writer its body starts in
+def opening(+head: Bool, +closing: Bool, +v10: Bool, +code: U32, hs: List<&2, Http.Header>, ln: Maybe<&2, Nat>) ->
+  Bytes() & Sent:
+  opening.at(head, closing, v10, code, U32.is_eq(code, 204) || U32.is_eq(code, 304), Http.rhead(code, hs, ""), ln)
+
+def emits.on(q: Sent & Bytes(), go: Sent -> Bytes()) -> Bytes():
+  (st, out) = q
+  Bytes.append(out, go(st))
+
+# what the writer puts on the wire for the writes ws, the end included
+def emits(ws: List<&2, Bytes()>, st: Sent) -> Bytes():
+  match ws:
+    case Nil{}:
+      Pair.fst(Bytes(), Bool, close(st))
+    case Con{+x, t}:
+      emits.on(emit(st, x), s2 => emits(t, s2))
+
+# a whole response, as the server writes it: its head, then each write's
+# bytes, then the end (LAWS.bend's pour_chunked and pour_length read it)
+def poured.at(q: Bytes() & Sent, ws: List<&2, Bytes()>) -> Bytes():
+  (hb, st) = q
+  Bytes.append(hb, emits(ws, st))
+
+def poured(+head: Bool, +closing: Bool, +v10: Bool, +code: U32, hs: List<&2, Http.Header>, ln: Maybe<&2, Nat>,
+  ws: List<&2, Bytes()>) -> Bytes():
+  poured.at(opening(head, closing, v10, code, hs, ln), ws)
+
+# The Sink
+# --------
+
+type Sink is Type:
+  Sink{s: Socket, st: Sent, ms: U32}
+
+def Wrote() -> Type:
+  Sink & Result<&2, &2, Err, Unit>
+
+# a send that failed: stalled past the send time (ETIMEDOUT), or the
+# peer gone
+def send.err(+code: U32) -> Err:
+  Bool.pick(Err, U32.is_eq(code, 110) || U32.is_eq(code, 60), ETime{}, EClosed{})
+
+def write.sent(m: L.Put(Socket), +st: Sent, +ms: U32) -> IO(Wrote()):
+  (s, r) = m
+  match r:
+    case Fail{er}:
+      (code, msg) = er
+      +e = send.err(code)
+      IO.pure(Wrote(), (Sink{s, sent.failed(st, e), ms}, Fail{e}))
+    case Done{u}:
+      IO.pure(Wrote(), (Sink{s, st, ms}, Done{Unit{}}))
+
+def write.out(s: Socket, +st: Sent, +ms: U32, +out: Bytes(), f: Maybe<&2, Err>, empty: Bool) -> IO(Wrote()):
+  match f empty:
+    case Some{e} _:
+      IO.pure(Wrote(), (Sink{s, st, ms}, Fail{e}))
+    case None{} True{}:
+      IO.pure(Wrote(), (Sink{s, st, ms}, Done{Unit{}}))
+    case None{} False{}:
+      IO.bind(L.Put(Socket), Wrote(), TCP.send_buf_poll(s, out, ms), m => write.sent(m, st, ms))
+
+def write.emit(s: Socket, q: Sent & Bytes(), +ms: U32) -> IO(Wrote()):
+  (+st, +out) = q
+  write.out(s, st, ms, out, sent.fail(st), String.is_empty(out))
+
+# Write x: its bytes go out, framed, before the write returns (each send
+# within the send time); Done, or why it failed. After a failure every
+# write answers the same failure and sends nothing.
+def write(k: Sink, +x: Bytes()) -> IO(Wrote()):
+  match k:
+    case Sink{s, st, +ms}:
+      write.emit(s, emit.all(Bytes.len(x), st, x), ms)
+
+# Stop the body short: nothing more goes out, not its end, and the
+# connection closes after the response, so the client sees it cut (a
+# producer whose source failed, having sent a head that said 200)
+def abort(k: Sink) -> Sink:
+  match k:
+    case Sink{s, st, ms}:
+      Sink{s, sent.failed(st, EClosed{}), ms}
+
+# The response
+# ------------
+
+# what a Stream.get handler answers: a response whole, or one whose body
+# run writes (of n bytes, or of a length it does not know)
+type Reply is Type:
+  Plain{r: Http.Response}
+  Pour{code: U32, hs: List<&2, Http.Header>, ln: Maybe<&2, Nat>, run: Sink -> IO(Sink)}
+
+def whole(r: Http.Response) -> Reply:
+  Plain{r}
+
+# a response whose body run writes, its length unknown: chunked
+def pour(code: U32, hs: List<&2, Http.Header>, run: Sink -> IO(Sink)) -> Reply:
+  Pour{code, hs, None{}, run}
+
+# a response whose body run writes, n bytes of it: a Content-Length
+def pour.len(code: U32, hs: List<&2, Http.Header>, n: Nat, run: Sink -> IO(Sink)) -> Reply:
+  Pour{code, hs, Some{n}, run}
+
+def pour.ended(m: L.Put(Socket), +ok: Bool) -> IO(Socket & Bool):
+  (s, r) = m
+  IO.pure(Socket & Bool, (s, ok && Result.is_done(&1, &1, U32 & String, Unit, r)))
+
+def pour.end.at(s: Socket, +eb: Bytes(), +ok: Bool, +more: Bool, +ms: U32, empty: Bool) -> IO(Socket & Bool):
+  match empty:
+    case True{}:
+      IO.pure(Socket & Bool, (s, ok && more))
+    case False{}:
+      IO.bind(L.Put(Socket), Socket & Bool, TCP.send_buf_poll(s, eb, ms), m => pour.ended(m, ok && more))
+
+def pour.end(s: Socket, q: Bytes() & Bool, +more: Bool, +ms: U32) -> IO(Socket & Bool):
+  (+eb, +ok) = q
+  pour.end.at(s, eb, ok, more, ms, String.is_empty(eb))
+
+def pour.fin(k: Sink, +more: Bool) -> IO(Socket & Bool):
+  match k:
+    case Sink{s, st, +ms}:
+      pour.end(s, close(st), more, ms)
+
+def pour.headed(m: L.Put(Socket), +st: Sent, run: Sink -> IO(Sink), +more: Bool, +ms: U32) -> IO(Socket & Bool):
+  (s, r) = m
+  match r:
+    case Fail{e}:
+      IO.pure(Socket & Bool, (s, False{}))
+    case Done{u}:
+      IO.bind(Sink, Socket & Bool, run(Sink{s, st, ms}), k => pour.fin(k, more))
+
+def pour.begun(q: Bytes() & Sent, run: Sink -> IO(Sink), +more: Bool, +ms: U32, s: Socket) -> IO(Socket & Bool):
+  (hb, +st) = q
+  IO.bind(L.Put(Socket), Socket & Bool, TCP.send_buf_poll(s, hb, ms), m => pour.headed(m, st, run, more, ms))
+
+# the head, then run with the Sink, then the end: the socket, and whether
+# the connection may go on
+def pour.go(+code: U32, hs: List<&2, Http.Header>, ln: Maybe<&2, Nat>, run: Sink -> IO(Sink), t: Server.Terms,
+  s: Socket) -> IO(Socket & Bool):
+  match t:
+    case Server.Terms{+head, +closing, +v10, +ms}:
+      pour.begun(opening(head, closing, v10, code, hs, ln), run, Bool.not(closing), ms, s)
+
+def reply.of(rp: Reply) -> IO(Server.Reply):
+  match rp:
+    case Plain{r}:
+      IO.pure(Server.Reply, Server.Answer{r})
+    case Pour{+code, hs, ln, run}:
+      IO.pure(Server.Reply, Server.Pour{t => s => pour.go(code, hs, ln, run, t, s)})
+
+# a GET route (HEAD too) whose handler answers a Stream.Reply, beside
+# Server.get and the rest in Server.serve.routes (or WsServer.serve)
+def get(pat: Bytes(), h: Http.Request -> IO(Reply)) -> Server.Route:
+  Server.Sock{pat, a => r => IO.bind(Reply, Server.Reply, h(r), reply.of)}
+
+# Server-sent events
+# ------------------
+
+# what an event stream's source answers: an event (its name, "" for a
+# plain message; its data, a line a data field; its id, "" for none);
+# nothing within the time it was given; or the stream's end
+type Ev is Data:
+  Event{name: Bytes(), data: Bytes(), id: Bytes()}
+  Idle{}
+  Over{}
+
+def event(name: Bytes(), data: Bytes()) -> Ev:
+  Event{name, data, ""}
+
+def idle() -> Ev:
+  Idle{}
+
+def over() -> Ev:
+  Over{}
+
+def sse.keep(drop: Bool, +c: U32, rest: Bytes()) -> Bytes():
+  match drop:
+    case True{}:
+      rest
+    case False{}:
+      SCon{Chr{c}, rest}
+
+# a name or id, with no line end in it
+def sse.clean(b: Bytes()) -> Bytes():
+  match b:
+    case SNil{}:
+      ""
+    case SCon{Chr{+c}, t}:
+      sse.keep(U32.is_eq(c, 10) || U32.is_eq(c, 13), c, sse.clean(t))
+
+def sse.field(+tag: Bytes(), +v: Bytes()) -> Bytes():
+  Bool.pick(Bytes(), String.is_empty(v), "", Bytes.concat([tag, ": ", sse.clean(v), "\n"]))
+
+# what a byte of data does: ends a line, is dropped (a CR), or is kept
+type Dk is Data:
+  DLf{}
+  DCr{}
+  DKeep{}
+
+def sse.dk(+c: U32) -> Dk:
+  Bool.pick(Dk, U32.is_eq(c, 10), DLf{}, Bool.pick(Dk, U32.is_eq(c, 13), DCr{}, DKeep{}))
+
+def sse.line(+cur: Bytes()) -> Bytes():
+  Bytes.concat(["data: ", cur, "\n"])
+
+def sse.data.at(k: Dk, +c: U32, +cur: Bytes(), go: Bytes() -> Bytes()) -> Bytes():
+  match k:
+    case DLf{}:
+      Bytes.append(sse.line(cur), go(""))
+    case DCr{}:
+      go(cur)
+    case DKeep{}:
+      go(Bytes.push(cur, c))
+
+# the data, a data field a line (a CR dropped, a LF the line's end)
+def sse.data.go(b: Bytes(), +cur: Bytes()) -> Bytes():
+  match b:
+    case SNil{}:
+      sse.line(cur)
+    case SCon{Chr{+c}, t}:
+      sse.data.at(sse.dk(c), c, cur, cu => sse.data.go(t, cu))
+
+# an event as it goes out (text/event-stream)
+def sse.of(e: Ev) -> Bytes():
+  match e:
+    case Event{+name, +data, +id}:
+      Bytes.concat([sse.field("event", name), sse.field("id", id), sse.data.go(data, ""), "\n"])
+    case Idle{}:
+      ": keepalive\n\n"
+    case Over{}:
+      ""
+
+def events.fuel() -> Nat:
+  U32.to_nat(4294967295)
+
+def events.wrote(~S: Type, w: Wrote(), s: S, go: S -> Sink -> IO(Sink)) -> IO(Sink):
+  (k, r) = w
+  match r:
+    case Done{u}:
+      go(s, k)
+    case Fail{e}:
+      IO.pure(Sink, k)
+
+def events.got(~S: Type, q: S & Ev, k: Sink, go: S -> Sink -> IO(Sink)) -> IO(Sink):
+  (s, e) = q
+  match e:
+    case Over{}:
+      IO.pure(Sink, k)
+    case _:
+      IO.bind(Wrote(), Sink, write(k, sse.of(e)), w => events.wrote(~S, w, s, go))
+
+def events.at(~S: Type, ~next: S -> U32 -> IO(S & Ev), stop: Bool, +every: U32, s: S, k: Sink,
+  go: S -> Sink -> IO(Sink)) -> IO(Sink):
+  match stop:
+    case True{}:
+      IO.pure(Sink, k)
+    case False{}:
+      IO.bind(S & Ev, Sink, next(s, every), q => events.got(~S, q, k, go))
+
+# the stream: an event, a keepalive, or the end, until the source says
+# over, a write fails (the client left), or the server is stopped
+def events.go(~S: Type, ~next: S -> U32 -> IO(S & Ev), n: Nat, +every: U32, s: S, k: Sink) -> IO(Sink):
+  match n:
+    case 0n:
+      IO.pure(Sink, k)
+    case 1n+j:
+      IO.bind(Bool, Sink, IO.signal_seen(15),
+        stop => events.at(~S, ~next, stop, every, s, k, s2 => k2 => events.go(~S, ~next, j, every, s2, k2)))
+
+# an event stream: 200, text/event-stream, not to be cached, and the
+# fields hs; next(s, every) is asked for each event
+def events(~S: Type, ~next: S -> U32 -> IO(S & Ev), s: S, +every: U32, hs: List<&2, Http.Header>) -> Reply:
+  pour(200, List.append(&2, Http.Header, [Http.Header{"content-type", "text/event-stream"},
+    Http.Header{"cache-control", "no-cache"}], hs), k => events.go(~S, ~next, events.fuel(), every, s, k))

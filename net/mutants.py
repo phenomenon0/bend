@@ -21,15 +21,21 @@
 # a reader that keeps the body instead of handing it on, a read kept
 # whatever came after the body or those bytes not counted, a connection
 # that goes on before its body ended or without the bytes after it; a
-# stream route's head read by a reader that takes a bare LF for a line's
-# end, takes a folded line, or takes two lengths that disagree, and a
-# head judged wrong at its blank line (no framing taken for chunked, the
-# Hosts unchecked, a length one too many, the head taken at a field
-# line's CR, an upgrade that does not close) -- and net/PROOF.bend must
-# refuse every one. Each runs in a scratch
-# copy of the tree the proof imports, where bend-proxy's proof (which
-# net/'s uses: rr.h, u32.eq, the list lemmas, and scan_is_spec and
-# frames_agree through them) is replaced by its statements left open:
+# response body with a chunk that lies about its size, no last chunk, a
+# chunk without its CR LF, a byte left out or dropped, no
+# Transfer-Encoding, a head written that failed its check, a length that
+# says one more or is not checked, a write past its length let through
+# or not counted down, a failed writer that still writes or ends the
+# body, a write sent twice or padded; a stream route's head read by a
+# reader that takes a bare LF for a line's end, takes a folded line, or
+# takes two lengths that disagree, and a head judged wrong at its blank
+# line (no framing taken for chunked, the Hosts unchecked, a length one
+# too many, the head taken at a field line's CR, an upgrade that does
+# not close) -- and net/PROOF.bend must refuse every one. Each runs in a
+# scratch copy of the tree the proof imports, where bend-proxy's proof
+# (which net/'s uses: rr.h, rmain and the head lemmas, u32.eq, the list
+# lemmas, and scan_is_spec and frames_agree through them) is replaced by
+# its statements left open:
 # the copy checks to exactly its count of open holes, and a mutant the
 # proof refuses shows an error instead. (The laws hold step checks
 # net/PROOF.bend whole, bend-proxy's proof included.)
@@ -233,6 +239,49 @@ MUTANTS = [
     '''        case R.Final{r, x}:
           Some{x}''', '''        case R.Final{r, x}:
           Some{""}'''),
+  ('a chunk of 2^14 bytes whose size line says one more (pour_chunked)', B,
+    '''"1000", "2000", "4000"]''', '''"1000", "2000", "4001"]'''),
+  ('a chunked body without its last chunk (pour_chunked)', B,
+    '''      (chunk.last(), True{})''', '''      ("", True{})'''),
+  ('a chunk\'s data without the CR LF after it (pour_chunked)', B,
+    '''Bytes.append("\\r\\n", go(String.drop(x, chunk.size(j))))''', '''go(String.drop(x, chunk.size(j)))'''),
+  ('a write\'s odd last byte left out (pour_chunked)', B,
+    '''      chunks.at(Nat.is_ge(Bytes.len(x), chunk.size(0n)), 0n, x, t => "")''', '''      ""'''),
+  ('a byte dropped after each chunk (pour_chunked)', B,
+    '''go(String.drop(x, chunk.size(j)))''', '''go(String.drop(x, 1n+chunk.size(j)))'''),
+  ('a chunked head without its Transfer-Encoding (pour_chunked)', B,
+    '''rhd.bytes(cd, why, List.append(&2, Wr.Field, fs, te()), "", X.conn.val(closing, v10))''',
+    '''rhd.bytes(cd, why, fs, "", X.conn.val(closing, v10))'''),
+  ('a head that failed the check written anyway (pour_chunked)', B,
+    '''def rhd.ok(+cd: Bytes(), +code: U32, +why: Bytes(), fs: List<&2, Wr.Field>) -> Bool:
+  X.rok.code(cd, code) && X.rok.all(RS.TVal{}, why) && X.rok.fields(fs)''',
+    '''def rhd.ok(+cd: Bytes(), +code: U32, +why: Bytes(), fs: List<&2, Wr.Field>) -> Bool:
+  X.rok.code(cd, code) && X.rok.all(RS.TVal{}, why)'''),
+  ('a declared length that says one more (pour_length)', B,
+    '''      +clen = Bool.pick(Bytes(), nb, "", Nat.show(n))''', '''      +clen = Bool.pick(Bytes(), nb, "", Nat.show(1n+n))'''),
+  ('a declared length\'s head not checked (pour_length)', B,
+    '''      opening.ok(len.check(head, code, cd, why, fs, clen, n), head, closing, v10,''',
+    '''      opening.ok(rhd.ok(cd, code, why, fs), head, closing, v10,'''),
+  ('a write past the declared length let through (pour_capped)', B,
+    '''      emit.len(Nat.is_le(Bytes.len(x), left), left, x)''', '''      emit.len(True{}, left, x)'''),
+  ('what is left of a length not counted down (pour_capped)', B,
+    '''      (Sent{MLen{Nat.sub(left, Bytes.len(x))}, None{}}, x)''', '''      (Sent{MLen{left}, None{}}, x)'''),
+  ('a failed writer that still writes (pour_quiet)', B,
+    '''        case Some{e}:
+          (Sent{m, Some{e}}, "")''', '''        case Some{e}:
+          (Sent{m, Some{e}}, x)'''),
+  ('the last chunk sent after a failure (pour_quiet)', B,
+    '''    case Some{e}:
+      ("", False{})
+    case None{}:
+      close.mode(m)''', '''    case Some{e}:
+      (chunk.last(), False{})
+    case None{}:
+      close.mode(m)'''),
+  ('a body to the close that writes each write twice (pour_bounded)', B,
+    '''      (Sent{MRaw{}, None{}}, x)''', '''      (Sent{MRaw{}, None{}}, Bytes.append(x, x))'''),
+  ('a write framed with an extension on every chunk (pour_bounded)', B,
+    '''      Bytes.append(chunk.hex(j), Bytes.append("\\r\\n",''', '''      Bytes.append(chunk.hex(j), Bytes.append(";padding-padding\\r\\n",'''),
   ('a head reader that takes a bare LF for a line\'s end (stream_head)', E,
     '''    case InLx{v} KLf{}:
       P{Bad{}, pd, out}''', '''    case InLx{v} KLf{}:
@@ -266,6 +315,7 @@ MUTANTS = [
 
 # bend-proxy's proof, as net/PROOF.bend uses it: its statements, open
 OPEN = '''import Base
+import ../wire/reader.bend as Wr
 import ../wire/http1/resp.bend as R
 import ../wire/http1/spec.bend as RS
 import ../demos/io_proxy/core.bend as X
@@ -292,6 +342,74 @@ def rr.h(h: X.RHead, +head: Bool, +code: U32, +body: Bytes(), +closing: Bool, +v
   hv: {X.rvalid(head, code, X.rsp.fin(head, code, h, body)) == True{} : Bool}) ->
   {RS.response(X.rask(head), Bytes.to_list(X.reply(Some{X.rsp.fin(head, code, h, body)}, head, closing, v10))) ==
     Laws.rlook(Some{X.rsp.fin(head, code, h, body)}, head, code, body, closing) : R.Look}:
+  ?TODO
+
+def FLl(f: Wr.Field) -> List<&2, U32>:
+  match f:
+    case Wr.Field{n, v}:
+      List.append(&2, U32, Bytes.to_list(n), Con{58, Con{32, Bytes.to_list(v)}})
+
+def FLSl(fs: List<&2, Wr.Field>) -> List<&2, U32>:
+  match fs:
+    case Nil{}:
+      Nil{}
+    case Con{f, t}:
+      List.append(&2, U32, FLl(f), Con{13, Con{10, FLSl(t)}})
+
+def SLl(+cd: Bytes(), +why: Bytes()) -> List<&2, U32>:
+  List.append(&2, U32, Bytes.to_list("HTTP/1.1 "), List.append(&2, U32, Bytes.to_list(cd), Con{32, Bytes.to_list(why)}))
+
+def RSERl(+cd: Bytes(), +why: Bytes(), fs: List<&2, Wr.Field>, clen: Bytes(), +conn: Bytes(), +b: Bytes()) -> List<&2, U32>:
+  List.append(&2, U32, SLl(cd, why),
+    Con{13, Con{10, List.append(&2, U32, FLSl(X.rall(fs, clen, conn)), Con{13, Con{10, Bytes.to_list(b)}})}})
+
+def rhc(h: R.Head, closing: Bool, v10: Bool) -> R.Head:
+  match closing:
+    case True{}:
+      RS.head.conn(h, True{}, False{})
+    case False{}:
+      match v10:
+        case True{}:
+          RS.head.conn(h, False{}, True{})
+        case False{}:
+          h
+
+def fls.app(a: List<&2, Wr.Field>, +b: List<&2, Wr.Field>) ->
+  {FLSl(List.append(&2, Wr.Field, a, b)) == List.append(&2, U32, FLSl(a), FLSl(b)) : List<&2, U32>}:
+  ?TODO
+
+def rser.list(+cd: Bytes(), +why: Bytes(), +fs: List<&2, Wr.Field>, +clen: Bytes(), +conn: Bytes(), +body: Bytes(), +bl: Bool) ->
+  {Bytes.to_list(X.rser(X.Rsp{cd, why, fs, clen, body, bl}, conn)) ==
+    RSERl(cd, why, fs, clen, conn, Bool.pick(Bytes(), bl, "", body)) : List<&2, U32>}:
+  ?TODO
+
+def rline.st(+cd: Bytes(), +why: Bytes(), +rest: List<&2, U32>, +e: R.Ask, +o: List<&2, U32>,
+  +ad: {X.rok.all(RS.TDig{}, cd) == True{} : Bool}, cw: {RS.code.whole(Bytes.to_list(cd)) == True{} : Bool},
+  +aw: {X.rok.all(RS.TVal{}, why) == True{} : Bool}) ->
+  {RS.walk(e, List.append(&2, U32, SLl(cd, why), Con{13, Con{10, rest}}), RS.W{RS.MStatus{Nil{}}, o}) ==
+    RS.walk(e, rest, RS.W{RS.MField{R.head.new(False{}, RS.num(Bytes.to_list(cd))), Nil{}}, o}) : RS.W}:
+  ?TODO
+
+def rfields.walk(fs: List<&2, Wr.Field>, +rest: List<&2, U32>, +h: R.Head, +e: R.Ask, +o: List<&2, U32>,
+  hok: {X.rok.fields(fs) == True{} : Bool}) ->
+  {RS.walk(e, List.append(&2, U32, FLSl(fs), rest), RS.W{RS.MField{h, Nil{}}, o}) ==
+    RS.walk(e, rest, RS.W{RS.MField{h, Nil{}}, o}) : RS.W}:
+  ?TODO
+
+def rconn(closing: Bool, v10: Bool, +h: R.Head, +rest: List<&2, U32>, +e: R.Ask, +o: List<&2, U32>) ->
+  {RS.walk(e, List.append(&2, U32, FLSl(X.rconf(X.conn.val(closing, v10))), rest), RS.W{RS.MField{h, Nil{}}, o}) ==
+    RS.walk(e, rest, RS.W{RS.MField{rhc(h, closing, v10), Nil{}}, o}) : RS.W}:
+  ?TODO
+
+def rmain(+cd: Bytes(), +why: Bytes(), +fs: List<&2, Wr.Field>, +clen: Bytes(), +head: Bool, +code: U32, +body: Bytes(),
+  +closing: Bool, +v10: Bool,
+  hv: {X.rvalid(head, code, X.Rsp{cd, why, fs, clen, body, X.rbodyless(head, code)}) == True{} : Bool}) ->
+  {RS.walk(X.rask(head), Bytes.to_list(X.rser(X.Rsp{cd, why, fs, clen, body, X.rbodyless(head, code)}, X.conn.val(closing, v10))),
+    RS.W{RS.MStatus{Nil{}}, Nil{}}) ==
+    RS.W{RS.MDone{R.Resp{code, False{}, closing, Bool.pick(Bytes(), X.rbodyless(head, code), "", body)}, Nil{}}, Nil{}} : RS.W}:
+  ?TODO
+
+def bytes.rt(b: Bytes()) -> {Bytes.from_list(Bytes.to_list(b)) == b : Bytes()}:
   ?TODO
 '''
 

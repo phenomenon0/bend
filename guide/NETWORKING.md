@@ -197,7 +197,11 @@ deadline lets go a handler that waits (a sleep, a channel, a socket, an
 upstream), which runs on, unseen, until it ends. A handler that computes
 for a minute without an effect holds the event loop for that minute, and
 its answer is written: no deadline can cut it short. The time runs from
-the handler's first effect. Underneath is `IO.within(A, ms, act)`, which
+the handler's first effect until the handler answers: a response, a
+`Stream.get` handler's `Stream.Reply`, a WebSocket handler's accept or
+refusal. A `Stream.pour` body or a WebSocket session, once begun, is not
+under it: each send has 10 s (`send`) to make progress, so an export or
+an event stream runs as long as its client reads. Underneath is `IO.within(A, ms, act)`, which
 answers `Some` of `act`'s answer, or `None` when `act` still waits `ms`
 after its first effect.
 
@@ -302,6 +306,44 @@ When the handler returns, the server drains up to 1 MiB of what is left and
 the connection goes on. Past that, it answers and closes. A body that failed
 (malformed, too large, too slow) is answered by the server itself, whatever
 the handler said. The whole program is `net/examples/upload.bend`.
+
+### Exports and Event Streams
+
+A body too large to hold, or one that never ends, is written as it is made. A
+`Stream.get(pat, h)` route (GET and HEAD, beside `Server.get` in
+`Server.serve.routes`) answers `Stream.whole(resp)`, `Stream.pour(status,
+fields, run)` (chunked) or `Stream.pour.len(status, fields, n, run)` (a
+Content-Length). The producer `run` gets a `Stream.Sink` and hands it back:
+
+```python
+# GET /export.csv, /export.ndjson
+def export(+json: Bool, r: Http.Request) -> IO(Stream.Reply):
+  +n = arg(r, "rows", 100n)
+  IO.pure(Stream.Reply, Stream.pour(200,
+    [Http.Header{"content-type", Bool.pick(Bytes(), json, "application/x-ndjson", "text/csv")}],
+    k => rows(n, json, 0n, n, k)))
+```
+
+`Stream.write(k, bytes)` returns once the bytes are on the socket, so a client
+that stops reading stops the producer; it answers the Sink beside `Done` or a
+`Stream.Err`: `EClosed` (the client left), `ETime` (a send stalled past 10 s),
+`ELarge` (past the declared length: nothing of it sent, and the connection
+closes), `ENone` (HEAD, 204, 304: the head goes alone). After a failure every
+write answers it and sends nothing. A 1 GB export runs in about 5 MB.
+`Stream.events(~S, ~next, s, every, fields)` is an event stream: `next(s,
+every)` answers `Stream.event(name, data)`, `Stream.idle()` (a keepalive goes
+out) or `Stream.over()`:
+
+```python
+def started(+keep: U32, +n: Nat, +ms: Nat, +now: Nat) -> IO(Stream.Reply):
+  +left = Bool.pick(Nat, Nat.is_eq(n, 0n), U32.to_nat(4294967295), n)
+  IO.pure(Stream.Reply, Stream.events(~Tk, ~next, Tk{0n, left, now, ms}, keep, []))
+```
+
+The whole programs are `net/examples/export.bend` and `net/examples/events.bend`.
+`Client.stream(~K, ~give, ~fin, url, opts, k)` hands a GET's body to a
+consumer as it comes; with a `Stream.Sink` as the consumer it relays a body
+end to end (`net/examples/relay_stream.bend`).
 
 ## Fetching
 
@@ -658,6 +700,7 @@ cannot hold a resource forever.
 | a streamed body's reads | 10 s each (`progress`) | 408, closed | a body sent a byte a minute cannot hold a connection |
 | a body a stream handler left | 1 MiB drained | answered, closed | its bytes are never read as a request |
 | a handler's answer, from its first effect | 30 s (`handler`) | 503, closed; the handler let go | a handler waiting on something that never comes cannot hold a connection |
+| a streamed response's writes | each send within 10 s (`send`) | `ETime`, closed | a client that stops reading cannot hold a producer |
 | connections | 1024 | the next waits for a slot | each holds memory and a descriptor |
 | SIGTERM | listener closed; idle connections let go within a second | the rest end, or grace (5 s) is up | a deploy does not cut requests in flight |
 | client: connect (DNS aside; shared among a name's addresses) | 10 s | `Timeout` | a host that does not answer |
@@ -709,6 +752,14 @@ parsed under the budget you pass, at most 64 containers deep.
   answered 426 by a WebSocket route. `ws_route_methods`: a WebSocket route
   takes every method of a request that asked to upgrade, so a POST is refused
   by the handshake (400), as a HEAD is.
+- `pour_chunked`: a response written as it is made, its length unknown, reads
+  back as exactly one response, its body the producer's writes joined, and
+  nothing after it; `pour_length`: the same with a declared length the writes
+  come to.
+- `pour_capped`: a declared length is never written past.
+- `pour_quiet`: after a failure nothing more is written.
+- `pour_bounded`: a write goes out as itself and at most 120 bytes of framing,
+  so a connection holds one write, however long the body.
 - `stream_head`: a stream route's head is read by the server's own reader, and
   the head a stream handler gets (its fields, its framing, or a 400) is the one
   RFC 9112's spec reads at the same byte, however TCP cut the stream and
@@ -749,8 +800,10 @@ checked response writer that `respond_framed` is about (`net/README.md`).
 
 ## Not Built Yet
 
-- Streaming response bodies. A response body is held whole, or sent from a
-  file by `Http.file`.
+- A streamed client response's head before its body: `Client.stream` tells the
+  status once the body is through.
+- A streamed response on a stream route (an upload's answer) or to a method
+  but GET.
 - A stream route's request pipelined behind another in one read is read whole,
   under `max_body`. Clients that do not pipeline are not affected.
 - A chunked streamed body past 256 MiB. The reader's budget stays under 2^28,
