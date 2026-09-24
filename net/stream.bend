@@ -49,7 +49,9 @@
 # that it answers and closes (and when a 100 Continue is still owed, the
 # client sends no body: it answers and closes at once). A read that failed (the body refused, too large, too slow)
 # is answered by the server itself (400, 413, 408) whatever the handler
-# answered, and the connection closes.
+# answered, and the connection closes. A plain handler (app) has the
+# server's handler time, as under Server.serve (a 503 that closes); a
+# stream handler holds the socket, so none: its reads have progress.
 #
 # Which requests are streamed is decided by the request line, before a
 # field is read: at the start of a read with no message in progress (as
@@ -1029,8 +1031,8 @@ def one.run(~E: Data, ~app: Server.Hx(E), ~ups: Ux(E), +cfg: Cfg, +env: E, +req:
       IO.bind(Body & Http.Response, Socket, run(ups(env), req.bare(req), mem.body(cfg, s, Http.body(req))),
         bo => mem.done(cfg, head, closing, v10, bo, acc, go))
     case False{}:
-      IO.bind(Http.Response, Socket, app(env, req),
-        resp => Server.one.done(cfg.srv(cfg), head, closing, v10, resp, acc, s, go))
+      IO.bind(Maybe<&1, Http.Response>, Socket, IO.within(Http.Response, Server.cfg.handler(cfg.srv(cfg)), app(env, req)),
+        m => Server.one.plan(cfg.srv(cfg), Server.plan(head, closing, v10, m, acc), s, go))
 
 def one.at(~E: Data, ~app: Server.Hx(E), ~ups: Ux(E), +cfg: Cfg, +ip: Bytes(), +env: E, +r: Eng.Req, +head: Bool,
   +v10: Bool, far: Bool, acc: List<&2, L.Seg>, s: Socket, go: List<&2, L.Seg> -> Socket -> IO(Socket)) -> IO(Socket):

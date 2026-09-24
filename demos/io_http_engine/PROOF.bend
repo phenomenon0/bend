@@ -4909,6 +4909,50 @@ def Laws.key_alphabet():
 def Laws.key_padding():
   {==}
 
+# a message whose version is none or another does not ask, whatever its
+# key, Upgrade and Connection said
+def no13.k(ky: Bytes(), +vr: Eng.Ver, h: {Eng.ver.is13(vr) == False{} : Bool}) ->
+  {Pair.fst(Bool, Bytes(), Eng.up.asked(Eng.Asks{ky, True{}, True{}, vr})) == False{} : Bool}:
+  match ky:
+    case SNil{}:
+      {==}
+    case SCon{c, t}:
+      h
+
+def no13.c(ky: Bytes(), cc: Bool, +vr: Eng.Ver, h: {Eng.ver.is13(vr) == False{} : Bool}) ->
+  {Pair.fst(Bool, Bytes(), Eng.up.asked(Eng.Asks{ky, True{}, cc, vr})) == False{} : Bool}:
+  match cc:
+    case False{}:
+      {==}
+    case True{}:
+      no13.k(ky, vr, h)
+
+# a message whose version is none or another does not ask, whatever its
+# key, Upgrade and Connection said
+def no13(ky: Bytes(), uu: Bool, cc: Bool, +vr: Eng.Ver, h: {Eng.ver.is13(vr) == False{} : Bool}) ->
+  {Pair.fst(Bool, Bytes(), Eng.up.asked(Eng.Asks{ky, uu, cc, vr})) == False{} : Bool}:
+  match uu:
+    case False{}:
+      {==}
+    case True{}:
+      no13.c(ky, cc, vr, h)
+
+def Laws.upgrade_needs_13(key, up, cu, ver, h):
+  match ver:
+    case Eng.V13{}:
+      Bool.no({Pair.fst(Bool, Bytes(), Eng.up.asked(Eng.Asks{key, up, cu, Eng.V13{}})) == False{} : Bool},
+        Equal.sym(Bool, True{}, False{}, h))
+    case Eng.VNone{}:
+      no13(key, up, cu, Eng.VNone{}, h)
+    case Eng.VOther{}:
+      no13(key, up, cu, Eng.VOther{}, h)
+
+def Laws.ver_other_sticks():
+  {==}
+
+def Laws.parse_version_none():
+  {==}
+
 def Laws.parse_version_13():
   {==}
 
@@ -9315,11 +9359,11 @@ def line.field(cur: List<&2, U32>, +pd: Eng.Pend, +out: List<&2, Eng.Req>) -> Pl
 # target, the length, close, the Host count (none, one, more), the four
 # things an upgrade needs, and what the request line and the framing
 # fields said (Fx: HTTP/1.0, keep-alive, chunked). A reader that never
-# saw an upgrade field holds none of them, which looks like an empty key
-# and three falses.
+# saw an upgrade field holds none of them, which looks like an empty key,
+# two falses and no version.
 
 type UV is Data:
-  UV{key: Bytes(), up: Bool, cu: Bool, vb: Bool}
+  UV{key: Bytes(), up: Bool, cu: Bool, ver: Eng.Ver}
 
 type PV is Data:
   PV{meth: Eng.Meth, path: Bytes(), cl: Eng.Cl, close: Bool, host: Eng.Hosts, u: UV, fx: Eng.Fx, hx: Eng.Hx}
@@ -9327,7 +9371,7 @@ type PV is Data:
 def uv(ws: Eng.Up) -> UV:
   match ws:
     case Eng.Plain{}:
-      UV{"", False{}, False{}, False{}}
+      UV{"", False{}, False{}, Eng.VNone{}}
     case Eng.Asks{k, u, c, v}:
       UV{k, u, c, v}
 
@@ -9394,7 +9438,7 @@ def pv.ver(x: PV, ok: Bool) -> PV:
     case PV{m, p, cl, close, host, u, fx, hx}:
       match u:
         case UV{kk, uu, c, v}:
-          PV{m, p, cl, close, host, UV{kk, uu, c, v || Bool.not(ok)}, fx, hx}
+          PV{m, p, cl, close, host, UV{kk, uu, c, Spec.ver.next(v, ok)}, fx, hx}
 
 def pv.host(x: PV) -> PV:
   match x:
@@ -9461,16 +9505,32 @@ def e.key(pd: Eng.Pend, +kb: Bytes()) -> {pv(Eng.pend.key(pd, kb)) == pv.key(pv(
         case Eng.Asks{k, u, c, v}:
           {==}
 
+# a version field adds the same on both sides
+def e.ver.add(v: Eng.Ver, ok: Bool) -> {Eng.ver.add(v, ok) == Spec.ver.next(v, ok) : Eng.Ver}:
+  match v ok:
+    case Eng.VNone{} True{}:
+      {==}
+    case Eng.VNone{} False{}:
+      {==}
+    case Eng.V13{} True{}:
+      {==}
+    case Eng.V13{} False{}:
+      {==}
+    case Eng.VOther{} True{}:
+      {==}
+    case Eng.VOther{} False{}:
+      {==}
+
 def e.ver(pd: Eng.Pend, +ok: Bool) -> {pv(Eng.pend.ver(pd, ok)) == pv.ver(pv(pd), ok) : PV}:
   match pd:
     case Eng.Pend{m, p, cl, close, host, ws, fx, hx, nx}:
-      match ws ok:
-        case Eng.Plain{} True{}:
-          {==}
-        case Eng.Plain{} False{}:
-          {==}
-        case Eng.Asks{k, u, c, v} x:
-          {==}
+      match ws:
+        case Eng.Plain{}:
+          Equal.cong(Eng.Ver, PV, w => PV{m, p, cl, close, host, UV{"", False{}, False{}, w}, fx, hx},
+            Eng.ver.add(Eng.VNone{}, ok), Spec.ver.next(Eng.VNone{}, ok), e.ver.add(Eng.VNone{}, ok))
+        case Eng.Asks{k, u, c, v}:
+          Equal.cong(Eng.Ver, PV, w => PV{m, p, cl, close, host, UV{k, u, c, w}, fx, hx},
+            Eng.ver.add(v, ok), Spec.ver.next(v, ok), e.ver.add(v, ok))
 
 def e.host(pd: Eng.Pend) -> {pv(Eng.pend.host(pd)) == pv.host(pv(pd)) : PV}:
   match pd:
@@ -9636,7 +9696,7 @@ def e.te(pd: Eng.Pend, +ok: Bool, -out: List<&2, Eng.Req>) ->
           e.te.go(ok && Bool.not(t), m, p, cl, close, host, ws, a, b, hx, nx, out, t)
 
 def s.te.go(b: Bool, -m: Eng.Meth, -t: List<&2, U32>, -l: Maybe<&2, U32>, -cl: Bool, -hs: Nat,
-  -k: List<&2, U32>, -u: Bool, -c: Bool, -v: Bool, -v10: Bool, -ka: Bool, -x: Bool, -hxx: Eng.Hx) ->
+  -k: List<&2, U32>, -u: Bool, -c: Bool, -v: Eng.Ver, -v10: Bool, -ka: Bool, -x: Bool, -hxx: Eng.Hx) ->
   {hte.pick(b, Spec.Head{m, t, l, cl, hs, k, u, c, v, Eng.Fx{v10, ka, x}, hxx}) ==
     Spec.head.te.at(b, m, t, l, cl, hs, k, u, c, v, v10, ka, hxx) : Maybe<&2, Spec.Head>}:
   match b:
@@ -9688,18 +9748,18 @@ def meth.is(+m: Bytes()) -> {Spec.method(m) == Eng.meth.of(m) : Eng.Meth}:
 # a request line's head, on both sides: HTTP/1.1, and HTTP/1.0
 def pr.new(+m: List<&2, U32>, +t: List<&2, U32>) -> PR(pd2(m, t), Spec.head.new(m, t, False{})):
   %meth.is(Bytes.from_list(m)) :
-    {PV{_, Bytes.from_list(t), Eng.NoCl{}, False{}, Eng.H0{}, UV{"", False{}, False{}, False{}}, Eng.Fx{False{}, False{}, False{}},
+    {PV{_, Bytes.from_list(t), Eng.NoCl{}, False{}, Eng.H0{}, UV{"", False{}, False{}, Eng.VNone{}}, Eng.Fx{False{}, False{}, False{}},
       Eng.Hx{Bytes.from_list(m), "", Nil{}, Nil{}}} ==
-      PV{Spec.method(Bytes.from_list(m)), Bytes.from_list(t), Eng.NoCl{}, False{}, Eng.H0{}, UV{"", False{}, False{}, False{}},
+      PV{Spec.method(Bytes.from_list(m)), Bytes.from_list(t), Eng.NoCl{}, False{}, Eng.H0{}, UV{"", False{}, False{}, Eng.VNone{}},
         Eng.Fx{False{}, False{}, False{}}, Eng.Hx{Bytes.from_list(m), "", Nil{}, Nil{}}} : PV}
   {==}
 
 def pr.new10(+m: List<&2, U32>, +t: List<&2, U32>) ->
   PR(Eng.pend.v10(pd2(m, t)), Spec.head.new(m, t, True{})):
   %meth.is(Bytes.from_list(m)) :
-    {PV{_, Bytes.from_list(t), Eng.NoCl{}, False{}, Eng.H0{}, UV{"", False{}, False{}, False{}}, Eng.Fx{True{}, False{}, False{}},
+    {PV{_, Bytes.from_list(t), Eng.NoCl{}, False{}, Eng.H0{}, UV{"", False{}, False{}, Eng.VNone{}}, Eng.Fx{True{}, False{}, False{}},
       Eng.Hx{Bytes.from_list(m), "", Nil{}, Nil{}}} ==
-      PV{Spec.method(Bytes.from_list(m)), Bytes.from_list(t), Eng.NoCl{}, False{}, Eng.H0{}, UV{"", False{}, False{}, False{}},
+      PV{Spec.method(Bytes.from_list(m)), Bytes.from_list(t), Eng.NoCl{}, False{}, Eng.H0{}, UV{"", False{}, False{}, Eng.VNone{}},
         Eng.Fx{True{}, False{}, False{}}, Eng.Hx{Bytes.from_list(m), "", Nil{}, Nil{}}} : PV}
   {==}
 
@@ -10550,10 +10610,18 @@ def s.req(h: Spec.Head, -b: List<&2, U32>) ->
   {Spec.req(h, b) == reqof(hv(h), Bytes.from_list(b)) : Eng.Req}:
   match h:
     case Spec.Head{m, t, l, cl, hs, k, u, c, v, f, hxx}:
-      match k f hxx:
-        case Nil{} Eng.Fx{a, bb, x} Eng.Hx{hm, hn, hf, hc}:
+      match k v f hxx:
+        case Nil{} Eng.VNone{} Eng.Fx{a, bb, x} Eng.Hx{hm, hn, hf, hc}:
           {==}
-        case Con{y, r} Eng.Fx{a, bb, x} Eng.Hx{hm, hn, hf, hc}:
+        case Nil{} Eng.V13{} Eng.Fx{a, bb, x} Eng.Hx{hm, hn, hf, hc}:
+          {==}
+        case Nil{} Eng.VOther{} Eng.Fx{a, bb, x} Eng.Hx{hm, hn, hf, hc}:
+          {==}
+        case Con{y, r} Eng.VNone{} Eng.Fx{a, bb, x} Eng.Hx{hm, hn, hf, hc}:
+          {==}
+        case Con{y, r} Eng.V13{} Eng.Fx{a, bb, x} Eng.Hx{hm, hn, hf, hc}:
+          {==}
+        case Con{y, r} Eng.VOther{} Eng.Fx{a, bb, x} Eng.Hx{hm, hn, hf, hc}:
           {==}
 
 def REQ(+pd: Eng.Pend, +h: Spec.Head, +b: List<&2, U32>, pr: PR(pd, h)) ->
@@ -10583,7 +10651,7 @@ def EMIT(+pd: Eng.Pend, h: Spec.Head, +b: List<&2, U32>, +out: List<&2, Eng.Req>
     case Spec.Head{+hm, +ht, +l, +hc, +hs, +hk, +hu, +hcu, +hvb, +hf, +hxx}:
       match hf:
         case Eng.Fx{+v10, +ka, +te}:
-          EMIT.ws(Bool.not(v10) && (hu && hcu && Spec.has(hk) && Bool.not(hvb)), p2, hm, Bytes.from_list(ht),
+          EMIT.ws(Bool.not(v10) && (hu && hcu && Spec.has(hk) && Spec.ver.ok(hvb)), p2, hm, Bytes.from_list(ht),
             Bytes.from_list(b), hc || (v10 && Bool.not(ka)), Bytes.from_list(hk), Spec.hd(hxx, v10), out, pd,
             Equal.trans(Eng.P, p2, Eng.emit(pd, Bytes.from_list(b), out),
               Eng.emit.go(Spec.req(Spec.Head{hm, ht, l, hc, hs, hk, hu, hcu, hvb, Eng.Fx{v10, ka, te}, hxx}, b), out), e,
@@ -10791,7 +10859,7 @@ def PVcl(x: PV) -> Eng.Cl:
 def pr.cl(+m: Eng.Meth, +pa: Bytes(), +cl: Eng.Cl, +cls: Bool, +host: Eng.Hosts, +ws: Eng.Up, +fx: Eng.Fx,
   +hx: Eng.Hx, +nx: Maybe<&2, Eng.Pend>,
   +hm: Eng.Meth, +ht: List<&2, U32>, +l: Maybe<&2, U32>, +hc: Bool, +hs: Nat, +hk: List<&2, U32>,
-  +hu: Bool, +hcu: Bool, +hvb: Bool, +hf: Eng.Fx, +hxx: Eng.Hx, +w: U32,
+  +hu: Bool, +hcu: Bool, +hvb: Eng.Ver, +hf: Eng.Fx, +hxx: Eng.Hx, +w: U32,
   pr: PR(Eng.Pend{m, pa, cl, cls, host, ws, fx, hx, nx}, Spec.Head{hm, ht, l, hc, hs, hk, hu, hcu, hvb, hf, hxx})) ->
   PR(Eng.Pend{m, pa, Eng.Has{w}, cls, host, ws, fx, hx, nx}, Spec.Head{hm, ht, Some{w}, hc, hs, hk, hu, hcu, hvb, hf, hxx}):
   pr.by(x => pv.cl(x, Eng.Has{w}), Eng.Pend{m, pa, cl, cls, host, ws, fx, hx, nx}, Eng.Pend{m, pa, Eng.Has{w}, cls, host, ws, fx, hx, nx},
@@ -10811,7 +10879,7 @@ def CR.dup(b: Bool, -p: Eng.P, +c: U32, +pd2: Eng.Pend, +h2: Spec.Head, +out: Li
 def CR.clen.l(l: Maybe<&2, U32>, +n: U32, +m: Eng.Meth, +pa: Bytes(), +cl: Eng.Cl, +cls: Bool,
   +host: Eng.Hosts, +ws: Eng.Up, +fx: Eng.Fx, +hx: Eng.Hx, +nx: Maybe<&2, Eng.Pend>,
   +hm: Eng.Meth, +ht: List<&2, U32>, +hc: Bool, +hs: Nat,
-  +hk: List<&2, U32>, +hu: Bool, +hcu: Bool, +hvb: Bool, +hf: Eng.Fx, +hxx: Eng.Hx, -p: Eng.P, +c: U32,
+  +hk: List<&2, U32>, +hu: Bool, +hcu: Bool, +hvb: Eng.Ver, +hf: Eng.Fx, +hxx: Eng.Hx, -p: Eng.P, +c: U32,
   +out: List<&2, Eng.Req>, +since: List<&2, U32>,
   e: {Eng.step(p, c) == Eng.step.clen.go(m, pa, clv(l), cls, host, ws, fx, hx, nx, n, out) : Eng.P},
   bnd: BND(Eng.step(p, c), Spec.snoc(since, c), out),

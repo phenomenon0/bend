@@ -387,7 +387,7 @@ law parse_agree:
 # the upgrade a browser asks for, Connection a list; what follows it is
 # kept for the frame reader
 law parse_upgrade:
-  {Eng.parse("GET /ws HTTP/1.1\r\nHost: x\r\nUpgrade: websocket\r\nConnection: keep-alive, Upgrade\r\nSec-WebSocket-Key: k\r\n\r\nGET / HTTP/1.1\r\n\r\n") ==
+  {Eng.parse("GET /ws HTTP/1.1\r\nHost: x\r\nUpgrade: websocket\r\nConnection: keep-alive, Upgrade\r\nSec-WebSocket-Key: k\r\nSec-WebSocket-Version: 13\r\n\r\nGET / HTTP/1.1\r\n\r\n") ==
     ([Eng.Req{Eng.MGet{}, "/ws", "", False{}, True{}, "k",
       hd("GET", False{}, hx(), ["upgrade", "", "keep-alive", ""])}], False{}) :
     List<&2, Eng.Req> & Bool}
@@ -437,7 +437,7 @@ law parse_fields:
     List<&2, Eng.Req> & Bool}
 
 law rest_upgrade:
-  {Eng.p.rest(Eng.feed_buf(Bytes.append("GET /ws HTTP/1.1\r\nHost: x\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: k\r\n\r\n", Bytes.from_list([129, 128])), Eng.p.new())) ==
+  {Eng.p.rest(Eng.feed_buf(Bytes.append("GET /ws HTTP/1.1\r\nHost: x\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: k\r\nSec-WebSocket-Version: 13\r\n\r\n", Bytes.from_list([129, 128])), Eng.p.new())) ==
     Bytes.from_list([129, 128]) : Bytes()}
 
 # LAW: and what is refused. None of these completes a message: each is
@@ -723,7 +723,7 @@ law frame_get:
       Spec.Open{Eng.bytes("GET /ec")}} : Spec.Frames}
 
 law frame_upgrade:
-  {Spec.frame(Eng.bytes("GET /ws HTTP/1.1\r\nHost: x\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: k\r\n\r\nab")) ==
+  {Spec.frame(Eng.bytes("GET /ws HTTP/1.1\r\nHost: x\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: k\r\nSec-WebSocket-Version: 13\r\n\r\nab")) ==
     Spec.Frames{[Eng.Req{Eng.MGet{}, "/ws", "", False{}, True{}, "k", hd("GET", False{}, hx(), ["upgrade", ""])}],
       Spec.Upgraded{"ab"}} : Spec.Frames}
 
@@ -1808,8 +1808,28 @@ law key_alphabet:
 law key_padding:
   {Eng.key.ok(Eng.bytes("dGhlIHNhbXBsZSBub25jZQAA"), 0, True{}) == False{} : Bool}
 
-# LAW: an upgrade that names version 13 asks to upgrade, and one that
-# names another does not, whatever else it carried
+# LAW: an upgrade that names version 13 (and no other) asks to upgrade;
+# one that names another, or none, does not, whatever else it carried
+# (RFC 6455 4.2.1 6, 4.4): it is a request like any, answered 426 by
+# whoever serves the path, and the one after it is read as HTTP
+law upgrade_needs_13:
+  for +key: Bytes()
+  for +up: Bool
+  for +cu: Bool
+  for +ver: Eng.Ver
+  for h: {Eng.ver.is13(ver) == False{} : Bool}
+  {Pair.fst(Bool, Bytes(), Eng.up.asked(Eng.Asks{key, up, cu, ver})) == False{} : Bool}
+
+law ver_other_sticks:
+  {[Eng.ver.add(Eng.ver.add(Eng.VNone{}, True{}), True{}), Eng.ver.add(Eng.ver.add(Eng.VNone{}, True{}), False{}),
+    Eng.ver.add(Eng.ver.add(Eng.VNone{}, False{}), True{})] == [Eng.V13{}, Eng.VOther{}, Eng.VOther{}] : List<&2, Eng.Ver>}
+
+law parse_version_none:
+  {Eng.parse("GET /ws HTTP/1.1\r\nHost: x\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: k\r\n\r\nGET / HTTP/1.1\r\nHost: x\r\n\r\n") ==
+    ([Eng.Req{Eng.MGet{}, "/ws", "", False{}, False{}, "k", hd("GET", False{}, hx(), ["upgrade", ""])},
+      Eng.Req{Eng.MGet{}, "/", "", False{}, False{}, "", get()}], False{}) :
+    List<&2, Eng.Req> & Bool}
+
 law parse_version_13:
   {Eng.parse("GET /ws HTTP/1.1\r\nHost: x\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: k\r\nSec-WebSocket-Version: 13\r\n\r\n") ==
     ([Eng.Req{Eng.MGet{}, "/ws", "", False{}, True{}, "k", hd("GET", False{}, hx(), ["upgrade", ""])}], False{}) :

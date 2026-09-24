@@ -521,11 +521,14 @@ def ok(r: Result<&2, &2, Hw, Bytes()>) -> Bool:
 # RFC 6455 4.2 as net/ws_server.bend answers an opening request. The
 # engine's reader (demos/io_http_engine) has read the head already:
 # asked is whether it was an HTTP/1.1 request with Upgrade: websocket, a
-# Connection naming upgrade, a Sec-WebSocket-Key, and no
-# Sec-WebSocket-Version but 13 (the engine reads a missing one as 13);
-# key is the key as it came, trimmed. The request is answered:
+# Connection naming upgrade, a Sec-WebSocket-Key, and a
+# Sec-WebSocket-Version of 13 and no other (the engine's Up carries the
+# version, none, 13 or another, and its upgrade_needs_13: one with none
+# or another did not ask, RFC 6455 4.2.1 6 and 4.4); key is the key as
+# it came, trimmed. The request is answered:
 #
-#   not asked                  426 Upgrade Required (it may ask again)
+#   not asked, or asked with   426 Upgrade Required, naming version 13
+#   no version or another      (it may ask again)
 #   asked, not GET, or a key
 #   that is not sixteen bytes
 #   in base64                  400

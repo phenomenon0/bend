@@ -739,15 +739,15 @@ def field.view(x: List<&2, U32>) -> FLine:
 # length its Content-Length fields agree on, whether a Connection asked
 # to close, how many Host fields came, and for an upgrade (RFC 6455
 # 4.2.1): the last Sec-WebSocket-Key, whether an Upgrade named
-# websocket and a Connection named upgrade, and whether a
-# Sec-WebSocket-Version named anything but 13; fr: whether the
+# websocket and a Connection named upgrade, and what the
+# Sec-WebSocket-Version fields named: none, only 13, or another; fr: whether the
 # request line said HTTP/1.0, whether a Connection named keep-alive,
 # and whether a Transfer-Encoding said chunked; and hx, what it hands
 # on: the method's bytes, the name of the last field it passes on, those
 # fields (newest first) and the members every Connection listed
 type Head is Data:
   Head{meth: Eng.Meth, target: List<&2, U32>, len: Maybe<&2, U32>, close: Bool,
-    hosts: Nat, key: List<&2, U32>, up: Bool, cu: Bool, vb: Bool, fr: Eng.Fx, hx: Eng.Hx}
+    hosts: Nat, key: List<&2, U32>, up: Bool, cu: Bool, ver: Eng.Ver, fr: Eng.Fx, hx: Eng.Hx}
 
 def meth.pick(get: Bool, head: Bool) -> Eng.Meth:
   match get head:
@@ -764,7 +764,7 @@ def method(+m: Bytes()) -> Eng.Meth:
   meth.pick(eq(m, "GET"), eq(m, "HEAD"))
 
 def head.new(+m: List<&2, U32>, t: List<&2, U32>, v10: Bool) -> Head:
-  Head{method(Bytes.from_list(m)), t, None{}, False{}, 0n, Nil{}, False{}, False{}, False{},
+  Head{method(Bytes.from_list(m)), t, None{}, False{}, 0n, Nil{}, False{}, False{}, Eng.VNone{},
     Eng.Fx{v10, False{}, False{}}, Eng.Hx{Bytes.from_list(m), "", Nil{}, Nil{}}}
 
 # whitespace at either end of a value is no part of it (RFC 9110 5.5)
@@ -853,10 +853,27 @@ def head.key(h: Head, key: List<&2, U32>) -> Head:
     case Head{m, t, l, cl, hs, k, u, c, v, f, x}:
       Head{m, t, l, cl, hs, key, u, c, v, f, x}
 
+# a version field: 13 is 13 while no other came; another sticks
+def ver.next(v: Eng.Ver, ok: Bool) -> Eng.Ver:
+  match v ok:
+    case Eng.VOther{} _:
+      Eng.VOther{}
+    case _ True{}:
+      Eng.V13{}
+    case _ False{}:
+      Eng.VOther{}
+
+def ver.ok(v: Eng.Ver) -> Bool:
+  match v:
+    case Eng.V13{}:
+      True{}
+    case _:
+      False{}
+
 def head.ver(h: Head, ok: Bool) -> Head:
   match h:
     case Head{m, t, l, cl, hs, k, u, c, v, f, x}:
-      Head{m, t, l, cl, hs, k, u, c, v || Bool.not(ok), f, x}
+      Head{m, t, l, cl, hs, k, u, c, ver.next(v, ok), f, x}
 
 def head.host(h: Head) -> Head:
   match h:
@@ -893,7 +910,7 @@ def head.cn(h: Head, ms: List<&2, List<&2, U32>>) -> Head:
 # applied once; any other coding, or a list, is one it does not
 # implement. Each is refused where its line ends.
 def head.te.at(ok: Bool, m: Eng.Meth, t: List<&2, U32>, l: Maybe<&2, U32>, cl: Bool, hs: Nat,
-  k: List<&2, U32>, u: Bool, c: Bool, v: Bool, v10: Bool, ka: Bool, x: Eng.Hx) -> Maybe<&2, Head>:
+  k: List<&2, U32>, u: Bool, c: Bool, v: Eng.Ver, v10: Bool, ka: Bool, x: Eng.Hx) -> Maybe<&2, Head>:
   match ok:
     case True{}:
       Some{Head{m, t, l, cl, hs, k, u, c, v, Eng.Fx{v10, ka, True{}}, x}}
@@ -938,8 +955,8 @@ def field.done(h: Head, val: Val) -> Maybe<&2, Head>:
 # a request: its method, target and body; whether it asked to close --
 # a Connection named close, or it is HTTP/1.0 and no Connection named
 # keep-alive (RFC 9112 9.3); and whether it asked to become a WebSocket
-# -- Upgrade named websocket, Connection named upgrade, a key came and
-# no version but 13 -- with its key. An Upgrade in an HTTP/1.0 request
+# -- Upgrade named websocket, Connection named upgrade, a key came, and
+# a version, 13 and no other (RFC 6455 4.2.1, 4.4) -- with its key. An Upgrade in an HTTP/1.0 request
 # is not one (RFC 9110 7.8: a server MUST ignore it).
 def has(k: List<&2, U32>) -> Bool:
   match k:
@@ -960,7 +977,7 @@ def req(h: Head, body: List<&2, U32>) -> Eng.Req:
       match f:
         case Eng.Fx{+v10, ka, te}:
           Eng.Req{m, Bytes.from_list(t), Bytes.from_list(body), cl || (v10 && Bool.not(ka)),
-            Bool.not(v10) && (u && c && has(k) && Bool.not(v)), Bytes.from_list(k), hd(x, v10)}
+            Bool.not(v10) && (u && c && has(k) && ver.ok(v)), Bytes.from_list(k), hd(x, v10)}
 
 # The chunked body
 # -----------------

@@ -513,9 +513,27 @@ def server_checks(echo):
         pass
     s.close()
     check("srv.hs.426", st == 426 and fs.get("sec-websocket-version") == ["13"] and b"200 OK" in more, str((st, fs)))
+    # no Sec-WebSocket-Version (RFC 6455 4.4): a 426 naming 13, and the
+    # connection goes on, as for another version
+    st, fs, s, rest = srv_open(E, ver=None)
+    s.sendall(b"GET / HTTP/1.1\r\nHost: x\r\n\r\n")
+    s.settimeout(3)
+    more = rest
+    try:
+        while b"200 OK" not in more:
+            c = s.recv(4096)
+            if not c:
+                break
+            more += c
+    except OSError:
+        pass
+    s.close()
+    check("srv.hs.no_version", st == 426 and fs.get("sec-websocket-version") == ["13"] and b"200 OK" in more,
+          str((st, fs, more[:200])))
     for name, kw, want in [("srv.hs.version", dict(ver="8"), 426), ("srv.hs.no_key", dict(key=None), 426),
                            ("srv.hs.bad_key", dict(key="abc"), 400), ("srv.hs.key_no_pad", dict(key="dGhlIHNhbXBsZSBub25jZQAA"), 400),
-                           ("srv.hs.http10", dict(http="HTTP/1.0"), 426), ("srv.hs.post", dict(method="POST"), 405),
+                           ("srv.hs.http10", dict(http="HTTP/1.0"), 426), ("srv.hs.post", dict(method="POST"), 400),
+                           ("srv.hs.head", dict(method="HEAD"), 400), ("srv.hs.put", dict(method="PUT"), 400),
                            ("srv.hs.no_route", dict(path="/nope"), 404)]:
         st, fs, s, rest = srv_open(E, **kw)
         s.close()

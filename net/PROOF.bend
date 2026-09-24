@@ -37,6 +37,8 @@ import ./server.bend as Server
 import ./client.bend as Client
 import ./stream.bend as Stream
 import ./LAWS.bend as Laws
+import ./ws_hs.bend as H
+import ../wire/loop.bend as L
 
 # Booleans
 # ========
@@ -1207,3 +1209,74 @@ def bd.at(q: R.P & Bytes(), +n: Nat, h: {Wr.drain.b(R.P, R.take(Wr.drain.s(R.P, 
 
 def Laws.stream_bounded(e, bs, p, ok):
   bd.at(Stream.step(e, bs, p), Bytes.len(bs), take2(R.feed_buf(e, bs, p)), ok)
+
+# The handler's time
+# ==================
+
+def Laws.handler_late(ms, t, h, head, closing, v10, resp, acc):
+  %Equal.sym(Bool, Nat.is_lt(t, U32.to_nat(ms)), False{}, h) : {Server.plan(head, closing, v10, Laws.within.at(_, resp), acc) ==
+    Server.End{Con{L.Raw{Server.own(head, v10, 503)}, acc}} : Server.Plan}
+  {==}
+
+def Laws.handler_in_time(ms, t, h, head, closing, v10, resp, acc):
+  %Equal.sym(Bool, Nat.is_lt(t, U32.to_nat(ms)), True{}, h) : {Server.plan(head, closing, v10, Laws.within.at(_, resp), acc) ==
+    Server.plan.of(closing, Server.rev.onto(Server.segs.of(head, closing, v10, resp), acc)) : Server.Plan}
+  {==}
+
+def Laws.late_framed(head, v10):
+  match head v10:
+    case True{} True{}:
+      {==}
+    case True{} False{}:
+      {==}
+    case False{} True{}:
+      {==}
+    case False{} False{}:
+      {==}
+
+# WebSockets
+# ==========
+
+def no13.k(ky: Bytes(), +vr: Eng.Ver, h: {Eng.ver.is13(vr) == False{} : Bool}) ->
+  {Pair.fst(Bool, Bytes(), Eng.up.asked(Eng.Asks{ky, True{}, True{}, vr})) == False{} : Bool}:
+  match ky:
+    case SNil{}:
+      {==}
+    case SCon{c, t}:
+      h
+
+def no13.c(ky: Bytes(), cc: Bool, +vr: Eng.Ver, h: {Eng.ver.is13(vr) == False{} : Bool}) ->
+  {Pair.fst(Bool, Bytes(), Eng.up.asked(Eng.Asks{ky, True{}, cc, vr})) == False{} : Bool}:
+  match cc:
+    case False{}:
+      {==}
+    case True{}:
+      no13.k(ky, vr, h)
+
+# the engine's upgrade_needs_13, again here (its proof is not imported)
+def no13(ky: Bytes(), uu: Bool, cc: Bool, +vr: Eng.Ver, h: {Eng.ver.is13(vr) == False{} : Bool}) ->
+  {Pair.fst(Bool, Bytes(), Eng.up.asked(Eng.Asks{ky, uu, cc, vr})) == False{} : Bool}:
+  match uu:
+    case False{}:
+      {==}
+    case True{}:
+      no13.c(ky, cc, vr, h)
+
+def ws.426(+get: Bool, +key: Bytes(), +offered: List<&2, Bytes()>, +proto: Bytes()) ->
+  {H.s.answer(get, False{}, key, offered, proto) == H.SNo{426} : H.Sv}:
+  match get:
+    case True{}:
+      {==}
+    case False{}:
+      {==}
+
+def Laws.ws_version(key, up, cu, ver, h, get, offered, proto):
+  %Equal.sym(Bool, Pair.fst(Bool, Bytes(), Eng.up.asked(Eng.Asks{key, up, cu, ver})), False{}, no13(key, up, cu, ver, h)) :
+    {H.s.answer(get, _, key, offered, proto) == H.SNo{426} : H.Sv}
+  ws.426(get, key, offered, proto)
+
+def Laws.ws_route_methods(up, m, pat, h):
+  {==}
+
+def Laws.ws_route_vectors():
+  {==}
