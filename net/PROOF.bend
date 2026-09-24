@@ -43,6 +43,8 @@ import ./server.bend as Server
 import ./client.bend as Client
 import ./stream.bend as Stream
 import ./LAWS.bend as Laws
+import ./ws_hs.bend as H
+import ../wire/loop.bend as L
 
 # Booleans
 # ========
@@ -1235,6 +1237,41 @@ def bd.at(q: R.P & Bytes(), +n: Nat, h: {Wr.drain.b(R.P, R.take(Wr.drain.s(R.P, 
 def Laws.stream_bounded(e, bs, p, ok):
   bd.at(Stream.step(e, bs, p), Bytes.len(bs), take2(R.feed_buf(e, bs, p)), ok)
 
+# The handler's time
+# ==================
+
+def Laws.handler_late(ms, t, h, head, closing, v10, resp, acc):
+  %Equal.sym(Bool, Nat.is_lt(t, U32.to_nat(ms)), False{}, h) : {Server.plan(head, closing, v10, Laws.within.at(_, resp), acc) ==
+    Server.End{Con{L.Raw{Server.own(head, v10, 503)}, acc}} : Server.Plan}
+  {==}
+
+def Laws.handler_in_time(ms, t, h, head, closing, v10, resp, acc):
+  %Equal.sym(Bool, Nat.is_lt(t, U32.to_nat(ms)), True{}, h) : {Server.plan(head, closing, v10, Laws.within.at(_, resp), acc) ==
+    Server.plan.of(closing, Server.rev.onto(Server.segs.of(head, closing, v10, resp), acc)) : Server.Plan}
+  {==}
+
+def Laws.late_framed(head, v10):
+  match head v10:
+    case True{} True{}:
+      {==}
+    case True{} False{}:
+      {==}
+    case False{} True{}:
+      {==}
+    case False{} False{}:
+      {==}
+
+# WebSockets
+# ==========
+
+def ws.426(+get: Bool, +key: Bytes(), +offered: List<&2, Bytes()>, +proto: Bytes()) ->
+  {H.s.answer(get, False{}, key, offered, proto) == H.SNo{426} : H.Sv}:
+  match get:
+    case True{}:
+      {==}
+    case False{}:
+      {==}
+
 # Response bodies, written as they are made
 # =========================================
 #
@@ -1979,6 +2016,17 @@ def po.e500.ok(head: Bool) -> {X.rvalid(head, 500, X.rsp.fin(head, 500, Http.e50
       {==}
     case False{}:
       {==}
+
+def Laws.ws_version(key, up, cu, ver, h, get, offered, proto):
+  %Equal.sym(Bool, Pair.fst(Bool, Bytes(), Eng.up.asked(Eng.Asks{key, up, cu, ver})), False{}, EP.no13(key, up, cu, ver, h)) :
+    {H.s.answer(get, _, key, offered, proto) == H.SNo{426} : H.Sv}
+  ws.426(get, key, offered, proto)
+
+def Laws.ws_route_methods(up, m, pat, h):
+  {==}
+
+def Laws.ws_route_vectors():
+  {==}
 
 # a writer with no body sends nothing, whatever is written
 def po.emits.none(ws: List<&2, Bytes()>) -> {Stream.emits(ws, Stream.Sent{Stream.MNone{}, None{}}) == "" : Bytes()}:

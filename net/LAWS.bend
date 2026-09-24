@@ -35,6 +35,20 @@
 #                   once the framing says it ended, with exactly the
 #                   bytes after it: an undrained body is never read as a
 #                   request
+#   handler_late    a handler still waiting when its time is up is
+#                   answered with the 503 that ends the connection,
+#                   after what waited and before nothing: whatever it
+#                   answers, and whenever, none of it is written
+#   handler_in_time one that answers in time is written as ever
+#   late_framed     that 503, as a client reads it: one final response,
+#                   closing, nothing after it
+#   ws_version      a request whose Sec-WebSocket-Version is none, or not
+#                   13, does not ask to switch (the engine's reading) and
+#                   a WebSocket route answers it 426 (RFC 6455 4.4)
+#   ws_route_methods a WebSocket route takes a request that asked to
+#                   switch whatever its method (its handshake refuses
+#                   every one but GET with a 400); a plain one only as
+#                   GET's
 #   pour_chunked    a response written as it is made, its length unknown,
 #                   read back by wire/http1's spec, is one final response
 #                   whose body is the writes joined, closing as the server
@@ -59,6 +73,7 @@
 # and the response check.
 import Base
 import ../wire/reader.bend as Wr
+import ../wire/loop.bend as L
 import ../wire/client.bend as C
 import ../wire/world.bend as W
 import ../wire/http1/resp.bend as R
@@ -74,6 +89,7 @@ import ./addr.bend as A
 import ./server.bend as Server
 import ./client.bend as Client
 import ./stream.bend as Stream
+import ./ws_hs.bend as H
 
 # A handler sees what the RFC framed
 # ==================================
@@ -739,6 +755,102 @@ law stream_next:
   {Stream.next(Wr.drain.s(R.P, streamed(e, f, rs))) == spec.next(spec.body(e, f, Bytes.to_list(Bytes.concat(rs)))) :
     Maybe<&2, Bytes()>}
 
+# The handler's time
+# ==================
+#
+# IO.within's contract (bend2/effs/within.c), as a function of when the
+# handler answered: t ms after its first wait began, its answer while t
+# is short of ms, and none after -- the runtime wakes the connection at
+# ms, and drops an answer that comes later. (A handler that answers
+# without waiting is always in time: nothing preempts a computation, so
+# its answer, however long it took, is its own.)
+def within.at(ok: Bool, resp: Http.Response) -> Maybe<&1, Http.Response>:
+  match ok:
+    case True{}:
+      Some{resp}
+    case False{}:
+      None{}
+
+def within(+ms: U32, +t: Nat, resp: Http.Response) -> Maybe<&1, Http.Response>:
+  within.at(Nat.is_lt(t, U32.to_nat(ms)), resp)
+
+# LAW: a handler whose time is up is answered by the server, with the
+# 503 that closes the connection, after the responses already waiting
+# and with nothing after it: the connection ends there (End), and nothing
+# the handler answers, whatever and whenever, is written.
+law handler_late:
+  for +ms: U32
+  for +t: Nat
+  for h: {Nat.is_lt(t, U32.to_nat(ms)) == False{} : Bool}
+  for +head: Bool
+  for +closing: Bool
+  for +v10: Bool
+  for resp: Http.Response
+  for acc: List<&2, L.Seg>
+  {Server.plan(head, closing, v10, within(ms, t, resp), acc) == Server.End{Con{L.Raw{Server.own(head, v10, 503)}, acc}} :
+    Server.Plan}
+
+# LAW: and one that answers in time is written as its response always
+# is: after what waits, going on or ending as the request said.
+law handler_in_time:
+  for +ms: U32
+  for +t: Nat
+  for h: {Nat.is_lt(t, U32.to_nat(ms)) == True{} : Bool}
+  for +head: Bool
+  for +closing: Bool
+  for +v10: Bool
+  for resp: Http.Response
+  for acc: List<&2, L.Seg>
+  {Server.plan(head, closing, v10, within(ms, t, resp), acc) ==
+    Server.plan.of(closing, Server.rev.onto(Server.segs.of(head, closing, v10, resp), acc)) : Server.Plan}
+
+# LAW: the 503, as wire/http1/spec.bend's response() reads it: one final
+# response, 503, closing, its reason as the body (none for a HEAD), and
+# not a byte more.
+law late_framed:
+  for +head: Bool
+  for +v10: Bool
+  {RS.response(X.rask(head), Bytes.to_list(Server.own(head, v10, 503))) ==
+    sent(head, True{}, 503, True{}, "503 Service Unavailable\n") : R.Look}
+
+# WebSockets: the version, and the method
+# =======================================
+
+# LAW: a request whose Sec-WebSocket-Version fields named none, or
+# anything but 13, is one the engine's reader says did not ask to switch,
+# whatever its key, Upgrade and Connection said, so a WebSocket route
+# answers it 426 (which names 13: ws_server.bend's refusal), whatever its
+# method: RFC 6455 4.2.1 6 and 4.4. (ws_laws.bend's srv_hs_version, from
+# the engine's head.)
+law ws_version:
+  for +key: Bytes()
+  for +up: Bool
+  for +cu: Bool
+  for +ver: Eng.Ver
+  for h: {Eng.ver.is13(ver) == False{} : Bool}
+  for +get: Bool
+  for +offered: List<&2, Bytes()>
+  for +proto: Bytes()
+  {H.s.answer(get, Pair.fst(Bool, Bytes(), Eng.up.asked(Eng.Asks{key, up, cu, ver})), key, offered, proto) == H.SNo{426} :
+    H.Sv}
+
+# LAW: a WebSocket route holds the method of every request that asked to
+# switch, so the route's handshake answers it (400 for any but GET,
+# RFC 6455 4.2.1 1 and 4.2.2), never the router's 405; a request that did
+# not ask is routed as a GET route's are (another method: 405).
+law ws_route_methods:
+  for +up: Bool
+  for +m: Bytes()
+  for +pat: Bytes()
+  for h: Server.Ask -> Http.Request -> IO(Server.Reply)
+  {Pair.fst(List<&2, Server.Pat>, List<&1, Server.Hr()>, Server.unzip(up, m, [Server.Sock{pat, h}])) ==
+    [Server.Pat{Bool.pick(List<&2, Bytes()>, up, Con{m, ["GET", "HEAD"]}, ["GET", "HEAD"]), pat}] : List<&2, Server.Pat>}
+
+law ws_route_vectors:
+  {[Server.pick([Server.Pat{Server.sock.methods(True{}, "POST"), "/ws"}], "POST", "/ws"),
+    Server.pick([Server.Pat{Server.sock.methods(False{}, "POST"), "/ws"}], "POST", "/ws"),
+    Server.pick([Server.Pat{Server.sock.methods(True{}, "HEAD"), "/ws"}], "HEAD", "/ws")] ==
+    [Server.Hit{0n, []}, Server.NoMethod{["GET", "HEAD"]}, Server.Hit{0n, []}] : List<&2, Server.Pick>}
 # Streamed response bodies
 # ========================
 #

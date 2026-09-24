@@ -418,7 +418,9 @@ whose accept key is `base64(sha1(key ++ GUID))`, computed by the Bend
 in `sha1.bend` and `b64.bend` once per handshake. After the `101` the
 connection reads frames instead of requests. A key that is not 24
 characters of base64 (22 and `==`) is a `400` before it is hashed, and
-a `Sec-WebSocket-Version` other than 13 gets the `426`, naming 13. The
+a `Sec-WebSocket-Version` other than 13, or none, gets the `426`,
+naming 13 (RFC 6455 4.2.1 6 and 4.4: the reader's `Up` carries the
+version, none, 13 or another, and only 13 alone asks). The
 key and the version are read without the whitespace at either end
 (RFC 9110 5.5): a padded key upgrades and ` 13 ` is 13, while `1 3`,
 whose space is inside the value, is not. Until the whole-input law

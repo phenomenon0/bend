@@ -30,6 +30,8 @@
 #   conns     at most conns connections at once (1024); a SIGTERM closes
 #             the listener, lets idle connections go at once, and ends
 #             the process when the rest are done or grace (5 s) is up
+#   handler   a handler's answer within handler (30 s) of its first
+#             effect: 503, and the connection ends (one.timed)
 #
 # A broken request (the reader refuses it) is a 400 that closes; nothing
 # after it on the connection is read. One connection's failure is its
@@ -60,75 +62,80 @@ def Peer.addr(s: Socket) -> IO(Socket & String):
 
 type Cfg is Data:
   Cfg{host: String, port: U32, idle: U32, head: U32, body: U32, send: U32, max_head: U32, max_body: U32,
-    conns: U32, grace: U32, cert: String, key: String, shared: Bool}
+    conns: U32, grace: U32, cert: String, key: String, shared: Bool, handler: U32}
 
 # the defaults: every one a bound; every IPv4 interface (0.0.0.0)
 def config(port: U32) -> Cfg:
-  Cfg{"0.0.0.0", port, 5000, 10000, 30000, 10000, 16384, 1048576, 1024, 5000, "", "", False{}}
+  Cfg{"0.0.0.0", port, 5000, 10000, 30000, 10000, 16384, 1048576, 1024, 5000, "", "", False{}, 30000}
 
 def cfg.host(c: Cfg) -> String:
   match c:
-    case Cfg{host, port, idle, head, body, send, mh, mb, conns, grace, cert, key, shared}:
+    case Cfg{host, port, idle, head, body, send, mh, mb, conns, grace, cert, key, shared, handler}:
       host
 
 def cfg.port(c: Cfg) -> U32:
   match c:
-    case Cfg{host, port, idle, head, body, send, mh, mb, conns, grace, cert, key, shared}:
+    case Cfg{host, port, idle, head, body, send, mh, mb, conns, grace, cert, key, shared, handler}:
       port
 
 def cfg.idle(c: Cfg) -> U32:
   match c:
-    case Cfg{host, port, idle, head, body, send, mh, mb, conns, grace, cert, key, shared}:
+    case Cfg{host, port, idle, head, body, send, mh, mb, conns, grace, cert, key, shared, handler}:
       idle
 
 def cfg.head(c: Cfg) -> U32:
   match c:
-    case Cfg{host, port, idle, head, body, send, mh, mb, conns, grace, cert, key, shared}:
+    case Cfg{host, port, idle, head, body, send, mh, mb, conns, grace, cert, key, shared, handler}:
       head
 
 def cfg.body(c: Cfg) -> U32:
   match c:
-    case Cfg{host, port, idle, head, body, send, mh, mb, conns, grace, cert, key, shared}:
+    case Cfg{host, port, idle, head, body, send, mh, mb, conns, grace, cert, key, shared, handler}:
       body
 
 def cfg.send(c: Cfg) -> U32:
   match c:
-    case Cfg{host, port, idle, head, body, send, mh, mb, conns, grace, cert, key, shared}:
+    case Cfg{host, port, idle, head, body, send, mh, mb, conns, grace, cert, key, shared, handler}:
       send
 
 def cfg.max_head(c: Cfg) -> U32:
   match c:
-    case Cfg{host, port, idle, head, body, send, mh, mb, conns, grace, cert, key, shared}:
+    case Cfg{host, port, idle, head, body, send, mh, mb, conns, grace, cert, key, shared, handler}:
       mh
 
 def cfg.max_body(c: Cfg) -> U32:
   match c:
-    case Cfg{host, port, idle, head, body, send, mh, mb, conns, grace, cert, key, shared}:
+    case Cfg{host, port, idle, head, body, send, mh, mb, conns, grace, cert, key, shared, handler}:
       mb
 
 def cfg.conns(c: Cfg) -> U32:
   match c:
-    case Cfg{host, port, idle, head, body, send, mh, mb, conns, grace, cert, key, shared}:
+    case Cfg{host, port, idle, head, body, send, mh, mb, conns, grace, cert, key, shared, handler}:
       conns
 
 def cfg.grace(c: Cfg) -> U32:
   match c:
-    case Cfg{host, port, idle, head, body, send, mh, mb, conns, grace, cert, key, shared}:
+    case Cfg{host, port, idle, head, body, send, mh, mb, conns, grace, cert, key, shared, handler}:
       grace
 
 def cfg.cert(c: Cfg) -> String:
   match c:
-    case Cfg{host, port, idle, head, body, send, mh, mb, conns, grace, cert, key, shared}:
+    case Cfg{host, port, idle, head, body, send, mh, mb, conns, grace, cert, key, shared, handler}:
       cert
 
 def cfg.key(c: Cfg) -> String:
   match c:
-    case Cfg{host, port, idle, head, body, send, mh, mb, conns, grace, cert, key, shared}:
+    case Cfg{host, port, idle, head, body, send, mh, mb, conns, grace, cert, key, shared, handler}:
       key
+
+def cfg.handler(c: Cfg) -> U32:
+  match c:
+    case Cfg{host, port, idle, head, body, send, mh, mb, conns, grace, cert, key, shared, handler}:
+      handler
 
 def cfg.shared(c: Cfg) -> Bool:
   match c:
-    case Cfg{host, port, idle, head, body, send, mh, mb, conns, grace, cert, key, shared}:
+    case Cfg{host, port, idle, head, body, send, mh, mb, conns, grace, cert, key, shared, handler}:
       shared
 
 # the address to listen on, a dotted IPv4 one ("127.0.0.1" for this
@@ -136,74 +143,82 @@ def cfg.shared(c: Cfg) -> Bool:
 # machine alone; "::" every interface, IPv4's too where the system allows)
 def set.host(c: Cfg, h: String) -> Cfg:
   match c:
-    case Cfg{host, port, idle, head, body, send, mh, mb, conns, grace, cert, key, shared}:
-      Cfg{h, port, idle, head, body, send, mh, mb, conns, grace, cert, key, shared}
+    case Cfg{host, port, idle, head, body, send, mh, mb, conns, grace, cert, key, shared, handler}:
+      Cfg{h, port, idle, head, body, send, mh, mb, conns, grace, cert, key, shared, handler}
 
 def set.idle(c: Cfg, ms: U32) -> Cfg:
   match c:
-    case Cfg{host, port, idle, head, body, send, mh, mb, conns, grace, cert, key, shared}:
-      Cfg{host, port, ms, head, body, send, mh, mb, conns, grace, cert, key, shared}
+    case Cfg{host, port, idle, head, body, send, mh, mb, conns, grace, cert, key, shared, handler}:
+      Cfg{host, port, ms, head, body, send, mh, mb, conns, grace, cert, key, shared, handler}
 
 def set.head(c: Cfg, ms: U32) -> Cfg:
   match c:
-    case Cfg{host, port, idle, head, body, send, mh, mb, conns, grace, cert, key, shared}:
-      Cfg{host, port, idle, ms, body, send, mh, mb, conns, grace, cert, key, shared}
+    case Cfg{host, port, idle, head, body, send, mh, mb, conns, grace, cert, key, shared, handler}:
+      Cfg{host, port, idle, ms, body, send, mh, mb, conns, grace, cert, key, shared, handler}
 
 def set.body(c: Cfg, ms: U32) -> Cfg:
   match c:
-    case Cfg{host, port, idle, head, body, send, mh, mb, conns, grace, cert, key, shared}:
-      Cfg{host, port, idle, head, ms, send, mh, mb, conns, grace, cert, key, shared}
+    case Cfg{host, port, idle, head, body, send, mh, mb, conns, grace, cert, key, shared, handler}:
+      Cfg{host, port, idle, head, ms, send, mh, mb, conns, grace, cert, key, shared, handler}
 
 def set.send(c: Cfg, ms: U32) -> Cfg:
   match c:
-    case Cfg{host, port, idle, head, body, send, mh, mb, conns, grace, cert, key, shared}:
-      Cfg{host, port, idle, head, body, ms, mh, mb, conns, grace, cert, key, shared}
+    case Cfg{host, port, idle, head, body, send, mh, mb, conns, grace, cert, key, shared, handler}:
+      Cfg{host, port, idle, head, body, ms, mh, mb, conns, grace, cert, key, shared, handler}
 
 def set.max_head(c: Cfg, n: U32) -> Cfg:
   match c:
-    case Cfg{host, port, idle, head, body, send, mh, mb, conns, grace, cert, key, shared}:
-      Cfg{host, port, idle, head, body, send, n, mb, conns, grace, cert, key, shared}
+    case Cfg{host, port, idle, head, body, send, mh, mb, conns, grace, cert, key, shared, handler}:
+      Cfg{host, port, idle, head, body, send, n, mb, conns, grace, cert, key, shared, handler}
 
 # at most the engine's cap, 1 MiB
 def set.max_body(c: Cfg, n: U32) -> Cfg:
   match c:
-    case Cfg{host, port, idle, head, body, send, mh, mb, conns, grace, cert, key, shared}:
-      Cfg{host, port, idle, head, body, send, mh, U32.min(n, 1048576), conns, grace, cert, key, shared}
+    case Cfg{host, port, idle, head, body, send, mh, mb, conns, grace, cert, key, shared, handler}:
+      Cfg{host, port, idle, head, body, send, mh, U32.min(n, 1048576), conns, grace, cert, key, shared, handler}
 
 def set.conns(c: Cfg, n: U32) -> Cfg:
   match c:
-    case Cfg{host, port, idle, head, body, send, mh, mb, conns, grace, cert, key, shared}:
-      Cfg{host, port, idle, head, body, send, mh, mb, n, grace, cert, key, shared}
+    case Cfg{host, port, idle, head, body, send, mh, mb, conns, grace, cert, key, shared, handler}:
+      Cfg{host, port, idle, head, body, send, mh, mb, n, grace, cert, key, shared, handler}
 
 def set.grace(c: Cfg, ms: U32) -> Cfg:
   match c:
-    case Cfg{host, port, idle, head, body, send, mh, mb, conns, grace, cert, key, shared}:
-      Cfg{host, port, idle, head, body, send, mh, mb, conns, ms, cert, key, shared}
+    case Cfg{host, port, idle, head, body, send, mh, mb, conns, grace, cert, key, shared, handler}:
+      Cfg{host, port, idle, head, body, send, mh, mb, conns, ms, cert, key, shared, handler}
+
+# the most a handler has to answer, from its call: past it the request
+# is answered 503 and the connection closes (one.timed)
+def set.handler(c: Cfg, ms: U32) -> Cfg:
+  match c:
+    case Cfg{host, port, idle, head, body, send, mh, mb, conns, grace, cert, key, shared, handler}:
+      Cfg{host, port, idle, head, body, send, mh, mb, conns, grace, cert, key, shared, ms}
 
 # serve TLS (1.2+, ALPN http/1.1) with the PEM files at these paths
 def set.tls(c: Cfg, crt: String, k: String) -> Cfg:
   match c:
-    case Cfg{host, port, idle, head, body, send, mh, mb, conns, grace, cert, key, shared}:
-      Cfg{host, port, idle, head, body, send, mh, mb, conns, grace, crt, k, shared}
+    case Cfg{host, port, idle, head, body, send, mh, mb, conns, grace, cert, key, shared, handler}:
+      Cfg{host, port, idle, head, body, send, mh, mb, conns, grace, crt, k, shared, handler}
 
 # share the port with other copies (SO_REUSEPORT; the runtime's
 # --workers N forks them)
 def set.shared(c: Cfg) -> Cfg:
   match c:
-    case Cfg{host, port, idle, head, body, send, mh, mb, conns, grace, cert, key, shared}:
-      Cfg{host, port, idle, head, body, send, mh, mb, conns, grace, cert, key, True{}}
+    case Cfg{host, port, idle, head, body, send, mh, mb, conns, grace, cert, key, shared, handler}:
+      Cfg{host, port, idle, head, body, send, mh, mb, conns, grace, cert, key, True{}, handler}
 
 # A configuration from the command line (IO.args()), read over cfg: a
 # flag given wins over what cfg says, and a set.* applied to what args
 # answers wins over the flag. --host A, --port N, --idle-ms N, --head-ms
 # N, --body-ms N, --max-head N, --max-body N, --max-conns N, --grace-ms
-# N, --tls-cert F --tls-key F, --shared; anything else is left alone.
+# N, --handler-ms N, --tls-cert F --tls-key F, --shared; anything else
+# is left alone.
 def arg.num(+s: String, d: U32) -> U32:
   Maybe.default(&2, U32, U32.read(s), d)
 
 def args.one(+prev: String, +x: String, +c: Cfg) -> Cfg:
   match c:
-    case Cfg{host, port, idle, head, body, send, mh, mb, conns, grace, cert, key, shared}:
+    case Cfg{host, port, idle, head, body, send, mh, mb, conns, grace, cert, key, shared, handler}:
       Cfg{Bool.pick(String, String.eq(prev, "--host"), x, host),
         Bool.pick(U32, String.eq(prev, "--port"), arg.num(x, port), port),
         Bool.pick(U32, String.eq(prev, "--idle-ms"), arg.num(x, idle), idle),
@@ -214,7 +229,8 @@ def args.one(+prev: String, +x: String, +c: Cfg) -> Cfg:
         Bool.pick(U32, String.eq(prev, "--max-conns"), arg.num(x, conns), conns),
         Bool.pick(U32, String.eq(prev, "--grace-ms"), arg.num(x, grace), grace),
         Bool.pick(String, String.eq(prev, "--tls-cert"), x, cert),
-        Bool.pick(String, String.eq(prev, "--tls-key"), x, key), shared || String.eq(x, "--shared")}
+        Bool.pick(String, String.eq(prev, "--tls-key"), x, key), shared || String.eq(x, "--shared"),
+        Bool.pick(U32, String.eq(prev, "--handler-ms"), arg.num(x, handler), handler)}
 
 def args.go(xs: List<String>, +prev: String, c: Cfg) -> Cfg:
   match xs:
@@ -266,10 +282,15 @@ def flag(xs: List<String>, +name: String, +d: String) -> String:
 
 # whether a request asked to switch protocols, as the engine's reader
 # framed it (HTTP/1.1, Upgrade: websocket, Connection: upgrade, a
-# Sec-WebSocket-Key, no Sec-WebSocket-Version but 13), and its key
+# Sec-WebSocket-Key, and Sec-WebSocket-Version: 13, none other; one with
+# no version or another did not ask), and its key
 type Ask is Data:
   Ask{up: Bool, key: Bytes()}
 
+def ask.up(a: Ask) -> Bool:
+  match a:
+    case Ask{up, key}:
+      up
 # what a route that writes its own response is told: whether the request
 # was HEAD, whether the connection ends after it, whether it is HTTP/1.0,
 # and the time each send has to make progress
@@ -569,6 +590,51 @@ def segs.of(+head: Bool, +closing: Bool, +v10: Bool, r: Http.Response) -> List<&
 # or it asked to upgrade, which this server does not) is the last, and
 # a target past 8 KiB is a 414 that closes. The rest of the read's
 # requests follow through go.
+#
+# The handler has cfg's handler ms (30 s) from its first effect to answer
+# its Reply (IO.within): a plain route's response, or a Sock route's
+# answer (a WebSocket's accept or refusal, a Stream.get's whole response
+# or Pour). Past that the answer is a 503 -- the server could not handle
+# it in time; not a 504, which says an upstream it went to as a gateway
+# did not answer -- that closes the connection, after what waits, and
+# whatever the handler answers later is dropped (LAWS.bend's
+# handler_late). Once a Pour's body or a Switch's session has begun, the
+# handler's time is over and the socket's own deadlines govern (each send
+# within send ms). Nothing preempts a handler: one that waits in an effect
+# (a sleep, a channel, a socket) is let go at the deadline, and runs on
+# with its answer dropped (an answer after a wait and past the deadline
+# is dropped even when the loop had not yet woken the connection); one
+# that computes without waiting holds the loop until it answers, and
+# that answer is written.
+
+# what a request's answer leaves to write, newest first: go on after
+# it, or end the connection with it
+type Plan is Data:
+  Go{acc: List<&2, L.Seg>}
+  End{acc: List<&2, L.Seg>}
+
+def plan.of(closing: Bool, acc: List<&2, L.Seg>) -> Plan:
+  match closing:
+    case True{}:
+      End{acc}
+    case False{}:
+      Go{acc}
+
+# the handler's response in time (Some), or none: the 503 that closes
+def plan(+head: Bool, +closing: Bool, +v10: Bool, m: Maybe<&1, Http.Response>, acc: List<&2, L.Seg>) -> Plan:
+  match m:
+    case Some{resp}:
+      plan.of(closing, rev.onto(segs.of(head, closing, v10, resp), acc))
+    case None{}:
+      End{Con{L.Raw{own(head, v10, 503)}, acc}}
+
+def one.plan(+cfg: Cfg, p: Plan, s: Socket, go: List<&2, L.Seg> -> Socket -> IO(Socket)) -> IO(Socket):
+  match p:
+    case Go{acc}:
+      go(acc, s)
+    case End{acc}:
+      fin(cfg, acc, s)
+
 def one.then(+cfg: Cfg, closing: Bool, out: List<&2, L.Seg>, s: Socket, go: List<&2, L.Seg> -> Socket -> IO(Socket)) ->
   IO(Socket):
   match closing:
@@ -577,6 +643,7 @@ def one.then(+cfg: Cfg, closing: Bool, out: List<&2, L.Seg>, s: Socket, go: List
     case False{}:
       go(out, s)
 
+# a response in time: its plan's, without building it
 def one.done(+cfg: Cfg, +head: Bool, +closing: Bool, +v10: Bool, resp: Http.Response, acc: List<&2, L.Seg>,
   s: Socket, go: List<&2, L.Seg> -> Socket -> IO(Socket)) -> IO(Socket):
   one.then(cfg, closing, rev.onto(segs.of(head, closing, v10, resp), acc), s, go)
@@ -625,14 +692,23 @@ def one.reply(+cfg: Cfg, +head: Bool, +closing: Bool, +v10: Bool, rp: Reply, acc
       IO.bind(Socket & Bool, Socket, flush.segs(s, rev.onto(acc, Nil{}), cfg.send(cfg)),
         sb => one.pour(sb, run(Terms{head, closing, v10, cfg.send(cfg)}), Bool.not(closing), go))
 
+# the handler's reply, if it came in time
+def one.timed(+cfg: Cfg, +head: Bool, +closing: Bool, +v10: Bool, m: Maybe<&1, Reply>, acc: List<&2, L.Seg>, s: Socket,
+  rest: Bytes(), go: List<&2, L.Seg> -> Socket -> IO(Socket)) -> IO(Socket):
+  match m:
+    case Some{rp}:
+      one.reply(cfg, head, closing, v10, rp, acc, s, rest, go)
+    case None{}:
+      one.plan(cfg, plan(head, closing, v10, None{}, acc), s, go)
+
 def one.at(~E: Data, ~app: Ux(E), +cfg: Cfg, +ip: Bytes(), +env: E, +r: Eng.Req, +ask: Ask, +head: Bool, +v10: Bool,
   far: Bool, acc: List<&2, L.Seg>, s: Socket, rest: Bytes(), go: List<&2, L.Seg> -> Socket -> IO(Socket)) -> IO(Socket):
   match far:
     case True{}:
       fin(cfg, Con{L.Raw{own(head, v10, 414)}, acc}, s)
     case False{}:
-      IO.bind(Reply, Socket, app(env, ask, Http.req.of(ip, r)),
-        rp => one.reply(cfg, head, Eng.req.close(r) || Eng.req.ws(r), v10, rp, acc, s, rest, go))
+      IO.bind(Maybe<&1, Reply>, Socket, IO.within(Reply, cfg.handler(cfg), app(env, ask, Http.req.of(ip, r))),
+        m => one.timed(cfg, head, Eng.req.close(r) || Eng.req.ws(r), v10, m, acc, s, rest, go))
 
 def one(~E: Data, ~app: Ux(E), +cfg: Cfg, +ip: Bytes(), +env: E, +r: Eng.Req, acc: List<&2, L.Seg>, s: Socket,
   rest: Bytes(), go: List<&2, L.Seg> -> Socket -> IO(Socket)) -> IO(Socket):
@@ -924,18 +1000,27 @@ def unzip.put(p: Pat, h: Hr(), r: List<&2, Pat> & List<&1, Hr()>) -> List<&2, Pa
   (ps, hs) = r
   (Con{p, ps}, Con{h, hs})
 
-# the routes' patterns, and their handlers in the same order; a Sock
-# route is a GET one (HEAD too, as any GET)
-def unzip(rs: List<&1, Route>) -> List<&2, Pat> & List<&1, Hr()>:
+# the methods a Sock route answers: GET's (HEAD too, as any GET's), and
+# the method of a request that asked to switch protocols (up), whatever
+# it is, so that the route refuses it as RFC 6455 4.2.1 and 4.2.2 say --
+# the handshake is a GET, and a request that does not match it is a 400
+# -- rather than the router answering 405 for some methods and the
+# route 400 for HEAD
+def sock.methods(+up: Bool, +m: Bytes()) -> List<&2, Bytes()>:
+  Bool.pick(List<&2, Bytes()>, up, Con{m, ["GET", "HEAD"]}, ["GET", "HEAD"])
+
+# the routes' patterns, and their handlers in the same order, for a
+# request with method m that asked to switch protocols or not (up)
+def unzip(+up: Bool, +m: Bytes(), rs: List<&1, Route>) -> List<&2, Pat> & List<&1, Hr()>:
   match rs:
     case Nil{}:
       (Nil{}, Nil{})
     case Con{r, t}:
       match r:
         case Route{ms, pat, h}:
-          unzip.put(Pat{ms, pat}, a => q => answer(h(q)), unzip(t))
+          unzip.put(Pat{ms, pat}, a => q => answer(h(q)), unzip(up, m, t))
         case Sock{pat, h}:
-          unzip.put(Pat{["GET", "HEAD"], pat}, h, unzip(t))
+          unzip.put(Pat{sock.methods(up, m), pat}, h, unzip(up, m, t))
 
 def nth(i: Nat, hs: List<&1, Hr()>) -> Maybe<&1, Hr()>:
   match i hs:
@@ -981,8 +1066,8 @@ def run.split(pz: List<&2, Pat> & List<&1, Hr()>, a: Ask, +r: Http.Request) -> I
   run.pick(pick(pats, Http.method(r), Http.path(r)), hs, a, r)
 
 # the routes' answer to a request that may ask to switch protocols
-def route.ask(rs: List<&1, Route>, a: Ask, r: Http.Request) -> IO(Reply):
-  run.split(unzip(rs), a, r)
+def route.ask(rs: List<&1, Route>, +a: Ask, +r: Http.Request) -> IO(Reply):
+  run.split(unzip(ask.up(a), Http.method(r), rs), a, r)
 
 def reply.resp(rp: Reply) -> IO(Http.Response):
   match rp:

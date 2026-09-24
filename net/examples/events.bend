@@ -9,7 +9,10 @@
 # event, a comment goes out instead, which keeps a proxy from timing the
 # stream out and finds a client that left. The stream ends after the
 # N-th event, when the client leaves, or at SIGTERM. GET / is the page
-# that listens to it (EventSource).
+# that listens to it (EventSource). &delay=MS has the handler wait MS ms
+# before it answers: past the server's handler time (--handler-ms, 30 s)
+# that is a 503, while a stream once begun runs as long as it likes
+# (each of its sends has the send time).
 import Base
 import ../http.bend as Http
 import ../server.bend as Server
@@ -70,10 +73,13 @@ def started(+keep: U32, +n: Nat, +ms: Nat, +now: Nat) -> IO(Stream.Reply):
   +left = Bool.pick(Nat, Nat.is_eq(n, 0n), U32.to_nat(4294967295), n)
   IO.pure(Stream.Reply, Stream.events(~Tk, ~next, Tk{0n, left, now, ms}, keep, []))
 
+def delayed(+keep: U32, +n: Nat, +ms: Nat, u: Unit) -> IO(Stream.Reply):
+  IO.bind(Nat, Stream.Reply, IO.now(), now => started(keep, n, ms, now))
+
 def ticks.go(+keep: U32, +r: Http.Request) -> IO(Stream.Reply):
   +n = num(r, "n", 0n)
   +ms = num(r, "ms", 1000n)
-  IO.bind(Nat, Stream.Reply, IO.now(), now => started(keep, n, ms, now))
+  IO.bind(Unit, Stream.Reply, IO.sleep(U32.from_nat(num(r, "delay", 0n))), u => delayed(keep, n, ms, u))
 
 # GET /ticks
 def ticks(+keep: U32, r: Http.Request) -> IO(Stream.Reply):

@@ -63,10 +63,10 @@ as (the server's writer, `respond_framed`'s).
 IO(Http.Response)`; `Server.serve.with(~E, ~app, env, cfg)` hands `env`
 (a channel, a configuration: shared state) to every call. `cfg` is
 `Server.config(port)` changed by `Server.set.host/idle/head/body/send/
-max_head/max_body/conns/grace/tls(cert, key)/shared`, or read from the
+max_head/max_body/conns/grace/handler/tls(cert, key)/shared`, or read from the
 command line (`xs` is `IO.args()`) by `Server.args(xs, cfg)` (`--host
 --port --idle-ms --head-ms --body-ms --max-head --max-body --max-conns
---grace-ms --tls-cert --tls-key --shared`; `Server.flag(xs, name, d)`
+--grace-ms --handler-ms --tls-cert --tls-key --shared`; `Server.flag(xs, name, d)`
 reads one of your own). Precedence: a flag given wins over `cfg`, and a
 `set.*` applied to what `args` answers wins over the flag. The server
 binds `host` (0.0.0.0, every IPv4 interface, by default; a dotted
@@ -74,15 +74,32 @@ address; an IPv6 one, `::1` or `::`, IPV6_V6ONLY off so `::` takes IPv4
 too) and says so on stderr (`http://[::1]:8080`); a request's remote is
 its peer's address, IPv6 in RFC 5952's text; a certificate or key that does not load ends it with `TLS setup
 failed` and the file.
+A handler has `handler` ms (30 s) to answer: past it the server answers
+503 (it could not handle the request in time; 504 would name an upstream
+it reached as a gateway) with `Connection: close`, after the responses
+already waiting, and closes; whatever the handler answers later is
+dropped (`IO.within`, below). Nothing preempts a Bend computation: it
+yields only at an effect. So a handler waiting in one (a sleep, a
+channel, a socket, an upstream) is let go at the deadline and runs on,
+unseen, until it ends; one that computes without an effect holds the
+loop until it answers, and that answer is written. The deadline runs
+from the handler's first effect: what it computes before one is taken
+at once, as a direct call. It covers every route's answer: a `Server.get`
+handler's response, a `Stream.get` handler's `Stream.Reply` (whole or
+pour), a WebSocket handler's accept or refusal. Once a pour has begun,
+or a WebSocket session, the handler's time is over: each send has
+`send` (10 s) for progress, so a stream may run as long as its client
+reads.
 Router: `Server.route(routes, req)` over `[Server.get(pat, h),
 Server.post(...), put, patch, delete, Server.on(methods, pat, h),
 Server.static(prefix, root)]`, patterns of literals, `:name` and a last
 `*`; no match is a 404, a path with other methods a 405 with `Allow`,
 and GET answers HEAD. `Server.serve.routes(~E, ~rs, env, cfg)` serves the
-routes `rs(env)` directly, and then a `Server.Sock` route (a GET one;
-`WsServer.ws` makes them) may take its connection over: it is told
-whether the request asked to switch protocols, and answers a response
-or the head that switches it and what runs on the socket. Middleware is Handler -> Handler as a template:
+routes `rs(env)` directly, and then a `Server.Sock` route (a GET one, and
+every method of a request that asked to switch, so its handshake refuses
+those with a 400; `WsServer.ws` makes them) may take its connection over:
+it is told whether the request asked to switch protocols, and answers a
+response or the head that switches it and what runs on the socket. Middleware is Handler -> Handler as a template:
 `~Server.logged(~app)` (a line per request on stderr),
 `~Server.secured(~app)` (nosniff, DENY, no-referrer, CSP 'self', each
 unless set), `~Server.recovered(~app)` (a handler answering
@@ -167,6 +184,10 @@ the connection handed back), `Ws.close` (the same, then released).
 `WsServer.choose(r, ours)` picks a subprotocol the client offered;
 `WsServer.ws.with(o, pat, h)` takes `WsServer.opts()` changed by
 `opts.max_msg/keepalive(ping, pong)/timeouts(recv, close, send)/origins`.
+A request that did not ask -- no Upgrade, or a `Sec-WebSocket-Version`
+that is not 13, or none (RFC 6455 4.4) -- is a 426 naming 13, and the
+connection goes on; one that asked with any method but GET, or a key
+that is not a key, a 400 (4.2.1, 4.2.2).
 A `WsServer.Hub` is a room: `hub.new`, `join`, `leave`, `publish`, `inbox`,
 `relay`.
 
@@ -190,6 +211,7 @@ and `Json.f64` (an `F64`; NaN and infinities are null), `Json.get`,
 | a streamed body | 1 GiB (`max_stream`; chunked at most 256 MiB) | 413 |
 | a streamed body's read | 10 s (`progress`) | 408, closed |
 | a streamed body left unread | 1 MiB drained | answered, closed |
+| a handler's answer, from its first effect | 30 s (`handler`) | 503, closed; the handler let go |
 | a streamed response's write | each send within 10 s (`send`) | `ETime`, closed |
 | connections | 1024 | the next waits for a slot |
 | SIGTERM | listener closed, idle connections let go within a second | the process ends when the rest end, or after grace (5 s) |
@@ -245,6 +267,17 @@ passes its export. `net/LAWS.bend`:
   (Stream.next) only once the RFC's framing says the body ended, with
   exactly the bytes after it; else it closes. An undrained body is never
   read as a request.
+- `handler_late`: a handler still waiting when its time is up (IO.within's
+  contract, `within` in LAWS.bend) is answered with the 503 that ends the
+  connection, after the responses waiting and before nothing: whatever it
+  answers, whenever, none of it is written. `handler_in_time`: one that
+  answers in time is written as ever. `late_framed`: the 503 reads back
+  as one final response that closes.
+- `ws_version`: a request whose Sec-WebSocket-Version is none or not 13
+  does not ask to switch (the engine's `upgrade_needs_13`), and a
+  WebSocket route answers it 426. `ws_route_methods`: a WebSocket route
+  takes a request that asked whatever its method (its handshake refuses
+  all but GET: 400), a plain one only as GET's.
 - `pour_chunked`: a response whose body is written as it is made, its
   length unknown, read by wire/http1's spec, is exactly one final
   response: the handler's status, its body the writes joined in order
@@ -275,8 +308,10 @@ passes its export. `net/LAWS.bend`:
 
 `bend net/ws_proof.bend` is the WebSocket gate (`net/ws_laws.bend`): the
 client's laws, and the server's -- `srv_hs_valid` (every request that
-asked well gets RFC 6455 4.2.2's 101, the Accept its key earns),
-`srv_hs_refused` (every other a 400 or 426), `srv_hs_proto` (no
+asked well -- version 13 among it -- gets RFC 6455 4.2.2's 101, the
+Accept its key earns), `srv_hs_version` (one that did not ask, a
+missing or other version too, a 426), `srv_hs_refused` (every other a
+400 or 426), `srv_hs_proto` (no
 subprotocol the client did not offer), `srv_frame_unmasked` (no frame the
 server writes is masked), `srv_unmasked_refused` (an unmasked client
 frame breaks the framing: 1002), `srv_reads` (the acts a handler's
@@ -284,12 +319,14 @@ connection takes are the spec's reassembly of the input, for every cut
 of it into reads), `srv_close_once` and `srv_close_after` (at most one
 close written, none after this end's own), and vectors.
 
-`python3 net/mutants.py`: seventy broken servers, streams, stream heads
-(a bare LF, a folded line, two lengths that disagree, a head judged
-wrong), response writers, clients, URLs and IPv6 texts, each refused;
-`python3 net/ws_mutants.py`: the WebSocket ones. Not proven: the IO loops
-(they call the functions the laws are about, and stop a read at every
-stream route's head: checked by `check.py`), the deadlines and limits.
+`python3 net/mutants.py`: seventy-nine broken servers, streams, stream
+heads (a bare LF, a folded line, two lengths that disagree, a head judged
+wrong), response writers, handler deadlines, WebSocket routes, clients,
+URLs and IPv6 texts, each refused; `python3 net/ws_mutants.py`: the
+WebSocket ones. Not proven: the IO loops (they call the functions the laws
+are about, and stop a read at every stream route's head: checked by
+`check.py`), the deadlines and limits (the handler's race is the
+runtime's IO.within, bend2/effs/within.c).
 
 ## The examples
 
@@ -314,7 +351,9 @@ stream route's head: checked by `check.py`), the deadlines and limits.
 `python3 net/check.py` builds every example and checks, from outside: framing,
 pipelining, HEAD, keep-alive, HTTP/1.0, 400/408/413/414/431, the idle,
 head and body timeouts, the connection limit, 100-continue, SIGTERM,
-404/405, JSON and files, the middleware, `--host` and its banner, a TLS
+404/405, JSON and files, the middleware, the handler's time (a handler
+that sleeps forever: a 503 that closes, nothing after it, the server
+still answering others), `--host` and its banner, a TLS
 certificate that does not load; and the client against Python peers: pooling,
 refused, DNS, the deadline, redirects (cap, 303, 307, credentials),
 gzip, the body cap, a field with a line end refused, TLS refused
@@ -331,7 +370,8 @@ memory (about 200 MB/s on one core), a declared length exact, short and
 long, HEAD, HTTP/1.0 to the close, a client gone mid-body (the producer
 told within a send), server-sent events with `curl -N`;
 and WebSockets on the server: the chat room's broadcast between two
-ws_chat clients, its 426, 400 and 101, SIGTERM's 1001; and IPv6, where
+ws_chat clients, its 426 (a missing version too), 400 (a POST that
+asks too) and 101, SIGTERM's 1001; and IPv6, where
 the machine has a loopback for it: the server on ::1 and on :: (its
 banner, the remote, over TLS), the client to http://[::1]:port/ (Host,
 pool), a name with both families, TLS to an IP-literal (IP SAN, no SNI),
@@ -350,5 +390,8 @@ raced), IPv6 zone IDs, a streamed client body's head before its body
 (Client.stream tells the status at the end, so a relay decides its own
 head first), and past 256 MiB; a streamed response on a stream route (an
 upload's answer) or to methods but GET; a chunked streamed body past 256
-MiB, a deadline on the handler itself, WebSocket compression
-(permessage-deflate is declined).
+MiB, WebSocket compression (permessage-deflate is declined). Not
+possible: preempting a handler that computes without an effect (the
+handler's time lets go only one that waits); a stream route's upload
+handler has no handler time (it holds the socket), only its reads'
+progress.

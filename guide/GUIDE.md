@@ -368,7 +368,10 @@ Node.js: each runs its pure code (in parallel, on every core) up to its next
 effect, and one that waits on a socket, a sleep or a channel steps aside for the
 others. `IO.fork` starts a computation and returns the channel its result will
 arrive on; `IO.join` waits for it. Underneath are `IO.spawn`, `Chan.new`,
-`Chan.send`, `Chan.recv` and `Chan.close`. The program ends when every
+`Chan.send`, `Chan.recv` and `Chan.close`. `IO.within(A, ms, act)` answers
+`Some` of `act`'s answer, or `None` if `act` still waits `ms` after its first
+effect; `act` runs on, its answer dropped, since nothing preempts a computation
+between effects. The program ends when every
 computation is done, or reports a deadlock when the remaining ones all wait.
 
 Every effect in Base is a def whose body is `import "./x.js"` plus a `.c` twin,

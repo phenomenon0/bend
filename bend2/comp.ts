@@ -3943,7 +3943,8 @@ function js_func(fl: File, tm: HTerm, ty0: HTerm | null,
     const adt = adt_of(fl.book, all.A);
     const { arms, end } = mat_arms(x);
     const total = Bend.book_adt(fl.book, adt, Bend.Emp()).c.length;
-    if (adt.k === "IO.OP") {
+    // a foreign request is refused, unless a default arm takes it
+    if (adt.k === "IO.OP" && arms.length >= total) {
       block(fl, "if (" + s + ".$ === \"$FFI\") {", () => {
         file_push(fl, "throw " + s + ";");
       });
@@ -7425,9 +7426,9 @@ static u64 io_sys_end(IoWork* w, ssize_t n) {
 
 // cont(item) is the next request (run by io_exec). Parked, word/time/evts
 // hold fd/deadline/readiness; pack resumes. Leading work permits IoWork*
-// to IoAct* casts.
+// to IoAct* casts. race: IO.within's, whose answer io_race takes.
 // IoAct ::=
-//   | IoAct(work, cont, item, time, evts, next)
+//   | IoAct(work, cont, item, time, evts, next, race)
 typedef struct IoAct {
   IoWork        work;
   Term          cont;
@@ -7436,6 +7437,7 @@ typedef struct IoAct {
   short         evts;
   u32           heap;
   struct IoAct* next;
+  void*         race;
 } IoAct;
 
 // IoQue ::=
@@ -8239,19 +8241,32 @@ static void show_val(Env e, u32 d, const Term* w, char chain) {
 
 #endif
 
-// The continuation applied to the item is the next request.
-static int io_step(Env e, IoAct* a) {
-  for (;;) {
-    Loc  ap  = task_node(e, FID_CLO_APPLY, TERM_HOLE, 0, 0);
-    e.mem[ap]     = a->cont;
-    e.mem[ap + 1] = a->item;
-    Term req = corpus_eval(e.mem, term_tsk(FID_CLO_APPLY, ap));
+// IO.within's (effs/within.c): an answer handed to whoever waits on it;
+// the activation is its to free.
+static void (*io_race)(Env e, IoAct* a, Term v);
+
+// The continuation applied to the item is the next request (or req, the
+// first, when it is not TERM_HOLE).
+static int io_step(Env e, IoAct* a, Term req) {
+  for (;; req = TERM_HOLE) {
+    if (req == TERM_HOLE) {
+      Loc ap = task_node(e, FID_CLO_APPLY, TERM_HOLE, 0, 0);
+      e.mem[ap]     = a->cont;
+      e.mem[ap + 1] = a->item;
+      req = corpus_eval(e.mem, term_tsk(FID_CLO_APPLY, ap));
+    }
     u32  c   = (u32)term_aux(req);
     Loc  at  = term_peek(e, req);
     if (c == CID_EMIT) {
+      io_live -= 1;
+      if (a->race != NULL) {
+        Term v[1];
+        spare_free(e, cls_fit(1), ctr_take(e, req, 1, v));
+        io_race(e, a, v[0]);
+        return -1;
+      }
       term_drop(e, req);
       free(a);
-      io_live -= 1;
       return -1;
     }
     if (c == CID_HALT) {
@@ -8332,7 +8347,7 @@ OUTLINE int io_loop(Corpus H) {
     if ((n & 63) == 0 && io_busy != 0) {
       io_take(e);
     }
-    int code = io_step(e, io_pop(&io_runs));
+    int code = io_step(e, io_pop(&io_runs), TERM_HOLE);
     if (code >= 0) {
       return code;
     }

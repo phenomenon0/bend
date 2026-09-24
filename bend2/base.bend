@@ -279,6 +279,24 @@ def IO.sleep(ms: U32) -> IO(Unit):
   import "./effs/sleep.c"
   import "./effs/sleep.js"
 
+def IO.within.go(-A: Type, ms: U32, op: IO.OP<A>) -> IO(Maybe<&1, A>):
+  import "./effs/within.c"
+  import "./effs/within.js"
+
+def IO.within.at(-A: Type, ms: U32, op: IO.OP<A>) -> IO(Maybe<&1, A>):
+  match op:
+    case Emit{v}:
+      IO.pure(Maybe<&1, A>, Some{v})
+    case o:
+      IO.within.go(A, ms, o)
+
+# act's steps up to its first effect, at once; then, if it has not
+# answered, the rest as a computation of its own: Some{its answer}, or
+# None{} when ms after that effect it still waits (a later answer is
+# dropped). Nothing preempts act: it yields only at an effect.
+def IO.within(-A: Type, ms: U32, act: IO(A)) -> IO(Maybe<&1, A>):
+  IO.within.at(A, ms, act(A, x => Emit{x}))
+
 def IO.now() -> IO(Nat):
   import "./effs/now.c"
   import "./effs/now.js"

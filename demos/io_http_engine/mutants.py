@@ -295,6 +295,39 @@ FRAMING = [
       GTo{ADataLf{}, False{}}
     case ADataCr{} Eng.XLf{}:
       GTo{ASize0{}, False{}}'''),
+  ('an upgrade with no Sec-WebSocket-Version asks, as if it named 13', 'main.bend',
+    '''def ver.is13(v: Ver) -> Bool:
+  match v:
+    case V13{}:
+      True{}
+    case _:
+      False{}''',
+    '''def ver.is13(v: Ver) -> Bool:
+  match v:
+    case VOther{}:
+      False{}
+    case _:
+      True{}'''),
+  ('a version 13 after another is taken: "8" then "13" asks', 'main.bend',
+    '''    case VOther{} _:
+      VOther{}
+    case _ True{}:
+      V13{}''',
+    '''    case _ True{}:
+      V13{}'''),
+  ('the spec reads an upgrade with no version as asking', 'spec.bend',
+    '''def ver.ok(v: Eng.Ver) -> Bool:
+  match v:
+    case Eng.V13{}:
+      True{}
+    case _:
+      False{}''',
+    '''def ver.ok(v: Eng.Ver) -> Bool:
+  match v:
+    case Eng.VOther{}:
+      False{}
+    case _:
+      True{}'''),
 ]
 
 # what the framing's copy keeps of LAWS.bend: frame_sim's family and

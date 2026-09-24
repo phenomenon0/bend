@@ -171,8 +171,39 @@ def add(+r: Http.Request) -> IO(Result<&2, &2, Bytes(), Http.Response>):
   IO.pure(Result<&2, &2, Bytes(), Http.Response>, sum(U32.read(Http.param(r, "a")), U32.read(Http.param(r, "b"))))
 
 def routes() -> List<Server.Route>:
-  [Server.get("/greet", greet), Server.get("/add/:a/:b", r => Server.recovered.around(add(r)))]
+  [Server.get("/greet", greet), Server.get("/add/:a/:b", r => Server.recovered.around(add(r))),
+    Server.get("/stall", stall)]
 ```
+
+### The Handler's Time
+
+A handler has `handler` ms, 30 s by default, to answer (`Server.set.handler`,
+`--handler-ms`). Past it the server answers 503 with `Connection: close`,
+after the responses already waiting, and closes; whatever the handler
+answers later is dropped. 503, not 504: the server could not handle the
+request in time, where 504 says an upstream it reached as a gateway did
+not answer.
+
+```python
+# GET /stall: a handler that waits and never answers (49 days is never);
+# when the handler's time is up (Server.set.handler, --handler-ms; 30 s)
+# the server answers 503, closes, and lets it go
+def stall(r: Http.Request) -> IO(Http.Response):
+  IO.bind(Unit, Http.Response, IO.sleep(4294967295), u => Http.reply(Http.text(200, "awake\n")))
+```
+
+Nothing preempts a Bend computation: it yields only at an effect. So the
+deadline lets go a handler that waits (a sleep, a channel, a socket, an
+upstream), which runs on, unseen, until it ends. A handler that computes
+for a minute without an effect holds the event loop for that minute, and
+its answer is written: no deadline can cut it short. The time runs from
+the handler's first effect until the handler answers: a response, a
+`Stream.get` handler's `Stream.Reply`, a WebSocket handler's accept or
+refusal. A `Stream.pour` body or a WebSocket session, once begun, is not
+under it: each send has 10 s (`send`) to make progress, so an export or
+an event stream runs as long as its client reads. Underneath is `IO.within(A, ms, act)`, which
+answers `Some` of `act`'s answer, or `None` when `act` still waits `ms`
+after its first effect.
 
 ### Shared State
 
@@ -634,8 +665,9 @@ def member(+hub: WsServer.Hub, c: Ws.Conn) -> IO(Ws.Conn):
 
 The server answers the opening handshake as RFC 6455 4.2.2 says: a GET that
 asked to upgrade with a good key gets the 101 and the Accept its key earns; a
-request that did not ask gets a 426 naming version 13 (a version other than 13
-too), and one that asked broken (a key that is not sixteen bytes in base64) a
+request that did not ask gets a 426 naming version 13 (so does one whose
+`Sec-WebSocket-Version` is not 13, or missing: RFC 6455 4.4), and one that
+asked broken (any method but GET, a key that is not sixteen bytes in base64) a
 400. No extension is ever agreed: `permessage-deflate`, offered, is declined by
 not naming it. Then every frame the client sends must be masked (1002), a
 message is at most `max_msg` (1009), text must be UTF-8 (1007), a ping is
@@ -667,6 +699,7 @@ cannot hold a resource forever.
 | a streamed body | 1 GiB (`max_stream`; chunked, 256 MiB) | 413 | a stream route's body is read a chunk at a time |
 | a streamed body's reads | 10 s each (`progress`) | 408, closed | a body sent a byte a minute cannot hold a connection |
 | a body a stream handler left | 1 MiB drained | answered, closed | its bytes are never read as a request |
+| a handler's answer, from its first effect | 30 s (`handler`) | 503, closed; the handler let go | a handler waiting on something that never comes cannot hold a connection |
 | a streamed response's writes | each send within 10 s (`send`) | `ETime`, closed | a client that stops reading cannot hold a producer |
 | connections | 1024 | the next waits for a slot | each holds memory and a descriptor |
 | SIGTERM | listener closed; idle connections let go within a second | the rest end, or grace (5 s) is up | a deploy does not cut requests in flight |
@@ -711,6 +744,14 @@ parsed under the budget you pass, at most 64 containers deep.
 - `stream_next`: after a streamed request the connection goes on only once
   the body has ended, with exactly the bytes after it. A body a handler did not
   read is never read as the next request.
+- `handler_late`: a handler still waiting when its time is up is answered
+  with a 503 that closes the connection, after what was waiting, and nothing
+  it answers later is written. `handler_in_time`: one in time is written as
+  ever. `late_framed`: the 503 reads back as one response.
+- `ws_version`: a request with no `Sec-WebSocket-Version`, or one not 13, is
+  answered 426 by a WebSocket route. `ws_route_methods`: a WebSocket route
+  takes every method of a request that asked to upgrade, so a POST is refused
+  by the handshake (400), as a HEAD is.
 - `pour_chunked`: a response written as it is made, its length unknown, reads
   back as exactly one response, its body the producer's writes joined, and
   nothing after it; `pour_length`: the same with a declared length the writes
@@ -734,7 +775,8 @@ parsed under the budget you pass, at most 64 containers deep.
 frame a server sends is not, forbidden frames are refused with their close
 code (an unmasked one from a client with 1002), pings are answered, the
 handshake is checked as RFC 6455 says on both ends (the server's 101 for every
-request that asked well, a 400 or 426 for every other), the messages a server's
+request that asked well, a 426 for one that did not ask, a 400 or 426 for
+every other), the messages a server's
 handler receives are the spec's reassembly of the input however TCP cut it
 into reads, and a close is answered once. To run them:
 
@@ -768,8 +810,6 @@ checked response writer that `respond_framed` is about (`net/README.md`).
   so a chunk's size never wraps. A Content-Length body can reach 4 GiB.
 - WebSocket compression (`permessage-deflate`): offered, it is declined, on
   both ends.
-- A deadline on the handler itself. A handler that never answers holds its
-  connection.
 - HTTP/2 in `net/`. `demos/io_http2` is an HTTP/2 server of its own, not
   behind `Server.serve`.
 - Happy Eyeballs (RFC 8305). A name's addresses are tried one after another,

@@ -69,7 +69,9 @@
 # Continue is still owed, the client sends no body: it answers and
 # closes at once). A read that failed (the body refused, too large, too
 # slow) is answered by the server itself (400, 413, 408) whatever the
-# handler answered, and the connection closes.
+# handler answered, and the connection closes. A plain handler (app) has
+# the server's handler time, as under Server.serve (a 503 that closes);
+# a stream handler holds the socket, so none: its reads have progress.
 import Base
 import ../wire/reader.bend as Wr
 import ../wire/loop.bend as L
@@ -977,8 +979,9 @@ def one.at(~E: Data, ~app: Server.Hx(E), +cfg: Cfg, +ip: Bytes(), +env: E, +r: E
     case True{}:
       Server.fin(cfg.srv(cfg), Con{L.Raw{Server.own(head, v10, 414)}, acc}, s)
     case False{}:
-      IO.bind(Http.Response, Socket, app(env, Http.req.of(ip, r)),
-        resp => Server.one.done(cfg.srv(cfg), head, Eng.req.close(r) || Eng.req.ws(r), v10, resp, acc, s, go))
+      IO.bind(Maybe<&1, Http.Response>, Socket,
+        IO.within(Http.Response, Server.cfg.handler(cfg.srv(cfg)), app(env, Http.req.of(ip, r))),
+        m => Server.one.plan(cfg.srv(cfg), Server.plan(head, Eng.req.close(r) || Eng.req.ws(r), v10, m, acc), s, go))
 
 def one(~E: Data, ~app: Server.Hx(E), +cfg: Cfg, +ip: Bytes(), +env: E, +r: Eng.Req, acc: List<&2, L.Seg>, s: Socket,
   go: List<&2, L.Seg> -> Socket -> IO(Socket)) -> IO(Socket):

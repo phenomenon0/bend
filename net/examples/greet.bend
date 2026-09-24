@@ -7,6 +7,7 @@
 #   curl 'localhost:8080/greet'              Hello, stranger!
 #   curl localhost:8080/add/2/3              5
 #   curl -i localhost:8080/add/2/x           500; "handler failed: ..." on stderr
+#   curl -i localhost:8080/stall             503 after the handler's time (--handler-ms)
 import Base
 import ../http.bend as Http
 import ../server.bend as Server
@@ -15,6 +16,12 @@ import ../server.bend as Server
 def greet(r: Http.Request) -> IO(Http.Response):
   +name = Maybe.default(&2, Bytes(), Http.query.get(r, "name"), "stranger")
   Http.reply(Http.text(200, Bytes.concat(["Hello, ", name, "!\n"])))
+
+# GET /stall: a handler that waits and never answers (49 days is never);
+# when the handler's time is up (Server.set.handler, --handler-ms; 30 s)
+# the server answers 503, closes, and lets it go
+def stall(r: Http.Request) -> IO(Http.Response):
+  IO.bind(Unit, Http.Response, IO.sleep(4294967295), u => Http.reply(Http.text(200, "awake\n")))
 
 # GET /add/:a/:b: a handler that answers Done{response} or Fail{why};
 # Server.recovered.around turns a Fail into a plain 500
@@ -29,7 +36,8 @@ def add(+r: Http.Request) -> IO(Result<&2, &2, Bytes(), Http.Response>):
   IO.pure(Result<&2, &2, Bytes(), Http.Response>, sum(U32.read(Http.param(r, "a")), U32.read(Http.param(r, "b"))))
 
 def routes() -> List<Server.Route>:
-  [Server.get("/greet", greet), Server.get("/add/:a/:b", r => Server.recovered.around(add(r)))]
+  [Server.get("/greet", greet), Server.get("/add/:a/:b", r => Server.recovered.around(add(r))),
+    Server.get("/stall", stall)]
 
 def app(r: Http.Request) -> IO(Http.Response):
   Server.route(routes(), r)

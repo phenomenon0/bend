@@ -55,6 +55,35 @@ E = 'demos/io_http_engine/main.bend'
 
 # (what, file, before, after)
 MUTANTS = [
+  ('a handler past its time answered 500, not 503 (handler_late)', S,
+    '''      End{Con{L.Raw{own(head, v10, 503)}, acc}}''',
+    '''      End{Con{L.Raw{own(head, v10, 500)}, acc}}'''),
+  ('the connection goes on after a handler past its time (handler_late)', S,
+    '''      End{Con{L.Raw{own(head, v10, 503)}, acc}}''',
+    '''      Go{Con{L.Raw{own(head, v10, 503)}, acc}}'''),
+  ('the responses waiting dropped for the 503 (handler_late)', S,
+    '''      End{Con{L.Raw{own(head, v10, 503)}, acc}}''',
+    '''      End{[L.Raw{own(head, v10, 503)}]}'''),
+  ('output written after the 503: what waited goes out after it (handler_late)', S,
+    '''      End{Con{L.Raw{own(head, v10, 503)}, acc}}''',
+    '''      End{List.append(&2, L.Seg, acc, [L.Raw{own(head, v10, 503)}])}'''),
+  ('a response in time dropped for the 503 (handler_in_time)', S,
+    '''    case Some{resp}:
+      plan.of(closing, rev.onto(segs.of(head, closing, v10, resp), acc))''',
+    '''    case Some{resp}:
+      End{Con{L.Raw{own(head, v10, 503)}, acc}}'''),
+  ("the server's own answers keep the connection (late_framed)", S,
+    '''  Http.write(head, True{}, v10, code, [Http.Header{"content-type", "text/plain; charset=utf-8"}],''',
+    '''  Http.write(head, False{}, v10, code, [Http.Header{"content-type", "text/plain; charset=utf-8"}],'''),
+  ('an upgrade with no Sec-WebSocket-Version asks (ws_version)', 'demos/io_http_engine/main.bend',
+    '''      (up && cu && Bool.not(bnil(key)) && ver.is13(ver), key)''',
+    '''      (up && cu && Bool.not(bnil(key)), key)'''),
+  ('a ws route takes only GET and HEAD, even a request that asked (ws_route_methods)', S,
+    '''          unzip.put(Pat{sock.methods(up, m), pat}, h, unzip(up, m, t))''',
+    '''          unzip.put(Pat{sock.methods(False{}, m), pat}, h, unzip(up, m, t))'''),
+  ('a ws route takes every method, asked or not (ws_route_methods)', S,
+    '''  Bool.pick(List<&2, Bytes()>, up, Con{m, ["GET", "HEAD"]}, ["GET", "HEAD"])''',
+    '''  Con{m, ["GET", "HEAD"]}'''),
   ('each read scanned from a fresh reader (handler_framed)', S,
     '''def scan(+bs: Bytes(), sc: X.Scan) -> X.Scanned:
   X.scan(bs, sc)''',

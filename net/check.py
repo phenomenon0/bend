@@ -12,6 +12,7 @@ pipelining, HEAD, keep-alive and close, its refusals (400, 408, 413,
 414, 431), its timeouts (head, body, idle), the connection limit,
 100-continue and SIGTERM; the router's 404 and 405 with Allow, the JSON
 API and the file server; the middleware as templates (greet), the
+handler's time (a handler that sleeps forever: a 503 that closes), the
 listening address and the banner that names it, a TLS certificate that
 does not load named; and the client against Python peers: plain and
 TLS (a self-signed certificate refused, then trusted by --ca), refused
@@ -241,7 +242,7 @@ def check_notes(notes):
 
 def check_greet(greet):
     port = PORT + 6
-    p = start([greet, "--port", str(port)], port)
+    p = start([greet, "--port", str(port), "--handler-ms", "600"], port)
     r = get(port, "/greet?name=Ada")
     ok("greet: a query value, decoded", r.startswith(b"HTTP/1.1 200") and r.endswith(b"Hello, Ada!\n"), r)
     ok("greet: ~Server.logged(~Server.secured(~app)) adds the browser's headers", b"x-frame-options: DENY" in r, r)
@@ -249,10 +250,36 @@ def check_greet(greet):
     ok("greet: a handler that can fail, answering", r.endswith(b"\r\n\r\n5\n"), r)
     r = get(port, "/add/2/x")
     ok("greet: a handler's Fail is a plain 500", r.startswith(b"HTTP/1.1 500"), r)
+    # the handler's time: /stall sleeps forever; past --handler-ms the
+    # server answers 503 that closes, and nothing after it
+    t0 = time.time()
+    r, eof = raw(port, b"GET /stall HTTP/1.1\r\nHost: t\r\n\r\nGET /greet?name=Late HTTP/1.1\r\nHost: t\r\n\r\n",
+                 wait=4, total=4)
+    dt = time.time() - t0
+    ok("handler time: a handler that never answers is a 503 at --handler-ms, closing, and nothing after it",
+       r.startswith(b"HTTP/1.1 503") and b"connection: close" in r.lower() and eof and r.count(b"HTTP/1.1 ") == 1
+       and b"Late" not in r and 0.5 < dt < 2.0, (r, eof, dt))
+    t0 = time.time()
+    r, eof = raw(port, b"GET /greet?name=Ada HTTP/1.1\r\nHost: t\r\n\r\nGET /stall HTTP/1.1\r\nHost: t\r\n\r\n",
+                 wait=4, total=4)
+    dt = time.time() - t0
+    ok("handler time: what was answered before it goes out first, then the 503",
+       r.startswith(b"HTTP/1.1 200") and r.count(b"HTTP/1.1 503") == 1 and r.index(b"Hello, Ada!") < r.index(b"HTTP/1.1 503")
+       and eof and 0.5 < dt < 2.0, (r, eof, dt))
+    held = [socket.create_connection(("127.0.0.1", port)) for _ in range(3)]
+    for h in held:
+        h.sendall(b"GET /stall HTTP/1.1\r\nHost: t\r\n\r\n")
+    time.sleep(0.1)
+    r = get(port, "/greet?name=Bo")
+    ok("handler time: handlers waiting do not hold the server: another request is answered at once",
+       r.startswith(b"HTTP/1.1 200") and r.endswith(b"Hello, Bo!\n"), r)
+    for h in held:
+        h.close()
     stop(p)
     log = p.stderr.read().decode()
     ok("greet: the logged template writes a line per request", "GET /greet 200" in log and "GET /add/2/x 500" in log
        and "handler failed: /add wants two numbers" in log, log)
+    ok("handler time: a handler let go is never logged as answering", "GET /stall" not in log, log)
 
 def check_listen(hello, tmp):
     port = PORT + 7
@@ -752,7 +779,7 @@ def check_pour(export, events, relay, tmp):
     stop(rl)
     stop(p)
     port = PORT + 13
-    p = start([events, "--port", str(port), "--keepalive-ms", "200"], port)
+    p = start([events, "--port", str(port), "--keepalive-ms", "200", "--handler-ms", "600"], port)
     t0 = time.time()
     c = subprocess.run(["curl", "-N", "-sS", "-i", "--max-time", "10", "http://127.0.0.1:%d/ticks?n=3&ms=500" % port],
                        capture_output=True, text=True)
@@ -763,6 +790,13 @@ def check_pour(export, events, relay, tmp):
        c.returncode == 0 and "content-type: text/event-stream" in h and "cache-control: no-cache" in h
        and evs == ["event: tick\nid: %d\ndata: %d" % (i, i) for i in range(3)] and b.count(": keepalive\n\n") >= 2
        and 0.9 < dt < 3, (c.returncode, c.stdout, c.stderr))
+    ok("handler time: a stream begun runs past --handler-ms (600): only the handler's answer is timed, then the sends",
+       c.returncode == 0 and len(evs) == 3 and dt > 0.9, dt)
+    t0 = time.time()
+    r, eof = raw(port, b"GET /ticks?n=1&delay=5000 HTTP/1.1\r\nHost: t\r\n\r\n", wait=4, total=4)
+    dt = time.time() - t0
+    ok("handler time: a Stream.get handler that has not answered at --handler-ms is a 503 that closes",
+       r.startswith(b"HTTP/1.1 503") and b"connection: close" in r.lower() and eof and 0.5 < dt < 2.0, (r, eof, dt))
     stop(p)
 
 # WebSockets on the server
@@ -785,6 +819,13 @@ def check_ws(room, chat_bin, echo):
     r = raw(port, b"GET /room HTTP/1.1\r\nHost: t\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
             b"Sec-WebSocket-Key: short\r\nSec-WebSocket-Version: 13\r\n\r\n")[0]
     ok("ws: a key that is not sixteen bytes in base64 is a 400", b" 400 " in r.split(b"\r\n", 1)[0], r[:200])
+    r = raw(port, b"GET /room HTTP/1.1\r\nHost: t\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
+            b"Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n")[0]
+    ok("ws: an upgrade with no Sec-WebSocket-Version is a 426 naming 13 (RFC 6455 4.4)",
+       b" 426 " in r.split(b"\r\n", 1)[0] and b"sec-websocket-version: 13" in r.lower(), r[:300])
+    r = raw(port, b"POST /room HTTP/1.1\r\nHost: t\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
+            b"Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\nContent-Length: 0\r\n\r\n")[0]
+    ok("ws: a POST that asks to upgrade is a 400, as a HEAD is (RFC 6455 4.2.1)", b" 400 " in r.split(b"\r\n", 1)[0], r[:200])
     r = raw(port, b"GET /room HTTP/1.1\r\nHost: t\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
             b"Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n"
             b"Sec-WebSocket-Protocol: x, chat\r\nSec-WebSocket-Extensions: permessage-deflate\r\n\r\n", wait=0.5)[0]
