@@ -745,15 +745,20 @@ def judge.at(rl: Spec.RLine, h: Hs, +ip: Bytes()) -> Head:
       HNo{400}
 
 # a head, up to (not with) its blank line
-def judge.lines(ls: List<&2, Bytes()>, +ip: Bytes()) -> Head:
-  match ls:
-    case Nil{}:
+def judge.lines(ls: List<&2, Bytes()>, crlf: Bool, +ip: Bytes()) -> Head:
+  match ls crlf:
+    case _ False{}:
       HNo{400}
-    case Con{+l0, t}:
+    case Nil{} True{}:
+      HNo{400}
+    case Con{+l0, t} True{}:
       judge.at(Spec.req.view(Bytes.to_list(l0)), lines(t, hs.new()), ip)
 
+# a head's lines: cut at its CR LFs, every CR the start of one (a bare CR
+# or LF is refused, as the engine refuses it)
 def judge(+hb: Bytes(), +ip: Bytes()) -> Head:
-  judge.lines(X.cut(hb, 13, 2n), ip)
+  +ls = X.cut(hb, 13, 2n)
+  judge.lines(ls, String.eq(String.join(ls, "\r\n"), hb), ip)
 
 # The connection
 # ==============

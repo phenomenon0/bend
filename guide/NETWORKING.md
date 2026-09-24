@@ -221,11 +221,11 @@ and the file at fault.
 
 ### Uploads
 
-A body past `max_body` is taken as a stream. `Stream.serve.with(~E, ~app,
-~uploads, env, cfg)` (`net/stream.bend`) serves `app` as `Server.serve.with`
-does, and a table of stream routes beside it. A stream route's handler gets the
-request's head and its body as a `Stream.Body`, and hands the body back beside
-its response:
+A body too large to hold is read as a stream, on a stream route.
+`Stream.serve.with(~E, ~app, ~uploads, env, cfg)` (`net/stream.bend`) serves
+`app` as `Server.serve.with` does, and a table of stream routes beside it. A
+stream route's handler gets the request's head and its body as a
+`Stream.Body`, and hands the body back beside its response:
 
 ```python
 def uploads(+dir: Bytes()) -> List<Stream.Route>:

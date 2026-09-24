@@ -570,6 +570,8 @@ def check_stream(upload_bin, tmp):
     ok("stream: a body framed two ways is a 400 that closes", r.startswith(b"HTTP/1.1 400") and eof, r)
     r, eof = raw(port, b"PUT /upload/x HTTP/1.1\r\nContent-Length: 1\r\n\r\nx")
     ok("stream: no Host is a 400", r.startswith(b"HTTP/1.1 400") and eof, r)
+    r, eof = raw(port, b"PUT /upload/x HTTP/1.1\r\nHost: t\rX-A: 1\r\nContent-Length: 1\r\n\r\nx")
+    ok("stream: a bare CR in a head is a 400", r.startswith(b"HTTP/1.1 400") and eof, r)
     stop(p)
     p = start([upload_bin, "--port", str(port), "--dir", d, "--max-stream", "1000"], port)
     r, eof = raw(port, b"POST /count HTTP/1.1\r\nHost: t\r\nTransfer-Encoding: chunked\r\n\r\n400\r\n" + b"x" * 1024 + b"\r\n0\r\n\r\n")
