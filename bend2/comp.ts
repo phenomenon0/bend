@@ -3357,6 +3357,10 @@ using namespace metal;
 #include <stdatomic.h>
 #include <unistd.h>
 #include <signal.h>
+#include <sys/wait.h>
+#ifdef __linux__
+#include <sys/prctl.h>
+#endif
 #include <sys/mman.h>
 #include <time.h>
 #include <poll.h>
@@ -3662,6 +3666,9 @@ static Stk  io_stk;
 static const char* CLI_HELP =
   "usage: %s [options] [arguments]\n"
   "  --threads N       worker threads, 1 to 128 (default: the CPU count)\n"
+  "  --workers N       run N copies of the program as processes, as nginx\n"
+  "                    runs its workers; a server shares its port\n"
+  "                    (TCP.listen_shared) (default: 1)\n"
   "  --gpu on|off|4GB  run ! calls on the GPU, over this much of its memory\n"
   "                    (default: on if present, over 2GB on Metal)\n"
   "  --gpu-build       write the GPU program and exit\n"
@@ -5962,11 +5969,75 @@ static void cli_fail(const char* msg, const char* arg) {
   exit(1);
 }
 
+// Workers
+// =======
+
+// --workers N: the process forks N copies of the program before it
+// starts a thread, and stays as their master, as nginx's does: it runs
+// no program itself, passes SIGTERM, SIGINT and SIGHUP on to every
+// copy, and ends when they have all ended, with the first failure's
+// code. A copy dies with its master on Linux. Each is its own heap, its
+// own loop and its own threads; a server's copies share its port
+// through TCP.listen_shared, and the kernel spreads the connections.
+static pid_t* cli_kids;
+static int    cli_kids_n;
+
+static void cli_pass(int sig) {
+  for (int i = 0; i < cli_kids_n; i += 1) {
+    if (cli_kids[i] > 0) {
+      kill(cli_kids[i], sig);
+    }
+  }
+}
+
+// -1 in a copy, which goes on to run the program; the code in the master
+static int cli_workers(long n) {
+  cli_kids   = io_mem(calloc((size_t)n, sizeof *cli_kids));
+  pid_t boss = getpid();
+  for (long i = 0; i < n; i += 1) {
+    pid_t k = fork();
+    if (k < 0) {
+      cli_pass(SIGTERM);
+      cli_fail("could not fork a worker", NULL);
+    }
+    if (k == 0) {
+#ifdef __linux__
+      prctl(PR_SET_PDEATHSIG, SIGTERM);
+#endif
+      if (getppid() != boss) {
+        _exit(1);
+      }
+      return -1;
+    }
+    cli_kids[cli_kids_n++] = k;
+  }
+  struct sigaction sa = { .sa_handler = cli_pass };
+  sigemptyset(&sa.sa_mask);
+  sigaction(SIGTERM, &sa, NULL);
+  sigaction(SIGINT, &sa, NULL);
+  sigaction(SIGHUP, &sa, NULL);
+  int code = 0, left = cli_kids_n, st = 0;
+  while (left > 0) {
+    pid_t k = waitpid(-1, &st, 0);
+    if (k < 0) {
+      if (errno == EINTR) {
+        continue;
+      }
+      break;
+    }
+    left -= 1;
+    int c = WIFEXITED(st) ? WEXITSTATUS(st) : 128 + WTERMSIG(st);
+    code  = code != 0 ? code : c;
+  }
+  return code;
+}
+
 // Main
 // ====
 
 int main(int argc, char** argv) {
   long thr = 0;
+  long wks = 1;
   int  gpu = -1;
   u64  mem = 0;
   io_argv = argv + 1;
@@ -5992,6 +6063,13 @@ int main(int argc, char** argv) {
         cli_fail("expected a thread count of 1 or more after --threads", NULL);
       }
       i += 1;
+    } else if (strcmp(a, "--workers") == 0) {
+      char* end = NULL;
+      wks = v != NULL ? strtol(v, &end, 10) : 0;
+      if (wks < 1 || wks > 1024 || end == NULL || *end != '\0') {
+        cli_fail("expected a worker count of 1 to 1024 after --workers", NULL);
+      }
+      i += 1;
     } else if (strcmp(a, "--gpu") == 0) {
       char*  end = NULL;
       double n   = v != NULL ? strtod(v, &end) : 0;
@@ -6008,6 +6086,12 @@ int main(int argc, char** argv) {
       i += 1;
     } else {
       io_argv[io_argc++] = argv[i];
+    }
+  }
+  if (wks > 1) {
+    int code = cli_workers(wks);
+    if (code >= 0) {
+      return code;
     }
   }
   bool dev = gpu != 0 && BANGS != 0 && gpu_probe();
@@ -6088,7 +6172,8 @@ const RUNTIME_MAIN: string = String.raw`
 // Cli
 // ===
 
-// A JS program runs one thread and no GPU: --threads and --gpu do nothing.
+// A JS program runs one thread, one process and no GPU: --threads,
+// --workers and --gpu do nothing.
 let cli_args = [];
 
 function cli(argv) {
@@ -6099,7 +6184,8 @@ function cli(argv) {
     } else if (argv[i] === "--help") {
       io_out(1, io_bytes("usage: " + process.argv[1] + "\n"));
       process.exit(0);
-    } else if (argv[i] === "--threads" || argv[i] === "--gpu") {
+    } else if (argv[i] === "--threads" || argv[i] === "--workers"
+      || argv[i] === "--gpu") {
       i += 1;
     } else {
       cli_args.push(argv[i]);
