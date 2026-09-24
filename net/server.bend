@@ -415,6 +415,15 @@ def tail.cont(ask: Bool, acc: List<&2, L.Seg>) -> List<&2, L.Seg>:
     case False{}:
       acc
 
+# write what waits, then go on unless the send failed
+def next(sb: Socket & Bool, go: Socket -> IO(Socket)) -> IO(Socket):
+  (s, ok) = sb
+  match ok:
+    case True{}:
+      go(s)
+    case False{}:
+      IO.pure(Socket, s)
+
 def tail.go(+cfg: Cfg, big: Bool, over: Bool, +ask: Bool, fresh: Bool, t0: Maybe<&2, Nat>, cont: Bool,
   acc: List<&2, L.Seg>, s: Socket, +p: Eng.P, +n: Nat, more: More()) -> IO(Socket):
   match big over:
@@ -620,15 +629,6 @@ def go(~E: Data, ~app: Hx(E), +srv: Srv<E>, s: Socket) -> IO(Socket):
 
 # Serving
 # =======
-
-# write what waits, then go on unless the send failed
-def next(sb: Socket & Bool, go: Socket -> IO(Socket)) -> IO(Socket):
-  (s, ok) = sb
-  match ok:
-    case True{}:
-      go(s)
-    case False{}:
-      IO.pure(Socket, s)
 
 # a path's segments: the bytes after its leading '/', cut at every '/'
 def segs.at(cut: Bool, +s: Bytes(), +i: Nat, go: Bytes() -> List<&2, Bytes()>) -> List<&2, Bytes()>:
