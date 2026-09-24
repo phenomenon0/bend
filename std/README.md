@@ -184,18 +184,33 @@ it is under both implementations, and nothing of packing, views or the
 natives: the one fact each implementation owes is its `.is` laws (and
 `len.shift`), and each proves them.
 
+## Checking it on released Bend
+
+From this repo, with a checkout of released Bend at `canon/`
+(`git worktree add --detach canon canon/main`):
+
+    python3 tests/std/lanes.py  --bend canon/bend2/main.ts   # every tests/std test: check, interp, JS, C
+    python3 tests/std/readme.py --bend canon/bend2/main.ts   # the snippets above, and the examples run
+    bun canon/bend2/main.ts std/csv_proof.bend               # All terms check.
+
+Without `--bend` they use this repo's `bend2/main.ts`; `--packed` switches
+a scratch copy of `std/` to `bytes_packed.bend`.
+
 ## Speed
 
-Measured on one Linux x86_64 box (4 cores), C lane, one run's median of
-three, by `tests/std/bench/run.py` (answers checked against CPython first):
+`tests/std/bench/run.py` times each reader on one Linux x86_64 box (4
+cores, shared), in CPU seconds, the median of three runs, every answer
+held to CPython's first. C lane, one thread:
 
-| | released Bend (canon 95317d95), list | this repo, list | this repo, packed |
+| | released Bend (canon `95317d95`), list | this repo, list | this repo, packed |
 |---|---|---|---|
-| CSV, 10 MB | 7.3 MB/s | 10 MB/s | 24 MB/s |
-| JSON, 26 MB (GitHub event archive) | 3.0 MB/s | 1.3 MB/s | 20 MB/s |
-| gunzip, 30 KB out | 0.002 MB/s | | 2.6 MB/s (1 MB out) |
+| CSV, 10 MB (`tests/power/bench/csv/gen.py`) | 8.2 MB/s | 8.5 MB/s | PACKED_CSV |
+| JSON, 26 MB (json-iterator's `large-file.json`, GitHub events) | 3.2 MB/s | 1.1 MB/s | PACKED_JSON |
+| gunzip, 30 KB out | 2.7 KB/s | 7.7 KB/s | PACKED_GZ |
 
-Released Bend's JS lane is slower still (CSV 0.34 MB/s). Gzip on released
-Bend is correct but quadratic: inflate reads its window by offset, and a
-list is walked to the offset, so keep it to files of tens of kilobytes
-there. CSV and JSON scan forward and are linear on both.
+On released Bend, compile to C for speed: `bend F.bend` runs an IO main on
+the JS runtime, and so does `-o F.js`, where the same readers do CSV at
+0.3 MB/s and JSON at 0.16 MB/s (UPSTREAM.md F10). Gzip there is correct but
+quadratic: inflate reads its window back by offset, and a list is walked to
+the offset (F09), so keep it to files of tens of kilobytes. CSV and JSON
+only read forward and are linear in every lane.

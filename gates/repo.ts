@@ -95,7 +95,7 @@ allow(/^tests\/(regex|parser|lint|translate|translator|power|kernels|decode)\/[A
 allow("power/csv_proof.bend", 96000);
 allow(/^power\/[a-z0-9_]+\.bend$/, 64000);
 allow("std/README.md", 6000);
-allow("std/csv_proof.bend", 96000);
+allow(/^std\/(csv|deflate)_proof\.bend$/, 96000);
 allow(/^std\/[a-z0-9_]+\.bend$/, 64000);
 allow(/^std\/examples\/[a-z_]+\.bend$/, 4000);
 allow(/^std\/examples\/data\/[a-z_]+\.(csv|json)$/, 1000);
