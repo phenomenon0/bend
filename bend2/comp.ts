@@ -7325,6 +7325,34 @@ static int io_sys_addr(const char* host, u32 port, struct sockaddr_in* at) {
     ? -1 : 0;
 }
 
+// An address of either family: a dotted IPv4 one, read as io_sys_addr
+// reads it, or an IPv6 one in its text form ("::1", "::ffff:1.2.3.4";
+// no brackets, no zone). *len is the length the address takes; the
+// answer is its family, or -1.
+static int io_sys_sa(const char* host, u32 port, struct sockaddr_storage* at, socklen_t* len) {
+  memset(at, 0, sizeof(*at));
+  if (io_sys_addr(host, port, (struct sockaddr_in*)at) == 0) {
+    *len = sizeof(struct sockaddr_in);
+    return AF_INET;
+  }
+  struct sockaddr_in6* a6 = (struct sockaddr_in6*)at;
+  memset(at, 0, sizeof(*at));
+  a6->sin6_family = AF_INET6;
+  a6->sin6_port   = htons((uint16_t)port);
+  *len            = sizeof(struct sockaddr_in6);
+  return port > 65535 || inet_pton(AF_INET6, host, &a6->sin6_addr) != 1 ? -1 : AF_INET6;
+}
+
+// An IPv6 listener takes IPv4 connections too (IPV6_V6ONLY off) where
+// the system lets it, so "::" is every interface of both families, as
+// 0.0.0.0 is every one of IPv4's; where it does not, "::" is IPv6's.
+static void io_sys_dual(int fd, int fam) {
+  if (fam == AF_INET6) {
+    int zero = 0;
+    setsockopt(fd, IPPROTO_IPV6, IPV6_V6ONLY, &zero, sizeof(zero));
+  }
+}
+
 // The program's arguments (IO.args).
 static int    io_argc;
 static char** io_argv;
@@ -8635,6 +8663,91 @@ function io_addr(host, port) {
   const head = io_sys().mac ? [16, 2] : [2, 0];
   b.set([...head, port >> 8, port & 255, ...part.map(Number)]);
   return b;
+}
+
+// The 16 bytes of an IPv6 address in its text form ("::1",
+// "::ffff:1.2.3.4"; no brackets, no zone), as inet_pton reads one, or null
+function io_ip6(host) {
+  const two = typeof host === "string" ? host.indexOf("::") : -2;
+  if (two === -2 || !/^[0-9A-Fa-f:.]+$/.test(host) || two !== host.lastIndexOf("::")
+    || (two >= 0 && host.slice(two).startsWith(":::"))) {
+    return null;
+  }
+  const side = (s, tail) => {
+    const out = [];
+    const ps = s === "" ? [] : s.split(":");
+    for (let i = 0; i < ps.length; i += 1) {
+      const p = ps[i];
+      const v4 = tail && i === ps.length - 1 && p.includes(".") ? io_addr(p, 0) : null;
+      if (v4 !== null) {
+        out.push(v4[4] << 8 | v4[5], v4[6] << 8 | v4[7]);
+      } else if (/^[0-9A-Fa-f]{1,4}$/.test(p)) {
+        out.push(parseInt(p, 16));
+      } else {
+        return null;
+      }
+    }
+    return out;
+  };
+  const l = side(two < 0 ? host : host.slice(0, two), two < 0);
+  const r = two < 0 ? [] : side(host.slice(two + 2), true);
+  if (l === null || r === null || (two < 0 ? l.length !== 8 : l.length + r.length > 7)) {
+    return null;
+  }
+  const gs = [...l, ...new Array(8 - l.length - r.length).fill(0), ...r];
+  const b = new Uint8Array(16);
+  gs.forEach((g, i) => b.set([g >> 8, g & 255], 2 * i));
+  return b;
+}
+
+// An IPv6 address's text as RFC 5952 writes it: lowercase, no leading
+// zeros, the longest run of two or more zero groups (the first of equals)
+// as "::", and an IPv4-mapped one as ::ffff: and the dotted address
+function io_ip6_show(b) {
+  const g = [0, 1, 2, 3, 4, 5, 6, 7].map((i) => b[2 * i] << 8 | b[2 * i + 1]);
+  if (g.slice(0, 5).every((x) => x === 0) && g[5] === 0xffff) {
+    return "::ffff:" + [b[12], b[13], b[14], b[15]].join(".");
+  }
+  let at = -1, len = 0;
+  for (let i = 0; i < 8;) {
+    let j = i;
+    while (j < 8 && g[j] === 0) {
+      j += 1;
+    }
+    if (j - i > len) {
+      at = i;
+      len = j - i;
+    }
+    i = j === i ? i + 1 : j;
+  }
+  const hex = (xs) => xs.map((x) => x.toString(16)).join(":");
+  return len < 2 ? hex(g) : hex(g.slice(0, at)) + "::" + hex(g.slice(at + len));
+}
+
+// A socket address of either family, the host read as io_addr or io_ip6
+// reads it: { fam, b } (b the address's bytes), or null
+function io_sa(host, port) {
+  const v4 = io_addr(host, port);
+  if (v4 !== null) {
+    return { fam: 2, b: v4 };
+  }
+  const ip = port > 65535 ? null : io_ip6(host);
+  if (ip === null) {
+    return null;
+  }
+  const mac = io_sys().mac;
+  const b = new Uint8Array(28);
+  b.set(mac ? [28, 30, port >> 8, port & 255] : [10, 0, port >> 8, port & 255]);
+  b.set(ip, 8);
+  return { fam: mac ? 30 : 10, b };
+}
+
+// As io_sys_dual: an IPv6 listener takes IPv4 too, where it may
+function io_dual(fd, fam) {
+  if (fam !== 2) {
+    const sys = io_sys();
+    sys.setsockopt(fd, 41, sys.mac ? 27 : 26, sys.ptr(new Int32Array([0])), 4);
+  }
 }
 
 function io_push(fun, arg, fresh) {

@@ -10,8 +10,10 @@
 #
 # net/ws_cli.bend is a whole program on it.
 #
-# connect resolves the host (DNS.resolve), dials under a deadline
-# (TCP.connect_poll, or TLS.connect with SNI, ALPN http/1.1 and the
+# connect resolves the host to all its addresses, IPv6 and IPv4
+# (DNS.resolve_all; an IP-literal, ws://[::1]/, is its own), dials the
+# first that answers under a deadline split among them (net/addr.bend;
+# TCP.connect_poll, or TLS.connect with SNI, ALPN http/1.1 and the
 # certificate verified against the system's store or the pinned CA in
 # the options), sends the opening request with a key of sixteen random
 # bytes (IO.random_u32), and reads the answer's head under the same
@@ -55,6 +57,7 @@ import ../demos/io_http_engine/b64.bend as B64
 import ../demos/io_http_engine/sha1.bend as Sha1
 import ./ws_frame.bend as F
 import ./ws_hs.bend as H
+import ./addr.bend as A
 
 # The options
 # ===========
@@ -967,26 +970,22 @@ def tls.strip(r: Result<&1, &1, U32 & String, Socket & String>) -> IO(Result<&1,
     case Fail{e}:
       IO.pure(Result<&1, &1, U32 & String, Socket>, Fail{e})
 
-# the connection, plain or TLS (SNI and the name checked are the URL's
-# host; ALPN offers http/1.1, the protocol a WebSocket opens on)
-def dial(u: H.Url, +o: Opts, addr: String) -> IO(Result<&1, &1, U32 & String, Socket>):
-  match u:
-    case H.Url{tls, host, +port, path}:
-      match tls:
-        case True{}:
-          IO.bind(Result<&1, &1, U32 & String, Socket & String>, Result<&1, &1, U32 & String, Socket>,
-            TLS.connect(addr, port, host, "http/1.1", o.ca(o), o.connect(o)), tls.strip)
-        case False{}:
-          TCP.connect_poll(addr, port, o.connect(o))
-
-def resolved(+u: H.Url, +o: Opts, +until: Nat, r: Result<&1, &1, U32 & String, String>) -> RC():
+def resolved(+u: H.Url, +o: Opts, +until: Nat, r: A.Dialed) -> RC():
   match r:
-    case Fail{e}:
-      (code, msg) = e
+    case A.NoName{code, msg}:
       IO.pure(Result<&2, &1, Err, Conn>, Fail{EDns{code}})
-    case Done{addr}:
-      IO.bind(Result<&1, &1, U32 & String, Socket>, Result<&2, &1, Err, Conn>, dial(u, o, addr),
+    case A.Tried{g}:
+      IO.bind(Result<&1, &1, U32 & String, Socket>, Result<&2, &1, Err, Conn>, tls.strip(g),
         d => dialed(u, o, until, d))
+
+# the dial: to the first of the host's addresses that answers (net/
+# addr.bend's connect), plain or TLS (SNI and the name checked are the
+# URL's host, an IP-literal's address without brackets and no SNI; ALPN
+# offers http/1.1, the protocol a WebSocket opens on)
+def dial.of(+o: Opts, u: H.Url) -> A.Dial:
+  match u:
+    case H.Url{tls, +host, port, path}:
+      A.Dial{tls, port, A.bare(host), "http/1.1", o.ca(o)}
 
 def url.host(u: H.Url) -> String:
   match u:
@@ -994,7 +993,7 @@ def url.host(u: H.Url) -> String:
       host
 
 def connect.at(+u: H.Url, +o: Opts, +now: Nat) -> RC():
-  IO.bind(Result<&1, &1, U32 & String, String>, Result<&2, &1, Err, Conn>, DNS.resolve(url.host(u)),
+  IO.bind(A.Dialed, Result<&2, &1, Err, Conn>, A.connect(url.host(u), dial.of(o, u), o.connect(o)),
     r => resolved(u, o, Nat.add(now, U32.to_nat(o.connect(o))), r))
 
 def connect.url(+o: Opts, may: Maybe<&2, H.Url>) -> RC():

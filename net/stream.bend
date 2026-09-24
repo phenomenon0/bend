@@ -36,36 +36,44 @@
 #                   framing puts after it: an undrained body's bytes are
 #                   never read as the next request
 #
+# and the head is the one RFC 9112 reads:
+#
+#   stream_head     a stream route's head is read by the engine's reader,
+#                   the server's own, and what the stream takes from it
+#                   at the blank line is the head spec.bend's frame()
+#                   holds there, judged as the RFC judges it, however the
+#                   stream was cut and whatever came before it
+#
+# Every request, streamed or not, goes through the one reader: a read is
+# fed to it a piece at a time (Where a read stops, below), and when it
+# stands at the blank line of a head a stream route takes, the read stops
+# there, the requests before it are answered as Server.serve answers
+# them, and the stream takes the rest. The head is the engine's; its
+# body cap (the server's max_body) is left to the requests it reads
+# whole, and a stream's body has the stream's.
+#
 # The bounds (Stream.Cfg): a body at most max_stream bytes (1 GiB; a
-# length past it is a 413 before a byte of it is read, and a chunked
+# length past it is a 413 before a byte of it is read -- one past
+# 4294967289, more than the reader reads a length as, a 400 -- and a chunked
 # body is cut there, and is at most 256 MiB, the reader's budget, kept
 # under 2^28 so a chunk's size never wraps); each read of a body within
 # progress (10 s) or a 408; the head within the server's head time and
-# at most its max_head (408, 431). An Expect: 100-continue is answered
-# at the handler's first read of the socket, so a handler that refuses
-# without reading never asks for the body. When the handler returns, the
-# server drains what is left of the body, up to drain.cap() (1 MiB),
-# each read within the progress time, and the connection goes on; past
-# that it answers and closes (and when a 100 Continue is still owed, the
-# client sends no body: it answers and closes at once). A read that failed (the body refused, too large, too slow)
-# is answered by the server itself (400, 413, 408) whatever the handler
-# answered, and the connection closes.
-#
-# Which requests are streamed is decided by the request line, before a
-# field is read: at the start of a read with no message in progress (as
-# every client but a pipelining one sends), a request line whose method
-# and path a stream route matches is read by this file; any other goes
-# through the server's own reader. A stream route's request that comes
-# pipelined behind another in one read is read by the server's reader,
-# whole, under max_body, and handed to its handler as a Body over those
-# bytes.
+# at most its max_head (408, 431), as every head. An Expect:
+# 100-continue is answered at the handler's first read of the socket, so
+# a handler that refuses without reading never asks for the body. When
+# the handler returns, the server drains what is left of the body, up to
+# drain.cap() (1 MiB), each read within the progress time, and the
+# connection goes on; past that it answers and closes (and when a 100
+# Continue is still owed, the client sends no body: it answers and
+# closes at once). A read that failed (the body refused, too large, too
+# slow) is answered by the server itself (400, 413, 408) whatever the
+# handler answered, and the connection closes.
 import Base
 import ../wire/reader.bend as Wr
 import ../wire/loop.bend as L
 import ../wire/effects.bend as Fx
 import ../wire/http1/resp.bend as R
 import ../demos/io_http_engine/main.bend as Eng
-import ../demos/io_http_engine/spec.bend as Spec
 import ../demos/io_proxy/core.bend as X
 import ./http.bend as Http
 import ./server.bend as Server
@@ -569,208 +577,81 @@ def run(rs: List<&1, Route>, r: Http.Request, b: Body) -> IO(Body & Http.Respons
 # The head of a streamed request
 # ==============================
 #
-# Read whole, through its blank line, and judged a line at a time: the
-# request line by the engine's spec.bend view of one (a method, a target
-# of at most 8 KiB, HTTP/1.1 or HTTP/1.0), every field line by spec.bend's
-# view of it, but a Content-Length, whose digits are read here as a
-# number of any size (the engine refuses one past the 1 MiB it holds).
-# Refused, as the engine refuses: a line that does not read, lengths
-# that disagree, a Transfer-Encoding but chunked, two of them, one beside
-# a Content-Length or in HTTP/1.0, and a Host too many or too few.
+# Read by the engine's reader, the one every request the server takes is
+# read by (net/LAWS.bend's handler_framed, the engine's frame_sim): a
+# stream route's head is the head that reader holds when it stands at
+# the CR of the blank line (Eng.CrL), and its framing the engine's own
+# decision there (Eng.head.frame), before the engine's body cap: the
+# decision step.head applies body.fit to. Nothing here reads a byte of a
+# head: net/LAWS.bend's stream_head says the view below is the one
+# spec.bend's frame() reaches at the same byte, for every stream however
+# cut.
 
-# what the field lines said: the fields handed on (newest first), the
-# length, the Transfer-Encodings and whether each said chunked, the
-# Hosts, a Connection's close and keep-alive, 100-continue, and whether
-# a line was refused
-type Hs is Data:
-  Hs{fs: List<&2, Http.Header>, len: Maybe<&2, Nat>, te: Nat, ch: Bool, hosts: Nat, cl: Bool, ka: Bool, co: Bool,
-    bad: Bool}
+# a stream route's head: the request as the server hands one on (its
+# body empty), how its body is framed, and whether it is HTTP/1.0,
+# closes after, is a HEAD; or refused, as the engine refuses it (a Host
+# too many or too few, two framings, a Transfer-Encoding in HTTP/1.0)
+type Head is Data:
+  HOk{req: Http.Request, f: Frame, v10: Bool, closing: Bool, head: Bool}
+  HNo{}
 
-def hs.new() -> Hs:
-  Hs{Nil{}, None{}, 0n, True{}, 0n, False{}, False{}, False{}, False{}}
-
-def hs.bad(h: Hs) -> Hs:
-  match h:
-    case Hs{fs, len, te, ch, ho, cl, ka, co, bad}:
-      Hs{fs, len, te, ch, ho, cl, ka, co, True{}}
-
-def hs.pass(h: Hs, +n: Bytes(), +v: Bytes()) -> Hs:
-  match h:
-    case Hs{fs, len, te, ch, ho, cl, ka, co, bad}:
-      Hs{Con{Http.Header{n, v}, fs}, len, te, ch, ho, cl, ka, co, bad}
-
-def hs.host(h: Hs, +n: Bytes(), +v: Bytes()) -> Hs:
-  match h:
-    case Hs{fs, len, te, ch, ho, cl, ka, co, bad}:
-      Hs{Con{Http.Header{n, v}, fs}, len, te, ch, 1n+ho, cl, ka, co, bad}
-
-def hs.expect(h: Hs, +n: Bytes(), +v: Bytes()) -> Hs:
-  match h:
-    case Hs{fs, len, te, ch, ho, cl, ka, co, bad}:
-      Hs{Con{Http.Header{n, v}, fs}, len, te, ch, ho, cl, ka, co || String.eq(Eng.lows(v), "100-continue"), bad}
-
-def hs.te(h: Hs, +v: Bytes()) -> Hs:
-  match h:
-    case Hs{fs, len, te, ch, ho, cl, ka, co, bad}:
-      Hs{fs, len, 1n+te, ch && String.eq(Eng.lows(v), "chunked"), ho, cl, ka, co, bad}
-
-def hs.conn(h: Hs, +ms: List<&2, Bytes()>) -> Hs:
-  match h:
-    case Hs{fs, len, te, ch, ho, cl, ka, co, bad}:
-      Hs{fs, len, te, ch, ho, cl || X.in.names("close", ms), ka || X.in.names("keep-alive", ms), co, bad}
-
-def same.len(len: Maybe<&2, Nat>, +n: Nat) -> Bool:
-  match len:
-    case None{}:
-      True{}
-    case Some{m}:
-      Nat.is_eq(m, n)
-
-def hs.len.at(h: Hs, +n: Nat) -> Hs:
-  match h:
-    case Hs{fs, +len, te, ch, ho, cl, ka, co, bad}:
-      Hs{fs, Some{n}, te, ch, ho, cl, ka, co, bad || Bool.not(same.len(len, n))}
-
-def hs.len(h: Hs, d: Maybe<&2, Nat>) -> Hs:
-  match d:
-    case None{}:
-      hs.bad(h)
-    case Some{+n}:
-      hs.len.at(h, n)
-
-def digit.next(+acc: Nat, +c: U32) -> Nat:
-  Nat.min(Nat.add(Nat.mul(acc, 10n), U32.to_nat((c - 48 : U32))), 4294967295n)
-
-def num.pick(dg: Bool, next: Maybe<&2, Nat>) -> Maybe<&2, Nat>:
-  match dg:
-    case True{}:
-      next
-    case False{}:
+# the engine's framing, its body cap aside
+def head.frame(ok: Bool, bd: Eng.Bd) -> Maybe<&2, Frame>:
+  match ok bd:
+    case False{} _:
+      None{}
+    case True{} Eng.BdNone{}:
+      Some{FLen{0n}}
+    case True{} Eng.BdLen{v}:
+      Some{FLen{U32.to_nat(v)}}
+    case True{} Eng.BdChunked{}:
+      Some{FChunked{}}
+    case True{} Eng.BdBad{}:
       None{}
 
-def num(b: Bytes(), +acc: Nat) -> Maybe<&2, Nat>:
-  match b:
-    case SNil{}:
-      Some{acc}
-    case SCon{Chr{+c}, t}:
-      num.pick(R.digit(c), num(t, digit.next(acc, c)))
+def head.ok(+ip: Bytes(), r: Eng.Req, f: Frame) -> Head:
+  match r:
+    case Eng.Req{m, t, b, +cl, +ws, k, +hd}:
+      HOk{Http.req.of(ip, Eng.Req{m, t, b, cl, ws, k, hd}), f, Server.hd.v10(hd), cl || ws, Server.hd.head(hd)}
 
-# a Content-Length's value: digits, at least one
-def digits(+v: Bytes()) -> Maybe<&2, Nat>:
-  Bool.pick(Maybe<&2, Nat>, String.is_empty(v), None{}, num(v, 0n))
-
-def fline.ok(v: Spec.FLine) -> Bool:
-  match v:
-    case Spec.FVal{x}:
-      True{}
-    case _:
-      False{}
-
-def field.named(+h: Hs, +n: Bytes(), +v: Bytes()) -> Hs:
-  Bool.pick(Hs, String.eq(n, "transfer-encoding"), hs.te(h, v),
-  Bool.pick(Hs, String.eq(n, "connection"), hs.conn(h, X.members(v)),
-  Bool.pick(Hs, String.eq(n, "upgrade"), h,
-  Bool.pick(Hs, String.eq(n, "host"), hs.host(h, n, v),
-  Bool.pick(Hs, String.eq(n, "expect"), hs.expect(h, n, v), hs.pass(h, n, v))))))
-
-def field.at(+n: Bytes(), +v: Bytes(), +l: Bytes(), +h: Hs) -> Hs:
-  Bool.pick(Hs, String.eq(n, "content-length"), hs.len(h, digits(v)),
-    Bool.pick(Hs, fline.ok(Spec.field.view(Bytes.to_list(l))), field.named(h, n, v), hs.bad(h)))
-
-def line.at(f: Maybe<&2, Wr.Field>, +l: Bytes(), +h: Hs) -> Hs:
-  match f:
+def head.mk(+ip: Bytes(), r: Eng.Req, mf: Maybe<&2, Frame>) -> Head:
+  match mf:
     case None{}:
-      hs.bad(h)
-    case Some{fl}:
-      match fl:
-        case Wr.Field{+n, +v}:
-          field.at(n, v, l, h)
+      HNo{}
+    case Some{f}:
+      head.ok(ip, r, f)
 
-def lines(ls: List<&2, Bytes()>, h: Hs) -> Hs:
-  match ls:
-    case Nil{}:
-      h
-    case Con{+l, t}:
-      lines(t, line.at(X.field.of(l), l, h))
+def head.pair(+ip: Bytes(), r: Eng.Req, fr: Bool & Eng.Bd) -> Head:
+  (ok, bd) = fr
+  head.mk(ip, r, head.frame(ok, bd))
 
-# a head judged: the request (no body, no params yet), the body's
-# framing, and whether it is HTTP/1.0, closes after, expects
-# 100-continue, is a HEAD; or the status it is refused with
-type Head is Data:
-  HOk{req: Http.Request, f: Frame, v10: Bool, closing: Bool, cont: Bool, head: Bool}
-  HNo{code: U32}
+# the head the engine holds, pd, judged
+def head.of(+ip: Bytes(), +pd: Eng.Pend) -> Head:
+  head.pair(ip, Eng.pend.req(pd, ""), Eng.head.frame(pd))
 
-def frame.of(+te: Nat, len: Maybe<&2, Nat>) -> Frame:
-  match te len:
-    case 1n+k _:
-      FChunked{}
-    case 0n Some{n}:
-      FLen{n}
-    case 0n None{}:
-      FLen{0n}
-
-def hosts.ok(+v10: Bool, +ho: Nat) -> Bool:
-  Bool.pick(Bool, v10, Nat.is_le(ho, 1n), Nat.is_eq(ho, 1n))
-
-def judge.req(+m: Bytes(), pq: Bytes() & Bytes(), fs: List<&2, Http.Header>, +ip: Bytes()) -> Http.Request:
-  (p, q) = pq
-  Http.Request{m, p, q, List.reverse(&2, Http.Header, fs), "", ip, Nil{}}
-
-def judge.hs(+v10: Bool, +m: Bytes(), +t: Bytes(), h: Hs, +ip: Bytes()) -> Head:
-  match h:
-    case Hs{fs, +len, +te, +ch, +ho, +cl, +ka, +co, +bad}:
-      +two = Nat.is_lt(0n, te) && (Maybe.is_some(&2, Nat, len) || v10 || Bool.not(ch) || Nat.is_lt(1n, te))
-      Bool.pick(Head, bad || two || Bool.not(hosts.ok(v10, ho)), HNo{400},
-        HOk{judge.req(m, Http.target.cut(t), fs, ip), frame.of(te, len), v10, cl || (v10 && Bool.not(ka)), co,
-          String.eq(m, "HEAD")})
-
-def judge.go(ok: Bool, far: Bool, +v10: Bool, +m: Bytes(), +t: Bytes(), h: Hs, +ip: Bytes()) -> Head:
-  match ok far:
-    case False{} _:
-      HNo{400}
-    case True{} True{}:
-      HNo{414}
-    case True{} False{}:
-      judge.hs(v10, m, t, h, ip)
-
-def judge.ver(+m: Bytes(), +t: Bytes(), +v: Bytes(), h: Hs, +ip: Bytes()) -> Head:
-  judge.go(String.eq(v, "HTTP/1.1") || String.eq(v, "HTTP/1.0"), Eng.long(Eng.target.cap(), t), String.eq(v, "HTTP/1.0"),
-    m, t, h, ip)
-
-def judge.at(rl: Spec.RLine, h: Hs, +ip: Bytes()) -> Head:
-  match rl:
-    case Spec.RVer{m, t, v}:
-      judge.ver(Bytes.from_list(m), Bytes.from_list(t), Bytes.from_list(v), h, ip)
+def at.head.st(+ip: Bytes(), st: Eng.St, +pd: Eng.Pend) -> Maybe<&2, Head>:
+  match st:
+    case Eng.CrL{}:
+      Some{head.of(ip, pd)}
     case _:
-      HNo{400}
+      None{}
 
-# a head, up to (not with) its blank line
-def judge.lines(ls: List<&2, Bytes()>, crlf: Bool, +ip: Bytes()) -> Head:
-  match ls crlf:
-    case _ False{}:
-      HNo{400}
-    case Nil{} True{}:
-      HNo{400}
-    case Con{+l0, t} True{}:
-      judge.at(Spec.req.view(Bytes.to_list(l0)), lines(t, hs.new()), ip)
-
-# a head's lines: cut at its CR LFs, every CR the start of one (a bare CR
-# or LF is refused, as the engine refuses it)
-def judge(+hb: Bytes(), +ip: Bytes()) -> Head:
-  +ls = X.cut(hb, 13, 2n)
-  judge.lines(ls, String.eq(String.join(ls, "\r\n"), hb), ip)
+# the reader at a head's blank line, the CR read: the head; anywhere
+# else, none
+def at.head(+ip: Bytes(), p: Eng.P) -> Maybe<&2, Head>:
+  match p:
+    case Eng.P{st, +pd, out}:
+      at.head.st(ip, st, pd)
 
 # The connection
 # ==============
 #
-# Server.serve's loop, with one more way in: at the start of a read with
-# no message in progress, the request line is read first, and a stream
-# route's request is read here -- its head, then its body by the
-# handler -- while every other goes through the server's own reader,
-# as the same bytes (Server.scan is the proxy's scan, held to the spec
-# for any cut of the stream). After a streamed request the connection
-# goes on with the bytes after its body (Stream.next), read as the
-# start of the next request.
+# Server.serve's loop, with one more way out of a read: the engine's
+# reader stopped at a stream route's head (Where a read stops, below),
+# the head judged there, and the body read by the handler. After a
+# streamed request the connection goes on with the bytes after its body
+# (Stream.next), read from a fresh reader as the start of the next
+# request.
 
 # what the connection goes on with after a streamed request: the socket
 # and the bytes that came after the body
@@ -780,38 +661,6 @@ def Go() -> Type:
 # the server's own answer, closing
 def own.fin(+cfg: Cfg, +code: U32, s: Socket) -> IO(Socket):
   Server.fin(cfg.srv(cfg), [L.Raw{Server.own(False{}, False{}, code)}], s)
-
-# more of a head: a read under the head's clock, which began at t
-def hd.bytes(empty: Bool, s: Socket, +acc: Bytes(), +bs: Bytes(), k: Go()) -> IO(Socket):
-  match empty:
-    case True{}:
-      IO.pure(Socket, s)
-    case False{}:
-      k(s, Bytes.append(acc, bs))
-
-def hd.got(g: L.Got(Socket), +cfg: Cfg, +acc: Bytes(), k: Go()) -> IO(Socket):
-  (s, r) = g
-  match r:
-    case Fail{e}:
-      IO.pure(Socket, s)
-    case Done{m}:
-      match m:
-        case None{}:
-          Server.late(cfg.srv(cfg), s)
-        case Some{+bs}:
-          hd.bytes(String.is_empty(bs), s, acc, bs, k)
-
-def hd.wait(+cfg: Cfg, +acc: Bytes(), +lim: Nat, +now: Nat, s: Socket, k: Go(), live: Bool) -> IO(Socket):
-  match live:
-    case True{}:
-      IO.bind(L.Got(Socket), Socket, TCP.poll_buf(s, Server.chunk(), U32.from_nat(Nat.sub(lim, now))),
-        g => hd.got(g, cfg, acc, k))
-    case False{}:
-      Server.late(cfg.srv(cfg), s)
-
-def hd.more(+cfg: Cfg, +acc: Bytes(), +t: Nat, s: Socket, k: Go()) -> IO(Socket):
-  +lim = Nat.add(t, U32.to_nat(Server.cfg.head(cfg.srv(cfg))))
-  IO.bind(Nat, Socket, IO.now(), +now => hd.wait(cfg, acc, lim, now, s, k, Nat.is_lt(now, lim)))
 
 # Draining
 # --------
@@ -972,165 +821,206 @@ def begin.at(~E: Data, ~ups: Ux(E), +cfg: Cfg, +env: E, +req: Http.Request, +f: 
       +e = ask(cfg.max(cfg))
       begin.step(~E, ~ups, cfg, env, req, v10, closing, head, e, cont, rest, entry(e, f), step(e, rest, entry(e, f)), s, nx)
 
-def begin(~E: Data, ~ups: Ux(E), +cfg: Cfg, +env: E, hd: Head, +rest: Bytes(), s: Socket, nx: Go()) -> IO(Socket):
+def begin(~E: Data, ~ups: Ux(E), +cfg: Cfg, +env: E, hd: Head, +cont: Bool, +rest: Bytes(), s: Socket, nx: Go()) ->
+  IO(Socket):
   match hd:
-    case HNo{code}:
-      own.fin(cfg, code, s)
-    case HOk{+req, +f, +v10, +closing, +cont, +head}:
+    case HNo{}:
+      own.fin(cfg, 400, s)
+    case HOk{+req, +f, +v10, +closing, +head}:
       begin.at(~E, ~ups, cfg, env, req, f, v10, closing, cont, head, rest, s, nx, too.big(f, cfg.max(cfg)))
 
-def need.big(+cfg: Cfg, big: Bool, +acc: Bytes(), +t: Nat, s: Socket, k: Go()) -> IO(Socket):
-  match big:
-    case True{}:
-      own.fin(cfg, 431, s)
-    case False{}:
-      hd.more(cfg, acc, t, s, k)
+def pend.of(p: Eng.P) -> Eng.Pend:
+  match p:
+    case Eng.P{st, pd, out}:
+      pd
 
-# a stream route's head, read to its blank line (at most max_head)
-def need(~E: Data, ~ups: Ux(E), +cfg: Cfg, +ip: Bytes(), +env: E, +t: Nat, k: Nat, fnd: Maybe<&2, Nat>, +acc: Bytes(),
+def target.of(p: Eng.P) -> Bytes():
+  match p:
+    case Eng.P{st, pd, out}:
+      match pd:
+        case Eng.Pend{meth, path, cl, close, host, ws, fx, hx, nx}:
+          path
+
+def begin.lf(~E: Data, ~ups: Ux(E), +cfg: Cfg, +ip: Bytes(), +env: E, +p: Eng.P, lf: Bool, far: Bool, +rest: Bytes(),
   s: Socket, nx: Go()) -> IO(Socket):
-  match k fnd:
-    case _ Some{+i}:
-      begin(~E, ~ups, cfg, env, judge(String.take(acc, i), ip), String.drop(acc, Nat.add(i, 4n)), s, nx)
-    case 0n None{}:
-      IO.pure(Socket, s)
-    case 1n+j None{}:
-      need.big(cfg, Nat.is_lt(U32.to_nat(Server.cfg.max_head(cfg.srv(cfg))), Bytes.len(acc)), acc, t, s,
-        s2 => +a2 => need(~E, ~ups, cfg, ip, env, t, j, Bytes.find(a2, "\r\n\r\n"), a2, s2, nx))
+  match lf far:
+    case False{} _:
+      own.fin(cfg, 400, s)
+    case True{} True{}:
+      own.fin(cfg, 414, s)
+    case True{} False{}:
+      begin(~E, ~ups, cfg, env, head.of(ip, pend.of(p)), Server.expects(p), String.drop(rest, 1n), s, nx)
 
-# The server's own reader
-# -----------------------
+# a stream route's head, the reader at its blank line's CR, and rest what
+# came after that CR (never empty): anything but the LF there is refused,
+# as the engine refuses it; a target past 8 KiB is a 414, as the
+# server's; then the head is judged (head.of) and the bytes after the LF
+# are the body's first read
+def begin.head(~E: Data, ~ups: Ux(E), +cfg: Cfg, +ip: Bytes(), +env: E, +p: Eng.P, +rest: Bytes(), s: Socket,
+  nx: Go()) -> IO(Socket):
+  begin.lf(~E, ~ups, cfg, ip, env, p, U32.is_eq(Bytes.get(rest, 0n), 10), Eng.long(Eng.target.cap(), target.of(p)), rest,
+    s, nx)
+
+# Where a read stops
+# ------------------
 #
-# Server.serve's, but for a stream route's request it framed whole
-# (pipelined behind another in one read), run by the stream route with
-# a Body over the body it holds.
+# A read goes through the engine's reader as Server.serve's does (the
+# proxy's scan, Server.scan), but a piece at a time: up to and with each
+# CR (a body counted off by its length goes in one piece), and before
+# each piece the reader is looked at. When it stands at the blank line's
+# CR of a head a stream route takes (Eng.CrL, the method and path of the
+# head it holds), the read stops: the requests completed before it are
+# answered as the server answers them, and the rest of the read is the
+# stream's. The reader reaches CrL only at a CR, and it is looked at
+# after every CR and at the start of every read (a head whose CR ended
+# the last one), so every stream route's head stops the read at its
+# blank line, however the stream was cut and whatever came before it on
+# the connection: none is read whole, and none is ever held to the
+# engine's body cap.
 
-def req.bare(r: Http.Request) -> Http.Request:
-  match r:
-    case Http.Request{m, p, q, hs, b, ip, ps}:
-      Http.Request{m, p, q, hs, "", ip, ps}
+# how a read went: through whole, as the server's scan says; or stopped
+# at a stream route's head, with the requests completed before it, the
+# reader at the head's CR, and the bytes after that CR
+type Cut is Data:
+  Whole{sd: X.Scanned}
+  At{ts: List<&2, Eng.Req>, p: Eng.P, rest: Bytes()}
 
-def mem.body(+cfg: Cfg, s: Socket, +body: Bytes()) -> Body:
-  Body{s, R.P{entry.len(0n), Nil{}}, body, Lim{ask(cfg.max(cfg)), cfg.prog(cfg), False{}, Bytes.len(body),
-    U32.to_nat(cfg.max(cfg)), None{}}}
+def stops.st(rs: List<&1, Route>, +ip: Bytes(), st: Eng.St, +pd: Eng.Pend) -> Bool:
+  match st:
+    case Eng.CrL{}:
+      +r = Http.req.of(ip, Eng.pend.req(pd, ""))
+      takes(rs, Http.method(r), Http.path(r))
+    case _:
+      False{}
 
-def mem.done(+cfg: Cfg, +head: Bool, +closing: Bool, +v10: Bool, bo: Body & Http.Response, acc: List<&2, L.Seg>,
-  go: List<&2, L.Seg> -> Socket -> IO(Socket)) -> IO(Socket):
-  (b, resp) = bo
-  match b:
-    case Body{s, p, held, lim}:
-      Server.one.done(cfg.srv(cfg), head, closing, v10, resp, acc, s, go)
+# whether the reader stands at the blank line of a head a stream route
+# takes
+def stops(rs: List<&1, Route>, +ip: Bytes(), p: Eng.P) -> Bool:
+  match p:
+    case Eng.P{st, +pd, out}:
+      stops.st(rs, ip, st, pd)
 
-def one.run(~E: Data, ~app: Server.Hx(E), ~ups: Ux(E), +cfg: Cfg, +env: E, +req: Http.Request, +head: Bool,
-  +closing: Bool, +v10: Bool, hit: Bool, acc: List<&2, L.Seg>, s: Socket,
-  go: List<&2, L.Seg> -> Socket -> IO(Socket)) -> IO(Socket):
-  match hit:
-    case True{}:
-      IO.bind(Body & Http.Response, Socket, run(ups(env), req.bare(req), mem.body(cfg, s, Http.body(req))),
-        bo => mem.done(cfg, head, closing, v10, bo, acc, go))
-    case False{}:
-      IO.bind(Http.Response, Socket, app(env, req),
-        resp => Server.one.done(cfg.srv(cfg), head, closing, v10, resp, acc, s, go))
+# how much of a read the next piece is: the rest of a body counted off,
+# else up to and with the next CR
+def piece(p: Eng.P, +bs: Bytes()) -> Nat:
+  match p:
+    case Eng.P{st, pd, out}:
+      match st:
+        case Eng.Bod{r, b}:
+          1n+r
+        case Eng.Chd{r, b, left}:
+          1n+r
+        case _:
+          1n+Bytes.find_byte(bs, 0n, 13)
 
-def one.at(~E: Data, ~app: Server.Hx(E), ~ups: Ux(E), +cfg: Cfg, +ip: Bytes(), +env: E, +r: Eng.Req, +head: Bool,
-  +v10: Bool, far: Bool, acc: List<&2, L.Seg>, s: Socket, go: List<&2, L.Seg> -> Socket -> IO(Socket)) -> IO(Socket):
+def scan.p(sc: X.Scan) -> Eng.P:
+  match sc:
+    case X.Scan{p, n}:
+      p
+
+# what a read goes on with after a piece
+def Rest() -> Type:
+  X.Scan -> Bytes() -> List<&2, Eng.Req> -> Cut
+
+def cut.fed(+more: Bytes(), acc: List<&2, Eng.Req>, sd: X.Scanned, again: Rest()) -> Cut:
+  match sd:
+    case X.Scanned{took, t}:
+      match t:
+        case X.TWait{sc2}:
+          again(sc2, more, List.append(&2, Eng.Req, acc, took))
+        case X.TBad{}:
+          Whole{X.Scanned{List.append(&2, Eng.Req, acc, took), X.TBad{}}}
+        case X.TUp{}:
+          Whole{X.Scanned{List.append(&2, Eng.Req, acc, took), X.TUp{}}}
+
+def cut.at(+sc: X.Scan, +bs: Bytes(), acc: List<&2, Eng.Req>, empty: Bool, stop: Bool, again: Rest()) -> Cut:
+  match empty stop:
+    case True{} _:
+      Whole{X.Scanned{acc, X.TWait{sc}}}
+    case False{} True{}:
+      At{acc, scan.p(sc), bs}
+    case False{} False{}:
+      +i = piece(scan.p(sc), bs)
+      cut.fed(String.drop(bs, i), acc, Server.scan(String.take(bs, i), sc), again)
+
+# a read, from where the last one left the reader: at most k pieces
+# (each takes a byte at least), acc the requests completed so far
+def cut.go(~E: Data, ~ups: Ux(E), +env: E, +ip: Bytes(), k: Nat, +sc: X.Scan, +bs: Bytes(), acc: List<&2, Eng.Req>) -> Cut:
+  match k:
+    case 0n:
+      Whole{X.Scanned{acc, X.TBad{}}}
+    case 1n+j:
+      cut.at(sc, bs, acc, String.is_empty(bs), stops(ups(env), ip, scan.p(sc)),
+        sc2 => +b2 => a2 => cut.go(~E, ~ups, env, ip, j, sc2, b2, a2))
+
+def cut(~E: Data, ~ups: Ux(E), +env: E, +ip: Bytes(), +sc: X.Scan, +bs: Bytes()) -> Cut:
+  cut.go(~E, ~ups, env, ip, Nat.add(Bytes.len(bs), 2n), sc, bs, Nil{})
+
+# The requests before it
+# ----------------------
+#
+# Server.serve's, for the requests a read completed: each handed to app.
+
+def one.at(~E: Data, ~app: Server.Hx(E), +cfg: Cfg, +ip: Bytes(), +env: E, +r: Eng.Req, +head: Bool, +v10: Bool,
+  far: Bool, acc: List<&2, L.Seg>, s: Socket, go: List<&2, L.Seg> -> Socket -> IO(Socket)) -> IO(Socket):
   match far:
     case True{}:
       Server.fin(cfg.srv(cfg), Con{L.Raw{Server.own(head, v10, 414)}, acc}, s)
     case False{}:
-      +req = Http.req.of(ip, r)
-      one.run(~E, ~app, ~ups, cfg, env, req, head, Eng.req.close(r) || Eng.req.ws(r), v10,
-        takes(ups(env), Http.method(req), Http.path(req)), acc, s, go)
+      IO.bind(Http.Response, Socket, app(env, Http.req.of(ip, r)),
+        resp => Server.one.done(cfg.srv(cfg), head, Eng.req.close(r) || Eng.req.ws(r), v10, resp, acc, s, go))
 
-def one(~E: Data, ~app: Server.Hx(E), ~ups: Ux(E), +cfg: Cfg, +ip: Bytes(), +env: E, +r: Eng.Req,
-  acc: List<&2, L.Seg>, s: Socket, go: List<&2, L.Seg> -> Socket -> IO(Socket)) -> IO(Socket):
+def one(~E: Data, ~app: Server.Hx(E), +cfg: Cfg, +ip: Bytes(), +env: E, +r: Eng.Req, acc: List<&2, L.Seg>, s: Socket,
+  go: List<&2, L.Seg> -> Socket -> IO(Socket)) -> IO(Socket):
   match r:
     case Eng.Req{meth, +path, body, close, ws, key, hd}:
-      one.at(~E, ~app, ~ups, cfg, ip, env, r, Server.hd.head(hd), Server.hd.v10(hd), Eng.long(Eng.target.cap(), path),
-        acc, s, go)
+      one.at(~E, ~app, cfg, ip, env, r, Server.hd.head(hd), Server.hd.v10(hd), Eng.long(Eng.target.cap(), path), acc, s,
+        go)
 
-def took(~E: Data, ~app: Server.Hx(E), ~ups: Ux(E), +cfg: Cfg, +ip: Bytes(), +env: E, ts: List<&2, Eng.Req>,
-  t: X.Tail, fresh: Bool, t0: Maybe<&2, Nat>, cont: Bool, acc: List<&2, L.Seg>, s: Socket, more: Server.More()) ->
-  IO(Socket):
+def took(~E: Data, ~app: Server.Hx(E), +cfg: Cfg, +ip: Bytes(), +env: E, ts: List<&2, Eng.Req>, t: X.Tail, fresh: Bool,
+  t0: Maybe<&2, Nat>, cont: Bool, acc: List<&2, L.Seg>, s: Socket, more: Server.More()) -> IO(Socket):
   match ts:
     case Nil{}:
       Server.tail(cfg.srv(cfg), t, fresh, t0, cont, acc, s, more)
     case Con{+r, rest}:
-      one(~E, ~app, ~ups, cfg, ip, env, r, acc, s,
-        acc2 => s2 => took(~E, ~app, ~ups, cfg, ip, env, rest, t, True{}, None{}, False{}, acc2, s2, more))
+      one(~E, ~app, cfg, ip, env, r, acc, s,
+        acc2 => s2 => took(~E, ~app, cfg, ip, env, rest, t, True{}, None{}, False{}, acc2, s2, more))
 
-def scanned(~E: Data, ~app: Server.Hx(E), ~ups: Ux(E), +cfg: Cfg, +ip: Bytes(), +env: E, sd: X.Scanned,
-  t0: Maybe<&2, Nat>, cont: Bool, s: Socket, more: Server.More()) -> IO(Socket):
+def scanned(~E: Data, ~app: Server.Hx(E), +cfg: Cfg, +ip: Bytes(), +env: E, sd: X.Scanned, t0: Maybe<&2, Nat>, cont: Bool,
+  s: Socket, more: Server.More()) -> IO(Socket):
   match sd:
     case X.Scanned{ts, t}:
-      took(~E, ~app, ~ups, cfg, ip, env, ts, t, False{}, t0, cont, Nil{}, s, more)
+      took(~E, ~app, cfg, ip, env, ts, t, False{}, t0, cont, Nil{}, s, more)
 
-# The request line
-# ----------------
+# the stream, once the responses to the requests before it are sent
+def stream.at(~E: Data, ~ups: Ux(E), +cfg: Cfg, +ip: Bytes(), +env: E, acc: List<&2, L.Seg>, s: Socket, +p: Eng.P,
+  +rest: Bytes(), nx: Go()) -> IO(Socket):
+  match acc:
+    case Nil{}:
+      begin.head(~E, ~ups, cfg, ip, env, p, rest, s, nx)
+    case Con{a, t}:
+      IO.bind(Socket & Bool, Socket,
+        Server.flush.segs(s, Server.rev.onto(Con{a, t}, Nil{}), Server.cfg.send(cfg.srv(cfg))),
+        sb => Server.next(sb, s2 => begin.head(~E, ~ups, cfg, ip, env, p, rest, s2, nx)))
 
-def rl.meth(+line: Bytes()) -> Bytes():
-  String.take(line, Bytes.find_byte(line, 0n, 32))
-
-def rl.target(+line: Bytes()) -> Bytes():
-  +t = String.drop(line, 1n+Bytes.find_byte(line, 0n, 32))
-  String.take(t, Bytes.find_byte(t, 0n, 32))
-
-def rl.path(+line: Bytes()) -> Bytes():
-  +t = rl.target(line)
-  String.take(t, Bytes.find_byte(t, 0n, 63))
-
-# a request line past the longest the server reads is its to refuse
-def rl.long(+acc: Bytes()) -> Bool:
-  Nat.is_lt(Nat.add(Eng.target.cap(), 64n), Bytes.len(acc))
-
-# no message in progress: the reader is before a request line
-def fresh(sc: X.Scan) -> Bool:
-  match sc:
-    case X.Scan{p, n}:
-      match p:
-        case Eng.P{st, pd, out}:
-          match st:
-            case Eng.Pre{}:
-              True{}
-            case _:
-              False{}
-
-def bound.pick(~E: Data, ~app: Server.Hx(E), ~ups: Ux(E), +cfg: Cfg, +ip: Bytes(), +env: E, hit: Bool, +acc: Bytes(),
-  t0: Maybe<&2, Nat>, +t: Nat, s: Socket, more: Server.More(), nx: Go()) -> IO(Socket):
-  match hit:
-    case True{}:
-      need(~E, ~ups, cfg, ip, env, t, fuel(), Bytes.find(acc, "\r\n\r\n"), acc, s, nx)
-    case False{}:
-      scanned(~E, ~app, ~ups, cfg, ip, env, Server.scan(acc, X.scan.new()), t0, False{}, s, more)
-
-# a read that begins a message: its request line, once it has come,
-# says whose the request is
-def bound(~E: Data, ~app: Server.Hx(E), ~ups: Ux(E), +cfg: Cfg, +ip: Bytes(), +env: E, +t: Nat, k: Nat,
-  fnd: Maybe<&2, Nat>, lng: Bool, +acc: Bytes(), t0: Maybe<&2, Nat>, s: Socket, more: Server.More(), nx: Go()) ->
-  IO(Socket):
-  match k fnd lng:
-    case _ Some{+i} _:
-      +line = String.take(acc, i)
-      bound.pick(~E, ~app, ~ups, cfg, ip, env, takes(ups(env), rl.meth(line), rl.path(line)), acc, t0, t, s, more, nx)
-    case _ None{} True{}:
-      scanned(~E, ~app, ~ups, cfg, ip, env, Server.scan(acc, X.scan.new()), t0, False{}, s, more)
-    case 0n None{} False{}:
-      IO.pure(Socket, s)
-    case 1n+j None{} False{}:
-      hd.more(cfg, acc, t, s, s2 => +a2 => bound(~E, ~app, ~ups, cfg, ip, env, t, j, Bytes.find(a2, "\r\n"), rl.long(a2), a2,
-        Some{t}, s2, more, nx))
+def took.at(~E: Data, ~app: Server.Hx(E), ~ups: Ux(E), +cfg: Cfg, +ip: Bytes(), +env: E, ts: List<&2, Eng.Req>,
+  acc: List<&2, L.Seg>, s: Socket, +p: Eng.P, +rest: Bytes(), nx: Go()) -> IO(Socket):
+  match ts:
+    case Nil{}:
+      stream.at(~E, ~ups, cfg, ip, env, acc, s, p, rest, nx)
+    case Con{+r, t}:
+      one(~E, ~app, cfg, ip, env, r, acc, s, acc2 => s2 => took.at(~E, ~app, ~ups, cfg, ip, env, t, acc2, s2, p, rest, nx))
 
 # The loop
 # --------
 
-def on.read(~E: Data, ~app: Server.Hx(E), ~ups: Ux(E), +cfg: Cfg, +ip: Bytes(), +env: E, at: Bool, sc: X.Scan,
-  t0: Maybe<&2, Nat>, cont: Bool, s: Socket, +bs: Bytes(), more: Server.More(), nx: Go()) -> IO(Socket):
-  match at:
-    case True{}:
-      IO.bind(Nat, Socket, IO.now(), +now => bound(~E, ~app, ~ups, cfg, ip, env, now, fuel(), Bytes.find(bs, "\r\n"),
-        rl.long(bs), bs, t0, s, more, nx))
-    case False{}:
-      scanned(~E, ~app, ~ups, cfg, ip, env, Server.scan(bs, sc), t0, cont, s, more)
+def on.cut(~E: Data, ~app: Server.Hx(E), ~ups: Ux(E), +cfg: Cfg, +ip: Bytes(), +env: E, c: Cut, t0: Maybe<&2, Nat>,
+  cont: Bool, s: Socket, more: Server.More(), nx: Go()) -> IO(Socket):
+  match c:
+    case Whole{sd}:
+      scanned(~E, ~app, cfg, ip, env, sd, t0, cont, s, more)
+    case At{ts, +p, +rest}:
+      took.at(~E, ~app, ~ups, cfg, ip, env, ts, Nil{}, s, p, rest, nx)
 
 def got.bytes(~E: Data, ~app: Server.Hx(E), ~ups: Ux(E), +cfg: Cfg, +ip: Bytes(), +env: E, +sc: X.Scan,
   t0: Maybe<&2, Nat>, cont: Bool, s: Socket, empty: Bool, +bs: Bytes(), more: Server.More(), nx: Go()) -> IO(Socket):
@@ -1138,7 +1028,7 @@ def got.bytes(~E: Data, ~app: Server.Hx(E), ~ups: Ux(E), +cfg: Cfg, +ip: Bytes()
     case True{}:
       IO.pure(Socket, s)
     case False{}:
-      on.read(~E, ~app, ~ups, cfg, ip, env, fresh(sc), sc, t0, cont, s, bs, more, nx)
+      on.cut(~E, ~app, ~ups, cfg, ip, env, cut(~E, ~ups, env, ip, sc, bs), t0, cont, s, more, nx)
 
 def got(~E: Data, ~app: Server.Hx(E), ~ups: Ux(E), +cfg: Cfg, +ip: Bytes(), +env: E, sc: X.Scan, t0: Maybe<&2, Nat>,
   cont: Bool, +il: U32, g: L.Got(Socket), more: Server.More(), nx: Go()) -> IO(Socket):

@@ -6,21 +6,23 @@
 // out among them, which is how a single-threaded server takes more than
 // one core. TCP.listen itself keeps refusing a port already taken, since
 // that refusal is what most programs want to hear. TCP.listen_shared_on
-// (host, port) binds the one dotted IPv4 address named.
+// (host, port) binds the one address named, as TCP.listen_on does.
 uint32_t tcp_listen_shared_at(const char* host, uint32_t port, int* out) {
-  int fd = socket(AF_INET, SOCK_STREAM, 0);
+  struct sockaddr_storage at;
+  socklen_t               len = 0;
+  int                     fam = io_sys_sa(host, port, &at, &len);
+  if (fam < 0) {
+    return EINVAL;
+  }
+  int fd = socket(fam, SOCK_STREAM, 0);
   if (fd < 0) {
     return (uint32_t)errno;
   }
   int one = 1;
   setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
   setsockopt(fd, SOL_SOCKET, SO_REUSEPORT, &one, sizeof(one));
-  struct sockaddr_in at;
-  if (io_sys_addr(host, port, &at) < 0) {
-    close(fd);
-    return EINVAL;
-  }
-  int bound = bind(fd, (struct sockaddr*)&at, sizeof(at));
+  io_sys_dual(fd, fam);
+  int bound = bind(fd, (struct sockaddr*)&at, len);
   if (bound < 0 || listen(fd, SOMAXCONN) < 0
     || fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) | O_NONBLOCK) < 0) {
     uint32_t code = (uint32_t)errno;

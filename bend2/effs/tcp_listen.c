@@ -2,20 +2,24 @@
 // ===
 
 // TCP.listen(port) binds every interface; TCP.listen_on(host, port) the
-// one dotted IPv4 address named (EINVAL for anything else).
+// one address named, a dotted IPv4 one or an IPv6 one ("::1"; "::" is
+// every interface, IPv4's too where the system allows: IPV6_V6ONLY off);
+// EINVAL for anything else.
 uint32_t tcp_listen_at(const char* host, uint32_t port, int* out) {
-  int fd = socket(AF_INET, SOCK_STREAM, 0);
+  struct sockaddr_storage at;
+  socklen_t               len = 0;
+  int                     fam = io_sys_sa(host, port, &at, &len);
+  if (fam < 0) {
+    return EINVAL;
+  }
+  int fd = socket(fam, SOCK_STREAM, 0);
   if (fd < 0) {
     return (uint32_t)errno;
   }
   int one = 1;
   setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
-  struct sockaddr_in at;
-  if (io_sys_addr(host, port, &at) < 0) {
-    close(fd);
-    return EINVAL;
-  }
-  int bound = bind(fd, (struct sockaddr*)&at, sizeof(at));
+  io_sys_dual(fd, fam);
+  int bound = bind(fd, (struct sockaddr*)&at, len);
   if (bound < 0 || listen(fd, SOMAXCONN) < 0
     || fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) | O_NONBLOCK) < 0) {
     uint32_t code = (uint32_t)errno;
