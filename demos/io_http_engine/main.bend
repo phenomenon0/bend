@@ -2840,37 +2840,62 @@ def ext.go(bs: List<&2, U32>, cur: List<&2, U32>) -> List<&2, U32>:
 type Mime is Data:
   Mime{ext: Bytes(), name: Bytes(), head: Bytes()}
 
-def mime.table() -> List<&2, Mime>:
-  [
-    Mime{"html", "text/html; charset=utf-8",
-      "HTTP/1.1 200 OK\r\ncontent-type: text/html; charset=utf-8\r\ncontent-length: "},
-    Mime{"htm", "text/html; charset=utf-8",
-      "HTTP/1.1 200 OK\r\ncontent-type: text/html; charset=utf-8\r\ncontent-length: "},
-    Mime{"css", "text/css; charset=utf-8",
-      "HTTP/1.1 200 OK\r\ncontent-type: text/css; charset=utf-8\r\ncontent-length: "},
-    Mime{"js", "application/javascript; charset=utf-8",
-      "HTTP/1.1 200 OK\r\ncontent-type: application/javascript; charset=utf-8\r\ncontent-length: "},
-    Mime{"json", "application/json",
-      "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: "},
-    Mime{"txt", "text/plain; charset=utf-8",
-      "HTTP/1.1 200 OK\r\ncontent-type: text/plain; charset=utf-8\r\ncontent-length: "},
-    Mime{"svg", "image/svg+xml",
-      "HTTP/1.1 200 OK\r\ncontent-type: image/svg+xml\r\ncontent-length: "},
-    Mime{"png", "image/png",
-      "HTTP/1.1 200 OK\r\ncontent-type: image/png\r\ncontent-length: "},
-    Mime{"jpg", "image/jpeg",
-      "HTTP/1.1 200 OK\r\ncontent-type: image/jpeg\r\ncontent-length: "},
-    Mime{"jpeg", "image/jpeg",
-      "HTTP/1.1 200 OK\r\ncontent-type: image/jpeg\r\ncontent-length: "},
-    Mime{"gif", "image/gif",
-      "HTTP/1.1 200 OK\r\ncontent-type: image/gif\r\ncontent-length: "},
-    Mime{"ico", "image/x-icon",
-      "HTTP/1.1 200 OK\r\ncontent-type: image/x-icon\r\ncontent-length: "},
-    Mime{"wasm", "application/wasm",
-      "HTTP/1.1 200 OK\r\ncontent-type: application/wasm\r\ncontent-length: "},
-    Mime{"pdf", "application/pdf",
-      "HTTP/1.1 200 OK\r\ncontent-type: application/pdf\r\ncontent-length: "}
-  ]
+# the rows of the type table, one per extension
+def mime.html() -> Mime:
+  Mime{"html", "text/html; charset=utf-8",
+    "HTTP/1.1 200 OK\r\ncontent-type: text/html; charset=utf-8\r\ncontent-length: "}
+
+def mime.htm() -> Mime:
+  Mime{"htm", "text/html; charset=utf-8",
+    "HTTP/1.1 200 OK\r\ncontent-type: text/html; charset=utf-8\r\ncontent-length: "}
+
+def mime.css() -> Mime:
+  Mime{"css", "text/css; charset=utf-8",
+    "HTTP/1.1 200 OK\r\ncontent-type: text/css; charset=utf-8\r\ncontent-length: "}
+
+def mime.js() -> Mime:
+  Mime{"js", "application/javascript; charset=utf-8",
+    "HTTP/1.1 200 OK\r\ncontent-type: application/javascript; charset=utf-8\r\ncontent-length: "}
+
+def mime.json() -> Mime:
+  Mime{"json", "application/json",
+    "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: "}
+
+def mime.txt() -> Mime:
+  Mime{"txt", "text/plain; charset=utf-8",
+    "HTTP/1.1 200 OK\r\ncontent-type: text/plain; charset=utf-8\r\ncontent-length: "}
+
+def mime.svg() -> Mime:
+  Mime{"svg", "image/svg+xml",
+    "HTTP/1.1 200 OK\r\ncontent-type: image/svg+xml\r\ncontent-length: "}
+
+def mime.png() -> Mime:
+  Mime{"png", "image/png",
+    "HTTP/1.1 200 OK\r\ncontent-type: image/png\r\ncontent-length: "}
+
+def mime.jpg() -> Mime:
+  Mime{"jpg", "image/jpeg",
+    "HTTP/1.1 200 OK\r\ncontent-type: image/jpeg\r\ncontent-length: "}
+
+def mime.jpeg() -> Mime:
+  Mime{"jpeg", "image/jpeg",
+    "HTTP/1.1 200 OK\r\ncontent-type: image/jpeg\r\ncontent-length: "}
+
+def mime.gif() -> Mime:
+  Mime{"gif", "image/gif",
+    "HTTP/1.1 200 OK\r\ncontent-type: image/gif\r\ncontent-length: "}
+
+def mime.ico() -> Mime:
+  Mime{"ico", "image/x-icon",
+    "HTTP/1.1 200 OK\r\ncontent-type: image/x-icon\r\ncontent-length: "}
+
+def mime.wasm() -> Mime:
+  Mime{"wasm", "application/wasm",
+    "HTTP/1.1 200 OK\r\ncontent-type: application/wasm\r\ncontent-length: "}
+
+def mime.pdf() -> Mime:
+  Mime{"pdf", "application/pdf",
+    "HTTP/1.1 200 OK\r\ncontent-type: application/pdf\r\ncontent-length: "}
 
 # the head a 200 of a type starts with: its status line, the type, and
 # the name of its length, which the table's rows keep ready
@@ -2880,25 +2905,6 @@ def mime.pre(name: Bytes()) -> Bytes():
 def mime.other() -> Mime:
   Mime{"", "application/octet-stream",
     "HTTP/1.1 200 OK\r\ncontent-type: application/octet-stream\r\ncontent-length: "}
-
-def mime.find.at(hit: Bool, m: Mime, rest: Mime) -> Mime:
-  match hit:
-    case True{}:
-      m
-    case False{}:
-      rest
-
-def mime.ext(m: Mime) -> Bytes():
-  match m:
-    case Mime{ext, name, head}:
-      ext
-
-def mime.find(tbl: List<&2, Mime>, +e: Bytes()) -> Mime:
-  match tbl:
-    case Nil{}:
-      mime.other()
-    case Con{+m, t}:
-      mime.find.at(bytes.eq(mime.ext(m), e), m, mime.find(t, e))
 
 def mime.name.of(m: Mime) -> Bytes():
   match m:
@@ -2910,11 +2916,128 @@ def mime.head.of(m: Mime) -> Bytes():
     case Mime{ext, name, head}:
       head
 
+# the row for an extension: its first and last bytes and its length pick
+# the one row that could name it (no two rows agree on all three), and
+# its bytes must then be that row's; what no row names is mime.other
+def mime.key(+e: Bytes()) -> U32:
+  (Bytes.get(e, 0n) * 65536 + Bytes.get(e, Nat.sub(Bytes.len(e), 1n)) * 256 + U32.from_nat(Bytes.len(e)) : U32)
+
+def mime.row(hit: Bool, m: Mime) -> Mime:
+  match hit:
+    case True{}:
+      m
+    case False{}:
+      mime.other()
+
+def mime.at.pdf(hit: Bool, +k: U32, +e: Bytes()) -> Mime:
+  match hit:
+    case True{}:
+      mime.row(bytes.eq(e, "pdf"), mime.pdf())
+    case False{}:
+      mime.other()
+
+def mime.at.wasm(hit: Bool, +k: U32, +e: Bytes()) -> Mime:
+  match hit:
+    case True{}:
+      mime.row(bytes.eq(e, "wasm"), mime.wasm())
+    case False{}:
+      mime.at.pdf(U32.is_eq(k, 7366147), k, e)
+
+def mime.at.ico(hit: Bool, +k: U32, +e: Bytes()) -> Mime:
+  match hit:
+    case True{}:
+      mime.row(bytes.eq(e, "ico"), mime.ico())
+    case False{}:
+      mime.at.wasm(U32.is_eq(k, 7826692), k, e)
+
+def mime.at.gif(hit: Bool, +k: U32, +e: Bytes()) -> Mime:
+  match hit:
+    case True{}:
+      mime.row(bytes.eq(e, "gif"), mime.gif())
+    case False{}:
+      mime.at.ico(U32.is_eq(k, 6909699), k, e)
+
+def mime.at.jpeg(hit: Bool, +k: U32, +e: Bytes()) -> Mime:
+  match hit:
+    case True{}:
+      mime.row(bytes.eq(e, "jpeg"), mime.jpeg())
+    case False{}:
+      mime.at.gif(U32.is_eq(k, 6776323), k, e)
+
+def mime.at.jpg(hit: Bool, +k: U32, +e: Bytes()) -> Mime:
+  match hit:
+    case True{}:
+      mime.row(bytes.eq(e, "jpg"), mime.jpg())
+    case False{}:
+      mime.at.jpeg(U32.is_eq(k, 6973188), k, e)
+
+def mime.at.png(hit: Bool, +k: U32, +e: Bytes()) -> Mime:
+  match hit:
+    case True{}:
+      mime.row(bytes.eq(e, "png"), mime.png())
+    case False{}:
+      mime.at.jpg(U32.is_eq(k, 6973187), k, e)
+
+def mime.at.svg(hit: Bool, +k: U32, +e: Bytes()) -> Mime:
+  match hit:
+    case True{}:
+      mime.row(bytes.eq(e, "svg"), mime.svg())
+    case False{}:
+      mime.at.png(U32.is_eq(k, 7366403), k, e)
+
+def mime.at.txt(hit: Bool, +k: U32, +e: Bytes()) -> Mime:
+  match hit:
+    case True{}:
+      mime.row(bytes.eq(e, "txt"), mime.txt())
+    case False{}:
+      mime.at.svg(U32.is_eq(k, 7563011), k, e)
+
+def mime.at.json(hit: Bool, +k: U32, +e: Bytes()) -> Mime:
+  match hit:
+    case True{}:
+      mime.row(bytes.eq(e, "json"), mime.json())
+    case False{}:
+      mime.at.txt(U32.is_eq(k, 7631875), k, e)
+
+def mime.at.js(hit: Bool, +k: U32, +e: Bytes()) -> Mime:
+  match hit:
+    case True{}:
+      mime.row(bytes.eq(e, "js"), mime.js())
+    case False{}:
+      mime.at.json(U32.is_eq(k, 6974980), k, e)
+
+def mime.at.css(hit: Bool, +k: U32, +e: Bytes()) -> Mime:
+  match hit:
+    case True{}:
+      mime.row(bytes.eq(e, "css"), mime.css())
+    case False{}:
+      mime.at.js(U32.is_eq(k, 6976258), k, e)
+
+def mime.at.htm(hit: Bool, +k: U32, +e: Bytes()) -> Mime:
+  match hit:
+    case True{}:
+      mime.row(bytes.eq(e, "htm"), mime.htm())
+    case False{}:
+      mime.at.css(U32.is_eq(k, 6517507), k, e)
+
+def mime.at.html(hit: Bool, +k: U32, +e: Bytes()) -> Mime:
+  match hit:
+    case True{}:
+      mime.row(bytes.eq(e, "html"), mime.html())
+    case False{}:
+      mime.at.htm(U32.is_eq(k, 6843651), k, e)
+
+def mime.at(+k: U32, +e: Bytes()) -> Mime:
+  mime.at.html(U32.is_eq(k, 6843396), k, e)
+
+def mime.of(+e: Bytes()) -> Mime:
+  mime.at(mime.key(e), e)
+
 def mime.name(+e: Bytes()) -> Bytes():
-  mime.name.of(mime.find(mime.table(), e))
+  mime.name.of(mime.of(e))
 
 def mime.head(+e: Bytes()) -> Bytes():
-  mime.head.of(mime.find(mime.table(), e))
+  mime.head.of(mime.of(e))
 
 # One piece of a reply is bend-wire's L.Seg: bytes as they are, or a
 # file to write when the reply is written (the root, the path under it,

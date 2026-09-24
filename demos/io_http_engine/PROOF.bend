@@ -2820,35 +2820,116 @@ def cd.part(+ct: Bytes(), +a: Nat, +b: Nat, +n: U32, +mt: U32) ->
 def pg.FH(m: Eng.Mime) -> Type:
   {Eng.mime.head.of(m) == Eng.mime.pre(Eng.mime.name.of(m)) : Bytes()}
 
-def pg.FHS(tbl: List<&2, Eng.Mime>) -> Type:
-  match tbl:
-    case Nil{}:
-      pg.FH(Eng.mime.other())
-    case Con{m, t}:
-      pg.FH(m) & pg.FHS(t)
-
-def pg.fh.table() -> pg.FHS(Eng.mime.table()):
-  ({==}, ({==}, ({==}, ({==}, ({==}, ({==}, ({==}, ({==}, ({==}, ({==}, ({==}, ({==}, ({==}, ({==},
-    {==}))))))))))))))
-
-def pg.fh.at(hit: Bool, m: Eng.Mime, rest: Eng.Mime, a: pg.FH(m), b: pg.FH(rest)) ->
-  pg.FH(Eng.mime.find.at(hit, m, rest)):
+def pg.fh.row(hit: Bool, m: Eng.Mime, a: pg.FH(m)) -> pg.FH(Eng.mime.row(hit, m)):
   match hit:
     case True{}:
       a
     case False{}:
-      b
+      {==}
 
-def pg.fh.find(tbl: List<&2, Eng.Mime>, +e: Bytes(), all: pg.FHS(tbl)) -> pg.FH(Eng.mime.find(tbl, e)):
-  match tbl:
-    case Nil{}:
-      all
-    case Con{+m, +t}:
-      (a, rest) = all
-      pg.fh.at(Eng.bytes.eq(Eng.mime.ext(m), e), m, Eng.mime.find(t, e), a, pg.fh.find(t, e, rest))
+def pg.fh.at.pdf(hit: Bool, +k: U32, +e: Bytes()) -> pg.FH(Eng.mime.at.pdf(hit, k, e)):
+  match hit:
+    case True{}:
+      pg.fh.row(Eng.bytes.eq(e, "pdf"), Eng.mime.pdf(), {==})
+    case False{}:
+      {==}
+
+def pg.fh.at.wasm(hit: Bool, +k: U32, +e: Bytes()) -> pg.FH(Eng.mime.at.wasm(hit, k, e)):
+  match hit:
+    case True{}:
+      pg.fh.row(Eng.bytes.eq(e, "wasm"), Eng.mime.wasm(), {==})
+    case False{}:
+      pg.fh.at.pdf(U32.is_eq(k, 7366147), k, e)
+
+def pg.fh.at.ico(hit: Bool, +k: U32, +e: Bytes()) -> pg.FH(Eng.mime.at.ico(hit, k, e)):
+  match hit:
+    case True{}:
+      pg.fh.row(Eng.bytes.eq(e, "ico"), Eng.mime.ico(), {==})
+    case False{}:
+      pg.fh.at.wasm(U32.is_eq(k, 7826692), k, e)
+
+def pg.fh.at.gif(hit: Bool, +k: U32, +e: Bytes()) -> pg.FH(Eng.mime.at.gif(hit, k, e)):
+  match hit:
+    case True{}:
+      pg.fh.row(Eng.bytes.eq(e, "gif"), Eng.mime.gif(), {==})
+    case False{}:
+      pg.fh.at.ico(U32.is_eq(k, 6909699), k, e)
+
+def pg.fh.at.jpeg(hit: Bool, +k: U32, +e: Bytes()) -> pg.FH(Eng.mime.at.jpeg(hit, k, e)):
+  match hit:
+    case True{}:
+      pg.fh.row(Eng.bytes.eq(e, "jpeg"), Eng.mime.jpeg(), {==})
+    case False{}:
+      pg.fh.at.gif(U32.is_eq(k, 6776323), k, e)
+
+def pg.fh.at.jpg(hit: Bool, +k: U32, +e: Bytes()) -> pg.FH(Eng.mime.at.jpg(hit, k, e)):
+  match hit:
+    case True{}:
+      pg.fh.row(Eng.bytes.eq(e, "jpg"), Eng.mime.jpg(), {==})
+    case False{}:
+      pg.fh.at.jpeg(U32.is_eq(k, 6973188), k, e)
+
+def pg.fh.at.png(hit: Bool, +k: U32, +e: Bytes()) -> pg.FH(Eng.mime.at.png(hit, k, e)):
+  match hit:
+    case True{}:
+      pg.fh.row(Eng.bytes.eq(e, "png"), Eng.mime.png(), {==})
+    case False{}:
+      pg.fh.at.jpg(U32.is_eq(k, 6973187), k, e)
+
+def pg.fh.at.svg(hit: Bool, +k: U32, +e: Bytes()) -> pg.FH(Eng.mime.at.svg(hit, k, e)):
+  match hit:
+    case True{}:
+      pg.fh.row(Eng.bytes.eq(e, "svg"), Eng.mime.svg(), {==})
+    case False{}:
+      pg.fh.at.png(U32.is_eq(k, 7366403), k, e)
+
+def pg.fh.at.txt(hit: Bool, +k: U32, +e: Bytes()) -> pg.FH(Eng.mime.at.txt(hit, k, e)):
+  match hit:
+    case True{}:
+      pg.fh.row(Eng.bytes.eq(e, "txt"), Eng.mime.txt(), {==})
+    case False{}:
+      pg.fh.at.svg(U32.is_eq(k, 7563011), k, e)
+
+def pg.fh.at.json(hit: Bool, +k: U32, +e: Bytes()) -> pg.FH(Eng.mime.at.json(hit, k, e)):
+  match hit:
+    case True{}:
+      pg.fh.row(Eng.bytes.eq(e, "json"), Eng.mime.json(), {==})
+    case False{}:
+      pg.fh.at.txt(U32.is_eq(k, 7631875), k, e)
+
+def pg.fh.at.js(hit: Bool, +k: U32, +e: Bytes()) -> pg.FH(Eng.mime.at.js(hit, k, e)):
+  match hit:
+    case True{}:
+      pg.fh.row(Eng.bytes.eq(e, "js"), Eng.mime.js(), {==})
+    case False{}:
+      pg.fh.at.json(U32.is_eq(k, 6974980), k, e)
+
+def pg.fh.at.css(hit: Bool, +k: U32, +e: Bytes()) -> pg.FH(Eng.mime.at.css(hit, k, e)):
+  match hit:
+    case True{}:
+      pg.fh.row(Eng.bytes.eq(e, "css"), Eng.mime.css(), {==})
+    case False{}:
+      pg.fh.at.js(U32.is_eq(k, 6976258), k, e)
+
+def pg.fh.at.htm(hit: Bool, +k: U32, +e: Bytes()) -> pg.FH(Eng.mime.at.htm(hit, k, e)):
+  match hit:
+    case True{}:
+      pg.fh.row(Eng.bytes.eq(e, "htm"), Eng.mime.htm(), {==})
+    case False{}:
+      pg.fh.at.css(U32.is_eq(k, 6517507), k, e)
+
+def pg.fh.at.html(hit: Bool, +k: U32, +e: Bytes()) -> pg.FH(Eng.mime.at.html(hit, k, e)):
+  match hit:
+    case True{}:
+      pg.fh.row(Eng.bytes.eq(e, "html"), Eng.mime.html(), {==})
+    case False{}:
+      pg.fh.at.htm(U32.is_eq(k, 6843651), k, e)
+
+def pg.fh.at(+k: U32, +e: Bytes()) -> pg.FH(Eng.mime.at(k, e)):
+  pg.fh.at.html(U32.is_eq(k, 6843396), k, e)
 
 def Laws.file_head_is_built(e, head, n, mt):
-  %pg.fh.find(Eng.mime.table(), e, pg.fh.table()) :
+  %pg.fh.at(Eng.mime.key(e), e) :
     {Eng.h.fhead(Eng.mime.head(e), Nil{}, head, n, mt) == L.Fr{C.hd.full.is(_, n, mt), 0, n} : L.Fr}
   %cd.full(Eng.mime.head(e), n, mt) : {Eng.h.fhead(Eng.mime.head(e), Nil{}, head, n, mt) == L.Fr{_, 0, n} : L.Fr}
   {==}
