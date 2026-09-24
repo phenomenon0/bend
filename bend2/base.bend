@@ -291,6 +291,23 @@ def TCP.connect(host: String, port: U32) ->
   import "./effs/tcp_connect.c"
   import "./effs/tcp_connect.js"
 
+# TCP.connect with a deadline: host a dotted IPv4 address (DNS.resolve
+# turns a name into one). Done once the peer accepts; ECONNREFUSED when
+# nothing listens; ETIMEDOUT once ms have passed with no answer, the
+# socket closed; EINVAL at once for a malformed address.
+def TCP.connect_poll(host: String, port: U32, ms: U32) ->
+  IO(Result<&1, &1, U32 & String, Socket>):
+  import "./effs/tcp_connect_poll.c"
+  import "./effs/tcp_connect_poll.js"
+
+# The first IPv4 address the system's resolver has for a name, dotted
+# (/etc/hosts, then DNS); a dotted address is its own answer, a name
+# with none is ENOENT, and an empty name or one past 253 bytes EINVAL.
+# The resolver blocks, so on C it runs on a helper thread.
+def DNS.resolve(name: String) -> IO(Result<&1, &1, U32 & String, String>):
+  import "./effs/dns_resolve.c"
+  import "./effs/dns_resolve.js"
+
 def TCP.send(sock: Socket, data: String) ->
   IO(Socket & Result<&1, &1, U32 & String, Unit>):
   import "./effs/tcp_send.c"
