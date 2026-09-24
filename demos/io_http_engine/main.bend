@@ -42,6 +42,7 @@ import ../../wire/reader.bend as Wr
 import ../../wire/loop.bend as L
 import ../../wire/effects.bend as Fx
 import ./ws.bend as Ws
+import ./cond.bend as C
 
 # Bytes
 # =====
@@ -2871,6 +2872,11 @@ def mime.table() -> List<&2, Mime>:
       "HTTP/1.1 200 OK\r\ncontent-type: application/pdf\r\ncontent-length: "}
   ]
 
+# the head a 200 of a type starts with: its status line, the type, and
+# the name of its length, which the table's rows keep ready
+def mime.pre(name: Bytes()) -> Bytes():
+  Bytes.concat(["HTTP/1.1 200 OK\r\ncontent-type: ", name, "\r\ncontent-length: "])
+
 def mime.other() -> Mime:
   Mime{"", "application/octet-stream",
     "HTTP/1.1 200 OK\r\ncontent-type: application/octet-stream\r\ncontent-length: "}
@@ -2925,12 +2931,12 @@ def miss(head: Bool) -> Bytes():
 
 def page.name(root: Bytes(), +ss: List<&2, List<&2, U32>>, head: Bool) -> L.Seg:
   L.Page{root, Bytes.from_list(join(ss)), mime.head(Bytes.from_list(ext.go(last(ss, Nil{}), Nil{}))),
-    head}
+    Nil{}, head}
 
 def page.of(root: Bytes(), ss: List<&2, List<&2, U32>>, head: Bool) -> L.Seg:
   match ss:
     case Nil{}:
-      L.Page{root, "index.html", mime.head("html"), head}
+      L.Page{root, "index.html", mime.head("html"), Nil{}, head}
     case Con{s, t}:
       page.name(root, Con{s, t}, head)
 
@@ -2994,7 +3000,8 @@ def ext.buf(t: Bytes(), cur: List<&2, U32>) -> List<&2, U32>:
 def page.go(root: Bytes(), +path: Bytes(), head: Bool, ok: Bool) -> L.Seg:
   match ok:
     case True{}:
-      L.Page{root, Bytes.drop(path, 1n), mime.head(Bytes.from_list(ext.buf(path, Nil{}))), head}
+      L.Page{root, Bytes.drop(path, 1n), mime.head(Bytes.from_list(ext.buf(path, Nil{}))), Nil{},
+        head}
     case False{}:
       page.spec(root, Bytes.to_list(path), head)
 
@@ -3203,12 +3210,34 @@ def serve.fit(
     case False{}:
       serve.go(srv, path, body, ok, head, ws, key)
 
+# A file's reply depends on what the request asked of it -- a range, a
+# condition -- which its segment carries to the writer, where the file's
+# size and mtime decide it (h.fhead). Only a file's segment reads them.
+def seg.ask(g: L.Seg, fs: List<&2, Wr.Field>) -> L.Seg:
+  match g:
+    case L.Page{root, path, ct, ask, head}:
+      L.Page{root, path, ct, fs, head}
+    case _:
+      g
+
+def segs.ask(xs: List<&2, L.Seg>, +fs: List<&2, Wr.Field>) -> List<&2, L.Seg>:
+  match xs:
+    case Nil{}:
+      Nil{}
+    case Con{g, t}:
+      Con{seg.ask(g, fs), segs.ask(t, fs)}
+
+def ans.ask(a: Ans, hd: Hd) -> Ans:
+  match a hd:
+    case Ans{out, cl, st, sk} Hd{m, v10, fs, cn}:
+      Ans{segs.ask(out, fs), cl, st, sk}
+
 def serve.log(+srv: Srv, r: Req) -> Ans:
   match r:
     case Req{+meth, +path, body, close, ws, key, hd}:
       noted(srv.log(srv), meth, path,
-        serve.fit(srv, path.of(path), body, meth.get(meth) || meth.head(meth),
-          meth.head(meth), ws, key, long(target.cap(), path)))
+        ans.ask(serve.fit(srv, path.of(path), body, meth.get(meth) || meth.head(meth),
+          meth.head(meth), ws, key, long(target.cap(), path)), hd))
 
 def serve(+srv: Srv, r: Req) -> Ans:
   serve.log(srv, r)
@@ -3418,9 +3447,11 @@ def h.mid(p: P) -> Bool:
 def h.shut(sh: Bool, bs: Bytes()) -> Bytes():
   flat.shut(sh, bs)
 
-# a file's head: the head its type keeps ready (mime.head), its length
-def h.fhead(pre: Bytes(), n: U32) -> Bytes():
-  Bytes.concat([pre, U32.show(n), "\r\nconnection: keep-alive\r\n\r\n"])
+# a file's reply (cond.bend): from the head its type keeps ready
+# (mime.head), what the request asked of it, and its size and mtime, the
+# head and the part of the file that follows it
+def h.fhead(pre: Bytes(), ask: List<&2, Wr.Field>, head: Bool, n: U32, mt: U32) -> L.Fr:
+  C.reply(pre, ask, head, n, mt)
 
 def h.lnote(note: Bytes(), out: Bytes()) -> String:
   log.line(note, out)

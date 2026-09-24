@@ -12,6 +12,7 @@ import ./b64.bend as B64
 import ./ws.bend as Ws
 import ./spec.bend as Spec
 import ./world.bend as W
+import ./cond.bend as C
 
 # LAW: chunking does not change the parse. Feeding a chunk and then
 # another one lands exactly where feeding the two joined would have.
@@ -983,12 +984,19 @@ law page_is_spec:
   for head: Bool
   {Eng.page(root, t, head) == Eng.page.spec(root, Bytes.to_list(t), head) : L.Seg}
 
-# LAW: a file's head, kept ready per type, is the head reply.n.head
-# builds from the type's name, for every extension and every length.
+# LAW: a file's head, kept ready per type, is the head mime.pre builds
+# from the type's name, for every extension; and the reply to a request
+# that asks nothing of the file (no condition, no range) is all of it,
+# after a 200 head that states its length, its mtime, its entity-tag and
+# that ranges of it are served, whatever the size and the mtime, GET or
+# HEAD (cond.bend's hd.full.is says those bytes piece by piece).
 law file_head_is_built:
   for +e: Bytes()
+  for head: Bool
   for +n: U32
-  {Eng.h.fhead(Eng.mime.head(e), n) == Eng.reply.n.head("200 OK", Eng.mime.name(e), n) : Bytes()}
+  for +mt: U32
+  {Eng.h.fhead(Eng.mime.head(e), Nil{}, head, n, mt) ==
+    L.Fr{C.hd.full.is(Eng.mime.pre(Eng.mime.name(e)), n, mt), 0, n} : L.Fr}
 
 # LAW: SHA-1 is SHA-1. The three vectors of RFC 3174, computed by the
 # checker through a Bend that shifts one bit at a time.
@@ -1554,22 +1562,26 @@ law page_fine:
   for root: Bytes()
   for path: Bytes()
   for ct: Bytes()
+  for ask: List<&2, Wr.Field>
   for head: Bool
   for may: Maybe<&2, Bytes()>
   for sh: Bool
   for st: L.Em<WW.World>
-  {WW.em.fine(W.sim.page(ms, root, path, ct, head, may, sh, st)) == True{} : Bool}
+  {WW.em.fine(W.sim.page(ms, root, path, ct, ask, head, may, sh, st)) == True{} : Bool}
 
 # LAW: a file's bytes. At a peer that takes what it is sent, a GET of a
 # file the root has (under 4 GiB) puts on the wire what waited in front
-# of it, the file's head, and then the file's own bytes, every one and
-# nothing else, by sendfile; and a sendfile or a head that did not go
+# of it, the head h.fhead framed from the file's size and what the
+# request asked, and then the part of the file it named -- the whole
+# file, a range, or nothing -- every byte of that part and nothing else,
+# by sendfile or with the head; and a sendfile or a head that did not go
 # out ends the connection with nothing after it.
 law page_wire:
   for +ms: U32
   for root: Bytes()
   for path: Bytes()
   for +ct: Bytes()
+  for +ask: List<&2, Wr.Field>
   for may: Maybe<&2, Bytes()>
   for +sh: Bool
   for +rd: List<&2, WW.Rd>
@@ -1578,12 +1590,16 @@ law page_wire:
   for +out: Bytes()
   for +acc: Bytes()
   for +body: Bytes()
+  for +hd: Bytes()
+  for +off: U32
+  for +len: U32
   for ef: {WW.w.find(fs, path) == Done{body} : Result<&1, &1, U32 & String, Bytes()>}
-  for en: {U32.to_nat(U32.from_nat(Bytes.len(body))) == Bytes.len(body) : Nat}
-  {W.sim.page(ms, root, path, ct, False{}, may, sh, L.Em{WW.eager(rd, now, fs, out), acc, True{}}) ==
-    L.Em{WW.eager(rd, now, fs, Bytes.append(Bytes.append(out,
-      Bytes.append(acc, Eng.h.shut(sh, Eng.h.fhead(ct, U32.from_nat(Bytes.len(body)))))), body)),
-      "", True{}} : L.Em<WW.World>}
+  for +en: {U32.to_nat(U32.from_nat(Bytes.len(body))) == Bytes.len(body) : Nat}
+  for efr: {Eng.h.fhead(ct, ask, False{}, U32.from_nat(Bytes.len(body)), 0) == L.Fr{hd, off, len} : L.Fr}
+  for +ep: {WW.wl.part(body, off, len) == True{} : Bool}
+  {W.sim.page(ms, root, path, ct, ask, False{}, may, sh, L.Em{WW.eager(rd, now, fs, out), acc, True{}}) ==
+    L.Em{WW.eager(rd, now, fs, Bytes.append(Bytes.append(out, Bytes.append(acc, Eng.h.shut(sh, hd))),
+      WW.w.fbytes(body, off, len))), "", True{}} : L.Em<WW.World>}
 
 law page_fail:
   for s: WW.World
@@ -1594,10 +1610,11 @@ law page_fail:
 law page_head_fail:
   for +ms: U32
   for f: Bytes()
-  for n: U32
+  for off: U32
+  for len: U32
   for s: WW.World
   for e: U32 & String
-  {WW.sim.headed(ms, f, n, (s, Fail{e})) == L.Em{s, "", False{}} : L.Em<WW.World>}
+  {WW.sim.headed(ms, f, off, len, (s, Fail{e})) == L.Em{s, "", False{}} : L.Em<WW.World>}
 
 # LAW: bounded buffering, the head. A read that leaves a head in
 # progress leaves it with at most head.cap() bytes since the read it

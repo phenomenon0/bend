@@ -13,6 +13,7 @@
 # wire/conform.bend drives the effects below through the contracts'
 # cases and judges them by those very relations.
 import Base
+import ./reader.bend as Wr
 import ./loop.bend as L
 
 # The adapters
@@ -48,10 +49,10 @@ def net.open(s: Socket, root: String, path: String) ->
     Socket & Result<&1, &1, U32 & String, Fh>, File.get_under(root, path, L.page.small()),
     r => IO.pure(Socket & Result<&1, &1, U32 & String, Fh>, net.got(s, r)))
 
-def fh.size(h: Fh) -> IO(Fh & Result<&1, &1, U32 & String, U32>):
+def fh.size(h: Fh) -> IO(Fh & Result<&1, &1, U32 & String, U32 & U32>):
   match h:
-    case Fh{+n, mt, f, bs}:
-      IO.pure(Fh & Result<&1, &1, U32 & String, U32>, (Fh{n, mt, f, bs}, Done{n}))
+    case Fh{+n, +mt, f, bs}:
+      IO.pure(Fh & Result<&1, &1, U32 & String, U32 & U32>, (Fh{n, mt, f, bs}, Done{(n, mt)}))
 
 def fh.back(n: U32, mt: U32, g: File & Result<&1, &1, U32 & String, Bytes()>) ->
   Fh & Result<&1, &1, U32 & String, Bytes()>:
@@ -138,7 +139,7 @@ def serve(
   ~E: Data, ~P: Data, ~U: Data, ~idle: E -> U32, ~hdms: E -> U32,
   ~plan: E -> Bytes() -> P -> L.Plan<P, U>, ~mid: P -> Bool, ~big: Bytes(),
   ~uplan: U -> Bytes() -> L.Plan<P, U>, ~gap: U32, ~event: U32 -> Bytes(),
-  ~shut: Bool -> Bytes() -> Bytes(), ~fhead: Bytes() -> U32 -> Bytes(),
+  ~shut: Bool -> Bytes() -> Bytes(), ~fhead: Bytes() -> List<&2, Wr.Field> -> Bool -> U32 -> U32 -> L.Fr,
   ~miss: Bool -> Bytes(), ~lnote: Bytes() -> Bytes() -> String,
   ~lsize: Bytes() -> Bytes() -> U32 -> String, +srv: E, p0: P, s: Socket
 ) -> IO(Socket):

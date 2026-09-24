@@ -11,6 +11,7 @@
 # is the engine's own: the replies a read's requests are owed, and the
 # 400 that answers a grammar that broke.
 import Base
+import ../../wire/reader.bend as Wr
 import ../../wire/loop.bend as L
 import ../../wire/world.bend as WW
 import ./main.bend as Eng
@@ -30,11 +31,11 @@ def sim.raw(+ms: U32, may: Maybe<&2, Bytes()>, bs: Bytes(), st: L.Em<WW.World>) 
   WW.sim.raw(~Eng.h.lnote, ms, may, bs, st)
 
 def sim.page(
-  +ms: U32, root: Bytes(), path: Bytes(), ct: Bytes(), head: Bool,
+  +ms: U32, root: Bytes(), path: Bytes(), ct: Bytes(), ask: List<&2, Wr.Field>, head: Bool,
   may: Maybe<&2, Bytes()>, sh: Bool, st: L.Em<WW.World>
 ) -> L.Em<WW.World>:
   WW.sim.page(~Eng.h.shut, ~Eng.h.fhead, ~Eng.miss, ~Eng.h.lnote, ~Eng.h.lsize, ms, root, path,
-    ct, head, may, sh, st)
+    ct, ask, head, may, sh, st)
 
 def sim.turn.h(+srv: Eng.Srv, s: WW.World, p: Eng.P, hw: L.Hw) ->
   (WW.World & Eng.Plan()) & L.Hw:

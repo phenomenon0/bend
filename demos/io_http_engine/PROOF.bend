@@ -19,6 +19,7 @@ import ./b64.bend as B64
 import ./ws.bend as Ws
 import ./spec.bend as Spec
 import ./world.bend as W
+import ./cond.bend as C
 import ./LAWS.bend as Laws
 
 def Laws.feed_split(a, b, p):
@@ -2482,38 +2483,38 @@ def pg.fin(root: Bytes(), +r: Bytes(), head: Bool, +c0: U32, k: Eng.Cut,
   lead: {pg.cut.lead(k) == True{} : Bool}, j: {pg.cut.join(k) == Bytes.to_list(r) : List<&2, U32>},
   +ok: {Eng.fnames.ok(False{}, Eng.segs.out(k)) == True{} : Bool},
   x: {Eng.ext.buf(r, Nil{}) == pg.cut.ext(k, Nil{}) : List<&2, U32>}) ->
-  {L.Page{root, r, Eng.mime.head(Bytes.from_list(Eng.ext.buf(r, Nil{}))), head} ==
+  {L.Page{root, r, Eng.mime.head(Bytes.from_list(Eng.ext.buf(r, Nil{}))), Nil{}, head} ==
     Eng.page.pick(root, Eng.fnames.guard(False{}, Eng.norm(Eng.segs.out(Eng.segs.at(True{}, c0, k)))), head) :
     L.Seg}:
   match k:
     case Eng.Cut{Nil{}, rs}:
-      no({L.Page{root, r, Eng.mime.head(Bytes.from_list(Eng.ext.buf(r, Nil{}))), head} ==
+      no({L.Page{root, r, Eng.mime.head(Bytes.from_list(Eng.ext.buf(r, Nil{}))), Nil{}, head} ==
         Eng.page.pick(root, Eng.fnames.guard(False{}, Eng.norm(Eng.segs.out(Eng.segs.at(True{}, c0,
           Eng.Cut{Nil{}, rs})))), head) : L.Seg}, lead)
     case Eng.Cut{Con{+h, +u}, +rs}:
       %Equal.sym(Maybe<&2, List<&2, List<&2, U32>>>, Eng.norm(Con{Con{h, u}, rs}), Some{Con{Con{h, u}, rs}},
         pg.norm(Con{Con{h, u}, rs}, ok)) :
-        {L.Page{root, r, Eng.mime.head(Bytes.from_list(Eng.ext.buf(r, Nil{}))), head} ==
+        {L.Page{root, r, Eng.mime.head(Bytes.from_list(Eng.ext.buf(r, Nil{}))), Nil{}, head} ==
           Eng.page.pick(root, Eng.fnames.guard(False{}, _), head) : L.Seg}
       %Equal.sym(Bool, Eng.fnames.ok(False{}, Con{Con{h, u}, rs}), True{}, ok) :
-        {L.Page{root, r, Eng.mime.head(Bytes.from_list(Eng.ext.buf(r, Nil{}))), head} ==
+        {L.Page{root, r, Eng.mime.head(Bytes.from_list(Eng.ext.buf(r, Nil{}))), Nil{}, head} ==
           Eng.page.pick(root, Eng.fnames.keep(Con{Con{h, u}, rs}, _), head) : L.Seg}
       %Equal.sym(List<&2, U32>, pg.cut.join(Eng.Cut{Con{h, u}, rs}), Bytes.to_list(r), j) :
-        {L.Page{root, r, Eng.mime.head(Bytes.from_list(Eng.ext.buf(r, Nil{}))), head} ==
+        {L.Page{root, r, Eng.mime.head(Bytes.from_list(Eng.ext.buf(r, Nil{}))), Nil{}, head} ==
           L.Page{root, Bytes.from_list(_),
-            Eng.mime.head(Bytes.from_list(Eng.ext.go(Eng.last(rs, Con{h, u}), Nil{}))), head} : L.Seg}
+            Eng.mime.head(Bytes.from_list(Eng.ext.go(Eng.last(rs, Con{h, u}), Nil{}))), Nil{}, head} : L.Seg}
       %Equal.sym(Bytes(), Bytes.from_list(Bytes.to_list(r)), r, pg.ft(r)) :
-        {L.Page{root, r, Eng.mime.head(Bytes.from_list(Eng.ext.buf(r, Nil{}))), head} ==
-          L.Page{root, _, Eng.mime.head(Bytes.from_list(Eng.ext.go(Eng.last(rs, Con{h, u}), Nil{}))), head} :
+        {L.Page{root, r, Eng.mime.head(Bytes.from_list(Eng.ext.buf(r, Nil{}))), Nil{}, head} ==
+          L.Page{root, _, Eng.mime.head(Bytes.from_list(Eng.ext.go(Eng.last(rs, Con{h, u}), Nil{}))), Nil{}, head} :
           L.Seg}
       %Equal.sym(List<&2, U32>, Eng.ext.buf(r, Nil{}), pg.cut.ext(Eng.Cut{Con{h, u}, rs}, Nil{}), x) :
-        {L.Page{root, r, Eng.mime.head(Bytes.from_list(_)), head} ==
-          L.Page{root, r, Eng.mime.head(Bytes.from_list(Eng.ext.go(Eng.last(rs, Con{h, u}), Nil{}))), head} :
+        {L.Page{root, r, Eng.mime.head(Bytes.from_list(_)), Nil{}, head} ==
+          L.Page{root, r, Eng.mime.head(Bytes.from_list(Eng.ext.go(Eng.last(rs, Con{h, u}), Nil{}))), Nil{}, head} :
           L.Seg}
       %Equal.sym(List<&2, U32>, pg.ext.tail(rs, Con{h, u}, Nil{}), Eng.ext.go(Eng.last(rs, Con{h, u}), Nil{}),
         pg.last(rs, Con{h, u})) :
-        {L.Page{root, r, Eng.mime.head(Bytes.from_list(_)), head} ==
-          L.Page{root, r, Eng.mime.head(Bytes.from_list(Eng.ext.go(Eng.last(rs, Con{h, u}), Nil{}))), head} :
+        {L.Page{root, r, Eng.mime.head(Bytes.from_list(_)), Nil{}, head} ==
+          L.Page{root, r, Eng.mime.head(Bytes.from_list(Eng.ext.go(Eng.last(rs, Con{h, u}), Nil{}))), Nil{}, head} :
           L.Seg}
       {==}
 
@@ -2525,25 +2526,25 @@ def pg.fast.at(root: Bytes(), +c0: U32, +r: Bytes(), head: Bool,
   +er = Bool.and_r(Bool.and(Eng.clean.pick(Eng.ctl(c0), c0), U32.is_eq(c0, 47)), Eng.fast.go(r, True{}), e)
   %Equal.sym(Bool, U32.is_eq(c0, 47), True{}, Bool.and_r(Eng.clean.pick(Eng.ctl(c0), c0), U32.is_eq(c0, 47), ea)) :
     {L.Page{root, String.drop(r, 0n),
-      Eng.mime.head(Bytes.from_list(Eng.ext.buf(r, Eng.ext.step(Nil{}, c0, Bool.or(U32.is_eq(c0, 46), _))))), head} ==
+      Eng.mime.head(Bytes.from_list(Eng.ext.buf(r, Eng.ext.step(Nil{}, c0, Bool.or(U32.is_eq(c0, 46), _))))), Nil{}, head} ==
       Eng.page.pick(root, Eng.fnames.gate(Eng.clean.go(Bytes.to_list(r), Eng.clean.pick(Eng.ctl(c0), c0)),
         Eng.fnames.guard(False{}, Eng.norm(Eng.segs.out(Eng.segs.at(_, c0, pg.K(r)))))), head) : L.Seg}
   %Equal.sym(Bool, Bool.or(U32.is_eq(c0, 46), True{}), True{}, Bool.or_true(U32.is_eq(c0, 46))) :
     {L.Page{root, String.drop(r, 0n),
-      Eng.mime.head(Bytes.from_list(Eng.ext.buf(r, Eng.ext.step(Nil{}, c0, _)))), head} ==
+      Eng.mime.head(Bytes.from_list(Eng.ext.buf(r, Eng.ext.step(Nil{}, c0, _)))), Nil{}, head} ==
       Eng.page.pick(root, Eng.fnames.gate(Eng.clean.go(Bytes.to_list(r), Eng.clean.pick(Eng.ctl(c0), c0)),
         Eng.fnames.guard(False{}, Eng.norm(Eng.segs.out(Eng.segs.at(True{}, c0, pg.K(r)))))), head) : L.Seg}
   %Equal.sym(Bool, Eng.clean.pick(Eng.ctl(c0), c0), True{},
     Bool.and_l(Eng.clean.pick(Eng.ctl(c0), c0), U32.is_eq(c0, 47), ea)) :
-    {L.Page{root, String.drop(r, 0n), Eng.mime.head(Bytes.from_list(Eng.ext.buf(r, Nil{}))), head} ==
+    {L.Page{root, String.drop(r, 0n), Eng.mime.head(Bytes.from_list(Eng.ext.buf(r, Nil{}))), Nil{}, head} ==
       Eng.page.pick(root, Eng.fnames.gate(Eng.clean.go(Bytes.to_list(r), _),
         Eng.fnames.guard(False{}, Eng.norm(Eng.segs.out(Eng.segs.at(True{}, c0, pg.K(r)))))), head) : L.Seg}
   %Equal.sym(Bool, Eng.clean.go(Bytes.to_list(r), True{}), True{}, pg.clean(r, True{})(er)) :
-    {L.Page{root, String.drop(r, 0n), Eng.mime.head(Bytes.from_list(Eng.ext.buf(r, Nil{}))), head} ==
+    {L.Page{root, String.drop(r, 0n), Eng.mime.head(Bytes.from_list(Eng.ext.buf(r, Nil{}))), Nil{}, head} ==
       Eng.page.pick(root, Eng.fnames.gate(_,
         Eng.fnames.guard(False{}, Eng.norm(Eng.segs.out(Eng.segs.at(True{}, c0, pg.K(r)))))), head) : L.Seg}
   %Equal.sym(Bytes(), String.drop(r, 0n), r, pg.drop0(r)) :
-    {L.Page{root, _, Eng.mime.head(Bytes.from_list(Eng.ext.buf(r, Nil{}))), head} ==
+    {L.Page{root, _, Eng.mime.head(Bytes.from_list(Eng.ext.buf(r, Nil{}))), Nil{}, head} ==
       Eng.page.pick(root, Eng.fnames.guard(False{}, Eng.norm(Eng.segs.out(Eng.segs.at(True{}, c0, pg.K(r))))), head) :
       L.Seg}
   pg.fin(root, r, head, c0, pg.K(r), pg.lead(r)(er), pg.join(r, True{})(er), pg.ok(r, True{})(er),
@@ -2572,42 +2573,285 @@ def Laws.page_is_spec(root, t, head):
   pg.page(root, t, head, Eng.fast(t))({==})
 
 
-# file_head_is_built: every row of the table, and the row for what no
-# row names, keeps its head equal to the built one; so does whichever
-# row the lookup lands on
-def pg.FH(+n: U32, m: Eng.Mime) -> Type:
-  {Eng.h.fhead(Eng.mime.head.of(m), n) == Eng.reply.n.head("200 OK", Eng.mime.name.of(m), n) : Bytes()}
+# Heads built in place are their pieces
+# =====================================
+#
+# A writer f appends s: whatever the buffer a, f(a) is a followed by s.
+# Writers compose, each appending after the last, and a chain of them
+# appends its pieces joined; so each head cond.bend grows in place is the
+# list of pieces hd.*.is names, joined.
+def cd.app_assoc(+a: Bytes(), -b: Bytes(), -c: Bytes()) ->
+  {Bytes.append(Bytes.append(a, b), c) == Bytes.append(a, Bytes.append(b, c)) : Bytes()}:
+  match a:
+    case SNil{}:
+      {==}
+    case SCon{+h, +t}:
+      %cd.app_assoc(t, b, c) : {SCon{h, Bytes.append(Bytes.append(t, b), c)} == SCon{h, _} : Bytes()}
+      {==}
 
-def pg.FHS(+n: U32, tbl: List<&2, Eng.Mime>) -> Type:
+def cd.Is(-f: Bytes() -> Bytes(), -s: Bytes()) -> Type:
+  @+a: Bytes() -> {f(a) == Bytes.append(a, s) : Bytes()}
+
+def cd.cmp(f: Bytes() -> Bytes(), -s: Bytes(), -g: Bytes() -> Bytes(), -t: Bytes(),
+  wf: cd.Is(f, s), wg: cd.Is(g, t)) -> cd.Is(a => g(f(a)), Bytes.append(s, t)):
+  +a => Equal.trans(Bytes(), g(f(a)), Bytes.append(f(a), t), Bytes.append(a, Bytes.append(s, t)),
+    wg(f(a)),
+    Equal.trans(Bytes(), Bytes.append(f(a), t), Bytes.append(Bytes.append(a, s), t),
+      Bytes.append(a, Bytes.append(s, t)),
+      Equal.cong(Bytes(), Bytes(), x => Bytes.append(x, t), f(a), Bytes.append(a, s), wf(a)),
+      cd.app_assoc(a, s, t)))
+
+def cd.id() -> cd.Is(a => a, ""):
+  +a => Equal.sym(Bytes(), Bytes.append(a, ""), a, WW.wl.app_nil(a))
+
+def cd.push(-c: U32) -> cd.Is(a => Bytes.push(a, c), SCon{Chr{c}, SNil{}}):
+  +a => {==}
+
+def cd.app(-s: Bytes()) -> cd.Is(a => Bytes.append(a, s), s):
+  +a => {==}
+
+# a writer's pieces are what it writes into nothing
+def cd.fix(f: Bytes() -> Bytes(), -s: Bytes(), w: cd.Is(f, s), w2: cd.Is(f, s)) -> cd.Is(f, f("")):
+  +a => %Equal.sym(Bytes(), f(""), s, w2("")) : {f(a) == Bytes.append(a, _) : Bytes()}
+    w(a)
+
+def cd.p2.qr(ab: Nat & Nat) -> cd.Is(a => C.p2.qr(a, ab), C.d2.qr(ab)):
+  match ab:
+    case (x, y):
+      +a => cd.app_assoc(a, SCon{Chr{C.dig(x)}, SNil{}}, SCon{Chr{C.dig(y)}, SNil{}})
+
+def cd.p2(+n: Nat) -> cd.Is(a => C.p2(a, n), C.d2(n)):
+  cd.p2.qr(Nat.divmod(n, 10n))
+
+def cd.num.go(+f: Nat, +b: Nat, qr: Nat & Nat) -> cd.Is(a => C.num.go(f, b, a, qr), C.num.go(f, b, "", qr)):
+  match f:
+    case 0n:
+      cd.id()
+    case 1n+g:
+      match qr:
+        case (+q, +r):
+          match q:
+            case 0n:
+              cd.push(C.hdig(r))
+            case 1n+p:
+              cd.cmp(a => C.num.go(g, b, a, Nat.divmod(1n+p, b)), C.num.go(g, b, "", Nat.divmod(1n+p, b)),
+                a => Bytes.push(a, C.hdig(r)), SCon{Chr{C.hdig(r)}, SNil{}},
+                cd.num.go(g, b, Nat.divmod(1n+p, b)), cd.push(C.hdig(r)))
+
+def cd.num(+n: Nat) -> cd.Is(a => C.num.into(a, n), C.num(n)):
+  cd.num.go(20n, 10n, Nat.divmod(n, 10n))
+
+def cd.hex(+x: U32) -> cd.Is(a => C.hex(a, x), C.hex("", x)):
+  cd.num.go(8n, 16n, Nat.divmod(U32.to_nat(x), 16n))
+
+def cd.etag(+mt: U32, +n: U32) -> cd.Is(a => C.etag.into(a, mt, n), C.etag.of(mt, n)):
+  cd.fix(a => C.etag.into(a, mt, n), Bytes.append(SCon{Chr{34}, SNil{}}, Bytes.append(C.hex("", mt), Bytes.append(SCon{Chr{45}, SNil{}}, Bytes.append(C.hex("", n), SCon{Chr{34}, SNil{}})))),
+    cd.cmp(z => Bytes.push(z, 34), SCon{Chr{34}, SNil{}},
+      z => Bytes.push(C.hex(Bytes.push(C.hex(z, mt), 45), n), 34), Bytes.append(C.hex("", mt), Bytes.append(SCon{Chr{45}, SNil{}}, Bytes.append(C.hex("", n), SCon{Chr{34}, SNil{}}))),
+      cd.push(34),
+      cd.cmp(z => C.hex(z, mt), C.hex("", mt),
+        z => Bytes.push(C.hex(Bytes.push(z, 45), n), 34), Bytes.append(SCon{Chr{45}, SNil{}}, Bytes.append(C.hex("", n), SCon{Chr{34}, SNil{}})),
+        cd.hex(mt),
+        cd.cmp(z => Bytes.push(z, 45), SCon{Chr{45}, SNil{}},
+          z => Bytes.push(C.hex(z, n), 34), Bytes.append(C.hex("", n), SCon{Chr{34}, SNil{}}),
+          cd.push(45),
+          cd.cmp(z => C.hex(z, n), C.hex("", n),
+            z => Bytes.push(z, 34), SCon{Chr{34}, SNil{}},
+            cd.hex(n),
+            cd.push(34))))),
+    cd.cmp(z => Bytes.push(z, 34), SCon{Chr{34}, SNil{}},
+      z => Bytes.push(C.hex(Bytes.push(C.hex(z, mt), 45), n), 34), Bytes.append(C.hex("", mt), Bytes.append(SCon{Chr{45}, SNil{}}, Bytes.append(C.hex("", n), SCon{Chr{34}, SNil{}}))),
+      cd.push(34),
+      cd.cmp(z => C.hex(z, mt), C.hex("", mt),
+        z => Bytes.push(C.hex(Bytes.push(z, 45), n), 34), Bytes.append(SCon{Chr{45}, SNil{}}, Bytes.append(C.hex("", n), SCon{Chr{34}, SNil{}})),
+        cd.hex(mt),
+        cd.cmp(z => Bytes.push(z, 45), SCon{Chr{45}, SNil{}},
+          z => Bytes.push(C.hex(z, n), 34), Bytes.append(C.hex("", n), SCon{Chr{34}, SNil{}}),
+          cd.push(45),
+          cd.cmp(z => C.hex(z, n), C.hex("", n),
+            z => Bytes.push(z, 34), SCon{Chr{34}, SNil{}},
+            cd.hex(n),
+            cd.push(34))))))
+
+def cd.y(yy: Nat & Nat, -tf: Bytes() -> Bytes(), -ts: List<&2, Bytes()>, wt: cd.Is(tf, Bytes.concat(ts))) ->
+  cd.Is(a => tf(C.di.y(a, yy)), Bytes.concat(C.date.y(yy, ts))):
+  match yy:
+    case (+p, +q):
+      cd.cmp(z => C.p2(z, p), C.d2(p),
+        z => tf(Bytes.push(C.p2(z, q), 32)), Bytes.append(C.d2(q), Bytes.append(SCon{Chr{32}, SNil{}}, Bytes.concat(ts))),
+        cd.p2(p),
+        cd.cmp(z => C.p2(z, q), C.d2(q),
+          z => tf(Bytes.push(z, 32)), Bytes.append(SCon{Chr{32}, SNil{}}, Bytes.concat(ts)),
+          cd.p2(q),
+          cd.cmp(z => Bytes.push(z, 32), SCon{Chr{32}, SNil{}},
+            z => tf(z), Bytes.concat(ts),
+            cd.push(32),
+            wt)))
+
+def cd.ymd.jd(+k: Nat, jd: Nat & Nat, -tf: Bytes() -> Bytes(), -ts: List<&2, Bytes()>,
+  wt: cd.Is(tf, Bytes.concat(ts))) ->
+  cd.Is(a => tf(C.di.ymd(a, (k, jd))), Bytes.concat(C.date.ymd((k, jd), ts))):
+  match jd:
+    case (+j, +d):
+      cd.cmp(z => C.p2(z, 1n+d), C.d2(1n+d),
+        z => tf(C.di.y(Bytes.append(Bytes.push(z, 32), C.nth(C.monc(), j)), Nat.divmod(Nat.add(1970n, k), 100n))), Bytes.append(SCon{Chr{32}, SNil{}}, Bytes.append(C.nth(C.monc(), j), Bytes.concat(C.date.y(Nat.divmod(Nat.add(1970n, k), 100n), ts)))),
+        cd.p2(1n+d),
+        cd.cmp(z => Bytes.push(z, 32), SCon{Chr{32}, SNil{}},
+          z => tf(C.di.y(Bytes.append(z, C.nth(C.monc(), j)), Nat.divmod(Nat.add(1970n, k), 100n))), Bytes.append(C.nth(C.monc(), j), Bytes.concat(C.date.y(Nat.divmod(Nat.add(1970n, k), 100n), ts))),
+          cd.push(32),
+          cd.cmp(z => Bytes.append(z, C.nth(C.monc(), j)), C.nth(C.monc(), j),
+            z => tf(C.di.y(z, Nat.divmod(Nat.add(1970n, k), 100n))), Bytes.concat(C.date.y(Nat.divmod(Nat.add(1970n, k), 100n), ts)),
+            cd.app(C.nth(C.monc(), j)),
+            cd.y(Nat.divmod(Nat.add(1970n, k), 100n), tf, ts, wt))))
+
+def cd.ymd(kjd: Nat & Nat & Nat, -tf: Bytes() -> Bytes(), -ts: List<&2, Bytes()>, wt: cd.Is(tf, Bytes.concat(ts))) ->
+  cd.Is(a => tf(C.di.ymd(a, kjd)), Bytes.concat(C.date.ymd(kjd, ts))):
+  match kjd:
+    case (+k, jd):
+      cd.ymd.jd(k, jd, tf, ts, wt)
+
+def cd.ds(+days: Nat, +h: Nat, +m: Nat, +x: Nat) ->
+  cd.Is(a => C.di.ds(a, days, h, m, x), Bytes.concat(C.date.ds(days, h, m, x))):
+  cd.cmp(z => Bytes.append(z, C.nth(C.wkc(), Nat.mod(Nat.add(days, 4n), 7n))), C.nth(C.wkc(), Nat.mod(Nat.add(days, 4n), 7n)),
+    z => Bytes.append(C.p2(Bytes.push(C.p2(Bytes.push(C.p2(C.di.ymd(z, C.civil(days)), h), 58), m), 58), x), " GMT"), Bytes.concat(C.date.ymd(C.civil(days), [C.d2(h), ":", C.d2(m), ":", C.d2(x), " GMT"])),
+    cd.app(C.nth(C.wkc(), Nat.mod(Nat.add(days, 4n), 7n))),
+    cd.ymd(C.civil(days), b => Bytes.append(C.p2(Bytes.push(C.p2(Bytes.push(C.p2(b, h), 58), m), 58), x), " GMT"), [C.d2(h), ":", C.d2(m), ":", C.d2(x), " GMT"],
+    cd.cmp(z => C.p2(z, h), C.d2(h),
+      z => Bytes.append(C.p2(Bytes.push(C.p2(Bytes.push(z, 58), m), 58), x), " GMT"), Bytes.append(SCon{Chr{58}, SNil{}}, Bytes.append(C.d2(m), Bytes.append(SCon{Chr{58}, SNil{}}, Bytes.append(C.d2(x), Bytes.append(" GMT", ""))))),
+      cd.p2(h),
+      cd.cmp(z => Bytes.push(z, 58), SCon{Chr{58}, SNil{}},
+        z => Bytes.append(C.p2(Bytes.push(C.p2(z, m), 58), x), " GMT"), Bytes.append(C.d2(m), Bytes.append(SCon{Chr{58}, SNil{}}, Bytes.append(C.d2(x), Bytes.append(" GMT", "")))),
+        cd.push(58),
+        cd.cmp(z => C.p2(z, m), C.d2(m),
+          z => Bytes.append(C.p2(Bytes.push(z, 58), x), " GMT"), Bytes.append(SCon{Chr{58}, SNil{}}, Bytes.append(C.d2(x), Bytes.append(" GMT", ""))),
+          cd.p2(m),
+          cd.cmp(z => Bytes.push(z, 58), SCon{Chr{58}, SNil{}},
+            z => Bytes.append(C.p2(z, x), " GMT"), Bytes.append(C.d2(x), Bytes.append(" GMT", "")),
+            cd.push(58),
+            cd.cmp(z => C.p2(z, x), C.d2(x),
+              z => Bytes.append(z, " GMT"), Bytes.append(" GMT", ""),
+              cd.p2(x),
+              cd.cmp(z => Bytes.append(z, " GMT"), " GMT",
+                z => z, "",
+                cd.app(" GMT"),
+                cd.id()))))))))
+
+def cd.q3(+m: Nat, +x: Nat, dh: Nat & Nat) -> cd.Is(a => C.di.q3(a, m, x, dh), C.date.q3(m, x, dh)):
+  match dh:
+    case (+days, +h):
+      cd.ds(days, h, m, x)
+
+def cd.q2(+x: Nat, hm: Nat & Nat) -> cd.Is(a => C.di.q2(a, x, hm), C.date.q2(x, hm)):
+  match hm:
+    case (+hs, +m):
+      cd.q3(m, x, Nat.divmod(hs, 24n))
+
+def cd.q1(mx: Nat & Nat) -> cd.Is(a => C.di.q1(a, mx), C.date.q1(mx)):
+  match mx:
+    case (+ms, +x):
+      cd.q2(x, Nat.divmod(ms, 60n))
+
+def cd.date(+t: Nat) -> cd.Is(a => C.date.into(a, t), C.date.fmt(t)):
+  cd.q1(Nat.divmod(t, 60n))
+
+def cd.vals(+mt: U32, +n: U32, -tf: Bytes() -> Bytes(), -ts: List<&2, Bytes()>, wt: cd.Is(tf, Bytes.concat(ts))) ->
+  cd.Is(a => tf(C.vals(a, mt, n)), Bytes.concat(C.vals.is(mt, n, ts))):
+  cd.cmp(z => Bytes.append(z, "\r\nlast-modified: "), "\r\nlast-modified: ",
+    z => tf(C.etag.into(Bytes.append(C.date.into(z, U32.to_nat(mt)), "\r\netag: "), mt, n)), Bytes.append(C.date.fmt(U32.to_nat(mt)), Bytes.append("\r\netag: ", Bytes.append(C.etag.of(mt, n), Bytes.concat(ts)))),
+    cd.app("\r\nlast-modified: "),
+    cd.cmp(z => C.date.into(z, U32.to_nat(mt)), C.date.fmt(U32.to_nat(mt)),
+      z => tf(C.etag.into(Bytes.append(z, "\r\netag: "), mt, n)), Bytes.append("\r\netag: ", Bytes.append(C.etag.of(mt, n), Bytes.concat(ts))),
+      cd.date(U32.to_nat(mt)),
+      cd.cmp(z => Bytes.append(z, "\r\netag: "), "\r\netag: ",
+        z => tf(C.etag.into(z, mt, n)), Bytes.append(C.etag.of(mt, n), Bytes.concat(ts)),
+        cd.app("\r\netag: "),
+        cd.cmp(z => C.etag.into(z, mt, n), C.etag.of(mt, n),
+          z => tf(z), Bytes.concat(ts),
+          cd.etag(mt, n),
+          wt))))
+
+def cd.full(ct: Bytes(), +n: U32, +mt: U32) -> {C.hd.full(ct, n, mt) == C.hd.full.is(ct, n, mt) : Bytes()}:
+  (cd.cmp(z => Bytes.append(z, ct), ct,
+      z => Bytes.append(C.vals(C.num.into(z, U32.to_nat(n)), mt, n), C.ranges()), Bytes.append(C.num(U32.to_nat(n)), Bytes.concat(C.vals.is(mt, n, [C.ranges()]))),
+      cd.app(ct),
+      cd.cmp(z => C.num.into(z, U32.to_nat(n)), C.num(U32.to_nat(n)),
+        z => Bytes.append(C.vals(z, mt, n), C.ranges()), Bytes.concat(C.vals.is(mt, n, [C.ranges()])),
+        cd.num(U32.to_nat(n)),
+        cd.vals(mt, n, b => Bytes.append(b, C.ranges()), [C.ranges()],
+      cd.cmp(z => Bytes.append(z, C.ranges()), C.ranges(),
+        z => z, "",
+        cd.app(C.ranges()),
+        cd.id())))))("")
+
+def cd.same(+mt: U32, +n: U32) -> {C.hd.same(mt, n) == C.hd.same.is(mt, n) : Bytes()}:
+  (cd.cmp(z => Bytes.append(z, "HTTP/1.1 304 Not Modified"), "HTTP/1.1 304 Not Modified",
+      z => Bytes.append(C.vals(z, mt, n), C.ka()), Bytes.concat(C.vals.is(mt, n, [C.ka()])),
+      cd.app("HTTP/1.1 304 Not Modified"),
+      cd.vals(mt, n, b => Bytes.append(b, C.ka()), [C.ka()],
+      cd.cmp(z => Bytes.append(z, C.ka()), C.ka(),
+        z => z, "",
+        cd.app(C.ka()),
+        cd.id()))))("")
+
+def cd.part(+ct: Bytes(), +a: Nat, +b: Nat, +n: U32, +mt: U32) ->
+  {C.hd.part(ct, a, b, n, mt) == C.hd.part.is(ct, a, b, n, mt) : Bytes()}:
+  (cd.cmp(z => Bytes.append(z, "HTTP/1.1 206 Partial Content\r\n"), "HTTP/1.1 206 Partial Content\r\n",
+      z => Bytes.append(C.vals(Bytes.append(Bytes.append(Bytes.append(z, Bytes.drop(ct, 17n)), C.num(Nat.sub(1n+b, a))), Bytes.concat(C.crange(a, b, U32.to_nat(n)))), mt, n), C.ka()), Bytes.append(Bytes.drop(ct, 17n), Bytes.append(C.num(Nat.sub(1n+b, a)), Bytes.append(Bytes.concat(C.crange(a, b, U32.to_nat(n))), Bytes.concat(C.vals.is(mt, n, [C.ka()]))))),
+      cd.app("HTTP/1.1 206 Partial Content\r\n"),
+      cd.cmp(z => Bytes.append(z, Bytes.drop(ct, 17n)), Bytes.drop(ct, 17n),
+        z => Bytes.append(C.vals(Bytes.append(Bytes.append(z, C.num(Nat.sub(1n+b, a))), Bytes.concat(C.crange(a, b, U32.to_nat(n)))), mt, n), C.ka()), Bytes.append(C.num(Nat.sub(1n+b, a)), Bytes.append(Bytes.concat(C.crange(a, b, U32.to_nat(n))), Bytes.concat(C.vals.is(mt, n, [C.ka()])))),
+        cd.app(Bytes.drop(ct, 17n)),
+        cd.cmp(z => Bytes.append(z, C.num(Nat.sub(1n+b, a))), C.num(Nat.sub(1n+b, a)),
+          z => Bytes.append(C.vals(Bytes.append(z, Bytes.concat(C.crange(a, b, U32.to_nat(n)))), mt, n), C.ka()), Bytes.append(Bytes.concat(C.crange(a, b, U32.to_nat(n))), Bytes.concat(C.vals.is(mt, n, [C.ka()]))),
+          cd.app(C.num(Nat.sub(1n+b, a))),
+          cd.cmp(z => Bytes.append(z, Bytes.concat(C.crange(a, b, U32.to_nat(n)))), Bytes.concat(C.crange(a, b, U32.to_nat(n))),
+            z => Bytes.append(C.vals(z, mt, n), C.ka()), Bytes.concat(C.vals.is(mt, n, [C.ka()])),
+            cd.app(Bytes.concat(C.crange(a, b, U32.to_nat(n)))),
+            cd.vals(mt, n, b => Bytes.append(b, C.ka()), [C.ka()],
+      cd.cmp(z => Bytes.append(z, C.ka()), C.ka(),
+        z => z, "",
+        cd.app(C.ka()),
+        cd.id())))))))("")
+
+# file_head_is_built: every row of the table, and the row for what no
+# row names, keeps the head mime.pre builds from its type's name; so
+# does whichever row the lookup lands on. A request that asks nothing
+# of the file is decided Full, and the head built in place is hd.full.is.
+def pg.FH(m: Eng.Mime) -> Type:
+  {Eng.mime.head.of(m) == Eng.mime.pre(Eng.mime.name.of(m)) : Bytes()}
+
+def pg.FHS(tbl: List<&2, Eng.Mime>) -> Type:
   match tbl:
     case Nil{}:
-      pg.FH(n, Eng.mime.other())
+      pg.FH(Eng.mime.other())
     case Con{m, t}:
-      pg.FH(n, m) & pg.FHS(n, t)
+      pg.FH(m) & pg.FHS(t)
 
-def pg.fh.table(+n: U32) -> pg.FHS(n, Eng.mime.table()):
+def pg.fh.table() -> pg.FHS(Eng.mime.table()):
   ({==}, ({==}, ({==}, ({==}, ({==}, ({==}, ({==}, ({==}, ({==}, ({==}, ({==}, ({==}, ({==}, ({==},
     {==}))))))))))))))
 
-def pg.fh.at(+n: U32, hit: Bool, m: Eng.Mime, rest: Eng.Mime, a: pg.FH(n, m), b: pg.FH(n, rest)) ->
-  pg.FH(n, Eng.mime.find.at(hit, m, rest)):
+def pg.fh.at(hit: Bool, m: Eng.Mime, rest: Eng.Mime, a: pg.FH(m), b: pg.FH(rest)) ->
+  pg.FH(Eng.mime.find.at(hit, m, rest)):
   match hit:
     case True{}:
       a
     case False{}:
       b
 
-def pg.fh.find(+n: U32, tbl: List<&2, Eng.Mime>, +e: Bytes(), all: pg.FHS(n, tbl)) ->
-  pg.FH(n, Eng.mime.find(tbl, e)):
+def pg.fh.find(tbl: List<&2, Eng.Mime>, +e: Bytes(), all: pg.FHS(tbl)) -> pg.FH(Eng.mime.find(tbl, e)):
   match tbl:
     case Nil{}:
       all
     case Con{+m, +t}:
       (a, rest) = all
-      pg.fh.at(n, Eng.bytes.eq(Eng.mime.ext(m), e), m, Eng.mime.find(t, e), a, pg.fh.find(n, t, e, rest))
+      pg.fh.at(Eng.bytes.eq(Eng.mime.ext(m), e), m, Eng.mime.find(t, e), a, pg.fh.find(t, e, rest))
 
-def Laws.file_head_is_built(e, n):
-  pg.fh.find(n, Eng.mime.table(), e, pg.fh.table(n))
+def Laws.file_head_is_built(e, head, n, mt):
+  %pg.fh.find(Eng.mime.table(), e, pg.fh.table()) :
+    {Eng.h.fhead(Eng.mime.head(e), Nil{}, head, n, mt) == L.Fr{C.hd.full.is(_, n, mt), 0, n} : L.Fr}
+  %cd.full(Eng.mime.head(e), n, mt) : {Eng.h.fhead(Eng.mime.head(e), Nil{}, head, n, mt) == L.Fr{_, 0, n} : L.Fr}
+  {==}
 
 def Laws.sha1_empty():
   {==}
@@ -2870,18 +3114,18 @@ def Laws.hold_fine(ms, s, acc):
 def Laws.raw_fine(ms, may, bs, st):
   WW.raw_fine(~Eng.h.lnote, ms, may, bs, st)
 
-def Laws.page_fine(ms, root, path, ct, head, may, sh, st):
-  WW.page_fine(~Eng.h.shut, ~Eng.h.fhead, ~Eng.miss, ~Eng.h.lnote, ~Eng.h.lsize, ms, root, path, ct, head, may, sh, st)
+def Laws.page_fine(ms, root, path, ct, ask, head, may, sh, st):
+  WW.page_fine(~Eng.h.shut, ~Eng.h.fhead, ~Eng.miss, ~Eng.h.lnote, ~Eng.h.lsize, ms, root, path, ct, ask, head, may, sh, st)
 
-def Laws.page_wire(ms, root, path, ct, may, sh, rd, now, fs, out, acc, body, ef, en):
+def Laws.page_wire(ms, root, path, ct, ask, may, sh, rd, now, fs, out, acc, body, hd, off, len, ef, en, efr, ep):
   WW.page_wire(~Eng.h.shut, ~Eng.h.fhead, ~Eng.miss, ~Eng.h.lnote, ~Eng.h.lsize, ms, root, path,
-    ct, may, sh, rd, now, fs, out, acc, body, ef, en)
+    ct, ask, may, sh, rd, now, fs, out, acc, body, hd, off, len, ef, en, efr, ep)
 
 def Laws.page_fail(s, f, e):
   WW.page_fail(s, f, e)
 
-def Laws.page_head_fail(ms, f, n, s, e):
-  WW.page_head_fail(ms, f, n, s, e)
+def Laws.page_head_fail(ms, f, off, len, s, e):
+  WW.page_head_fail(ms, f, off, len, s, e)
 
 def Laws.accept_calm(k, evs, served, e):
   WW.accept_calm(k, evs, served, e)
