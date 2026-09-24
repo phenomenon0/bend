@@ -392,13 +392,14 @@ def same(a: Bool, b: Bool) -> Bool:
       Bool.not(b)
 
 # the length spec.bend reads from a Content-Length's value: the one the
-# body has, zero exactly when it is empty
+# body has, zero exactly when it is empty, and within the body's cap
 def ok.len.at(v: Spec.FLine, +body: Bytes()) -> Bool:
   match v:
     case Spec.FVal{val}:
       match val:
         case Spec.VLen{+n, ws}:
-          same(U32.is_zero(n), String.is_empty(body)) && Nat.is_eq(U32.to_nat(n), Bytes.len(body))
+          Bool.not(U32.is_lt(Spec.len.cap(), n)) &&
+            (same(U32.is_zero(n), String.is_empty(body)) && Nat.is_eq(U32.to_nat(n), Bytes.len(body)))
         case _:
           False{}
     case _:

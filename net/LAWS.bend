@@ -49,6 +49,7 @@ import ../demos/io_http_engine/main.bend as Eng
 import ../demos/io_http_engine/spec.bend as Spec
 import ../demos/io_proxy/core.bend as X
 import ../demos/io_proxy/LAWS.bend as PL
+import ../demos/io_http_engine/LAWS.bend as EL
 import ./http.bend as Http
 import ./url.bend as U
 import ./server.bend as Server
@@ -583,3 +584,100 @@ law stream_next:
   for +rs: List<&2, Bytes()>
   {Stream.next(Wr.drain.s(R.P, streamed(e, f, rs))) == spec.next(spec.body(e, f, Bytes.to_list(Bytes.concat(rs)))) :
     Maybe<&2, Bytes()>}
+
+# A stream route's head
+# =====================
+#
+# A stream route's head is read by the engine's reader, the one every
+# request the server takes is read by: Stream.cut feeds it each read a
+# piece at a time and stops where it stands at a head's blank line, the
+# CR read, and what the stream takes from it there is Stream.at.head --
+# the request, adapted as a handler's is, and the framing the engine
+# decides there before its body cap. The reference is spec.bend's frame()
+# walk of the same bytes: where it has read a head whole to its blank
+# line's CR (MEoh), that head, judged as RFC 9112 judges one -- one Host
+# (HTTP/1.0: at most one), one framing, a Transfer-Encoding only chunked
+# and never in HTTP/1.0, the Content-Lengths agreeing -- and adapted as
+# handler_framed spells out; anywhere else, no head.
+
+# how RFC 9112 frames the body of the head spec.bend holds, the body cap
+# aside (a streamed body has its own): no length and no coding is a
+# length of 0; refused, none
+def spec.frame(ok: Bool, b: Spec.Body) -> Maybe<&2, Stream.Frame>:
+  match ok b:
+    case False{} _:
+      None{}
+    case True{} Spec.BNone{}:
+      Some{Stream.FLen{0n}}
+    case True{} Spec.BLen{n}:
+      Some{Stream.FLen{U32.to_nat(n)}}
+    case True{} Spec.BChunked{}:
+      Some{Stream.FChunked{}}
+    case True{} Spec.BBad{}:
+      None{}
+
+# the head a stream is handed: the request as a handler is handed one
+# (its body empty), the framing, whether it is HTTP/1.0, whether it
+# closes after (it asked to, or it is HTTP/1.0 without keep-alive, or it
+# asked to upgrade), whether it is a HEAD
+def spec.head.hd(+ip: Bytes(), +r: Eng.Req, +cl: Bool, f: Stream.Frame, hd: Eng.Hd) -> Stream.Head:
+  match hd:
+    case Eng.Hd{+m, +v10, fs, cn}:
+      Stream.HOk{spec.req(ip, r), f, v10, cl, String.eq(m, "HEAD")}
+
+def spec.head.req(+ip: Bytes(), r: Eng.Req, f: Stream.Frame) -> Stream.Head:
+  match r:
+    case Eng.Req{m, t, b, +cl, +ws, k, +hd}:
+      spec.head.hd(ip, Eng.Req{m, t, b, cl, ws, k, hd}, cl || ws, f, hd)
+
+def spec.head.mk(+ip: Bytes(), r: Eng.Req, mf: Maybe<&2, Stream.Frame>) -> Stream.Head:
+  match mf:
+    case None{}:
+      Stream.HNo{}
+    case Some{f}:
+      spec.head.req(ip, r, f)
+
+def spec.head(+ip: Bytes(), h: Spec.Head) -> Stream.Head:
+  match h:
+    case Spec.Head{m, t, +l, cl, +hs, k, u, c, v, f, x}:
+      match f:
+        case Eng.Fx{+v10, ka, +te}:
+          spec.head.mk(ip, Spec.req(Spec.Head{m, t, l, cl, hs, k, u, c, v, Eng.Fx{v10, ka, te}, x}, Nil{}),
+            spec.frame(Spec.hosts.ok(v10, hs), Spec.body.of(te, v10, l)))
+
+# where spec.bend's walk stands at a head's blank line, the CR read: the
+# head; anywhere else, none
+def spec.at.head.m(+ip: Bytes(), mode: Spec.Mode) -> Maybe<&2, Stream.Head>:
+  match mode:
+    case Spec.MEoh{h}:
+      Some{spec.head(ip, h)}
+    case _:
+      None{}
+
+def spec.at.head(+ip: Bytes(), w: Spec.W) -> Maybe<&2, Stream.Head>:
+  match w:
+    case Spec.W{mode, out, since}:
+      spec.at.head.m(ip, mode)
+
+# the walk from a connection's first byte
+def spec.start() -> Spec.W:
+  Spec.W{Spec.MReq{Nil{}}, Nil{}, Nil{}}
+
+# LAW: a stream route's head is the RFC's. For every stream a client
+# sends, however TCP cuts it into reads, the engine's reader fed the
+# reads in turn stands at a head's blank line exactly where spec.bend's
+# frame() walk of the stream whole does -- after every request before
+# it, pipelined or not -- and the head the stream takes there is the
+# walk's: the method, the target, the version, every field, the framing
+# of the body (a length of any size, or chunked), and a refusal exactly
+# where the RFC refuses the head (a Host too many or too few, two
+# framings, a coding but chunked, one in HTTP/1.0, two lengths that
+# disagree). A line the RFC refuses -- a bare LF, a folded line, a space
+# before a colon, a length that is not digits -- never reaches a blank
+# line on either side. The head a stream reads is never one another
+# reader of the same bytes would read otherwise.
+law stream_head:
+  for +ip: Bytes()
+  for +rs: List<&2, Bytes()>
+  {Stream.at.head(ip, EL.reads(rs, Eng.p.new())) ==
+    spec.at.head(ip, Spec.walk(Bytes.to_list(Bytes.concat(rs)), spec.start())) : Maybe<&2, Stream.Head>}
