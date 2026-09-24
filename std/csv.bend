@@ -128,6 +128,18 @@ def pad(d: Dialect) -> Bool:
     case Dialect{dl, q, a, b, c, h, mf, mn, rg, pd}:
       pd
 
+# d, with its first record taken as the header: Csv.with_header(Csv.excel())
+def with_header(d: Dialect) -> Dialect:
+  match d:
+    case Dialect{dl, q, a, b, c, h, mf, mn, rg, pd}:
+      Dialect{dl, q, a, b, c, True{}, mf, mn, rg, pd}
+
+# d, with the byte x for its delimiter: Csv.with_delim(Csv.excel(), 59) reads ;
+def with_delim(d: Dialect, x: U32) -> Dialect:
+  match d:
+    case Dialect{dl, q, a, b, c, h, mf, mn, rg, pd}:
+      Dialect{x, q, a, b, c, h, mf, mn, rg, pd}
+
 # Bytes
 # =====
 

@@ -818,6 +818,38 @@ def path.go(ks: List<&2, String>, m: Maybe<&2, Json>) -> Maybe<&2, Json>:
 def path(j: Json, ks: List<&2, String>) -> Maybe<&2, Json>:
   path.go(ks, Some{j})
 
+# The readers again, over a value that may be missing, so they chain:
+# Json.index(Json.get(j, "tags"), 1n), Json.nat(Json.get(j, "stars")),
+# Json.string(Json.path(j, ["owner", "login"]))
+
+def key(m: Maybe<&2, Json>, +k: String) -> Maybe<&2, Json>:
+  match m:
+    case Some{j}:
+      get(j, k)
+    case None{}:
+      None{}
+
+def index(m: Maybe<&2, Json>, i: Nat) -> Maybe<&2, Json>:
+  match m:
+    case Some{j}:
+      at(j, i)
+    case None{}:
+      None{}
+
+def nat(m: Maybe<&2, Json>) -> Maybe<&2, Nat>:
+  match m:
+    case Some{j}:
+      to_nat(j)
+    case None{}:
+      None{}
+
+def string(m: Maybe<&2, Json>) -> Maybe<&2, String>:
+  match m:
+    case Some{j}:
+      to_str(j)
+    case None{}:
+      None{}
+
 # -- closed laws: instances of the three, computed by the checker -------------
 
 # the canonical text of a parse, or the empty text for a refusal
