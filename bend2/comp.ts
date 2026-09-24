@@ -5442,10 +5442,13 @@ typedef struct {
 static IoEff io_eff_rows[1 << 16];
 static u32   io_live;
 
+// Strictly increasing, so equal spans parked in a row keep their order.
 static u64 io_tick(void) {
+  static u64      last;
   struct timespec ts;
   clock_gettime(CLOCK_MONOTONIC, &ts);
-  return (u64)ts.tv_sec * 1000000000ull + (u64)ts.tv_nsec;
+  u64 t = (u64)ts.tv_sec * 1000000000ull + (u64)ts.tv_nsec;
+  return last = t > last ? t : last + 1;
 }
 
 OUTLINE void* io_mem(void* mem) {
@@ -5486,13 +5489,15 @@ static u64 io_sys_end(IoWork* w, ssize_t n) {
 }
 
 // cont(item) is the next request; parked, word/time/evts hold the fd,
-// deadline and readiness. The leading work allows IoWork* to IoAct* casts.
+// deadline and readiness, slot its place in io_heap. The leading work
+// allows IoWork* to IoAct* casts.
 typedef struct IoAct {
   IoWork        work;
   Term          cont;
   Term          item;
   u64           time;
   short         evts;
+  u32           slot;
   struct IoAct* next;
 } IoAct;
 
@@ -5502,7 +5507,6 @@ typedef struct {
 } IoQue;
 
 static IoQue io_runs;
-static IoQue io_park;
 static IoQue io_jobs;
 
 static void io_push(IoQue* q, IoAct* a) {
@@ -5554,22 +5558,51 @@ static int io_arm(void* a, int fd, short evts, bool on) {
 #endif
 }
 
+// The deadlines, a min-heap.
+static IoAct** io_heap;
+static u32     io_heap_len;
+static u32     io_heap_cap;
+
+// Moves a, put at i, up or down to its place.
+static void io_heap_fix(u32 i, IoAct* a) {
+  for (u32 p; i > 0 && a->time < io_heap[p = (i - 1) / 2]->time; i = p) {
+    (io_heap[i] = io_heap[p])->slot = i + 1;
+  }
+  for (u32 c; (c = 2 * i + 1) < io_heap_len; i = c) {
+    c += c + 1 < io_heap_len && io_heap[c + 1]->time < io_heap[c]->time;
+    if (io_heap[c]->time >= a->time) {
+      break;
+    }
+    (io_heap[i] = io_heap[c])->slot = i + 1;
+  }
+  (io_heap[i] = a)->slot = i + 1;
+}
+
+static void io_heap_del(IoAct* a) {
+  IoAct* last = io_heap[--io_heap_len];
+  if (last != a) {
+    io_heap_fix(a->slot - 1, last);
+  }
+  a->slot = 0;
+}
+
 // Park until evts (POLLIN/POLLOUT; 0 ignores fd) or time (0: none); the
-// loop then calls more: a value resumes, IO_PARK re-parks. io_park holds
-// the waiters with a deadline, and those the poller refuses (a regular
-// file, always ready): evts -1 marks one due.
+// loop then calls more: a value resumes, IO_PARK re-parks. evts stays set
+// while the poller holds fd; one it refuses (a regular file) is due now.
 static Term io_wait_on(IoWork* w, int fd, short evts, u64 time, IoPack more) {
   IoAct* a     = (IoAct*)w;
   a->work.word = (u32)fd;
   a->work.pack = more;
-  a->time      = time;
-  a->evts      = evts;
-  if (evts != 0 && io_arm(a, fd, evts, true) != 0) {
-    a->evts = -1;
-  }
-  io_fds += a->evts > 0;
-  if (time != 0 || a->evts <= 0) {
-    io_push(&io_park, a);
+  a->evts      = evts != 0 && io_arm(a, fd, evts, true) == 0 ? evts : 0;
+  a->time      = a->evts == 0 && time == 0 ? 1 : time;
+  io_fds      += a->evts != 0;
+  if (a->time != 0) {
+    if (io_heap_len == io_heap_cap) {
+      io_heap_cap = io_heap_cap * 2 + 64;
+      io_heap     = io_mem(realloc(io_heap, io_heap_cap * sizeof(IoAct*)));
+    }
+    io_heap_len += 1;
+    io_heap_fix(io_heap_len - 1, a);
   }
   return IO_PARK;
 }
@@ -5774,14 +5807,10 @@ static void io_fire(Env e, IoAct* a) {
   }
 }
 
-// A fired fd waiter with a deadline is marked due and runs from io_park;
-// a deadline that fires first disarms its fd.
+// The first of an fd and a deadline to fire (TCP.poll waits on both)
+// takes the waiter out of the other.
 static void io_wait(Env e) {
-  u64 soon = 0;
-  for (IoAct* a = io_park.head; a != NULL; a = a->next) {
-    u64 t = a->evts < 0 ? 1 : a->time;
-    soon  = t != 0 && (soon == 0 || t < soon) ? t : soon;
-  }
+  u64   soon = io_heap_len != 0 ? io_heap[0]->time : 0;
   u64   tick = io_tick();
   u64   ms   = soon > tick ? (soon - tick) / 1000000 + 1 : 0;
   IoEvt es[64];
@@ -5798,8 +5827,6 @@ static void io_wait(Env e) {
       err_fail("the poller failed");
     }
   }
-  IoQue todo = io_park;
-  io_park = (IoQue){0};
   for (int i = 0; i < n; i += 1) {
     IoAct* a = io_evt_act(es[i]);
     if (a == NULL) {
@@ -5808,21 +5835,20 @@ static void io_wait(Env e) {
       continue;
     }
     io_fds -= 1;
-    a->evts = -1;
-    if (a->time == 0) {
-      io_fire(e, a);
+    a->evts = 0;
+    if (a->slot != 0) {
+      io_heap_del(a);
     }
+    io_fire(e, a);
   }
   u64 now = io_tick();
-  while (todo.head != NULL) {
-    IoAct* a = io_pop(&todo);
-    if (a->evts >= 0 && (a->time == 0 || a->time > now)) {
-      io_push(&io_park, a);
-      continue;
-    }
-    if (a->evts > 0) {
+  while (io_heap_len != 0 && io_heap[0]->time <= now) {
+    IoAct* a = io_heap[0];
+    io_heap_del(a);
+    if (a->evts != 0) {
       io_arm(a, (int)a->work.word, a->evts, false);
       io_fds -= 1;
+      a->evts = 0;
     }
     io_fire(e, a);
   }
@@ -6014,7 +6040,7 @@ OUTLINE int io_loop(Corpus H) {
       if (io_live == 0) {
         return 0;
       }
-      if (io_park.head == NULL && io_busy == 0 && io_fds == 0) {
+      if (io_heap_len == 0 && io_busy == 0 && io_fds == 0) {
         io_sync();
         fprintf(stderr, "bend: deadlock: every computation waits on a"
           " channel\n");
@@ -6355,8 +6381,8 @@ function io_push(fun, arg, fresh) {
 }
 
 // The kernel's poller holds each fd waiter (io.fds), armed one-shot and
-// keyed by its fd, so a pass costs what fired; io.waits holds those with a
-// deadline and those the poller refuses (a regular file, always ready).
+// keyed by its fd, so a pass costs what fired; io.heap holds the deadlines
+// (at 0 one the poller refuses) and skips a done one.
 function io_arm(fd, out, on) {
   const sys = io_sys();
   const v = new DataView(new ArrayBuffer(32));
@@ -6373,10 +6399,27 @@ function io_arm(fd, out, on) {
     : sys.epoll_ctl(sys.q, 2, fd, p);
 }
 
+function io_heap_pop(h) {
+  const top = h[0], w = h.pop();
+  let i = 0;
+  for (let c = 1; c < h.length; c = 2 * i + 1) {
+    c += c + 1 < h.length && h[c + 1].at < h[c].at ? 1 : 0;
+    if (h[c].at >= w.at) {
+      break;
+    }
+    h[i] = h[c];
+    i = c;
+  }
+  if (h.length > 0) {
+    h[i] = w;
+  }
+  return top;
+}
+
 function io_wait(io) {
   const sys = io_sys();
-  const soon = io.waits.reduce((m, w) => Math.min(m, w.due ? 0 : w.at ?? m),
-    Infinity);
+  const h = io.heap;
+  const soon = h.length > 0 ? h[0].at : Infinity;
   const ms = soon === Infinity ? -1
     : Math.min(2147483647, Math.max(0, Math.ceil(soon - performance.now())));
   const v = new DataView(new ArrayBuffer(64 * sys.ev));
@@ -6389,23 +6432,22 @@ function io_wait(io) {
       : v.getUint32(i * sys.ev + sys.ev - 8, true);
     const w = io.fds.get(fd);
     io.fds.delete(fd);
-    w.due = true;
-    if (w.at === undefined) {
-      io_push(io_wake, w, false);
-    }
+    w.done = true;
+    io_push(io_wake, w, false);
   }
   const now = performance.now();
-  io.waits = io.waits.filter((w) => {
-    const ready = w.due || w.at <= now;
-    if (ready && io.fds.get(w.fd) === w) {
+  while (h.length > 0 && h[0].at <= now) {
+    const w = io_heap_pop(h);
+    if (w.done) {
+      continue;
+    }
+    w.done = true;
+    if (io.fds.get(w.fd) === w) {
       io_arm(w.fd, w.out, false);
       io.fds.delete(w.fd);
     }
-    if (ready) {
-      io_push(io_wake, w, false);
-    }
-    return !ready;
-  });
+    io_push(io_wake, w, false);
+  }
 }
 
 // Resume k with more's value; undefined means re-parked.
@@ -6418,19 +6460,23 @@ function io_wake(w) {
 // fd or at disables that source.
 function io_park_on(fd, out, k, more, at) {
   const io = globalThis.BEND_IO;
-  const w = { fd, out, k, more, at, due: false };
-  if (fd !== undefined && io_arm(fd, out, true) === 0) {
+  const w = { fd, out, k, more, at };
+  if (fd !== undefined && io_arm(fd, out, true) !== 0) {
+    w.at = 0;
+  } else if (fd !== undefined) {
     io.fds.set(fd, w);
-  } else {
-    w.due = fd !== undefined;
   }
-  if (at !== undefined || !io.fds.has(fd)) {
-    io.waits.push(w);
+  if (w.at !== undefined) {
+    let i = io.heap.push(w) - 1;
+    for (; i > 0 && w.at < io.heap[i - 1 >> 1].at; i = i - 1 >> 1) {
+      io.heap[i] = io.heap[i - 1 >> 1];
+    }
+    io.heap[i] = w;
   }
 }
 
 function io_run(m) {
-  const io = { runs: [], live: 0, waits: [], fds: new Map() };
+  const io = { runs: [], live: 0, heap: [], fds: new Map() };
   globalThis.BEND_IO = io;
   try {
     io_push(run_loop(m()), (x) => ({ $: "Emit", value: x }), true);
@@ -6439,7 +6485,7 @@ function io_run(m) {
         if (io.live === 0) {
           return 0;
         }
-        if (io.waits.length === 0 && io.fds.size === 0) {
+        if (io.heap.length + io.fds.size === 0) {
           io_errs("bend: deadlock: every computation waits on a channel");
           return 1;
         }
