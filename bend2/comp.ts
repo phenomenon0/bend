@@ -3345,9 +3345,9 @@ function emit_match(fl: File, x: Of<"Mat"> | Of<"Efq">,
   const ret = all.B(DUMMY);
   const ls = emit_nats(adt, x);
   const ws = emit_lits(adt, x);
-  // A word is matched on its bits, a 64-bit word (U64, I64) on its one
+  // A word is matched on its bits, a 64-bit word (U64, I64, F64) on its one
   // constructor's node at its own width, anything else in its own layout.
-  const w64 = adt.k === "U64" || adt.k === "I64";
+  const w64 = adt.k === "U64" || adt.k === "I64" || adt.k === "F64";
   const lay = ws || w64 ? lay_node(fl.book, adt.k) : lay_of(fl.book, all.A);
   const u = val_hold(fl, val_to(fl, args[0],
     ws ? W32 : w64 ? WORDS[adt.k] : lay), "s");
