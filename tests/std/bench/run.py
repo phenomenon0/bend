@@ -7,7 +7,7 @@
 # runs, in CPU seconds (the C lane on one thread).
 #
 #   python3 tests/std/bench/run.py [--bend path/to/bend2/main.ts] [--packed]
-#     [--mb 10] [--json FILE | --events 20000] [--gz 30000] [--lanes c,js]
+#     [--mb 10 | --csv FILE] [--json FILE | --events 20000] [--gz 30000] [--lanes c,js]
 #
 # --bend runs another checkout's compiler (released Bend's, say) over a copy
 # of this std/; --packed switches the copy's std/bytes.bend to
@@ -80,9 +80,11 @@ def main():
     src = open(by).read()
     open(by, "w").write(src.replace("import ./bytes_list.bend as Impl",
       "import ./bytes_packed.bend as Impl"))
-  data = os.path.join(work, "bench.csv")
-  subprocess.run([sys.executable, os.path.join(ROOT, "tests", "power", "bench", "csv", "gen.py"), data,
-    str(MB)], check=True, capture_output=True)
+  data = arg("--csv", None)
+  if data is None:
+    data = os.path.join(work, "bench.csv")
+    subprocess.run([sys.executable, os.path.join(ROOT, "tests", "power", "bench", "csv", "gen.py"), data,
+      str(MB)], check=True, capture_output=True)
   rows = list(csv.reader(open(data, newline="", encoding="latin-1"), strict=True))
   want_csv = "%d %d %d" % (len(rows), sum(len(r) for r in rows), sum(len(x) for r in rows for x in r))
   jpath = arg("--json", None)

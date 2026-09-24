@@ -209,6 +209,11 @@ held to CPython's first. C lane, one thread:
 | JSON, 26 MB (json-iterator's `large-file.json`, GitHub events) | 3.2 MB/s | 1.1 MB/s | 23 MB/s |
 | gunzip, 30 KB out | 2.7 KB/s | 7.7 KB/s | 3.2 MB/s (1 MB out: 4.4 MB/s) |
 
+A real CSV reads the same: datasets/airport-codes (8.8 MB, 86127 records,
+quoted coordinates) takes 0.86 CPU seconds in released Bend's C lane
+(10 MB/s), with CPython's count of records, fields and bytes
+(`run.py --csv FILE`).
+
 On released Bend, compile to C for speed: `bend F.bend` runs an IO main on
 the JS runtime, and so does `-o F.js`, where the same readers do CSV at
 0.3 MB/s and JSON at 0.16 MB/s (UPSTREAM.md F10). Gzip there is correct but

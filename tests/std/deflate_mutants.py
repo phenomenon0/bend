@@ -10,12 +10,14 @@
 # switches the copy to bytes_packed.bend; --bend runs another checkout's
 # bend (released Bend's main.ts, say).
 #
-#   python3 tests/std/deflate_mutants.py [--packed] [--bend path/to/main.ts]
+#   python3 tests/std/deflate_mutants.py [--packed] [--bend path/to/main.ts] [WORDS...]
+# (WORDS: run only the mutants whose name holds one of them)
 import os, shutil, subprocess, sys, tempfile
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 PACKED = '--packed' in sys.argv
 BEND = sys.argv[sys.argv.index('--bend') + 1] if '--bend' in sys.argv else os.path.join(ROOT, 'bend2', 'main.ts')
+WORDS = [a for i, a in enumerate(sys.argv[1:], 1) if not a.startswith('--') and sys.argv[i - 1] != '--bend']
 
 MUTANTS = [
   ('the final block is written without BFINAL', 'deflate.bend', [(
@@ -118,7 +120,8 @@ def main():
   fixture = os.path.join(ROOT, 'tests', 'std', 'gzip.bend')
   want = ''.join(l[2:] + '\n' for l in open(fixture) if l.startswith('#|'))
   bad = 0
-  for name, target, edits in MUTANTS:
+  todo = [m for m in MUTANTS if not WORDS or any(w in m[0] for w in WORDS)]
+  for name, target, edits in todo:
     tmp = tempfile.mkdtemp(prefix='bend-std-deflate-mutant.')
     try:
       shutil.copytree(os.path.join(ROOT, 'std'), os.path.join(tmp, 'std'))
@@ -154,7 +157,7 @@ def main():
       sys.stdout.flush()
     finally:
       shutil.rmtree(tmp)
-  print('mutants: %d / %d killed' % (len(MUTANTS) - bad, len(MUTANTS)))
+  print('mutants: %d / %d killed' % (len(todo) - bad, len(todo)))
   sys.exit(1 if bad else 0)
 
 main()
