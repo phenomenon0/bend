@@ -48,9 +48,11 @@ too. `std/README.md` is its quick start, with examples that run on both.
                                    canon lacks)
     std/reader.bend                the reader kit, a copy of wire/reader.bend
     std/examples/                  the README's snippets, whole, with their data
-    tests/std/                     the tests, csv_mutants.py, deflate_mutants.py,
-                                   readme.py (snippets verbatim, examples run) and
-                                   bench/run.py (--bend another checkout's compiler)
+    tests/std/                     the tests; lanes.py runs them in every lane,
+                                   readme.py checks the snippets and runs the
+                                   examples, csv_mutants.py and deflate_mutants.py,
+                                   bench/run.py; each takes --bend (another
+                                   checkout's compiler) and --packed
 
 The laws are stated against the interface, so `bend std/csv_proof.bend` and
 `bend std/deflate_proof.bend` print `All terms check.` with either
