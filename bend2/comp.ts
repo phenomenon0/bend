@@ -2181,6 +2181,15 @@ function pick_lift(cb: Carb, def: Bend.Name, h: HTerm): HTerm {
           if (r !== null) {
             return r;
           }
+          // kept: the spine again, over the arguments lowered once
+          let at = 0;
+          const re = (u: HTerm): Bend.LTerm => {
+            const v = Bend.term_force(u);
+            return v.$ === "Ann" ? Bend.Ann(re(v.x), low(v.T, d, bs, null), v.s)
+              : v.$ === "App" ? Bend.App(re(v.f), ls[at++], v.s)
+              : low(v, d, bs, null);
+          };
+          return re(t);
         }
         return Bend.App(low(t.f, d, bs, null), low(t.x, d, bs, null), t.s);
       }
