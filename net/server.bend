@@ -338,6 +338,12 @@ def fin(+cfg: Cfg, acc: List<&2, L.Seg>, s: Socket) -> IO(Socket):
   IO.bind(Socket & Bool, Socket, flush.segs(s, rev.onto(acc, Nil{}), cfg.send(cfg)),
     sb => IO.pure(Socket, Pair.fst(Socket, Bool, sb)))
 
+# A read, through the scan the last one left: the engine's reader fed
+# the read whole, the requests it completed, oldest first, and how it
+# ends (bend-proxy's scan; LAWS.bend's handler_framed)
+def scan(+bs: Bytes(), sc: X.Scan) -> X.Scanned:
+  X.scan(bs, sc)
+
 # a message in progress whose clock ran out: 408, and the connection ends
 def late(+cfg: Cfg, s: Socket) -> IO(Socket):
   fin(cfg, [L.Raw{own(False{}, False{}, 408)}], s)
@@ -387,15 +393,6 @@ def expects.low(xs: List<&2, Bytes()>) -> List<&2, Bytes()>:
 
 def expects(+p: Eng.P) -> Bool:
   X.in.names("100-continue", expects.low(X.values("expect", Eng.p.fields(p))))
-
-# write what waits, then go on unless the send failed
-def next(sb: Socket & Bool, go: Socket -> IO(Socket)) -> IO(Socket):
-  (s, ok) = sb
-  match ok:
-    case True{}:
-      go(s)
-    case False{}:
-      IO.pure(Socket, s)
 
 # the clock of a message in progress: kept from the read it began in,
 # started now for one this read began
@@ -546,7 +543,7 @@ def got.bytes(~E: Data, ~app: Hx(E), +cfg: Cfg, +ip: Bytes(), +env: E, sc: X.Sca
     case True{}:
       IO.pure(Socket, s)
     case False{}:
-      scanned(~E, ~app, cfg, ip, env, X.scan(bs, sc), t0, cont, s, more)
+      scanned(~E, ~app, cfg, ip, env, scan(bs, sc), t0, cont, s, more)
 
 # what a read gave: a failure ends the connection, as does the peer's
 # FIN; silence ends it between messages when the idle time is spent or
@@ -623,6 +620,15 @@ def go(~E: Data, ~app: Hx(E), +srv: Srv<E>, s: Socket) -> IO(Socket):
 
 # Serving
 # =======
+
+# write what waits, then go on unless the send failed
+def next(sb: Socket & Bool, go: Socket -> IO(Socket)) -> IO(Socket):
+  (s, ok) = sb
+  match ok:
+    case True{}:
+      go(s)
+    case False{}:
+      IO.pure(Socket, s)
 
 # a path's segments: the bytes after its leading '/', cut at every '/'
 def segs.at(cut: Bool, +s: Bytes(), +i: Nat, go: Bytes() -> List<&2, Bytes()>) -> List<&2, Bytes()>:
