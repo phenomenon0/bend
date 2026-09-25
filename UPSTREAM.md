@@ -64,7 +64,10 @@ is lazy, as it should be) and U14's tls_close and marshal (they pass on
 canon). Against the fix branches: U01 FIXED on
 fix/socket-bytes-v2, U02 on fix/listen-backlog-v2, U04 on
 upstream/04-nat-min-max, U03 (descriptors) on fix/epoll-v2 in both
-lanes, while U03t (timers) stays REPRO there.
+lanes, while U03t (timers) stays REPRO there. U19, U20 and U21, found by
+the compiler's differential fuzzer (`tests/fuzz`) on 2026-09-25, read
+REPRO on canon `95317d95` in the lanes their rows name, and FIXED on this
+branch but for U20.
 
 ---
 
