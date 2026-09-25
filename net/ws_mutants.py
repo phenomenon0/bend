@@ -14,15 +14,17 @@
 # ask, the Accept or Connection: Upgrade wrong, a subprotocol not
 # offered named; an IP-literal URL's brackets dropped or its port
 # ignored -- and net/ws_proof.bend must refuse every one. Each
-# runs in a scratch copy of what the proof imports, and the copy is
-# checked clean first.
+# runs in a scratch copy of what the proof imports, of its own,
+# re-checked from the mutated file on (wire/mutate.py), and a clean copy
+# checks clean.
 #
-#   python3 net/ws_mutants.py        (from the repo root)
-import os, shutil, subprocess, sys, tempfile
-from concurrent.futures import ThreadPoolExecutor
+#   python3 net/ws_mutants.py [-j N] [--shard i/n]   (from the repo root)
+import os, shutil, sys, tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
+sys.path.insert(0, os.path.join(ROOT, 'wire'))
+import mutate as M
 FILES = ['net/ws_frame.bend', 'net/ws_hs.bend', 'net/addr.bend', 'net/ws_laws.bend', 'net/ws_proof.bend',
   'demos/io_http_engine/ws.bend', 'demos/io_http_engine/sha1.bend', 'demos/io_http_engine/b64.bend',
   'wire/reader.bend']
@@ -192,60 +194,41 @@ def lemmas():
 LEMMAS = lemmas()
 
 
-def check(top):
-  r = subprocess.run(['bun', os.path.join(ROOT, 'bend2', 'main.ts'), os.path.join(top, 'net', 'ws_proof.bend')],
-    capture_output=True, text=True, timeout=900)
-  return (r.stdout + r.stderr).strip()
-
-
-def copy(tag):
-  top = tempfile.mkdtemp(prefix='ws_mut_%s_' % tag)
+def copy():
+  top = tempfile.mkdtemp(prefix='ws_mut_')
   for f in FILES:
     os.makedirs(os.path.dirname(os.path.join(top, f)), exist_ok=True)
     shutil.copy(os.path.join(ROOT, f), os.path.join(top, f))
   return top
 
 
-def one(i):
-  what, f, before, after = MUTANTS[i]
-  top = copy(str(i))
-  try:
-    p = os.path.join(top, f)
-    src = open(p).read()
-    if src.count(before) != 1:
-      return (what, 'STALE (the text to break is not there once)')
-    open(p, 'w').write(src.replace(before, after))
-    out = check(top)
-    if out == 'All terms check.':
-      return (what, 'survived')
-    # a kill counts only when a law refuses it, or the proof of one (a
-    # lemma of ws_proof.bend on the way to it), not a parse or a type
-    # error in the code
-    locs = [l[len('Location: '):] for l in out.split('\n') if l.startswith('Location: ')]
-    if locs and locs[0].startswith('ws_laws.'):
-      return (what, 'killed by ' + locs[0].split('.', 1)[1])
-    if locs and locs[0] in LEMMAS:
-      return (what, 'killed by %s (its lemma %s)' % (LEMMAS[locs[0]], locs[0]))
-    return (what, 'ERROR ' + out[:300].replace('\n', ' '))
-  finally:
-    shutil.rmtree(top, ignore_errors=True)
+# a kill counts only when a law refuses it, or the proof of one (a lemma
+# of ws_proof.bend on the way to it), not a parse or a type error in the
+# code
+def verdict(out):
+  if out is None:
+    return 'STALE (the text to break is not there once)'
+  if out == 'All terms check.':
+    return 'survived'
+  locs = [l[len('Location: '):] for l in out.split('\n') if l.startswith('Location: ')]
+  if locs and locs[0].startswith('ws_laws.'):
+    return 'killed by ' + locs[0].split('.', 1)[1]
+  if locs and locs[0] in LEMMAS:
+    return 'killed by %s (its lemma %s)' % (LEMMAS[locs[0]], locs[0])
+  return 'ERROR ' + out[:300].replace('\n', ' ')
 
 
 def main():
-  top = copy('clean')
-  try:
-    out = check(top)
-  finally:
-    shutil.rmtree(top, ignore_errors=True)
-  if out != 'All terms check.':
-    print('the clean copy does not check:\n' + out[:2000])
+  jobs, shard = M.args()
+  bases, res = M.run(copy, 'net/ws_proof.bend', MUTANTS, jobs, shard)
+  if bases['net/ws_proof.bend'] != 'All terms check.':
+    print('the clean copy does not check:\n' + bases['net/ws_proof.bend'][:2000])
     sys.exit(1)
-  with ThreadPoolExecutor(max_workers=int(os.environ.get('JOBS', '4'))) as ex:
-    res = list(ex.map(one, range(len(MUTANTS))))
   bad = 0
-  for what, verdict in res:
-    print('%s: %s' % (what, verdict))
-    bad += not verdict.startswith('killed')
+  for what, _, out in res:
+    v = verdict(out)
+    print('%s: %s' % (what, v))
+    bad += not v.startswith('killed')
   print('%d / %d mutants killed' % (len(res) - bad, len(res)))
   sys.exit(1 if bad else 0)
 

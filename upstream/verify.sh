@@ -6,7 +6,7 @@
 # REPRO: the behaviour UPSTREAM.md describes is there. FIXED: the repro
 # saw the right behaviour (for an item marked NOT-REPRO or OURS, that is
 # the expected answer on canon). SKIP: a tool or file is missing.
-# Ports 29601-29613. Needs bun, python3, perl and clang.
+# Ports 29601-29613 and 29800. Needs bun, python3, perl and clang.
 set -u
 ROOT=$(cd "${1:?usage: verify.sh <bend-checkout> [item...]}" && pwd)
 shift
@@ -103,9 +103,13 @@ fi
 # U02: 64 connections at once to a listener that is not accepting
 want U02 && served U02 listen_backlog 'completed (1[0-9]|2[0-9]) ' burst 29602 64
 
-# U03: the pass cost beside 4000 descriptor waiters, then 20000 timers
+# U03: the pass cost beside 4000 descriptor waiters; U03t: beside 20000
+# timers, and 4000 passes beside 16384 sleepers ("slow" past 1 s)
 want U03 && lanes U03 io_fd_waiters 120 'ratio ([5-9]|[0-9]{2,})' "js c"
-want U03 && lanes U03t io_waiters 120 'ratio ([5-9]|[0-9]{2,})' "js c"
+if want U03 || want U03t; then
+  lanes U03t io_waiters 120 'ratio ([5-9]|[0-9]{2,})' "js c"
+  lanes U03t io_timer_waiters 60 '^slow' "interp js c"
+fi
 
 # U04: 2^40 through Nat.min and Nat.max (U16: the checker's evaluator
 # cannot build 2^40, so the interp lane is not asked)
@@ -271,6 +275,25 @@ if want U18; then
     lanes U18 connect_name 20 'Fail 22' "interp js c"
   fi
 fi
+
+# U19: a Socket dropped without Socket.close keeps its descriptor: under
+# `ulimit -n 256`, 400 connect-accept-drop rounds (800 sockets) hit EMFILE
+if want U19; then
+  build socket_drop "$HERE/socket_drop.bend"
+  for lane in interp js c; do
+    judge U19 $lane "$(ulimit -n 256; run 60 $(cmd $lane socket_drop \
+      "$HERE/socket_drop.bend"))" 'Fail 24'
+  done
+fi
+
+# U20: a word taken apart to a default arm; the C build fails on canon
+want U20 && lanes U20 word_unpack 20 '!^"0 32 16"$' "interp js c"
+
+# U21: a non-tail recursion 100000 deep (an IO main: interp is the JS runtime)
+want U21 && lanes U21 js_deep_recursion 60 '!^100000$' "interp js c"
+
+# U22: a boxed Bool (a polymorphic call's) into Bool.or / Bool.xor
+want U22 && lanes U22 bool_box_native 20 '!^"TFTF"$' "interp js c"
 
 # F-items: limitations from apps/uptime/FRICTION.md
 if want F01; then

@@ -80,7 +80,6 @@ def routes(+up: Bytes()) -> List<Server.Route>:
 
 def main() -> IO(Unit):
   do IO<Unit>:
-    xs : List<String> <- IO.args()
-    ys : List<String> <- IO.args()
+    +xs : List<&2, String> <- Server.argv(["--upstream URL"])
     +up : Bytes() = Server.flag(xs, "--upstream", "http://127.0.0.1:8080")
-    Server.serve.routes(~Bytes(), ~routes, up, Server.args(ys, Server.config(8081)))
+    Server.serve.routes(~Bytes(), ~routes, up, Server.args(xs, Server.config(8081)))

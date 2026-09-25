@@ -880,6 +880,14 @@ def fetch.at(+ss: Session, r: Result<&2, &2, NetError, IReq>) -> IO(Res()):
 def fetch(+ss: Session, r: Req) -> IO(Res()):
   fetch.at(ss, ireq.of(r))
 
+# a request on the session's connections with options of its own, o of
+# the session's (o => Client.with.timeout(o, 500)): its connect, timeout,
+# max_body, redirects and gzip; its ca stays the session's, whose pooled
+# connections were verified under it
+def fetch.with(+ss: Session, r: Req, o: Opts -> Opts) -> IO(Res()):
+  +so = s.opts(ss)
+  fetch.at(Session{with.ca(o(so), opts.ca(so)), s.pools(ss)}, ireq.of(r))
+
 # a request on a session of its own, closed after
 def request(r: Req, o: Opts) -> IO(Res()):
   do IO<Res()>:

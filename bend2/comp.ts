@@ -247,7 +247,7 @@ const OPERATIONS: Record<string, Intr> = Object.setPrototypeOf({
     JS: "cmp_new(BigInt.asIntN(64, $0), BigInt.asIntN(64, $1))",
   },
   i64_neg: {
-    C:  "((u64)(-(int64_t)($0)))",
+    C:  "((u64)0 - (u64)($0))", // -(int64_t)min is UB
     JS: "((-$0) & 0xFFFFFFFFFFFFFFFFn)",
   },
   i64_shr_s: {
@@ -2446,9 +2446,11 @@ function seg_name(fl: File, stem: string): string {
   return fl.seg.def.split("$")[0] + "$" + stem + fl.segs.length;
 }
 
-// Opens `name`: takes `live` (per `frame`, else in r0..), then `ks` words.
+// Opens `name`: takes `live` (per `frame`, else in r0..; a `boxed` one
+// unboxed), then `ks` words.
 function seg_open(fl: File, name: string, ret: Lay, frame: Seg["frame"],
-  live: [Probe, Bind][], k: string, ks: Kind[], rest: HTerm[]): string[] {
+  live: [Probe, Bind][], k: string, ks: Kind[], rest: HTerm[],
+  boxed: boolean[] = []): string[] {
   const olds = live.flatMap(([, b]) => b.val.ws);
   const news = olds.map((w) => name_local(fl, w.replace(/_\d+$/, "")));
   const ts = ks.map(() => name_local(fl, k));
@@ -2459,9 +2461,10 @@ function seg_open(fl: File, name: string, ret: Lay, frame: Seg["frame"],
   olds.forEach((w, i) =>
     fl.brwl.has(w) && fl.brwl.set(news[i], fl.brwl.get(w)!));
   let i = 0;
-  live.forEach(([p, b]) => bind_uses(fl, p,
-    val_new(news.slice(i, i += b.val.ws.length), b.val.lay), rest, b.A,
-    false));
+  live.forEach(([p, b], j) => {
+    const v = val_new(news.slice(i, i += b.val.ws.length), b.val.lay);
+    bind_uses(fl, p, boxed[j] ? val_unbox(fl, v, X64) : v, rest, b.A, false);
+  });
   return ts;
 }
 
@@ -3055,12 +3058,13 @@ function emit_intr(fl: File, it: Intr, x: HTerm,
   ty: HTerm | null): Val {
   const m = term_spine(fl, x);
   const k = (m.t as Of<"Ref">).k;
-  // A full word a polymorphic call handed back boxed is read out of its box.
+  // A value a polymorphic call handed back boxed is read out of its box.
   const lays = sig_def(fl, k).lays;
   const peek = it.peek ?? [];
   const sinks: Val[] = [];
   const args = emit_peek(fl, m.args, peek, sinks).map((v, i) =>
-    lays[i] === X64 && lay_box(v.lay) ? val_to(fl, v, X64) : v);
+    lays[i] !== undefined && !lay_box(lays[i]) && lay_box(v.lay)
+      ? val_to(fl, v, lays[i]) : v);
   const op = eff_name(k);
   // Native aggregate builders publish sealed fields. Teach field extraction and
   // the transitive borrow analysis about those counts on every pass.
@@ -3098,7 +3102,7 @@ function emit_intr(fl: File, it: Intr, x: HTerm,
       (fl.book.tlds[k] as Bend.Def).T).ret).ks[0] ?? "w64"])[0];
     sinks.forEach((v) => val_sink(fl, v));
   }
-  const lay = lay_of(fl.book, ty);
+  const lay = ty === null ? sig_def(fl, k).ret : lay_of(fl.book, ty);
   // a full word is raw, whatever the site knows of its type
   return val_new([out], sig_def(fl, k).ret === X64 ? X64
     : lay.ks.length === 1 ? lay : BOX);
@@ -3141,20 +3145,23 @@ function emit_peek(fl: File, xs: HTerm[], peek: number[], sinks: Val[]): Val[] {
 
 // A closure: its captures move into a node (a capture is one use of the
 // binding, whatever the closure does with it); its segment takes them,
-// then x.
+// then x. A dropped closure drops its node as Terms: a w64 rides boxed.
 function emit_clo(fl: File, x: HTerm, ty: HTerm | null): Val {
   const u = term_uses(fl, x);
+  const boxed: boolean[] = [];
   const live = [...fl.uses].filter(([p]) => term_use(u, p) > 0)
     .map(([p, b]): [Probe, Bind] => {
       fl.uses.set(p, { ...b, n: b.n - term_use(u, p) + 1 });
-      return [p, { ...b, val: bind_pop(fl, p) }];
+      const v = bind_pop(fl, p);
+      boxed.push(v.lay === X64);
+      return [p, { ...b, val: v.lay === X64 ? val_new([val_box(fl, v)], BOX) : v }];
     });
   const words = live.flatMap(([, b]) => val_own(fl, b.val));
   const name = seg_name(fl, "c");
   const clo = seg_clo(fl, seg_fid(name), words);
   const outer = { seg: fl.seg, uses: fl.uses, spares: fl.spares,
     tab: fl.tab, rest: fl.rest };
-  const [arg] = seg_open(fl, name, BOX, null, live, "x", ["w64"], [x]);
+  const [arg] = seg_open(fl, name, BOX, null, live, "x", ["w64"], [x], boxed);
   emit_body(fl, x, ty, [], [val_new([arg], BOX)], null);
   Object.assign(fl, outer);
   return val_new([clo], BOX);
@@ -3822,8 +3829,8 @@ function compile_reqs(fl: File): void {
 const TABLES = ["CID_ARITY_T", "CID_HOT_T", "FID_ARITY_T", "FID_FLAG_T", "FID_RESW_T"];
 
 // The datatypes whose constructors the runtime or the elaborator lays itself.
-const RUNTIME_ADTS = ["Sigma", "String", "Word.Con", "IO.OP", "Result",
-  "Maybe", "Bool", "Unit", "List", "Char", "Cmp", "Inst", "Match"];
+const RUNTIME_ADTS = ["Sigma", "String", "Word.Con", "Word.Nil", "IO.OP",
+  "Result", "Maybe", "Bool", "Unit", "List", "Char", "Cmp", "Inst", "Match"];
 
 // The compiler knows base.bend's types by their names alone, and applies
 // a closure through CLO_APPLY, a def it synthesizes. SYNTH is the name no
@@ -9154,8 +9161,33 @@ function io_push(fun, arg, fresh) {
   io.live += fresh ? 1 : 0;
 }
 
+// A waiter on the clock alone sits in io.heap, a min-heap on its deadline
+// (the earlier park breaks a tie), so a sleeper costs a pass nothing.
+function io_heap_lt(a, b) {
+  return a.at < b.at || a.at === b.at && a.n < b.n;
+}
+
+function io_heap_pop(h) {
+  const top = h[0], w = h.pop();
+  let i = 0;
+  for (let c = 1; c < h.length; c = 2 * i + 1) {
+    c += c + 1 < h.length && io_heap_lt(h[c + 1], h[c]) ? 1 : 0;
+    if (!io_heap_lt(h[c], w)) {
+      break;
+    }
+    h[i] = h[c];
+    i = c;
+  }
+  if (h.length > 0) {
+    h[i] = w;
+  }
+  return top;
+}
+
 function io_wait(io) {
-  const soon = io.waits.reduce((m, w) => Math.min(m, w.at ?? m), Infinity);
+  const h = io.heap;
+  const soon = io.waits.reduce((m, w) => Math.min(m, w.at ?? m),
+    h.length > 0 ? h[0].at : Infinity);
   const ms = soon === Infinity ? -1
     : Math.max(0, Math.ceil(soon - performance.now()));
   const fds = io.waits.filter((w) => w.fd !== undefined);
@@ -9180,6 +9212,9 @@ function io_wait(io) {
     }
     return !ready;
   });
+  while (h.length > 0 && h[0].at <= now) {
+    io_push(io_wake, io_heap_pop(h), false);
+  }
 }
 
 // Resume k with more's value; undefined means re-parked.
@@ -9191,11 +9226,21 @@ function io_wake(w) {
 // Park for read/write (out) or deadline at (performance.now()).
 // Undefined fd/at disables that source.
 function io_park_on(fd, out, k, more, at) {
-  globalThis.BEND_IO.waits.push({ fd, out, k, more, at });
+  const io = globalThis.BEND_IO;
+  const w = { fd, out, k, more, at, n: io.n++ };
+  if (fd !== undefined) {
+    io.waits.push(w);
+    return;
+  }
+  let i = io.heap.push(w) - 1;
+  for (; i > 0 && io_heap_lt(w, io.heap[i - 1 >> 1]); i = i - 1 >> 1) {
+    io.heap[i] = io.heap[i - 1 >> 1];
+  }
+  io.heap[i] = w;
 }
 
 function io_run(m) {
-  const io = { runs: [], live: 0, waits: [] };
+  const io = { runs: [], live: 0, waits: [], heap: [], n: 0 };
   globalThis.BEND_IO = io;
   try {
     io_push(run_loop(m()), (x) => ({ $: "Emit", value: x }), true);
@@ -9204,7 +9249,7 @@ function io_run(m) {
         if (io.live === 0) {
           return 0;
         }
-        if (io.waits.length === 0) {
+        if (io.waits.length + io.heap.length === 0) {
           io_errs("bend: deadlock: every computation waits on a channel");
           return 1;
         }

@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-# The laws are not vacuous. Two kinds of mutant, each applied, checked
-# and undone:
+# The laws are not vacuous. Two kinds of mutant, each applied and
+# checked:
 #
 # - the world's: each breaks the loop the way one of the review's bugs
 #   did (or would), and PROOF.bend must then fail, naming a law of the
-#   world. Applied in place to bend-wire's loop (wire/loop.bend), whose
+#   world. Applied to bend-wire's loop (wire/loop.bend), whose
 #   laws PROOF.bend states at the engine's hooks, to main.bend's
 #   planner and its files, or to the memo wire/world.bend models.
 #
@@ -17,11 +17,16 @@
 #   is frame_sim's and no other law's. The copy (beside a copy of wire/,
 #   which it imports) is checked clean first.
 #
-#   python3 demos/io_http_engine/mutants.py        (from the repo root)
-import os, re, shutil, subprocess, sys, tempfile
+# Each mutant runs in a scratch copy of the tree of its own, re-checked
+# from the mutated file on (wire/mutate.py's seeded check).
+#
+#   python3 demos/io_http_engine/mutants.py [-j N] [--shard i/n]   (from the repo root)
+import os, re, shutil, sys, tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(HERE))
+sys.path.insert(0, os.path.join(ROOT, 'wire'))
+import mutate as M
 LOOP = os.path.join(ROOT, 'wire', 'loop.bend')
 MAIN = os.path.join(HERE, 'main.bend')
 COND = os.path.join(HERE, 'cond.bend')
@@ -336,11 +341,6 @@ KEEP = {'feed_split', 'bad_absorbs', 'bad_feeds', 'feed_buf_is_feed', 'feed_buf_
         'bad_feeds_buf', 'cls_every', 'lower_every', 'frame_sim', 'frame_sim_buf',
         'frame_sim_reads'}
 
-def check(proof):
-  r = subprocess.run(['bun', 'bend2/main.ts', proof], cwd=ROOT,
-    capture_output=True, text=True, timeout=1800)
-  return (r.stdout + r.stderr).strip()
-
 def where(out):
   loc = [l for l in out.split('\n') if l.startswith('Location')]
   return (loc[0] if loc else out.split('\n')[0])[:100]
@@ -379,25 +379,27 @@ def strip(d):
   open(os.path.join(d, 'PROOF.bend'), 'w').write('\n'.join(l for b in keep for l in b))
   return len(gone)
 
-def main():
+PROOF = 'demos/io_http_engine/PROOF.bend'
+
+def verdicts(res):
   bad = 0
-  total = len(MUTANTS) + len(FRAMING)
-  origs = {f: open(f).read() for f in (LOOP, MAIN, WORLD, COND)}
-  try:
-    for name, f, a, b in MUTANTS:
-      orig = origs[f]
-      if orig.count(a) != 1:
-        print('MISSING  %s' % name); bad += 1; continue
-      open(f, 'w').write(orig.replace(a, b))
-      out = check('demos/io_http_engine/PROOF.bend')
-      open(f, 'w').write(orig)
-      if out == 'All terms check.':
-        print('SURVIVED %s' % name); bad += 1
-      else:
-        print('KILLED   %s -- %s' % (name, where(out)))
-  finally:
-    for f, orig in origs.items():
-      open(f, 'w').write(orig)
+  for name, _, out in res:
+    if out is None:
+      print('MISSING  %s' % name); bad += 1
+    elif out == 'All terms check.':
+      print('SURVIVED %s' % name); bad += 1
+    else:
+      print('KILLED   %s -- %s' % (name, where(out)))
+  return bad
+
+def main():
+  jobs, shard = M.args()
+  bases, res = M.run(lambda: M.tree(('wire', 'demos/io_http_engine', 'power'), prefix='engine_laws_'), PROOF,
+    [(name, os.path.relpath(f, ROOT), a, b) for name, f, a, b in MUTANTS], jobs, shard)
+  if bases[PROOF] != 'All terms check.':
+    print('the unmutated proof does not check: %s' % where(bases[PROOF]))
+    sys.exit(1)
+  bad, total = verdicts(res), len(res)
   top = tempfile.mkdtemp(prefix='frame_sim_')
   d = os.path.join(top, 'demos', 'io_http_engine')
   try:
@@ -410,25 +412,15 @@ def main():
       if f.endswith('.bend'):
         shutil.copy(os.path.join(HERE, f), d)
     n = strip(d)
-    out = check(os.path.join(d, 'PROOF.bend'))
-    if out != 'All terms check.':
-      print('the frame_sim copy (%d laws removed) does not check clean: %s' % (n, where(out)))
-      sys.exit(1)
-    print('frame_sim alone: %d rule-by-rule laws and vectors removed, the rest checks clean' % n)
-    for name, f, a, b in FRAMING:
-      path = os.path.join(d, f)
-      src = open(path).read()
-      if src.count(a) != 1:
-        print('MISSING  %s' % name); bad += 1; continue
-      open(path, 'w').write(src.replace(a, b))
-      out = check(os.path.join(d, 'PROOF.bend'))
-      open(path, 'w').write(src)
-      if out == 'All terms check.':
-        print('SURVIVED %s' % name); bad += 1
-      else:
-        print('KILLED   %s -- %s' % (name, where(out)))
+    bases, res = M.run(lambda: M.tree(('wire', 'demos', 'power'), src=top, prefix='frame_sim_'), PROOF,
+      [(name, 'demos/io_http_engine/' + f, a, b) for name, f, a, b in FRAMING], jobs, shard)
   finally:
     shutil.rmtree(top, ignore_errors=True)
+  if bases[PROOF] != 'All terms check.':
+    print('the frame_sim copy (%d laws removed) does not check clean: %s' % (n, where(bases[PROOF])))
+    sys.exit(1)
+  print('frame_sim alone: %d rule-by-rule laws and vectors removed, the rest checks clean' % n)
+  bad, total = bad + verdicts(res), total + len(res)
   print('mutants: %d / %d killed' % (total - bad, total))
   sys.exit(1 if bad else 0)
 

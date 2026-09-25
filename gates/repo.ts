@@ -79,7 +79,8 @@ allow(/^demos\/[a-z0-9_]+\/web\/(index\.html|[a-z_]+\.js|serve\.sh|bunfig\.toml)
 allow("guide/GUIDE.md", 12000);
 allow("guide/EFFECTS.md", 1600);
 allow("guide/SHADERS.md", 4200);
-allow("guide/NETWORKING.md", 8000);
+allow("guide/NETWORKING.md", 2000);
+allow(/^guide\/net\/(SERVING|STREAMS|CLIENT|JSON|WEBSOCKETS|LIMITS)\.md$/, 4000);
 allow(/^paper\/(BendRT|BendTT)\.pdf$/, 400000, true);
 allow(/^media\/intro\.(gif|mp4)$/, 25000000, true);
 allow(/^media\/(runtime|checker|parallel)\.gif$/, 6000000, true);
@@ -119,6 +120,8 @@ allow(/^kernel\/src\/[a-z]+\.rs$/, 12000);
 allow(/^kernel\/tests\/(run\.sh|[a-z_]+\.core)$/, 8000);
 allow(/^tests\/strings\/utf8\.bin$/, 200000, true);
 allow(/^tests\/(run|caps)\.sh$/, 4000);
+allow(/^tests\/fuzz\/(fuzz|gen)\.ts$/, 16000);
+allow("tests/fuzz/README.md", 2500);
 allow(/^tests\/[a-z0-9_]+\.bend$/, 4000);
 allow(/^tools\/bend-fmt-lsp\/(\.gitignore|README\.md|package\.json|package-lock\.json|tsconfig\.json)$/, 4000);
 allow(/^tools\/bend-fmt-lsp\/src\/(formatter|server)\.ts$/, 8000);

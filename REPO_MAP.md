@@ -16,7 +16,9 @@ this file says the same in more words, and maps the networking stack in full.
     kernel/             a second, independent checker in Rust; it re-checks a
                         proof's exported core (`bend F --export F.core`)
     guide/              GUIDE.md (`bend guide`), and the extras: SHADERS.md,
-                        EFFECTS.md, NETWORKING.md (`bend guide networking`)
+                        EFFECTS.md, NETWORKING.md (`bend guide networking`),
+                        the tour of net/ whose pages are guide/net/*.md
+                        (`bend guide net/serving`)
     power/              libraries in Bend: JSON, gzip and deflate, CSV, hashes,
                         search, numerics; some carry their own laws and proofs
     std/                the standard library for released Bend and ours (below)
@@ -153,6 +155,11 @@ shows the laws are not empty.
 | proxy | demos/io_proxy/LAWS.bend | demos/io_proxy/PROOF.bend | python3 demos/io_proxy/mutants.py |
 | HTTP/2 | demos/io_http2/LAWS.bend | demos/io_http2/PROOF.bend | python3 demos/io_http2/mutants.py |
 | RESP | demos/io_resp/LAWS.bend | demos/io_resp/PROOF.bend | |
+
+Every mutants script takes `-j N` (nproc by default) and `--shard i/n` (every
+n-th mutant from the i-th, as CI splits them). Each mutant runs in a scratch
+tree of its own and is re-checked from the file it breaks on: what loads before
+that file is the clean tree's (wire/mutate.py).
 
 Run them from the repo root. With no `bend` installed, `bun bend2/main.ts` is
 the same command. The second kernel re-checks a proof:

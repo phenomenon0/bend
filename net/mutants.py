@@ -31,26 +31,37 @@
 # takes two lengths that disagree, and a head judged wrong at its blank
 # line (no framing taken for chunked, the Hosts unchecked, a length one
 # too many, the head taken at a field line's CR, an upgrade that does
-# not close) -- and net/PROOF.bend must refuse every one. Each runs in a
+# not close); a table wrapped in middleware that loses a route or turns
+# a WebSocket route plain; a command line that lets an unknown flag, a
+# value missing or a number that is none through, or a flag reader that
+# ignores its value; JSON getters that take a number for a string, read
+# a number past a U32 or a missing Nat as 0, null as false, count an
+# array from 1, hide a wrong field behind a default, or drop a reason
+# -- and net/PROOF.bend must refuse every one. Each runs in a
 # scratch copy of the tree the proof imports, where bend-proxy's proof
 # (which net/'s uses: rr.h, rmain and the head lemmas, u32.eq, the list
 # lemmas, and scan_is_spec and frames_agree through them) is replaced by
 # its statements left open:
 # the copy checks to exactly its count of open holes, and a mutant the
 # proof refuses shows an error instead. (The laws hold step checks
-# net/PROOF.bend whole, bend-proxy's proof included.)
+# net/PROOF.bend whole, bend-proxy's proof included.) The copy is
+# re-checked from the mutated file on (wire/mutate.py's seeded check):
+# what loads before it -- the engine's proof, bend-proxy's statements,
+# wire/http1's proof -- is the clean tree's.
 #
-#   python3 net/mutants.py        (from the repo root)
-import os, re, shutil, subprocess, sys, tempfile
-from concurrent.futures import ThreadPoolExecutor
+#   python3 net/mutants.py [-j N] [--shard i/n]        (from the repo root)
+import os, re, sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
+sys.path.insert(0, os.path.join(ROOT, 'wire'))
+import mutate as M
 DIRS = ['net', 'wire', 'demos/io_http_engine', 'demos/io_proxy', 'power']
 
 H, S, C, U = 'net/http.bend', 'net/server.bend', 'net/client.bend', 'net/url.bend'
 A = 'net/addr.bend'
 B = 'net/stream.bend'
+J2 = 'net/json.bend'
 E = 'demos/io_http_engine/main.bend'
 
 # (what, file, before, after)
@@ -311,6 +322,56 @@ MUTANTS = [
       Some{head.of(ip, pd)}'''),
   ('a streamed request that asked to upgrade not closing (stream_head)', B,
     '''f, Server.hd.v10(hd), cl || ws, Server.hd.head(hd)}''', '''f, Server.hd.v10(hd), cl, Server.hd.head(hd)}'''),
+  ('a table wrapped with its WebSocket route made a plain one (wrap_pats)', S,
+    '''      Sock{pat, a => +r => IO.bind(Reply, Reply, h(a, r), rp => wrap.face(~mw, r, rp))}''',
+    '''      Route{["GET", "HEAD"], pat, r => Http.reply(Http.plain(500))}'''),
+  ('a wrapped table that drops a route (wrap_vectors)', S,
+    '''      Con{wrap.one(~mw, rt), wrap(~mw, t)}''', '''      wrap(~mw, t)'''),
+  ('an unknown flag let through (argv_vectors)', S,
+    '''      Some{Bool.pick(String, String.starts_with(x, "-"), "unknown flag " ++ x, "unexpected argument " ++ x)}''',
+    '''      None{}'''),
+  ('a flag\'s number left unchecked (argv_vectors)', S,
+    '''  Bool.pick(Maybe<&2, String>, String.eq(want, "N") && Maybe.is_none(&2, U32, U32.read(v)),''',
+    '''  Bool.pick(Maybe<&2, String>, False{},'''),
+  ('a last flag without its value let through (argv_vectors)', S,
+    '''      Bool.pick(Maybe<&2, String>, String.is_empty(want), None{}, Some{prev ++ " needs a value (" ++ want ++ ")"})''',
+    '''      None{}'''),
+  ('every flag taken as a switch (argv_vectors)', S,
+    '''    case Some{+s}:
+      spec.arg(s)''', '''    case Some{+s}:
+      ""'''),
+  ('a flag\'s number read as its default (flag_num_vectors)', S,
+    '''  arg.num(flag.go(xs, name, ""), d)''', '''  d'''),
+  ('a string getter that takes a number\'s text (json_str_vectors)', J2,
+    '''        case J.Str{s}:
+          Done{s}
+        case _:''', '''        case J.Str{s}:
+          Done{s}
+        case J.Num{t}:
+          Done{t}
+        case _:'''),
+  ('a U32 getter that reads a number past its range as 0 (json_u32_vectors)', J2,
+    '''      wrong(U32, p, "a whole number from 0 to 4294967295")''', '''      Done{0}'''),
+  ('a missing Nat read as 0 (json_nat_vectors)', J2,
+    '''      missing(Nat, p)''', '''      Done{0n}'''),
+  ('a Bool getter that reads null as false (json_bool_vectors)', J2,
+    '''        case J.Flag{b}:
+          Done{b}
+        case _:''', '''        case J.Flag{b}:
+          Done{b}
+        case J.Null{}:
+          Done{False{}}
+        case _:'''),
+  ('a path that counts an array from 1 (json_str_vectors)', J2,
+    '''      J.at(J.Arr{xs}, i)''', '''      J.at(J.Arr{xs}, Nat.add(i, 1n))'''),
+  ('a default that hides a field of the wrong type (json_u32_vectors)', J2,
+    '''    case Some{v}:
+      get(j, p)''', '''    case Some{v}:
+      Done{Result.default(&2, &2, Bytes(), A, get(j, p), d)}'''),
+  ('a reason dropped (json_fails_vectors)', J2,
+    '''    case Fail{e}:
+      Con{e, whys}''', '''    case Fail{e}:
+      whys'''),
 ]
 
 # bend-proxy's proof, as net/PROOF.bend uses it: its statements, open
@@ -413,18 +474,12 @@ def bytes.rt(b: Bytes()) -> {Bytes.from_list(Bytes.to_list(b)) == b : Bytes()}:
   ?TODO
 '''
 
-def check(top, path):
-  r = subprocess.run(['bun', os.path.join(ROOT, 'bend2', 'main.ts'), path], capture_output=True, text=True, cwd=top)
-  return (r.stdout + r.stderr).strip()
-
 def where(out):
   m = re.search(r'Location: ([^\s]+)', out)
   return m.group(1) if m else out.splitlines()[0] if out else '?'
 
 def tree():
-  top = tempfile.mkdtemp(prefix='net_laws_')
-  for d in DIRS:
-    shutil.copytree(os.path.join(ROOT, d), os.path.join(top, d))
+  top = M.tree(DIRS, prefix='net_laws_')
   proof = os.path.join(top, 'net/PROOF.bend')
   open(os.path.join(top, 'net/open.bend'), 'w').write(OPEN)
   src = open(proof).read()
@@ -432,39 +487,25 @@ def tree():
   if src.count(imp) != 1:
     print('net/PROOF.bend does not import the proxy proof as PP'); sys.exit(1)
   open(proof, 'w').write(src.replace(imp, 'import ./open.bend as PP\n'))
-  return top, proof
-
-def run(m, base):
-  name, f, a, b = m
-  top, proof = tree()
-  try:
-    path = os.path.join(top, f)
-    src = open(path).read()
-    if src.count(a) != 1:
-      return 'MISSING  %s' % name, False
-    open(path, 'w').write(src.replace(a, b))
-    out = check(top, proof)
-    if out == base:
-      return 'SURVIVED %s' % name, False
-    return 'KILLED   %s -- %s' % (name, where(out)), True
-  finally:
-    shutil.rmtree(top, ignore_errors=True)
+  return top
 
 def main():
-  top, proof = tree()
-  try:
-    base = check(top, proof)
-  finally:
-    shutil.rmtree(top, ignore_errors=True)
+  jobs, shard = M.args()
+  bases, res = M.run(tree, 'net/PROOF.bend', MUTANTS, jobs, shard)
+  base = bases['net/PROOF.bend']
   if not re.fullmatch(r'Error: \d+ TODOs found\.\nThe code is incomplete, and not a valid proof yet\.', base):
     print('the copy of net/PROOF.bend does not check clean: %s' % base)
     sys.exit(1)
   killed = 0
-  with ThreadPoolExecutor(max_workers=int(os.environ.get('JOBS', '3'))) as ex:
-    for line, ok in ex.map(lambda m: run(m, base), MUTANTS):
-      print(line, flush=True)
-      killed += ok
-  print('mutants: %d / %d killed' % (killed, len(MUTANTS)))
-  sys.exit(0 if killed == len(MUTANTS) else 1)
+  for name, _, out in res:
+    if out is None:
+      print('MISSING  %s' % name)
+    elif out == base:
+      print('SURVIVED %s' % name)
+    else:
+      print('KILLED   %s -- %s' % (name, where(out)))
+      killed += 1
+  print('mutants: %d / %d killed' % (killed, len(res)))
+  sys.exit(0 if killed == len(res) else 1)
 
 main()
