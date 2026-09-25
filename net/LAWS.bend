@@ -440,10 +440,11 @@ law json_u32_vectors:
 
 law json_nat_vectors:
   {[Json.get.nat(j.v(), "long"), Json.get.nat(j.v(), "neg"), Json.get.nat(j.v(), "s"), Json.get.nat(j.v(), "n"),
-    Json.get.nat(j.v(), "f"), Json.get.nat(j.v(), "a.1.q")] ==
+    Json.get.nat(j.v(), "f"), Json.get.nat(j.v(), "a.1.q"), Json.get.nat(j.v(), "zz")] ==
     [Fail{"long must be a whole number from 0 to 281474976710655"},
      Fail{"neg must be a whole number from 0 to 281474976710655"}, Fail{"s must be a number"}, Done{7n},
-     Fail{"f must be a whole number from 0 to 281474976710655"}, Done{2n}] : List<&2, Json.Got(Nat)>}
+     Fail{"f must be a whole number from 0 to 281474976710655"}, Done{2n}, Fail{"zz is required"}] :
+    List<&2, Json.Got(Nat)>}
 
 law json_i64_vectors:
   {[Json.get.i64(j.v(), "neg"), Json.get.i64(j.v(), "f"), Json.get.i64(j.v(), "b")] ==
