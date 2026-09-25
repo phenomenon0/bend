@@ -49,6 +49,7 @@ repro for each and the branch that fixes it, if any.
 | U18 | TCP.connect takes dotted IPv4 only (no names, no resolver) and has no deadline | LIMITATION | interp js c | med | upstream/06-connect-poll-dns | upstream/connect_name.bend |
 | U19 | a U32 taken apart to its Word and walked to a default arm: the C build fails (CID_WNIL undeclared) | BUG | c | med | ours: WNil among comp.ts's RUNTIME_ADTS | upstream/word_unpack.bend |
 | U20 | the JS lane runs a non-tail recursion on the host stack: 100000 deep overflows where C answers | LIMITATION | interp js | med | none (WONTFIX.txt SOON, #798 #802) | upstream/js_deep_recursion.bend |
+| U21 | a Bool a polymorphic call hands back (Bool.pick(Bool, ..)) fed to Bool.or / Bool.xor: C reads its box as the Bool | BUG | c | high | ours: emit_intr unboxes to the native's layout | upstream/bool_box_native.bend |
 | F01 | no wall clock: IO.now is monotonic | LIMITATION | all | med | none | verify.sh F01 |
 | F02 | no rename, fsync, seek, remove or mkdir | LIMITATION | all | med | none | verify.sh F02 |
 | F03 | File.read_at takes a U32 offset and answers a List cell per byte | LIMITATION | all | low | none | verify.sh F03 |
@@ -404,6 +405,26 @@ cells.
 (a pure main: `RangeError: Maximum call stack size exceeded`), with the
 32 MiB of stack gates/test.ts gives bun; C `100000`. **Expected**
 `100000` in every lane.
+
+## U21. A boxed Bool reaches a native as its box
+
+**Class** BUG, high (a wrong answer, silently). **Lanes** C. **Fix** ours:
+`emit_intr` reads each argument a polymorphic call handed back boxed out
+of its box into the layout the native takes (it did so for full words
+only); `tests/base/bool_box_native.bend`.
+
+**Where** (canon `95317d95`) `comp.ts:2261`, `emit_intr` passes its
+arguments as they come (`emit_each(fl, m.args, null)`). `Bool.pick` is a
+def over `-A: Type`, so its result is a box, and a Bool's box is its
+constructor's word; `bool_or` and `bool_xor` (`comp.ts:292`) are C's `|`
+and `^` over 0/1. A site whose arms are both cheap (word compares) is not
+lifted into a match, so the call stays.
+
+**Repro** `upstream/bool_box_native.bend`: `Bool.or(False{},
+Bool.pick(Bool, c, False{}, U32.is_le(x, x)))` and the `xor` twin.
+
+**Observed** interp and JS `"TFTF"`; C `"FFTT"`. **Expected** `"TFTF"`
+in every lane. Found by the compiler's differential fuzzer (`tests/fuzz`).
 
 ## F01-F06. From apps/uptime/FRICTION.md, checked on canon
 

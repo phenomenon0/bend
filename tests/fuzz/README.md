@@ -62,7 +62,12 @@ surrogate in a string (the JS lane refuses it, and says so), a JS stack
 overflow in a deep non-tail recursion (WONTFIX.txt's SOON, #798: a string
 of 84034 cells through `Bytes.to_list` was one), Nats past a
 few thousand (the normalizer counts in unary, UPSTREAM U16),
-`List.map` on a `List<&2, _>` (UPSTREAM F05).
+`List.map` on a `List<&2, _>` (UPSTREAM F05), and `F64.pow`, which the
+generator leaves out: bun's `Math.pow` is not correctly rounded and
+glibc's is, so the lanes differ in the last bit for about 0.3% of
+arguments (`F64.pow(5.0d, 97.0d)`: JS 6.310887241768096e+67, C
+6.310887241768095e+67, the exact 5^97 rounded; atan2, exp, log, sin and
+sqrt agreed on 200000 of 200000; F32's rounding hides it).
 
 ## Found
 
@@ -72,5 +77,12 @@ few thousand (the normalizer counts in unary, UPSTREAM U16),
 - `I64.neg` of I64's minimum negated through `int64_t` in C: undefined,
   seen by UBSan, and at -O3 clang folds `neg(x) == x` to `x == 0`
   (`tests/base/i64_neg_min.bend`; I64 is ours, not canon's).
+- UPSTREAM U21: `Bool.or`/`Bool.xor` of a `Bool.pick(Bool, ..)` whose
+  arms are word compares: C handed the native the Bool's box, not 0/1
+  (`tests/base/bool_box_native.bend`; also on canon).
+- A closure over an F64 (U64, I64) dropped unapplied: its 64-bit capture
+  lay raw in the node C drops as Terms, a wild reference
+  (`tests/base/closure_x64.bend`; F64 is ours).
+- UPSTREAM U20 (a known SOON): the JS lane recurses on the host stack.
 - Reverting either known fix (a peek argument evaluated twice, c823679d)
   or breaking `U32.mul` on one lane is found in under a hundred programs.

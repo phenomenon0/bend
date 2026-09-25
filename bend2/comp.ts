@@ -3059,12 +3059,14 @@ function emit_intr(fl: File, it: Intr, x: HTerm,
   ty: HTerm | null): Val {
   const m = term_spine(fl, x);
   const k = (m.t as Of<"Ref">).k;
-  // A full word a polymorphic call handed back boxed is read out of its box.
+  // A value a polymorphic call handed back boxed is read out of its box: a
+  // full word, and a packed one (a Bool's box is its constructor, not 0/1).
   const lays = sig_def(fl, k).lays;
   const peek = it.peek ?? [];
   const sinks: Val[] = [];
   const args = emit_peek(fl, m.args, peek, sinks).map((v, i) =>
-    lays[i] === X64 && lay_box(v.lay) ? val_to(fl, v, X64) : v);
+    lays[i] !== undefined && !lay_box(lays[i]) && lay_box(v.lay)
+      ? val_to(fl, v, lays[i]) : v);
   const op = eff_name(k);
   // Native aggregate builders publish sealed fields. Teach field extraction and
   // the transitive borrow analysis about those counts on every pass.

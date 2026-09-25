@@ -737,7 +737,7 @@ export class Gen {
         add(1, () => N("T", "K3{", E("LU"), ", ", E("Bool"), ", ", E("T"), "}"));
         break;
       case "F64":
-        add(3, () => F("F64." + this.pick(["add", "sub", "mul", "div", "mod", "pow", "atan2", "min", "max"]), E("F64"), E("F64")));
+        add(3, () => F("F64." + this.pick(["add", "sub", "mul", "div", "mod", "atan2", "min", "max"]), E("F64"), E("F64")));
         add(2, () => F("F64." + this.pick(["neg", "abs", "sqrt", "floor", "ceil", "trunc", "round", "exp", "log", "sin", "square"]), E("F64")));
         add(1, () => F("F64.from_nat", S()));
         add(1, () => F("U32.to_f64", E("U32")));
