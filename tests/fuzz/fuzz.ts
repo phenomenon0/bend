@@ -405,7 +405,7 @@ function judge(outs: Partial<Record<Lane, string>>): { sig: string; ref: Lane | 
   // is never built by the one and exhausts the others. When every compiled
   // lane ran out (time, the string or Nat cap), that is the strategy, not a
   // miscompile.
-  const out = /§signal SIGKILL|past the maximum length|past the largest immediate/;
+  const out = /§signal SIGKILL|past the maximum length|past the largest immediate|Out of memory|out of memory/;
   const ran = (["js", "c", "c1", "san"] as Lane[]).filter((l) => outs[l] !== undefined);
   if (ref === "interp" && bad.length > 0 && ran.length > 1 && ran.every((l) => out.test(outs[l]!))) {
     return { sig: "", ref, strict: true };
