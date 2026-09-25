@@ -1,8 +1,8 @@
 # A U32 taken apart into its Word and walked bit by bit: the C lane
 # lays the WCon chain itself, down to its WNil, so it must know WNil's id
 # even when no source names WNil (only WCon is matched here, and the end
-# of the word is a default arm). Found by tests/fuzz: the C build failed
-# with "use of undeclared identifier 'CID_WNIL'".
+# of the word is a default arm). Found by tests/fuzz (UPSTREAM U20): the
+# C build failed with "use of undeclared identifier 'CID_WNIL'".
 import Base
 
 def ones(n: Nat, w: Word(n)) -> Nat:

@@ -1,4 +1,4 @@
-# U21: a Bool handed back by a polymorphic call (Bool.pick(Bool, ..)) fed
+# U22: a Bool handed back by a polymorphic call (Bool.pick(Bool, ..)) fed
 # to a native that takes Bools (Bool.or, Bool.xor): the C lane passes the
 # box, the constructor's word, where the native wants 0/1. Every lane
 # should print "TFTF".

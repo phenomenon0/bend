@@ -102,7 +102,6 @@ def uploads(+dir: Bytes()) -> List<Stream.Route>:
 
 def main() -> IO(Unit):
   do IO<Unit>:
-    xs : List<String> <- IO.args()
-    ys : List<String> <- IO.args()
+    +xs : List<&2, String> <- Stream.argv(["--dir DIR"])
     +dir : Bytes() = Server.flag(xs, "--dir", "uploads")
-    Stream.serve.with(~Bytes(), ~app, ~uploads, dir, Stream.args(ys, Stream.config(Server.config(8080))))
+    Stream.serve.with(~Bytes(), ~app, ~uploads, dir, Stream.args(xs, Stream.config(Server.config(8080))))

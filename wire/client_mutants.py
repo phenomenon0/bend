@@ -9,14 +9,17 @@
 # twice, or goes on after it -- and the laws must refuse it: the file's
 # own, and the stream's in wire/world.bend. (A connection handed out and kept in the pool too is not a mutant
 # that can be written: a connection is affine, and the checker refuses
-# the second use.) Each runs in a scratch copy of wire/, checked clean
-# first.
+# the second use.) Each runs in a scratch copy of wire/ of its own,
+# re-checked from the mutated file on (mutate.py); a clean copy checks
+# clean.
 #
-#   python3 wire/client_mutants.py        (from the repo root)
-import os, re, shutil, subprocess, sys, tempfile
+#   python3 wire/client_mutants.py [-j N] [--shard i/n]   (from the repo root)
+import os, re, sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
+sys.path.insert(0, HERE)
+import mutate as M
 
 MUTANTS = [
   ('client.bend', 'a connection reused though its response said close',
@@ -97,42 +100,28 @@ STREAM = [
       again(bq)'''),
 ]
 
-def check(path):
-  r = subprocess.run(['bun', os.path.join(ROOT, 'bend2', 'main.ts'), path],
-    capture_output=True, text=True, cwd=ROOT)
-  return (r.stdout + r.stderr).strip()
-
 def where(out):
   m = re.search(r'Location: ([\w.]+)', out)
   return m.group(1) if m else out.splitlines()[0] if out else '?'
 
 def main():
+  jobs, shard = M.args()
   bad = 0
-  top = tempfile.mkdtemp(prefix='client_laws_')
-  d = os.path.join(top, 'wire')
-  try:
-    shutil.copytree(HERE, d)
-    for f in ('client.bend', 'pool.bend', 'world.bend'):
-      out = check(os.path.join(d, f))
-      if out != 'All terms check.':
-        print('the copy of %s does not check clean: %s' % (f, out))
-        sys.exit(1)
-    for f, name, a, b, laws in [m + (m[0],) for m in MUTANTS] + [m + ('world.bend',) for m in STREAM]:
-      path = os.path.join(d, f)
-      src = open(path).read()
-      if src.count(a) != 1:
-        print('MISSING  %s' % name); bad += 1; continue
-      open(path, 'w').write(src.replace(a, b))
-      out = check(os.path.join(d, laws))
-      open(path, 'w').write(src)
-      if out == 'All terms check.':
-        print('SURVIVED %s' % name); bad += 1
-      else:
-        print('KILLED   %s -- %s' % (name, where(out)))
-  finally:
-    shutil.rmtree(top, ignore_errors=True)
-  total = len(MUTANTS) + len(STREAM)
-  print('mutants: %d / %d killed' % (total - bad, total))
+  muts = [(name, 'wire/' + f, a, b, 'wire/' + f) for f, name, a, b in MUTANTS] \
+    + [(name, 'wire/' + f, a, b, 'wire/world.bend') for f, name, a, b in STREAM]
+  bases, res = M.run(lambda: M.tree(['wire'], prefix='client_laws_'), 'wire/world.bend', muts, jobs, shard)
+  for f, out in bases.items():
+    if out != 'All terms check.':
+      print('the copy of %s does not check clean: %s' % (f, out))
+      sys.exit(1)
+  for name, _, out in res:
+    if out is None:
+      print('MISSING  %s' % name); bad += 1
+    elif out == 'All terms check.':
+      print('SURVIVED %s' % name); bad += 1
+    else:
+      print('KILLED   %s -- %s' % (name, where(out)))
+  print('mutants: %d / %d killed' % (len(res) - bad, len(res)))
   sys.exit(1 if bad else 0)
 
 main()

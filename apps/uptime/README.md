@@ -27,7 +27,8 @@ A name is 1 to 64 of `A-Z a-z 0-9 . _ -` (it goes in a path).
 Flags: `--config`, `--state` (a path prefix; its directory must exist:
 Bend has no mkdir), `--web` (the dashboard's directory, default
 `apps/uptime/web`), `--webhook` (wins over the config's), and every
-`Server.args` flag (`--port --host --idle-ms ...`).
+`Server.args` flag (`--port --host --idle-ms ...`). Any other flag is
+refused with a usage line (`Server.argv`).
 
 ## The API
 

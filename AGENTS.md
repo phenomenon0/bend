@@ -40,7 +40,8 @@ lines its run must print, and the gates run on the mini cluster.
                         its check.py and FRICTION.md (what the library cost it)
     wire/               bend-wire, the loops, readers and pool net/ is built on
     guide/              GUIDE.md, and the extras SHADERS.md, EFFECTS.md and
-                        NETWORKING.md (`bend guide networking`)
+                        NETWORKING.md (`bend guide networking`), the tour
+                        of net/, whose pages are guide/net/ (net/serving)
     REPO_MAP.md         this map in more words, and the networking stack whole
     UPSTREAM.md         every bug we found that canon's main also has, kept
                         current; upstream/ holds its repros and verify.sh

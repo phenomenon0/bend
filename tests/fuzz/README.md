@@ -71,18 +71,18 @@ sqrt agreed on 200000 of 200000; F32's rounding hides it).
 
 ## Found
 
-- UPSTREAM U19: a `U32{w}` handed on whole and walked to a default arm;
+- UPSTREAM U20: a `U32{w}` handed on whole and walked to a default arm;
   the C emitter lays a `WNil` whose id it never declared, and clang
   refuses the file (`tests/base/word_unpack.bend`; also on canon).
 - `I64.neg` of I64's minimum negated through `int64_t` in C: undefined,
   seen by UBSan, and at -O3 clang folds `neg(x) == x` to `x == 0`
   (`tests/base/i64_neg_min.bend`; I64 is ours, not canon's).
-- UPSTREAM U21: `Bool.or`/`Bool.xor` of a `Bool.pick(Bool, ..)` whose
+- UPSTREAM U22: `Bool.or`/`Bool.xor` of a `Bool.pick(Bool, ..)` whose
   arms are word compares: C handed the native the Bool's box, not 0/1
   (`tests/base/bool_box_native.bend`; also on canon).
 - A closure over an F64 (U64, I64) dropped unapplied: its 64-bit capture
   lay raw in the node C drops as Terms, a wild reference
   (`tests/base/closure_x64.bend`; F64 is ours).
-- UPSTREAM U20 (a known SOON): the JS lane recurses on the host stack.
+- UPSTREAM U21 (a known SOON): the JS lane recurses on the host stack.
 - Reverting either known fix (a peek argument evaluated twice, c823679d)
   or breaking `U32.mul` on one lane is found in under a hundred programs.

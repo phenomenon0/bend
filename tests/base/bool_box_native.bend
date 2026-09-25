@@ -2,7 +2,7 @@
 # compares, so the site is not lifted) fed to a native that takes Bools
 # (Bool.or, Bool.xor). The C lane passed the box -- the constructor's word,
 # not 0/1 -- straight to the native: `0 | box` read as False. Found by
-# tests/fuzz (the C lane answered False where every other said True). The
+# tests/fuzz, UPSTREAM U22 (C answered False where every other said True). The
 # last case is the converse: a native's own Bool (U32.is_eq's 0/1), which
 # the emitter labelled a box where the site's type was unknown, must not
 # be read as a constructor.

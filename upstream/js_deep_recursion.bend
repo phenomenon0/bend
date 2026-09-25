@@ -1,4 +1,4 @@
-# U20: the JS lane runs a non-tail recursion on the host's stack: a list of
+# U21: the JS lane runs a non-tail recursion on the host's stack: a list of
 # 100000 counted by a def that conses after its call overflows it (bun,
 # 32 MiB of stack as gates/test.ts gives it), where C (heap frames)
 # answers; `bend` runs an IO main on the JS runtime too. Every lane should

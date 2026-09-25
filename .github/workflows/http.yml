@@ -1,28 +1,138 @@
 # The HTTP engine's gate, and bend-wire's (wire/) that it, RESP and
-# bend-h2 are built on: the laws check, the server builds, the checks
-# pass against it and against the C control, the fuzzer finds no
-# difference between the two, the RESP server answers, bend-h2 passes
-# h2spec and its own checks, and the binaries are kept. Runs on the
-# branch that carries the engine and only when it, the library, RESP,
-# bend-h2 or the runtime moves.
+# bend-h2 are built on: the laws check, in both kernels, and are not
+# vacuous; the server builds, the checks pass against it and against the
+# C control, the fuzzer finds no difference between the two, the RESP
+# server answers, bend-h2 passes h2spec and its own checks, and the
+# binaries are kept. Runs on the branch that carries the engine and only
+# when it, the library, RESP, bend-h2 or the runtime moves.
+#
+# One job per concern, side by side: the proofs, the second kernel, each
+# mutant set's shards (every mutant of every set, every push: none is
+# left for later), and the live checks, most of which share one build. Each
+# mutant runs in a scratch tree of its own, re-checked from the file it
+# breaks on (wire/mutate.py), -j nproc; --shard i/n takes every n-th.
 name: http engine
 on:
   push:
     branches: [omen-http, claude/next-gen-tier-review-xss592]
-    paths: ["demos/io_http_engine/**", "demos/io_proxy/**", "demos/io_resp/**", "demos/io_http2/**", "demos/io_sink/**",
-      "demos/io_http_client/**", "wire/**", "net/**", "power/csv*", "power/gzip*", "power/deflate*", "power/json*",
-      "bend2/**", "kernel/**", "tests/fuzz/**", ".github/workflows/http.yml"]
+    paths: ["demos/io_http_engine/**", "demos/io_proxy/**", "demos/io_resp/**", "demos/io_http2/**",
+      "demos/io_sink/**", "demos/io_http_client/**", "wire/**", "net/**", "power/csv*", "power/gzip*",
+      "power/deflate*", "power/json*", "bend2/**", "kernel/**", "tests/fuzz/**", ".github/workflows/http.yml"]
   pull_request:
-    paths: ["demos/io_http_engine/**", "demos/io_proxy/**", "demos/io_resp/**", "demos/io_http2/**", "demos/io_sink/**",
-      "demos/io_http_client/**", "wire/**", "net/**", "power/csv*", "power/gzip*", "power/deflate*", "power/json*",
-      "bend2/**", "kernel/**", "tests/fuzz/**", ".github/workflows/http.yml"]
+    paths: ["demos/io_http_engine/**", "demos/io_proxy/**", "demos/io_resp/**", "demos/io_http2/**",
+      "demos/io_sink/**", "demos/io_http_client/**", "wire/**", "net/**", "power/csv*", "power/gzip*",
+      "power/deflate*", "power/json*", "bend2/**", "kernel/**", "tests/fuzz/**", ".github/workflows/http.yml"]
+env:
+  BEND_NO_TELEMETRY: "1"
+  PROOFS: >-
+    demos/io_http_engine/PROOF.bend demos/io_resp/PROOF.bend power/csv_proof.bend
+    demos/io_http2/PROOF.bend wire/http1/PROOF.bend wire/client.bend wire/pool.bend wire/world.bend
+    demos/io_proxy/PROOF.bend net/ws_proof.bend net/PROOF.bend
+defaults:
+  run:
+    shell: bash
 jobs:
-  engine:
+  # The verdict line, not the exit code: a proof that leans on @unsafe or
+  # a foreign def exits 0 with "All terms check, but ..."
+  proofs:
+    name: the laws hold
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - name: the laws hold
+        run: |
+          mkdir -p verdicts
+          printf '%s\n' $PROOFS | xargs -P "$(nproc)" -I{} sh -c \
+            'bun bend2/main.ts "$1" > "verdicts/$(echo "$1" | tr / _)" 2>&1 || true' _ {}
+          bad=0
+          for f in $PROOFS; do
+            out=$(cat "verdicts/$(echo "$f" | tr / _)"); echo "$f: $out"
+            [ "$out" = "All terms check." ] || { echo "$f: not a clean proof"; bad=1; }
+          done
+          exit $bad
+  # The de Bruijn criterion: a second, independent kernel (kernel/, Rust,
+  # no crates) re-checks the exported core of every proof from scratch;
+  # its verdict must be PASS too
+  kernel:
+    name: the laws hold in a second kernel
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - uses: actions/cache@v4
+        with:
+          path: kernel/target
+          key: kernel-${{ runner.os }}-${{ hashFiles('kernel/Cargo.lock', 'kernel/Cargo.toml', 'kernel/src/**') }}
+      - name: the laws hold in a second kernel
+        run: |
+          cargo build --release --manifest-path kernel/Cargo.toml
+          bash kernel/tests/run.sh
+          mkdir -p cores
+          printf '%s\n' $PROOFS | xargs -P "$(nproc)" -I{} sh -c \
+            'bun bend2/main.ts "$1" --export "cores/$(echo "$1" | tr / _).core"' _ {}
+          for f in $PROOFS; do
+            kernel/target/release/bend-kernel -q "cores/$(echo "$f" | tr / _).core" \
+              || { echo "$f: the kernel refuses it"; exit 1; }
+          done
+  # The laws are not vacuous. engine: each mutant breaks the loop
+  # (wire/loop.bend) as one of the review's bugs did and the laws of the
+  # world refuse it, or breaks the framing's reader or spec and frame_sim
+  # alone refuses it. h2: HPACK, the framing, the stream states, flow
+  # control, a budget or the request checks. http1: the response reader's
+  # framing, as a splitting or smuggling bug would; resp_sim alone must
+  # refuse it. client: a connection reused when it must not be, a read
+  # past the deadline or the head's cap, a pooled connection handed out
+  # when it must not be, a body stream that reads with its window full,
+  # waits on a stalled consumer, reorders, drops, trusts too much or
+  # tells its end early or twice. proxy: the client's bytes passed
+  # through, a hop-by-hop field forwarded, a read on after a refusal, a
+  # request or a response unchecked, a length not its body's.
+  # ws: a frame the RFC forbids let through, one sent unmasked, a
+  # handshake taken that must be refused (ws_laws.bend). net: a handler
+  # handed what the RFC did not frame, a response a client would frame
+  # otherwise, a wrong route, a pooled connection its response closed, a
+  # redirect too far or with credentials (net/PROOF.bend).
+  mutants:
+    name: mutants ${{ matrix.set }} ${{ matrix.shard }}
     runs-on: ubuntu-24.04
     timeout-minutes: 45
-    defaults:
-      run:
-        shell: bash
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { set: engine, shard: 0/2, run: demos/io_http_engine/mutants.py }
+          - { set: engine, shard: 1/2, run: demos/io_http_engine/mutants.py }
+          - { set: h2, shard: 0/2, run: demos/io_http2/mutants.py }
+          - { set: h2, shard: 1/2, run: demos/io_http2/mutants.py }
+          - { set: net, shard: 0/3, run: net/mutants.py }
+          - { set: net, shard: 1/3, run: net/mutants.py }
+          - { set: net, shard: 2/3, run: net/mutants.py }
+          - { set: ws, shard: 0/2, run: net/ws_mutants.py }
+          - { set: ws, shard: 1/2, run: net/ws_mutants.py }
+          - { set: http1, shard: 0/1, run: wire/http1/mutants.py }
+          - { set: client, shard: 0/1, run: wire/client_mutants.py }
+          - { set: proxy, shard: 0/1, run: demos/io_proxy/mutants.py }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - name: the laws are not vacuous
+        run: python3 ${{ matrix.run }} --shard ${{ matrix.shard }}
+  # the compiler is trusted, not proven: random well-typed programs
+  # (tests/fuzz, seed 1) must print the same in the interpreter, JS and C
+  # (-O3, and on one thread); the CI mode runs no sanitizer
+  fuzz:
+    name: the compiler's lanes agree
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
@@ -30,79 +140,71 @@ jobs:
           bun-version: latest
       - name: clang
         run: sudo apt-get update -qq && sudo apt-get install -y -qq clang
-      # The verdict line, not the exit code: a proof that leans on
-      # @unsafe or a foreign def exits 0 with "All terms check, but ..."
-      - name: the laws hold
+      - name: 100 random programs agree in every lane
+        run: bun tests/fuzz/fuzz.ts --ci
+  # the binaries the live checks run, built once
+  build:
+    name: the server and its peers build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - name: clang
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq clang
+      - name: build
         run: |
-          for f in demos/io_http_engine/PROOF.bend demos/io_resp/PROOF.bend power/csv_proof.bend \
-            demos/io_http2/PROOF.bend wire/http1/PROOF.bend wire/client.bend wire/pool.bend wire/world.bend \
-            demos/io_proxy/PROOF.bend net/ws_proof.bend net/PROOF.bend; do
-            out=$(bun bend2/main.ts "$f"); echo "$out"
-            [ "$out" = "All terms check." ] || { echo "$f: not a clean proof"; exit 1; }
-          done
-      # The de Bruijn criterion: a second, independent kernel (kernel/,
-      # Rust, no crates) re-checks the exported core of each proof from
-      # scratch; its verdict must be PASS too
-      - name: the laws hold in a second kernel
-        run: |
-          cargo build --release --manifest-path kernel/Cargo.toml
-          bash kernel/tests/run.sh
-          for f in demos/io_http_engine/PROOF.bend demos/io_resp/PROOF.bend power/csv_proof.bend \
-            demos/io_http2/PROOF.bend wire/http1/PROOF.bend wire/client.bend wire/pool.bend wire/world.bend \
-            demos/io_proxy/PROOF.bend net/ws_proof.bend net/PROOF.bend; do
-            bun bend2/main.ts "$f" --export proof.core
-            kernel/target/release/bend-kernel -q proof.core || { echo "$f: the kernel refuses it"; exit 1; }
-          done
-      # each mutant breaks the loop (wire/loop.bend) as one of the
-      # review's bugs did, and the laws of the world must refuse every
-      # one; each of the framing's
-      # breaks the reader or the spec, and frame_sim alone must refuse it
-      - name: the laws are not vacuous
-        run: python3 demos/io_http_engine/mutants.py
-      # each of bend-h2's mutants breaks HPACK, the framing, the stream
-      # states, flow control, a budget or the request checks, and the
-      # proof must refuse every one
-      - name: bend-h2's laws are not vacuous
-        run: python3 demos/io_http2/mutants.py
-      # each of the response reader's mutants (wire/http1) breaks its
-      # framing as a response-splitting or smuggling bug would, and
-      # resp_sim alone must refuse every one
-      - name: the response reader's laws are not vacuous
-        run: python3 wire/http1/mutants.py
-      # each of the client's and the pool's mutants reuses a connection it
-      # must not, reads past the deadline or the head's cap, or hands out
-      # a pooled connection it must not; each of the body stream's reads
-      # with its window full, waits on a stalled consumer, reorders, drops
-      # or trusts too much of a body, or tells its end early or twice; and
-      # their laws must refuse it
-      - name: the client's, the pool's and the stream's laws are not vacuous
-        run: python3 wire/client_mutants.py
-      # each of the proxy's mutants passes the client's bytes through,
-      # forwards a hop-by-hop field, reads on after a refusal, sends a
-      # request or a response unchecked, with a length not its body's or
-      # a body its framing says it has not, and the proxy's laws
-      # (forward_canonical, no_smuggle, hop_by_hop_removed, scan_is_spec,
-      # rsp_reframed) must refuse every one
-      - name: the proxy's laws are not vacuous
-        run: python3 demos/io_proxy/mutants.py
-      # the compiler is trusted, not proven: random well-typed programs
-      # (tests/fuzz) must print the same in the interpreter, JS and C
-      - name: the compiler's lanes agree on 100 random programs
-        run: BEND_NO_TELEMETRY=1 bun tests/fuzz/fuzz.ts --ci
-      - name: the server builds
-        run: |
-          bun bend2/main.ts demos/io_http_engine/main.bend -o httpd
+          b() { bun bend2/main.ts "$1" -o "$2" > "$2.log" 2>&1; s=$?; cat "$2.log"; return $s; }
+          p=()
+          b demos/io_http_engine/main.bend httpd & p+=($!)
+          b demos/io_http2/main.bend h2d & p+=($!)
+          b wire/conform.bend conform & p+=($!)
+          b demos/io_http_client/main.bend hc & p+=($!)
+          b demos/io_proxy/main.bend proxyd & p+=($!)
+          b net/ws_cli.bend wsc & p+=($!)
+          b net/examples/ws_echo.bend wsecho & p+=($!)
+          b demos/io_resp/main.bend respd & p+=($!)
+          b demos/io_sink/main.bend sink & p+=($!)
+          C=demos/io_http_engine
+          cc -std=c11 -O3 -Wall $C/control.c -o control
+          cc -std=c11 -O3 -Wall $C/check.c -o check
+          cc -std=c11 -O3 -Wall -DCHECK_TLS $C/check.c -o check-tls -lssl -lcrypto
+          cc -std=c11 -O2 -Wall $C/fuzz.c -o fuzz
+          cc -std=c11 -O3 -Wall $C/load.c -o load
+          cc -std=c11 -O2 -Wall wire/conform.c -o conform-peer -lssl -lcrypto
+          for i in "${p[@]}"; do wait "$i"; done
           ldd httpd
-      - name: the C twins build
-        working-directory: demos/io_http_engine
-        run: |
-          cc -std=c11 -O3 -Wall control.c -o control
-          cc -std=c11 -O3 -Wall check.c -o check
-          cc -std=c11 -O3 -Wall -DCHECK_TLS check.c -o check-tls -lssl -lcrypto
-          cc -std=c11 -O2 -Wall fuzz.c -o fuzz
-          cc -std=c11 -O3 -Wall load.c -o load
+          tar czf bins.tgz httpd h2d conform hc proxyd wsc wsecho respd sink control check check-tls fuzz load conform-peer
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bins
+          path: bins.tgz
+          retention-days: 1
+      - uses: actions/upload-artifact@v4
+        with:
+          name: httpd-linux-x86_64
+          path: httpd
+      - uses: actions/upload-artifact@v4
+        with:
+          name: h2d-linux-x86_64
+          path: h2d
+  # the engine against check.c in every mode, the budgets, the fuzzer
+  # against the C control, TLS, and a shared port
+  engine:
+    name: the engine's checks
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: bins
       - name: fixtures
         run: |
+          tar xzf bins.tgz
           mkdir -p www/sub
           printf '<h1>hi</h1>\n' > www/index.html
           printf 'alpha\n' > www/a.txt
@@ -114,11 +216,10 @@ jobs:
       - name: the checks, every mode
         run: |
           up() { for i in $(seq 1 50); do (exec 3<>/dev/tcp/127.0.0.1/$1) 2>/dev/null && return 0; sleep 0.1; done; echo "never listened on $1"; return 1; }
-          C=demos/io_http_engine
-          ./httpd --root www --idle-ms 400 --log 2>log.txt & up 8080; $C/check 8080 $! --files --idle=400 --ws --log=log.txt --root=www; kill $!; wait $! || true
-          ./httpd --max-conns 2 & up 8080; $C/check 8080 $! --conns=2; kill $!; wait $! || true
-          ./httpd --grace-ms 3000 & up 8080; $C/check 8080 $! --term
-          $C/control 8081 & up 8081; $C/check 8081 $!; kill $!; wait $! || true
+          ./httpd --root www --idle-ms 400 --log 2>log.txt & up 8080; ./check 8080 $! --files --idle=400 --ws --log=log.txt --root=www; kill $!; wait $! || true
+          ./httpd --max-conns 2 & up 8080; ./check 8080 $! --conns=2; kill $!; wait $! || true
+          ./httpd --grace-ms 3000 & up 8080; ./check 8080 $! --term
+          ./control 8081 & up 8081; ./check 8081 $!; kill $!; wait $! || true
       # --guard: 600 pipelined GETs of a 100 KB file against VmHWM, a
       # peer that never reads, a head dribbled past --head-ms, a 431 and
       # a 414, 80 idle peers against `ulimit -n 64`, and SIGTERM under a
@@ -126,117 +227,113 @@ jobs:
       - name: the budgets hold
         run: |
           up() { for i in $(seq 1 50); do (exec 3<>/dev/tcp/127.0.0.1/$1) 2>/dev/null && return 0; sleep 0.1; done; echo "never listened on $1"; return 1; }
-          C=demos/io_http_engine
           python3 -c "open('www/big.bin','wb').write(bytes(i % 251 for i in range(100000)))"
           (ulimit -n 64; exec ./httpd --root www --idle-ms 1000 --head-ms 1500 --grace-ms 3000) & up 8080
-          $C/check 8080 $! --files --guard
+          ./check 8080 $! --files --guard
           wait $! || true
-      # the bridge between the proofs and C: each effect the model makes
-      # assumptions of, driven through its contract's cases and judged by
-      # world.bend's relations, with conform.c as its peer; and the client
-      # side: TCP.connect_poll and TLS.connect against cx.ok and tls.ok
-      - name: the effects keep their contracts
-        run: |
-          bun bend2/main.ts wire/conform.bend -o conform
-          cc -std=c11 -O2 -Wall wire/conform.c -o conform-peer -lssl -lcrypto
-          ./conform-peer ./conform 8095 "$PWD/conform-root/root"
-      # the client on bend-wire (wire/client.bend): its demo fetches from
-      # the engine, plain and over TLS (a pinned CA, an untrusted one, a
-      # name not on the certificate), and from nginx: a file, a large
-      # one, HEAD, a chunked page, Connection: close, keep-alive reuse;
-      # and again with the body streamed (wire/stream.bend)
-      - name: the client fetches from the engine and from nginx
-        run: |
-          sudo apt-get install -y -qq nginx || true
-          bun bend2/main.ts demos/io_http_client/main.bend -o hc
-          bash demos/io_http_client/check.sh ./hc ./httpd 8840
-      # the proxy (demos/io_proxy) in front of an upstream that records
-      # every byte: the smuggling vectors put no more requests upstream
-      # than the client framed (none where it refuses), no hop-by-hop
-      # field goes either way, the pool reuses its connection, and a hung,
-      # closed or absent upstream is a 504 or a 502; nginx, installed
-      # above, runs the same vectors beside it for the table
-      - name: the proxy forwards only what it framed
-        run: |
-          bun bend2/main.ts demos/io_proxy/main.bend -o proxyd
-          python3 demos/io_proxy/check.py ./proxyd 8850 --nginx
-      # the WebSocket client (net/ws.bend): each of its mutants lets
-      # through a frame the RFC forbids, sends one unmasked, or takes a
-      # handshake it must refuse, and ws_laws.bend must refuse every one;
-      # then the client against the engine's /ws echo, plain and over TLS,
-      # a raw server that sends what no library will and checks every
-      # frame the client sends is masked and every violation answered with
-      # its close code, and the websockets library; and the server
-      # (net/ws_server.bend, its echo) against a raw client that sends
-      # what no library will, the client above, and the websockets library
-      - name: the WebSocket client's and server's laws are not vacuous, and they talk to real peers
-        run: |
-          python3 net/ws_mutants.py
-          pip install -q websockets || true
-          bun bend2/main.ts net/ws_cli.bend -o wsc
-          bun bend2/main.ts net/examples/ws_echo.bend -o wsecho
-          python3 net/ws_check.py ./wsc ./httpd 8860 --server ./wsecho
-      # bend-net (net/): each of its mutants hands a handler what the RFC
-      # did not frame, writes a response a client would frame otherwise,
-      # routes wrong, pools a connection its response closed, or follows
-      # a redirect too far or with credentials, and net/PROOF.bend must
-      # refuse every one; then its examples, run against every default
-      # they promise: framing, timeouts, limits, the router, files, JSON,
-      # SIGTERM, and the client's TLS, redirects, gzip and pooling
-      - name: bend-net's laws are not vacuous, and its examples keep their defaults
-        run: |
-          python3 net/mutants.py
-          python3 net/check.py --bin net-bin --port 8870
-      - name: the RESP server answers on bend-wire
-        run: |
-          bun bend2/main.ts demos/io_resp/main.bend -o respd
-          python3 demos/io_resp/smoke.py ./respd 6380
-      # the body stream on a server's side (demos/io_sink): uploads by
-      # length and chunked, pipelined, one framed two ways refused, and
-      # 200 MB taken whole while the server's peak RSS stays under 16 MB
-      - name: the sink streams uploads in bounded memory
-        run: |
-          bun bend2/main.ts demos/io_sink/main.bend -o sink
-          bash demos/io_sink/check.sh ./sink 8850
       - name: the engine and the control agree on 500 random streams
         run: |
           up() { for i in $(seq 1 50); do (exec 3<>/dev/tcp/127.0.0.1/$1) 2>/dev/null && return 0; sleep 0.1; done; return 1; }
-          C=demos/io_http_engine
           ./httpd --port 8090 & A=$!; up 8090
-          $C/control 8091 & B=$!; up 8091
-          $C/fuzz 8090 8091 500 7
+          ./control 8091 & B=$!; up 8091
+          ./fuzz 8090 8091 500 7
           kill $A $B; wait $A $B || true
       - name: the same checks over TLS
         run: |
           up() { for _ in $(seq 1 60); do (exec 3<>/dev/tcp/127.0.0.1/$1) 2>/dev/null && return 0; sleep 0.1; done; return 1; }
-          C=demos/io_http_engine
           openssl req -x509 -newkey rsa:2048 -keyout key.pem -out cert.pem -days 2 -nodes -subj "/CN=localhost"
           ./httpd --port 8443 --tls-cert cert.pem --tls-key key.pem --root www --idle-ms 600 --log 2>tlog.txt & up 8443
-          $C/check-tls 8443 $! --files --idle=600 --ws --log=tlog.txt --root=www
+          ./check-tls 8443 $! --files --idle=600 --ws --log=tlog.txt --root=www
           kill $!; wait $! || true
           ./httpd --port 8443 --tls-cert cert.pem --tls-key key.pem --max-conns 2 & up 8443
-          $C/check-tls 8443 $! --conns=2; kill $!; wait $! || true
-
+          ./check-tls 8443 $! --conns=2; kill $!; wait $! || true
       - name: a shared port takes two copies, and --workers forks them
         run: |
           up() { for i in $(seq 1 50); do (exec 3<>/dev/tcp/127.0.0.1/$1) 2>/dev/null && return 0; sleep 0.1; done; return 1; }
           ./httpd --shared --port 8085 & A=$!; ./httpd --shared --port 8085 & B=$!; up 8085
-          LOAD_SPIN=1 demos/io_http_engine/load 8085 32 2 8 /health
+          LOAD_SPIN=1 ./load 8085 32 2 8 /health
           kill $A $B; wait $A $B || true
           ./httpd --workers 2 --shared --port 8086 & A=$!; up 8086
-          LOAD_SPIN=1 demos/io_http_engine/load 8086 32 2 1 /health
+          LOAD_SPIN=1 ./load 8086 32 2 1 /health
           kill $A; wait $A
-      # bend-h2: h2c by prior knowledge and h2 over TLS by ALPN, each run
-      # through h2spec (every section, strict), then check.py's client:
-      # requests, fifty streams at once, 1 MB through the windows both
-      # ways, and each flood budget met
+  # the effects' contracts (conform.c drives each through its cases); the
+  # client (wire/client.bend) against the engine, plain and over TLS, and
+  # nginx, whole and streamed; the proxy in front of an upstream that
+  # records every byte, nginx beside it; the RESP server; the sink's
+  # uploads in bounded memory; the WebSocket peers
+  peers:
+    name: the client, the proxy, RESP, the sink and WebSocket
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: bins
+      - name: nginx
+        run: tar xzf bins.tgz && (sudo apt-get update -qq && sudo apt-get install -y -qq nginx || true)
+      - name: the effects keep their contracts
+        run: ./conform-peer ./conform 8095 "$PWD/conform-root/root"
+      - name: the client fetches from the engine and from nginx
+        run: bash demos/io_http_client/check.sh ./hc ./httpd 8840
+      - name: the proxy forwards only what it framed
+        run: python3 demos/io_proxy/check.py ./proxyd 8850 --nginx
+      - name: the RESP server answers on bend-wire
+        run: python3 demos/io_resp/smoke.py ./respd 6380
+      - name: the sink streams uploads in bounded memory
+        run: bash demos/io_sink/check.sh ./sink 8880
+      # the WebSocket client against the engine's /ws echo, plain and over
+      # TLS, a raw server that sends what no library will, and the
+      # websockets library; the server (net/ws_server.bend) against a raw
+      # client, the client above and the library
+      - name: the WebSocket client and server talk to real peers
+        run: |
+          pip install -q websockets || true
+          python3 net/ws_check.py ./wsc ./httpd 8860 --server ./wsecho
+  # bend-net's examples, built here side by side (check.py takes what is
+  # built), against every default they promise: framing, timeouts,
+  # limits, the router, files, JSON, SIGTERM, and the client's TLS,
+  # redirects, gzip and pooling
+  net:
+    name: bend-net's examples keep their defaults
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - name: clang
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq clang
+      - name: bend-net's examples keep their defaults
+        run: |
+          mkdir -p net-bin
+          ls net/examples/*.bend | xargs -P "$(nproc)" -I{} sh -c 'n=$(basename "$1" .bend)
+            bun bend2/main.ts "$1" -o "net-bin/$n" > "net-bin/$n.log" 2>&1 || { cat "net-bin/$n.log"; exit 1; }' _ {}
+          python3 net/check.py --bin net-bin --port 8870
+  # bend-h2: h2c by prior knowledge and h2 over TLS by ALPN, each through
+  # h2spec (every section, strict), then check.py's client: requests,
+  # fifty streams at once, 1 MB through the windows both ways, and each
+  # flood budget met
+  h2:
+    name: bend-h2 answers, and passes h2spec
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: bins
       - name: bend-h2 answers, and passes h2spec
         run: |
           up() { for i in $(seq 1 50); do (exec 3<>/dev/tcp/127.0.0.1/$1) 2>/dev/null && return 0; sleep 0.1; done; return 1; }
+          tar xzf bins.tgz
           pip install -q h2
           curl -fsSL -o h2spec.tgz https://github.com/summerwind/h2spec/releases/download/v2.6.0/h2spec_linux_amd64.tar.gz
           tar xzf h2spec.tgz h2spec
-          bun bend2/main.ts demos/io_http2/main.bend -o h2d
+          openssl req -x509 -newkey rsa:2048 -keyout key.pem -out cert.pem -days 2 -nodes -subj "/CN=localhost"
           ./h2d --port 8443 & up 8443
           ./h2spec -h 127.0.0.1 -p 8443 -S
           python3 demos/io_http2/check.py 8443
@@ -244,11 +341,3 @@ jobs:
           ./h2d --port 8444 --tls-cert cert.pem --tls-key key.pem & up 8444
           ./h2spec -h 127.0.0.1 -p 8444 -t -k -S
           kill $!; wait $! || true
-      - uses: actions/upload-artifact@v4
-        with:
-          name: httpd-linux-x86_64
-          path: httpd
-      - uses: actions/upload-artifact@v4
-        with:
-          name: h2d-linux-x86_64
-          path: h2d

@@ -1,4 +1,4 @@
-# U19: a U32 taken apart into its Word and walked to a default arm: the C
+# U20: a U32 taken apart into its Word and walked to a default arm: the C
 # emitter lays the WCon chain down to a WNil it never declared, and clang
 # refuses the file ("use of undeclared identifier 'CID_WNIL'"). Every
 # lane should print "0 32 16".
