@@ -36,6 +36,7 @@ type Verdict = {
   err?: string;        // its refusal
   outs: Partial<Record<Lane, string>>;
   sig: string;         // "" when every lane agrees
+  strict?: boolean;    // they agree but for the strict lanes running out
   ref: Lane | null;
 };
 
@@ -367,7 +368,7 @@ async function batch(pool: Pool, ps: G.Prog[], san: boolean): Promise<(Verdict |
 // The reference is the interpreter unless it is stuck (F64 is opaque to
 // it) or timed out; then JS. The signature names each lane that differs
 // from it, and how: its output, its exit, a signal or a sanitizer report.
-function judge(outs: Partial<Record<Lane, string>>): { sig: string; ref: Lane | null } {
+function judge(outs: Partial<Record<Lane, string>>): { sig: string; ref: Lane | null; strict?: boolean } {
   const good = (s: string | undefined): boolean => s !== undefined && !s.startsWith("§");
   const ref: Lane | null = good(outs.interp) ? "interp" : good(outs.js) ? "js" : good(outs.c) ? "c" : null;
   const bad: string[] = [];
@@ -388,6 +389,16 @@ function judge(outs: Partial<Record<Lane, string>>): { sig: string; ref: Lane | 
   }
   if (ref === null && outs.interp !== undefined && !outs.interp.startsWith("§stuck")) {
     bad.push("all:" + outs.interp.slice(0, 20).replace(/\s/g, "_"));
+  }
+  // The normalizer is lazy and the compiled lanes strict: an argument no
+  // path needs (a string tripled per level of a recursion that ends in "")
+  // is never built by the one and exhausts the others. When every compiled
+  // lane ran out (time, the string or Nat cap), that is the strategy, not a
+  // miscompile.
+  const out = /§signal SIGKILL|past the maximum length|past the largest immediate/;
+  const ran = (["js", "c", "c1", "san"] as Lane[]).filter((l) => outs[l] !== undefined);
+  if (ref === "interp" && bad.length > 0 && ran.length > 1 && ran.every((l) => out.test(outs[l]!))) {
+    return { sig: "", ref, strict: true };
   }
   return { sig: bad.join(" "), ref };
 }
@@ -528,7 +539,7 @@ async function main(): Promise<void> {
     const one = opt("--one");
     const todo = one !== undefined ? [parse_one(one)]
       : Array.from({ length: n }, (_, i) => ({ seed: seed0 * 100003 + i, ...kind(i) }));
-    const stats = { gen: 0, rej: 0, run: 0, same: 0, diff: 0, slow: 0, rejs: new Map<string, number>() };
+    const stats = { gen: 0, rej: 0, run: 0, same: 0, diff: 0, slow: 0, strict: 0, rejs: new Map<string, number>() };
     const sigs = new Map<string, string[]>();
     const t0 = Date.now();
     let next = 0;
@@ -561,6 +572,7 @@ async function main(): Promise<void> {
       }
       if (v.sig === "") {
         stats.same += 1;
+        stats.strict += v.strict === true ? 1 : 0;
         if (one !== undefined) log(JSON.stringify(v.outs, null, 1));
         return;
       }
@@ -595,7 +607,8 @@ async function main(): Promise<void> {
     log("programs " + String(stats.gen) + ", rejected " + String(stats.rej) + " ("
       + (100 * stats.rej / Math.max(1, stats.gen)).toFixed(1) + "%), ran " + String(stats.run)
       + ", agreed " + String(stats.same) + ", differed " + String(stats.diff)
-      + ", interp timeouts " + String(stats.slow) + ", " + dt.toFixed(0) + " s");
+      + ", interp timeouts " + String(stats.slow) + ", strict lanes out " + String(stats.strict) + ", "
+      + dt.toFixed(0) + " s");
     for (const [why, k] of [...stats.rejs].sort((a, b) => b[1] - a[1]).slice(0, 6)) {
       log("  reject x" + String(k) + ": " + why);
     }

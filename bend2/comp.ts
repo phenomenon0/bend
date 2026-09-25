@@ -2447,9 +2447,11 @@ function seg_name(fl: File, stem: string): string {
   return fl.seg.def.split("$")[0] + "$" + stem + fl.segs.length;
 }
 
-// Opens `name`: takes `live` (per `frame`, else in r0..), then `ks` words.
+// Opens `name`: takes `live` (per `frame`, else in r0..), then `ks` words;
+// a `boxed` one arrives in an x64 box and is bound unboxed.
 function seg_open(fl: File, name: string, ret: Lay, frame: Seg["frame"],
-  live: [Probe, Bind][], k: string, ks: Kind[], rest: HTerm[]): string[] {
+  live: [Probe, Bind][], k: string, ks: Kind[], rest: HTerm[],
+  boxed: boolean[] = []): string[] {
   const olds = live.flatMap(([, b]) => b.val.ws);
   const news = olds.map((w) => name_local(fl, w.replace(/_\d+$/, "")));
   const ts = ks.map(() => name_local(fl, k));
@@ -2460,9 +2462,10 @@ function seg_open(fl: File, name: string, ret: Lay, frame: Seg["frame"],
   olds.forEach((w, i) =>
     fl.brwl.has(w) && fl.brwl.set(news[i], fl.brwl.get(w)!));
   let i = 0;
-  live.forEach(([p, b]) => bind_uses(fl, p,
-    val_new(news.slice(i, i += b.val.ws.length), b.val.lay), rest, b.A,
-    false));
+  live.forEach(([p, b], j) => {
+    const v = val_new(news.slice(i, i += b.val.ws.length), b.val.lay);
+    bind_uses(fl, p, boxed[j] ? val_unbox(fl, v, X64) : v, rest, b.A, false);
+  });
   return ts;
 }
 
@@ -3142,20 +3145,25 @@ function emit_peek(fl: File, xs: HTerm[], peek: number[], sinks: Val[]): Val[] {
 
 // A closure: its captures move into a node (a capture is one use of the
 // binding, whatever the closure does with it); its segment takes them,
-// then x.
+// then x. A closure dropped unapplied drops its node's words as Terms, so
+// a U64, I64 or F64 capture rides in its x64 box (a raw double, read as a
+// Term, is a wild reference).
 function emit_clo(fl: File, x: HTerm, ty: HTerm | null): Val {
   const u = term_uses(fl, x);
+  const boxed: boolean[] = [];
   const live = [...fl.uses].filter(([p]) => term_use(u, p) > 0)
     .map(([p, b]): [Probe, Bind] => {
       fl.uses.set(p, { ...b, n: b.n - term_use(u, p) + 1 });
-      return [p, { ...b, val: bind_pop(fl, p) }];
+      const v = bind_pop(fl, p);
+      boxed.push(v.lay === X64);
+      return [p, { ...b, val: v.lay === X64 ? val_new([val_box(fl, v)], BOX) : v }];
     });
   const words = live.flatMap(([, b]) => val_own(fl, b.val));
   const name = seg_name(fl, "c");
   const clo = seg_clo(fl, seg_fid(name), words);
   const outer = { seg: fl.seg, uses: fl.uses, spares: fl.spares,
     tab: fl.tab, rest: fl.rest };
-  const [arg] = seg_open(fl, name, BOX, null, live, "x", ["w64"], [x]);
+  const [arg] = seg_open(fl, name, BOX, null, live, "x", ["w64"], [x], boxed);
   emit_body(fl, x, ty, [], [val_new([arg], BOX)], null);
   Object.assign(fl, outer);
   return val_new([clo], BOX);

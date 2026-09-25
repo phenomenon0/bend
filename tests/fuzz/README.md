@@ -54,7 +54,10 @@ removes main's parts, defs, lets and match arms, puts each type's
 smallest value in a node's place or hoists a same-typed child, and keeps
 an edit when the program still checks and still differs the same way.
 
-Kept out, by design and counted as agreement: a Char past U+10FFFF or a
+Kept out, by design and counted as agreement: a program whose every
+compiled lane runs out (time, the string cap, the Nat cap) while the
+lazy normalizer answers, since it never builds an argument no path needs
+(a string tripled at each level of a recursion that returns ""); a Char past U+10FFFF or a
 surrogate in a string (the JS lane refuses it, and says so), a JS stack
 overflow in a deep non-tail recursion (WONTFIX.txt's SOON, #798: a string
 of 84034 cells through `Bytes.to_list` was one), Nats past a
