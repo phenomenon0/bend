@@ -8,7 +8,7 @@
 #
 # One job per concern, side by side: the proofs, the second kernel, each
 # mutant set's shards (every mutant of every set, every push: none is
-# left for later), and the live checks, which share one build. Each
+# left for later), and the live checks, most of which share one build. Each
 # mutant runs in a scratch tree of its own, re-checked from the file it
 # breaks on (wire/mutate.py), -j nproc; --shard i/n takes every n-th.
 name: http engine
@@ -107,16 +107,13 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { set: engine, shard: 0/4, run: demos/io_http_engine/mutants.py }
-          - { set: engine, shard: 1/4, run: demos/io_http_engine/mutants.py }
-          - { set: engine, shard: 2/4, run: demos/io_http_engine/mutants.py }
-          - { set: engine, shard: 3/4, run: demos/io_http_engine/mutants.py }
+          - { set: engine, shard: 0/2, run: demos/io_http_engine/mutants.py }
+          - { set: engine, shard: 1/2, run: demos/io_http_engine/mutants.py }
           - { set: h2, shard: 0/2, run: demos/io_http2/mutants.py }
           - { set: h2, shard: 1/2, run: demos/io_http2/mutants.py }
-          - { set: net, shard: 0/4, run: net/mutants.py }
-          - { set: net, shard: 1/4, run: net/mutants.py }
-          - { set: net, shard: 2/4, run: net/mutants.py }
-          - { set: net, shard: 3/4, run: net/mutants.py }
+          - { set: net, shard: 0/3, run: net/mutants.py }
+          - { set: net, shard: 1/3, run: net/mutants.py }
+          - { set: net, shard: 2/3, run: net/mutants.py }
           - { set: ws, shard: 0/2, run: net/ws_mutants.py }
           - { set: ws, shard: 1/2, run: net/ws_mutants.py }
           - { set: http1, shard: 0/1, run: wire/http1/mutants.py }
@@ -247,9 +244,9 @@ jobs:
   # client (wire/client.bend) against the engine, plain and over TLS, and
   # nginx, whole and streamed; the proxy in front of an upstream that
   # records every byte, nginx beside it; the RESP server; the sink's
-  # uploads in bounded memory
+  # uploads in bounded memory; the WebSocket peers
   peers:
-    name: the client, the proxy, RESP and the sink
+    name: the client, the proxy, RESP, the sink and WebSocket
     needs: build
     runs-on: ubuntu-24.04
     timeout-minutes: 20
@@ -270,14 +267,20 @@ jobs:
         run: python3 demos/io_resp/smoke.py ./respd 6380
       - name: the sink streams uploads in bounded memory
         run: bash demos/io_sink/check.sh ./sink 8880
-  # the WebSocket client against the engine's /ws echo, plain and over
-  # TLS, a raw server that sends what no library will, and the websockets
-  # library; the server (net/ws_server.bend) against a raw client, the
-  # client above and the library; bend-net's examples against every
-  # default they promise
+      # the WebSocket client against the engine's /ws echo, plain and over
+      # TLS, a raw server that sends what no library will, and the
+      # websockets library; the server (net/ws_server.bend) against a raw
+      # client, the client above and the library
+      - name: the WebSocket client and server talk to real peers
+        run: |
+          pip install -q websockets || true
+          python3 net/ws_check.py ./wsc ./httpd 8860 --server ./wsecho
+  # bend-net's examples, built here side by side (check.py takes what is
+  # built), against every default they promise: framing, timeouts,
+  # limits, the router, files, JSON, SIGTERM, and the client's TLS,
+  # redirects, gzip and pooling
   net:
-    name: the WebSocket peers and bend-net's examples
-    needs: build
+    name: bend-net's examples keep their defaults
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
@@ -285,16 +288,8 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: latest
-      - uses: actions/download-artifact@v4
-        with:
-          name: bins
       - name: clang
-        run: tar xzf bins.tgz && sudo apt-get update -qq && sudo apt-get install -y -qq clang
-      - name: the WebSocket client and server talk to real peers
-        run: |
-          pip install -q websockets || true
-          python3 net/ws_check.py ./wsc ./httpd 8860 --server ./wsecho
-      # the examples built side by side first; check.py takes what is built
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq clang
       - name: bend-net's examples keep their defaults
         run: |
           mkdir -p net-bin
