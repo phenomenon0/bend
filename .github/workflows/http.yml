@@ -87,7 +87,7 @@ jobs:
         run: python3 demos/io_proxy/mutants.py
       # the compiler is trusted, not proven: random well-typed programs
       # (tests/fuzz) must print the same in the interpreter, JS and C
-      - name: the compiler's lanes agree on 60 random programs
+      - name: the compiler's lanes agree on 100 random programs
         run: BEND_NO_TELEMETRY=1 bun tests/fuzz/fuzz.ts --ci
       - name: the server builds
         run: |

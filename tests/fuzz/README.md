@@ -5,7 +5,7 @@ source to C and JS) is trusted, not proven. This fuzzer checks it the way
 two of its bugs were found by hand: the same program in every lane must
 print the same thing.
 
-    bun tests/fuzz/fuzz.ts --ci                  # CI: seed 1, 60 programs (~2 min)
+    bun tests/fuzz/fuzz.ts --ci                  # CI: seed 1, 100 programs (~2 min)
     bun tests/fuzz/fuzz.ts --n 2000 --san 5      # a campaign, ASan+UBSan on every 5th
     bun tests/fuzz/fuzz.ts --time 3600 --reduce  # an hour, each new difference shrunk
     bun tests/fuzz/fuzz.ts --one 1100007 --reduce   # one program again (SEED[:io|:f64])

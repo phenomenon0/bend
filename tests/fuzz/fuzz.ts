@@ -534,7 +534,7 @@ async function main(): Promise<void> {
       return;
     }
     const seed0 = Number(opt("--seed") ?? (CI ? 1 : Date.now() % 1000000));
-    const n = Number(opt("--n") ?? (CI ? 60 : 200));
+    const n = Number(opt("--n") ?? (CI ? 100 : 200));
     const secs = Number(opt("--time") ?? 0);
     const one = opt("--one");
     const todo = one !== undefined ? [parse_one(one)]
