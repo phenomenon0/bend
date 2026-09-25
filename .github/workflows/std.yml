@@ -63,11 +63,11 @@ jobs:
           git checkout -- std/bytes.bend
           exit $bad
       - name: every test in every lane
-        run: python3 tests/std/lanes.py --bend ${{ matrix.bend }} ${{ matrix.packed }}
+        run: python3 tests/std/lanes.py --bend "$PWD/${{ matrix.bend }}" ${{ matrix.packed }}
       - name: the README is the examples, and they run
-        run: python3 tests/std/readme.py --bend ${{ matrix.bend }} ${{ matrix.packed }}
+        run: python3 tests/std/readme.py --bend "$PWD/${{ matrix.bend }}" ${{ matrix.packed }}
       - name: CSV's laws are not vacuous
-        run: python3 tests/std/csv_mutants.py --bend ${{ matrix.bend }} ${{ matrix.packed }}
+        run: python3 tests/std/csv_mutants.py --bend "$PWD/${{ matrix.bend }}" ${{ matrix.packed }}
   deflate-mutants:
     name: deflate's laws are not vacuous
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
