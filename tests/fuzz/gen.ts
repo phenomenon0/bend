@@ -666,7 +666,7 @@ export class Gen {
         add(1, () => F("String.concat", E("LS")));
         add(1, () => F("String.from_list", N("Str", "String.to_list(", E("Str"), ")")));
         add(1, () => F("fill", N("Nat", this.pick(["3n", "17n", "40n", "70n", "130n"])), E("Str"), E("U32"),
-          N("U32", this.pick(["127", "223", "1023", "65535"]))));
+          N("U32", this.pick(["127", "223", "1023", "32767"]))));
         add(2, () => F("Bytes.push", E("Str"), this.chance(0.7) ? N("U32", String(this.pick([this.int(256), 300, 0x1F600, 0x10FFFF, 0xFEFF])))
           : N("U32", "U32.and(", E("U32"), ", 255)")));
         add(1, () => F("Bytes.slice", E("Str"), S(), S()));

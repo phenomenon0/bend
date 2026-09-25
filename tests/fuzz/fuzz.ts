@@ -206,11 +206,17 @@ async function sh(cmd: string, args: string[], ms: number, env: Record<string, s
   try {
     return await new Promise((res) => {
       const p = child.spawn(cmd, args, { env: { ...process.env, ...env }, stdio: ["ignore", "pipe", "pipe"] });
-      let out = "";
-      p.stdout.on("data", (d) => { if (out.length < 1 << 20) out += d; });
-      p.stderr.on("data", (d) => { if (out.length < 1 << 20) out += d; });
+      // bytes, decoded once: a character split across two reads is whole
+      const bufs: Buffer[] = [];
+      let n = 0;
+      const take = (d: Buffer): void => { if (n < 1 << 20) { bufs.push(d); n += d.length; } };
+      p.stdout.on("data", take);
+      p.stderr.on("data", take);
       const bomb = setTimeout(() => p.kill("SIGKILL"), ms);
-      p.on("close", (code, sig) => { clearTimeout(bomb); res({ out, code, sig }); });
+      p.on("close", (code, sig) => {
+        clearTimeout(bomb);
+        res({ out: Buffer.concat(bufs).toString("utf8"), code, sig });
+      });
     });
   } finally {
     slots += 1;
@@ -368,8 +374,12 @@ async function batch(pool: Pool, ps: G.Prog[], san: boolean): Promise<(Verdict |
 // The reference is the interpreter unless it is stuck (F64 is opaque to
 // it) or timed out; then JS. The signature names each lane that differs
 // from it, and how: its output, its exit, a signal or a sanitizer report.
+const JS_KNOWN = /JS strings cannot contain non-scalar|Maximum call stack size exceeded/;
+
 function judge(outs: Partial<Record<Lane, string>>): { sig: string; ref: Lane | null; strict?: boolean } {
-  const good = (s: string | undefined): boolean => s !== undefined && !s.startsWith("§");
+  // a lane that refused by design (see below) is no reference either
+  const good = (s: string | undefined): boolean => s !== undefined && !s.startsWith("§")
+    && !JS_KNOWN.test(s);
   const ref: Lane | null = good(outs.interp) ? "interp" : good(outs.js) ? "js" : good(outs.c) ? "c" : null;
   const bad: string[] = [];
   const how = (s: string): string => /runtime error|AddressSanitizer|LeakSanitizer/.test(s) ? "report"
@@ -377,7 +387,7 @@ function judge(outs: Partial<Record<Lane, string>>): { sig: string; ref: Lane | 
   for (const l of ["js", "c", "c1", "san"] as Lane[]) {
     const s = outs[l];
     if (s === undefined || l === ref) continue;
-    if (l === "js" && /JS strings cannot contain non-scalar|Maximum call stack size exceeded/.test(s)) {
+    if (l === "js" && JS_KNOWN.test(s)) {
       // by design: a JS string holds scalar values only; and WONTFIX.txt's
       // SOON: a non-tail recursion runs on the JS host's stack (#798)
       continue;
