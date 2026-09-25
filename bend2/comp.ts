@@ -247,8 +247,7 @@ const OPERATIONS: Record<string, Intr> = Object.setPrototypeOf({
     JS: "cmp_new(BigInt.asIntN(64, $0), BigInt.asIntN(64, $1))",
   },
   i64_neg: {
-    // in u64: -(int64_t)x overflows (C's undefined behaviour) at I64's min
-    C:  "((u64)0 - (u64)($0))",
+    C:  "((u64)0 - (u64)($0))", // -(int64_t)min is UB
     JS: "((-$0) & 0xFFFFFFFFFFFFFFFFn)",
   },
   i64_shr_s: {
@@ -2447,8 +2446,8 @@ function seg_name(fl: File, stem: string): string {
   return fl.seg.def.split("$")[0] + "$" + stem + fl.segs.length;
 }
 
-// Opens `name`: takes `live` (per `frame`, else in r0..), then `ks` words;
-// a `boxed` one arrives in an x64 box and is bound unboxed.
+// Opens `name`: takes `live` (per `frame`, else in r0..; a `boxed` one
+// unboxed), then `ks` words.
 function seg_open(fl: File, name: string, ret: Lay, frame: Seg["frame"],
   live: [Probe, Bind][], k: string, ks: Kind[], rest: HTerm[],
   boxed: boolean[] = []): string[] {
@@ -3059,8 +3058,7 @@ function emit_intr(fl: File, it: Intr, x: HTerm,
   ty: HTerm | null): Val {
   const m = term_spine(fl, x);
   const k = (m.t as Of<"Ref">).k;
-  // A value a polymorphic call handed back boxed is read out of its box: a
-  // full word, and a packed one (a Bool's box is its constructor, not 0/1).
+  // A value a polymorphic call handed back boxed is read out of its box.
   const lays = sig_def(fl, k).lays;
   const peek = it.peek ?? [];
   const sinks: Val[] = [];
@@ -3104,8 +3102,6 @@ function emit_intr(fl: File, it: Intr, x: HTerm,
       (fl.book.tlds[k] as Bend.Def).T).ret).ks[0] ?? "w64"])[0];
     sinks.forEach((v) => val_sink(fl, v));
   }
-  // the site's type, else the native's own: its word is raw (a Bool's 0/1
-  // labelled a box would be unboxed as a constructor, or boxed as none)
   const lay = ty === null ? sig_def(fl, k).ret : lay_of(fl.book, ty);
   // a full word is raw, whatever the site knows of its type
   return val_new([out], sig_def(fl, k).ret === X64 ? X64
@@ -3149,9 +3145,7 @@ function emit_peek(fl: File, xs: HTerm[], peek: number[], sinks: Val[]): Val[] {
 
 // A closure: its captures move into a node (a capture is one use of the
 // binding, whatever the closure does with it); its segment takes them,
-// then x. A closure dropped unapplied drops its node's words as Terms, so
-// a U64, I64 or F64 capture rides in its x64 box (a raw double, read as a
-// Term, is a wild reference).
+// then x. A dropped closure drops its node as Terms: a w64 rides boxed.
 function emit_clo(fl: File, x: HTerm, ty: HTerm | null): Val {
   const u = term_uses(fl, x);
   const boxed: boolean[] = [];
@@ -3834,8 +3828,7 @@ function compile_reqs(fl: File): void {
 
 const TABLES = ["CID_ARITY_T", "CID_HOT_T", "FID_ARITY_T", "FID_FLAG_T", "FID_RESW_T"];
 
-// The datatypes whose constructors the runtime or the elaborator lays itself
-// (a word taken apart is laid WCon by WCon down to its WNil, named or not).
+// The datatypes whose constructors the runtime or the elaborator lays itself.
 const RUNTIME_ADTS = ["Sigma", "String", "Word.Con", "Word.Nil", "IO.OP",
   "Result", "Maybe", "Bool", "Unit", "List", "Char", "Cmp", "Inst", "Match"];
 
