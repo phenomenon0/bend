@@ -411,7 +411,9 @@ cells.
 **Class** BUG, high (a wrong answer, silently). **Lanes** C. **Fix** ours:
 `emit_intr` reads each argument a polymorphic call handed back boxed out
 of its box into the layout the native takes (it did so for full words
-only); `tests/base/bool_box_native.bend`.
+only), and labels a native's own result with the native's layout where
+the site's type is unknown (a raw 0/1 labelled a box would otherwise be
+unboxed in turn); `tests/base/bool_box_native.bend`.
 
 **Where** (canon `95317d95`) `comp.ts:2261`, `emit_intr` passes its
 arguments as they come (`emit_each(fl, m.args, null)`). `Bool.pick` is a
