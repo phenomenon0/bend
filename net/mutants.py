@@ -38,14 +38,18 @@
 # its statements left open:
 # the copy checks to exactly its count of open holes, and a mutant the
 # proof refuses shows an error instead. (The laws hold step checks
-# net/PROOF.bend whole, bend-proxy's proof included.)
+# net/PROOF.bend whole, bend-proxy's proof included.) The copy is
+# re-checked from the mutated file on (wire/mutate.py's seeded check):
+# what loads before it -- the engine's proof, bend-proxy's statements,
+# wire/http1's proof -- is the clean tree's.
 #
-#   python3 net/mutants.py        (from the repo root)
-import os, re, shutil, subprocess, sys, tempfile
-from concurrent.futures import ThreadPoolExecutor
+#   python3 net/mutants.py [-j N] [--shard i/n]        (from the repo root)
+import os, re, sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
+sys.path.insert(0, os.path.join(ROOT, 'wire'))
+import mutate as M
 DIRS = ['net', 'wire', 'demos/io_http_engine', 'demos/io_proxy', 'power']
 
 H, S, C, U = 'net/http.bend', 'net/server.bend', 'net/client.bend', 'net/url.bend'
@@ -413,18 +417,12 @@ def bytes.rt(b: Bytes()) -> {Bytes.from_list(Bytes.to_list(b)) == b : Bytes()}:
   ?TODO
 '''
 
-def check(top, path):
-  r = subprocess.run(['bun', os.path.join(ROOT, 'bend2', 'main.ts'), path], capture_output=True, text=True, cwd=top)
-  return (r.stdout + r.stderr).strip()
-
 def where(out):
   m = re.search(r'Location: ([^\s]+)', out)
   return m.group(1) if m else out.splitlines()[0] if out else '?'
 
 def tree():
-  top = tempfile.mkdtemp(prefix='net_laws_')
-  for d in DIRS:
-    shutil.copytree(os.path.join(ROOT, d), os.path.join(top, d))
+  top = M.tree(DIRS, prefix='net_laws_')
   proof = os.path.join(top, 'net/PROOF.bend')
   open(os.path.join(top, 'net/open.bend'), 'w').write(OPEN)
   src = open(proof).read()
@@ -432,39 +430,25 @@ def tree():
   if src.count(imp) != 1:
     print('net/PROOF.bend does not import the proxy proof as PP'); sys.exit(1)
   open(proof, 'w').write(src.replace(imp, 'import ./open.bend as PP\n'))
-  return top, proof
-
-def run(m, base):
-  name, f, a, b = m
-  top, proof = tree()
-  try:
-    path = os.path.join(top, f)
-    src = open(path).read()
-    if src.count(a) != 1:
-      return 'MISSING  %s' % name, False
-    open(path, 'w').write(src.replace(a, b))
-    out = check(top, proof)
-    if out == base:
-      return 'SURVIVED %s' % name, False
-    return 'KILLED   %s -- %s' % (name, where(out)), True
-  finally:
-    shutil.rmtree(top, ignore_errors=True)
+  return top
 
 def main():
-  top, proof = tree()
-  try:
-    base = check(top, proof)
-  finally:
-    shutil.rmtree(top, ignore_errors=True)
+  jobs, shard = M.args()
+  bases, res = M.run(tree, 'net/PROOF.bend', MUTANTS, jobs, shard)
+  base = bases['net/PROOF.bend']
   if not re.fullmatch(r'Error: \d+ TODOs found\.\nThe code is incomplete, and not a valid proof yet\.', base):
     print('the copy of net/PROOF.bend does not check clean: %s' % base)
     sys.exit(1)
   killed = 0
-  with ThreadPoolExecutor(max_workers=int(os.environ.get('JOBS', '3'))) as ex:
-    for line, ok in ex.map(lambda m: run(m, base), MUTANTS):
-      print(line, flush=True)
-      killed += ok
-  print('mutants: %d / %d killed' % (killed, len(MUTANTS)))
-  sys.exit(0 if killed == len(MUTANTS) else 1)
+  for name, _, out in res:
+    if out is None:
+      print('MISSING  %s' % name)
+    elif out == base:
+      print('SURVIVED %s' % name)
+    else:
+      print('KILLED   %s -- %s' % (name, where(out)))
+      killed += 1
+  print('mutants: %d / %d killed' % (killed, len(res)))
+  sys.exit(0 if killed == len(res) else 1)
 
 main()
