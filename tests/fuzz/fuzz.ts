@@ -376,8 +376,10 @@ function judge(outs: Partial<Record<Lane, string>>): { sig: string; ref: Lane | 
   for (const l of ["js", "c", "c1", "san"] as Lane[]) {
     const s = outs[l];
     if (s === undefined || l === ref) continue;
-    if (l === "js" && /JS strings cannot contain non-scalar/.test(s)) {
-      continue; // by design: a JS string holds scalar values only
+    if (l === "js" && /JS strings cannot contain non-scalar|Maximum call stack size exceeded/.test(s)) {
+      // by design: a JS string holds scalar values only; and WONTFIX.txt's
+      // SOON: a non-tail recursion runs on the JS host's stack (#798)
+      continue;
     } else if (l === "san" && /runtime error|AddressSanitizer/.test(s)) {
       bad.push("san:report");
     } else if (ref === null ? s.startsWith("§") : s !== outs[ref]) {

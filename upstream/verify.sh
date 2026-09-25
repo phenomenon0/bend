@@ -275,6 +275,9 @@ fi
 # U19: a word taken apart to a default arm; the C build fails on canon
 want U19 && lanes U19 word_unpack 20 '!^"0 32 16"$' "interp js c"
 
+# U20: a non-tail recursion 100000 deep (an IO main: interp is the JS runtime)
+want U20 && lanes U20 js_deep_recursion 60 '!^100000$' "interp js c"
+
 # F-items: limitations from apps/uptime/FRICTION.md
 if want F01; then
   if has IO.wall || has IO.clock; then

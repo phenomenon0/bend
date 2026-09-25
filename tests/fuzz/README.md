@@ -55,7 +55,9 @@ smallest value in a node's place or hoists a same-typed child, and keeps
 an edit when the program still checks and still differs the same way.
 
 Kept out, by design and counted as agreement: a Char past U+10FFFF or a
-surrogate in a string (the JS lane refuses it, and says so), Nats past a
+surrogate in a string (the JS lane refuses it, and says so), a JS stack
+overflow in a deep non-tail recursion (WONTFIX.txt's SOON, #798: a string
+of 84034 cells through `Bytes.to_list` was one), Nats past a
 few thousand (the normalizer counts in unary, UPSTREAM U16),
 `List.map` on a `List<&2, _>` (UPSTREAM F05).
 

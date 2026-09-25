@@ -48,6 +48,7 @@ repro for each and the branch that fixes it, if any.
 | U17 | TCP.listen binds 0.0.0.0 and takes no address: no loopback-only server | LIMITATION | interp js c | med | upstream/05-listen-on | verify.sh U17 (Base's signature) |
 | U18 | TCP.connect takes dotted IPv4 only (no names, no resolver) and has no deadline | LIMITATION | interp js c | med | upstream/06-connect-poll-dns | upstream/connect_name.bend |
 | U19 | a U32 taken apart to its Word and walked to a default arm: the C build fails (CID_WNIL undeclared) | BUG | c | med | ours: WNil among comp.ts's RUNTIME_ADTS | upstream/word_unpack.bend |
+| U20 | the JS lane runs a non-tail recursion on the host stack: 100000 deep overflows where C answers | LIMITATION | interp js | med | none (WONTFIX.txt SOON, #798 #802) | upstream/js_deep_recursion.bend |
 | F01 | no wall clock: IO.now is monotonic | LIMITATION | all | med | none | verify.sh F01 |
 | F02 | no rename, fsync, seek, remove or mkdir | LIMITATION | all | med | none | verify.sh F02 |
 | F03 | File.read_at takes a U32 offset and answers a List cell per byte | LIMITATION | all | low | none | verify.sh F03 |
@@ -384,6 +385,25 @@ matches `WCon` and ends the word in a default arm) reaches no `Word.Nil`.
 **Observed** interp and JS `"0 32 16"`; C: clang refuses the file, "use
 of undeclared identifier 'CID_WNIL'". **Expected** `"0 32 16"` in every
 lane. Found by the compiler's differential fuzzer (`tests/fuzz`).
+
+## U20. The JS lane recurses on the host's stack
+
+**Class** LIMITATION, med. **Lanes** JS, and interp for an IO main (the
+same runtime). **Fix** none; WONTFIX.txt lists continuation passing for
+non-tail calls on the JS lane as SOON (#798, #802).
+
+**Where** the JS emitter compiles a def's non-tail self call to a host
+call (tail calls loop); C's frames live on the heap, so C answers.
+
+**Repro** `upstream/js_deep_recursion.bend` counts a 100000-element list
+with a def that conses after its recursive call. The fuzzer met it
+through Base's own `Bytes.to_list` (not native) over a string of 84034
+cells.
+
+**Observed** interp and JS `bend: memory fault (machine stack overflow?)`
+(a pure main: `RangeError: Maximum call stack size exceeded`), with the
+32 MiB of stack gates/test.ts gives bun; C `100000`. **Expected**
+`100000` in every lane.
 
 ## F01-F06. From apps/uptime/FRICTION.md, checked on canon
 
