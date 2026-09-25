@@ -245,6 +245,13 @@ export const PRELUDE_DEFS: Record<string, string> = {
   "arr.dup": `def arr.dup(a: Array<U32>) -> Array<U32>:
   arr.both(Array.clone(U32, a))
 `,
+  "fill": `def fill(k: Nat, b: String, +x: U32, +w: U32) -> String:
+  match k:
+    case 0n:
+      b
+    case 1n+j:
+      fill(j, Bytes.push(b, U32.add(U32.and(x, w), 32)), U32.add(x, 7), w)
+`,
   "app": `def app(f: U32 -> U32, x: U32) -> U32:
   f(x)
 `,
@@ -648,7 +655,7 @@ export class Gen {
         add(2, () => F("String." + this.pick(["take", "drop", "take_end", "drop_end"]), E("Str"), S()));
         add(1, () => F("String.slice", E("Str"), S(), S()));
         add(2, () => F("String." + this.pick(["reverse", "to_upper", "to_lower", "trim", "trim_start", "trim_end", "capitalize", "swapcase", "title", "casefold", "copy"]), E("Str")));
-        add(1, () => F("String.repeat", E("Str"), N("Nat", String(this.int(4)) + "n")));
+        add(1, () => F("String.repeat", E("Str"), N("Nat", this.pick(["0n", "1n", "2n", "3n", "9n", "33n"]))));
         add(1, () => F("String." + this.pick(["pad_start", "pad_end"]), E("Str"), S(), E("Chr")));
         add(1, () => F("String.zfill", E("Str"), S()));
         add(1, () => F("String.center", E("Str"), S(), E("Chr")));
@@ -658,6 +665,8 @@ export class Gen {
         add(1, () => F("String.join", E("LS"), E("Str")));
         add(1, () => F("String.concat", E("LS")));
         add(1, () => F("String.from_list", N("Str", "String.to_list(", E("Str"), ")")));
+        add(1, () => F("fill", N("Nat", this.pick(["3n", "17n", "40n", "70n", "130n"])), E("Str"), E("U32"),
+          N("U32", this.pick(["127", "223", "1023", "65535"]))));
         add(2, () => F("Bytes.push", E("Str"), this.chance(0.7) ? N("U32", String(this.pick([this.int(256), 300, 0x1F600, 0x10FFFF, 0xFEFF])))
           : N("U32", "U32.and(", E("U32"), ", 255)")));
         add(1, () => F("Bytes.slice", E("Str"), S(), S()));
@@ -687,7 +696,7 @@ export class Gen {
         add(1, () => F("List." + this.pick(["take", "drop"]), "&2", "U32", E("LU"), S()));
         add(1, () => F("List.set", "&2", "U32", E("LU"), S(), E("U32")));
         add(1, () => F("List.tail", "&2", "U32", E("LU")));
-        add(1, () => F("List.replicate", "U32", N("Nat", String(this.int(5)) + "n"), E("U32")));
+        add(1, () => F("List.replicate", "U32", N("Nat", this.pick(["0n", "1n", "2n", "4n", "31n", "64n"])), E("U32")));
         add(1, () => F("mapu", this.tlam("U32", d), E("LU")));
         add(1, () => F("List.filter", "~U32", this.tlam("Bool", d), E("LU")));
         add(1, () => F("List.sort", "~U32", "~(a => b => U32.is_le(a, b))", E("LU")));
