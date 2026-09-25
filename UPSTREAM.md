@@ -61,7 +61,7 @@ repro for each and the branch that fixes it, if any.
 | F08 | a library cannot use a name Base has (type Event, constructor Emit), nor a def named after its own file | LIMITATION | check | low | none | upstream/base_name.bend, self_prefix.bend |
 | F09 | Base's only bytes are a String, a list: a read by offset walks, so decoders that index (inflate) are quadratic | LIMITATION | all | med | none (ours: the packed Bytes natives) | upstream/string_index.bend |
 | F10 | the JS lane walks a String 10-20x slower than the C lane, and a match that rebuilds SCon{h, t} copies the rest | PERF | js, interp for IO mains | med | none | upstream/js_string_scan.bend |
-| F11 | Base's String.take recurses on the JS stack: 40000 chars overflow it | BUG | js, interp for IO mains | med | none | upstream/js_deep_take.bend |
+| F11 | Base's String.take recurses on the JS stack: 40000 chars overflow it (U21, met in Base's own take) | BUG | js, interp for IO mains | med | none | upstream/js_deep_take.bend |
 
 Verified on canon `95317d95`: every U/F row above reads REPRO except
 U05, U07, U09, U12, U13 (FIXED: not on canon), U06p (a pure main's pick
@@ -599,7 +599,8 @@ stock runtime; these are what the port hit. Each reads REPRO on canon
   canon's JS lane and 8 MB/s in its C lane, std/json_value.bend 0.16 MB/s
   and 3.0 MB/s. `bend F.bend` runs an IO main on the JS runtime, so this
   is the speed a user gets by default.
-- **F11 deep recursion in the JS lane.** `String.take` (`base.bend:1903`)
+- **F11 deep recursion in the JS lane** (U21's cause, at a smaller
+  depth and in Base itself). `String.take` (`base.bend:1903`)
   builds `SCon{h, String.take(t, p)}`, a call a char, and the JS lane and
   the interpreter (for an IO main) run it on the machine stack:
   `upstream/js_deep_take.bend` takes 40000 chars and dies with "bend:
