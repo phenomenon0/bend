@@ -74,13 +74,13 @@ def ops.add(+st: M.Store, +c: M.Checked) -> M.Store:
 def ops.apply.op(+st: M.Store, +j: J.Json, +op: Bytes()) -> M.Store:
   Bool.pick(M.Store, String.eq(op, "add"), ops.add(st, M.check(j)),
     Bool.pick(M.Store, String.eq(op, "del"),
-      Pair.fst(M.Store, Bool, M.del(st, Maybe.default(&2, Bytes(), Json.get.str(j, "name"), ""))), st))
+      Pair.fst(M.Store, Bool, M.del(st, M.str.of(j, "name"))), st))
 
 # an ops line: a monitor added (when its spec passes) or deleted
 def ops.apply.at(st: M.Store, r: Result<&2, &2, J.Why, J.Json>) -> M.Store:
   match r:
     case Done{+j}:
-      ops.apply.op(st, j, Maybe.default(&2, Bytes(), Json.get.str(j, "op"), ""))
+      ops.apply.op(st, j, M.str.of(j, "op"))
     case Fail{w}:
       st
 

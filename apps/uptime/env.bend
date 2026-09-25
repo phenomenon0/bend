@@ -1,43 +1,51 @@
 # What every handler and every probe loop shares: the store (a channel
 # of one used as a lock), the WebSocket hub, the two append-only logs
-# (each a channel of one holding its File), the webhook's URL and the
-# dashboard's directory.
+# (each a channel of one holding its File), the webhook's URL, the
+# dashboard's directory, and the client session the probes pool their
+# connections in.
 import Base
+import ../../net/client.bend as Client
 import ../../net/ws_server.bend as WsServer
 import ./model.bend as M
 
 type Env is Data:
-  Env{db: Chan(M.Store), hub: WsServer.Hub, log: Chan(File), ops: Chan(File), hook: Bytes(), web: Bytes()}
+  Env{db: Chan(M.Store), hub: WsServer.Hub, log: Chan(File), ops: Chan(File), hook: Bytes(), web: Bytes(),
+    cl: Client.Session}
 
 def db(e: Env) -> Chan(M.Store):
   match e:
-    case Env{db, hub, log, ops, hook, web}:
+    case Env{db, hub, log, ops, hook, web, cl}:
       db
 
 def hub(e: Env) -> WsServer.Hub:
   match e:
-    case Env{db, hub, log, ops, hook, web}:
+    case Env{db, hub, log, ops, hook, web, cl}:
       hub
 
 def log(e: Env) -> Chan(File):
   match e:
-    case Env{db, hub, log, ops, hook, web}:
+    case Env{db, hub, log, ops, hook, web, cl}:
       log
 
 def ops(e: Env) -> Chan(File):
   match e:
-    case Env{db, hub, log, ops, hook, web}:
+    case Env{db, hub, log, ops, hook, web, cl}:
       ops
 
 def hook(e: Env) -> Bytes():
   match e:
-    case Env{db, hub, log, ops, hook, web}:
+    case Env{db, hub, log, ops, hook, web, cl}:
       hook
 
 def web(e: Env) -> Bytes():
   match e:
-    case Env{db, hub, log, ops, hook, web}:
+    case Env{db, hub, log, ops, hook, web, cl}:
       web
+
+def cl(e: Env) -> Client.Session:
+  match e:
+    case Env{db, hub, log, ops, hook, web, cl}:
+      cl
 
 # The lock
 # --------

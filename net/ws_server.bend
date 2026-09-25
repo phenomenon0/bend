@@ -419,6 +419,51 @@ def next(g: Ws.Out(Unit), go: Ws.Conn -> IO(Ws.Conn)) -> IO(Ws.Conn):
     case Fail{e}:
       IO.pure(Ws.Conn, c)
 
+# A listener
+# ----------
+#
+# broadcast(hub, c) is a run for accept whose client only listens: the
+# connection joins the room, is sent what the room publishes, and leaves
+# when its client closes or goes (SIGTERM's 1001 answered, too); what
+# the client sends is dropped. It waits for the client in slices of 50
+# ms and relays between them, as a member that talks does: nothing yet
+# parks on a socket and a channel at once, so a message reaches it
+# within a slice.
+
+def listen.relay(+me: Member, c: Ws.Conn, again: Ws.Conn -> IO(Ws.Conn)) -> IO(Ws.Conn):
+  IO.bind(Ws.Out(Unit), Ws.Conn, relay(me, c), g => next(g, again))
+
+def listen.heard(+me: Member, g: Ws.Out(F.Msg), again: Ws.Conn -> IO(Ws.Conn)) -> IO(Ws.Conn):
+  (c, r) = g
+  match r:
+    case Done{m}:
+      match m:
+        case F.Closed{code, reason}:
+          IO.pure(Ws.Conn, c)
+        case _:
+          listen.relay(me, c, again)
+    case Fail{e}:
+      match e:
+        case Ws.ETime{}:
+          listen.relay(me, c, again)
+        case _:
+          IO.pure(Ws.Conn, c)
+
+def listen.go(k: Nat, +me: Member, c: Ws.Conn) -> IO(Ws.Conn):
+  match k:
+    case 0n:
+      IO.pure(Ws.Conn, c)
+    case 1n+j:
+      IO.bind(Ws.Out(F.Msg), Ws.Conn, Ws.recv_for(c, 50), g => listen.heard(me, g, cc => listen.go(j, me, cc)))
+
+# the room's messages sent to c until its client leaves
+def broadcast(+hub: Hub, c: Ws.Conn) -> IO(Ws.Conn):
+  do IO<Ws.Conn>:
+    +me : Member <- join(hub)
+    c2 : Ws.Conn <- listen.go(Ws.big(), me, c)
+    leave(hub, me)
+    return c2
+
 # Serving
 # =======
 

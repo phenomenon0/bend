@@ -31,7 +31,13 @@
 # takes two lengths that disagree, and a head judged wrong at its blank
 # line (no framing taken for chunked, the Hosts unchecked, a length one
 # too many, the head taken at a field line's CR, an upgrade that does
-# not close) -- and net/PROOF.bend must refuse every one. Each runs in a
+# not close); a table wrapped in middleware that loses a route or turns
+# a WebSocket route plain; a command line that lets an unknown flag, a
+# value missing or a number that is none through, or a flag reader that
+# ignores its value; JSON getters that take a number for a string, read
+# a number past a U32 or a missing Nat as 0, null as false, count an
+# array from 1, hide a wrong field behind a default, or drop a reason
+# -- and net/PROOF.bend must refuse every one. Each runs in a
 # scratch copy of the tree the proof imports, where bend-proxy's proof
 # (which net/'s uses: rr.h, rmain and the head lemmas, u32.eq, the list
 # lemmas, and scan_is_spec and frames_agree through them) is replaced by
@@ -55,6 +61,7 @@ DIRS = ['net', 'wire', 'demos/io_http_engine', 'demos/io_proxy', 'power']
 H, S, C, U = 'net/http.bend', 'net/server.bend', 'net/client.bend', 'net/url.bend'
 A = 'net/addr.bend'
 B = 'net/stream.bend'
+J2 = 'net/json.bend'
 E = 'demos/io_http_engine/main.bend'
 
 # (what, file, before, after)
@@ -315,6 +322,56 @@ MUTANTS = [
       Some{head.of(ip, pd)}'''),
   ('a streamed request that asked to upgrade not closing (stream_head)', B,
     '''f, Server.hd.v10(hd), cl || ws, Server.hd.head(hd)}''', '''f, Server.hd.v10(hd), cl, Server.hd.head(hd)}'''),
+  ('a table wrapped with its WebSocket route made a plain one (wrap_pats)', S,
+    '''      Sock{pat, a => +r => IO.bind(Reply, Reply, h(a, r), rp => wrap.face(~mw, r, rp))}''',
+    '''      Route{["GET", "HEAD"], pat, r => Http.reply(Http.plain(500))}'''),
+  ('a wrapped table that drops a route (wrap_vectors)', S,
+    '''      Con{wrap.one(~mw, rt), wrap(~mw, t)}''', '''      wrap(~mw, t)'''),
+  ('an unknown flag let through (argv_vectors)', S,
+    '''      Some{Bool.pick(String, String.starts_with(x, "-"), "unknown flag " ++ x, "unexpected argument " ++ x)}''',
+    '''      None{}'''),
+  ('a flag\'s number left unchecked (argv_vectors)', S,
+    '''  Bool.pick(Maybe<&2, String>, String.eq(want, "N") && Maybe.is_none(&2, U32, U32.read(v)),''',
+    '''  Bool.pick(Maybe<&2, String>, False{},'''),
+  ('a last flag without its value let through (argv_vectors)', S,
+    '''      Bool.pick(Maybe<&2, String>, String.is_empty(want), None{}, Some{prev ++ " needs a value (" ++ want ++ ")"})''',
+    '''      None{}'''),
+  ('every flag taken as a switch (argv_vectors)', S,
+    '''    case Some{+s}:
+      spec.arg(s)''', '''    case Some{+s}:
+      ""'''),
+  ('a flag\'s number read as its default (flag_num_vectors)', S,
+    '''  arg.num(flag.go(xs, name, ""), d)''', '''  d'''),
+  ('a string getter that takes a number\'s text (json_str_vectors)', J2,
+    '''        case J.Str{s}:
+          Done{s}
+        case _:''', '''        case J.Str{s}:
+          Done{s}
+        case J.Num{t}:
+          Done{t}
+        case _:'''),
+  ('a U32 getter that reads a number past its range as 0 (json_u32_vectors)', J2,
+    '''      wrong(U32, p, "a whole number from 0 to 4294967295")''', '''      Done{0}'''),
+  ('a missing Nat read as 0 (json_nat_vectors)', J2,
+    '''      missing(Nat, p)''', '''      Done{0n}'''),
+  ('a Bool getter that reads null as false (json_bool_vectors)', J2,
+    '''        case J.Flag{b}:
+          Done{b}
+        case _:''', '''        case J.Flag{b}:
+          Done{b}
+        case J.Null{}:
+          Done{False{}}
+        case _:'''),
+  ('a path that counts an array from 1 (json_str_vectors)', J2,
+    '''      J.at(J.Arr{xs}, i)''', '''      J.at(J.Arr{xs}, Nat.add(i, 1n))'''),
+  ('a default that hides a field of the wrong type (json_u32_vectors)', J2,
+    '''    case Some{v}:
+      get(j, p)''', '''    case Some{v}:
+      Done{Result.default(&2, &2, Bytes(), A, get(j, p), d)}'''),
+  ('a reason dropped (json_fails_vectors)', J2,
+    '''    case Fail{e}:
+      Con{e, whys}''', '''    case Fail{e}:
+      whys'''),
 ]
 
 # bend-proxy's proof, as net/PROOF.bend uses it: its statements, open

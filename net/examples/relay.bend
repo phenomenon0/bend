@@ -34,13 +34,13 @@ def failed(status: U32, why: Bytes()) -> Http.Response:
   Json.respond(status, Json.obj([Json.kv("error", Json.str(why))]))
 
 # the upstream's JSON, cut to the fields this API promises
-def kept(+id: Bytes(), +up: Bytes(), name: Maybe<&2, Bytes()>) -> Http.Response:
+def kept(+id: Bytes(), +up: Bytes(), name: Json.Got(Bytes())) -> Http.Response:
   match name:
-    case Some{n}:
+    case Done{n}:
       Json.respond(200, Json.obj([Json.kv("id", Json.str(id)), Json.kv("name", Json.str(n)),
         Json.kv("via", Json.str(up))]))
-    case None{}:
-      failed(502, "the upstream's answer has no name")
+    case Fail{why}:
+      failed(502, Bytes.append("the upstream's answer: ", why))
 
 def parsed(+id: Bytes(), +up: Bytes(), r: Result<&2, &2, J.Why, J.Json>) -> Http.Response:
   match r:
@@ -65,13 +65,14 @@ def fetched(+id: Bytes(), +up: Bytes(), r: Client.Res()) -> IO(Http.Response):
         case _:
           Http.reply(failed(502, Client.error.show(e)))
 
-# GET /users/:id
+# GET /users/:id: on the session's connections, the upstream given 2 s
+# (the session's timeout, 5 s, is for its other requests)
 def user(+env: Env, r: Http.Request) -> IO(Http.Response):
   +id = Http.param(r, "id")
   +up = env.up(env)
   +url = Bytes.concat([up, "/users/", Http.pct.encode(id)])
   do IO<Http.Response>:
-    res : Client.Res() <- Client.fetch(env.s(env), Client.req("GET", url))
+    res : Client.Res() <- Client.fetch.with(env.s(env), Client.req("GET", url), o => Client.with.timeout(o, 2000))
     fetched(id, up, res)
 
 def health(r: Http.Request) -> IO(Http.Response):
@@ -88,8 +89,7 @@ def app(+env: Env, r: Http.Request) -> IO(Http.Response):
 
 def main() -> IO(Unit):
   do IO<Unit>:
-    xs : List<String> <- IO.args()
-    ys : List<String> <- IO.args()
+    +xs : List<&2, String> <- Server.argv(["--upstream URL"])
     +s : Client.Session <- Client.session(Client.with.timeout(Client.opts(), 5000))
     +env : Env = Env{s, Server.flag(xs, "--upstream", "http://127.0.0.1:9000")}
-    Server.serve.with(~Env, ~app, env, Server.args(ys, Server.config(8080)))
+    Server.serve.with(~Env, ~app, env, Server.args(xs, Server.config(8080)))

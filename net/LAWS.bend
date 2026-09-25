@@ -69,8 +69,10 @@
 # bend-net refuses), IPv6: its text as RFC 4291 reads it and RFC 5952
 # writes it, IP-literals in URLs (RFC 3986 3.2.2, RFC 6874's zones
 # refused) read, written back and read again to themselves, the Host
-# field and the origin (the pool's key) of one, the router's patterns,
-# and the response check.
+# field and the origin (the pool's key) of one, the router's patterns
+# (and a table wrapped in middleware: the same patterns), the response
+# check, the command line (argv's refusals, the flag readers), and JSON's
+# typed fields (each type, a path, a default, every reason).
 import Base
 import ../wire/reader.bend as Wr
 import ../wire/loop.bend as L
@@ -90,6 +92,8 @@ import ./server.bend as Server
 import ./client.bend as Client
 import ./stream.bend as Stream
 import ./ws_hs.bend as H
+import ./json.bend as Json
+import ../power/json_value.bend as J
 
 # A handler sees what the RFC framed
 # ==================================
@@ -328,6 +332,149 @@ law route_vectors:
         Server.NoMethod{["GET", "HEAD", "DELETE"]}, Server.NoRoute{}, Server.Hit{4n, [Http.Header{"*", "x/y.css"}]},
         Server.Hit{4n, [Http.Header{"*", ""}]}, Server.Hit{5n, [Http.Header{"x", "1"}, Http.Header{"y", "2"}]},
         Server.NoRoute{}, Server.NoMethod{["POST"]}] : List<&2, Server.Pick>}
+
+# Middleware over a route table
+# =============================
+#
+# Server.wrap puts a middleware around every route and changes nothing
+# the router chooses by: each route keeps its methods and its pattern,
+# in order, a Sock route (WsServer.ws, Stream.get) a Sock route, so
+# route_first and ws_route_methods hold of a wrapped table as they do of
+# the table.
+
+def w.h(r: Http.Request) -> IO(Http.Response):
+  Http.reply(Http.plain(200))
+
+def w.sock(a: Server.Ask, r: Http.Request) -> IO(Server.Reply):
+  Server.answer(Http.reply(Http.plain(200)))
+
+def w.table() -> List<&1, Server.Route>:
+  [Server.get("/", w.h), Server.Sock{"/ws", w.sock}, Server.post("/p", w.h), Server.static("/files", "www"),
+   Server.on(["PUT", "PATCH"], "/q/:id", w.h)]
+
+def w.mw(+r: Http.Request, io: IO(Http.Response)) -> IO(Http.Response):
+  Server.secured.around(io)
+
+def w.pats(+up: Bool, +m: Bytes(), rs: List<&1, Server.Route>) -> List<&2, Server.Pat>:
+  Pair.fst(List<&2, Server.Pat>, List<&1, Server.Hr()>, Server.unzip(up, m, rs))
+
+law wrap_vectors:
+  {[w.pats(True{}, "POST", Server.wrap(~w.mw, w.table())), w.pats(False{}, "GET", Server.wrap(~w.mw, w.table()))] ==
+    [w.pats(True{}, "POST", w.table()), w.pats(False{}, "GET", w.table())] : List<&2, List<&2, Server.Pat>>}
+
+law wrap_pats:
+  {w.pats(True{}, "POST", Server.wrap(~w.mw, w.table())) ==
+    [Server.Pat{["GET", "HEAD"], "/"}, Server.Pat{["POST", "GET", "HEAD"], "/ws"}, Server.Pat{["POST"], "/p"},
+     Server.Pat{["GET", "HEAD"], "/files/*"}, Server.Pat{["PUT", "PATCH"], "/q/:id"}] : List<&2, Server.Pat>}
+
+# The command line
+# ================
+#
+# Server.argv refuses a command line as a usage line would: a flag
+# neither the server nor the program declared, a flag without its
+# value, a value named N that is not a number, a word that is no flag's
+# value; and passes every other. The readers read what it passed.
+
+def a.own() -> List<&2, String>:
+  ["--config FILE", "--verbose", "--every N"]
+
+def a.why(xs: List<&2, String>) -> Maybe<&2, String>:
+  Server.argv.why(List.append(&2, String, a.own(), Server.flags()), xs, "", "")
+
+law argv_vectors:
+  {[a.why([]), a.why(["--port", "80", "--config", "c.json", "--verbose", "--shared", "--host", "::1"]),
+    a.why(["--prot", "80"]), a.why(["--port"]), a.why(["--port", "eighty"]), a.why(["--every", "5", "x"]),
+    a.why(["--config"]), a.why(["--verbose", "--max-body", "1"]), a.why(["--tls-cert", "--port"]),
+    a.why(["-v"]), a.why(["--every", "4294967296"])] ==
+    [None{}, None{}, Some{"unknown flag --prot"}, Some{"--port needs a value (N)"},
+     Some{"--port wants a number, not eighty"}, Some{"unexpected argument x"}, Some{"--config needs a value (FILE)"},
+     None{}, None{}, Some{"unknown flag -v"}, Some{"--every wants a number, not 4294967296"}] : List<&2, Maybe<&2, String>>}
+
+def a.xs() -> List<&2, String>:
+  ["--config", "c.json", "--port", "80", "--verbose", "--every", "5"]
+
+law flag_vectors:
+  {[Server.flag(a.xs(), "--config", "d"), Server.flag(a.xs(), "--state", "d")] == ["c.json", "d"] : List<&2, String>}
+
+law flag_num_vectors:
+  {[Server.flag.num(a.xs(), "--every", 1), Server.flag.num(a.xs(), "--other", 1),
+    Server.cfg.port(Server.args(a.xs(), Server.config(8080))), Server.cfg.port(Server.args([], Server.config(8080)))] ==
+    [5, 1, 80, 8080] : List<&2, U32>}
+
+law flag_on_vectors:
+  {[Server.flag.on(a.xs(), "--verbose"), Server.flag.on(a.xs(), "--quiet")] == [True{}, False{}] : List<&2, Bool>}
+
+# JSON fields
+# ===========
+#
+# A typed getter answers the value when the field holds that type, and
+# else says why, naming the path: missing ("is required"), another type
+# ("must be a string"), a number out of the type's range. A path walks
+# objects by key and arrays by index. Json.or's default is for a missing
+# field only; Json.fails keeps every reason, in order.
+
+def j.v() -> J.Json:
+  Json.obj([Json.kv("s", Json.str("x")), Json.kv("n", Json.num(7)), Json.kv("big", J.Num{"4294967296"}),
+    Json.kv("neg", J.Num{"-3"}), Json.kv("f", J.Num{"1.5"}), Json.kv("b", Json.yes()),
+    Json.kv("a", Json.arr([Json.str("p"), Json.obj([Json.kv("q", Json.num(2))])])),
+    Json.kv("o", Json.obj([Json.kv("k", Json.null())])), Json.kv("d.e", Json.str("dot")),
+    Json.kv("long", J.Num{"281474976710656"}), Json.kv("max", J.Num{"99999999999999"})])
+
+law json_str_vectors:
+  {[Json.get.str(j.v(), "s"), Json.get.str(j.v(), "n"), Json.get.str(j.v(), "zz"), Json.get.str(j.v(), "a.0"),
+    Json.get.str(j.v(), "a.1.q"), Json.get.str(j.v(), "a.2"), Json.get.str(j.v(), "o.k"), Json.get.str(j.v(), "s.t"),
+    Json.get.str(j.v(), "d.e"), Json.get.str(j.v(), "b")] ==
+    [Done{"x"}, Fail{"n must be a string"}, Fail{"zz is required"}, Done{"p"}, Fail{"a.1.q must be a string"},
+     Fail{"a.2 is required"}, Fail{"o.k must be a string"}, Fail{"s.t is required"}, Fail{"d.e is required"},
+     Fail{"b must be a string"}] : List<&2, Json.Got(Bytes())>}
+
+law json_u32_vectors:
+  {[Json.get.u32(j.v(), "n"), Json.get.u32(j.v(), "big"), Json.get.u32(j.v(), "f"), Json.get.u32(j.v(), "neg"),
+    Json.get.u32(j.v(), "s"), Json.get.u32(j.v(), "a.1.q"), Json.get.u32(j.v(), "zz"),
+    Json.or(U32, j.v(), "zz", 9, Json.get.u32), Json.or(U32, j.v(), "s", 9, Json.get.u32),
+    Json.or(U32, j.v(), "n", 9, Json.get.u32)] ==
+    [Done{7}, Fail{"big must be a whole number from 0 to 4294967295"},
+     Fail{"f must be a whole number from 0 to 4294967295"}, Fail{"neg must be a whole number from 0 to 4294967295"},
+     Fail{"s must be a number"}, Done{2}, Fail{"zz is required"}, Done{9}, Fail{"s must be a number"}, Done{7}] :
+    List<&2, Json.Got(U32)>}
+
+law json_nat_vectors:
+  {[Json.get.nat(j.v(), "long"), Json.get.nat(j.v(), "neg"), Json.get.nat(j.v(), "s"), Json.get.nat(j.v(), "n"),
+    Json.get.nat(j.v(), "f"), Json.get.nat(j.v(), "a.1.q"), Json.get.nat(j.v(), "zz")] ==
+    [Fail{"long must be a whole number from 0 to 281474976710655"},
+     Fail{"neg must be a whole number from 0 to 281474976710655"}, Fail{"s must be a number"}, Done{7n},
+     Fail{"f must be a whole number from 0 to 281474976710655"}, Done{2n}, Fail{"zz is required"}] :
+    List<&2, Json.Got(Nat)>}
+
+law json_i64_vectors:
+  {[Json.get.i64(j.v(), "neg"), Json.get.i64(j.v(), "f"), Json.get.i64(j.v(), "b")] ==
+    [Done{I64.neg(J.i64.small(3n))}, Fail{"f must be a whole number from -9223372036854775808 to 9223372036854775807"},
+     Fail{"b must be a number"}] : List<&2, Json.Got(I64)>}
+
+law json_bool_vectors:
+  {[Json.get.bool(j.v(), "b"), Json.get.bool(j.v(), "o.k"), Json.get.bool(j.v(), "n"), Json.get.bool(j.v(), "zz")] ==
+    [Done{True{}}, Fail{"o.k must be true or false"}, Fail{"n must be true or false"}, Fail{"zz is required"}] :
+    List<&2, Json.Got(Bool)>}
+
+law json_arr_vectors:
+  {[Json.get.arr(j.v(), "a.1.q"), Json.get.arr(j.v(), "o"), Json.get.arr(j.v(), "a")] ==
+    [Fail{"a.1.q must be an array"}, Fail{"o must be an array"},
+     Done{[Json.str("p"), Json.obj([Json.kv("q", Json.num(2))])]}] : List<&2, Json.Got(List<&2, J.Json>)>}
+
+law json_obj_vectors:
+  {[Json.get.obj(j.v(), "o"), Json.get.obj(j.v(), "a"), Json.get.obj(j.v(), "a.1")] ==
+    [Done{Json.obj([Json.kv("k", Json.null())])}, Fail{"a must be an object"}, Done{Json.obj([Json.kv("q", Json.num(2))])}] :
+    List<&2, Json.Got(J.Json)>}
+
+law json_fails_vectors:
+  {Json.fails(U32, Json.get.u32(j.v(), "s"), Json.fails(Bytes(), Json.get.str(j.v(), "s"),
+    Json.fails(Bool, Json.get.bool(j.v(), "q"), Json.fails(U32, Json.get.u32(j.v(), "a.1.q"), [])))) ==
+    ["s must be a number", "q is required"] : List<&2, Bytes()>}
+
+law json_num_text_vectors:
+  {[Json.text(Json.dec(105n, 2n)), Json.text(Json.dec(5n, 2n)), Json.text(Json.dec(7n, 0n)),
+    Json.text(Json.dec(100n, 1n)), Json.text(Json.nat(12n))] ==
+    ["1.05", "0.05", "7", "10.0", "12"] : List<&2, Bytes()>}
 
 # The pool
 # ========

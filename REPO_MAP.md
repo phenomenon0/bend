@@ -16,7 +16,9 @@ this file says the same in more words, and maps the networking stack in full.
     kernel/             a second, independent checker in Rust; it re-checks a
                         proof's exported core (`bend F --export F.core`)
     guide/              GUIDE.md (`bend guide`), and the extras: SHADERS.md,
-                        EFFECTS.md, NETWORKING.md (`bend guide networking`)
+                        EFFECTS.md, NETWORKING.md (`bend guide networking`),
+                        the tour of net/ whose pages are guide/net/*.md
+                        (`bend guide net/serving`)
     power/              libraries in Bend: JSON, gzip and deflate, CSV, hashes,
                         search, numerics; some carry their own laws and proofs
     tests/<ns>/         the tests; each ends in the `#|` lines its run prints

@@ -1,6 +1,5 @@
-# The probe loop: one computation per monitor, each on a pooled client
-# session of its own (the session's options carry the monitor's timeout),
-# and the webhook.
+# The probe loop: one computation per monitor, all on one pooled client
+# session (each request carries its monitor's timeout), and the webhook.
 #
 # Concurrency: IO.spawn starts a computation; the runtime's one event
 # loop interleaves them all (and the server's connections), each waiting
@@ -144,39 +143,40 @@ def wait(fuel: Nat, +until: Nat) -> IO(Unit):
         stop : Bool <- IO.signal_seen(15)
         wait.at(until, now, stop, u => wait(k, until))
 
+# a probe's own options: its monitor's timeout, to connect and for the
+# exchange, and no redirect followed
+def probe.opts(+ms: U32, o: Client.Opts) -> Client.Opts:
+  Client.with.redirects(Client.with.connect(Client.with.timeout(o, ms), ms), 0)
+
 # one probe of s at the slot due, then the wait for the next slot
-def probe.run(+e: E.Env, +ss: Client.Session, +s: M.Spec, +due: Nat, again: Nat -> IO(Unit)) -> IO(Unit):
+def probe.run(+e: E.Env, +s: M.Spec, +due: Nat, again: Nat -> IO(Unit)) -> IO(Unit):
   do IO<Unit>:
     +t0 : Nat <- IO.now()
     +w : Nat <- IO.wall()
-    r : Client.Res() <- Client.fetch(ss, Client.req("GET", M.spec.url(s)))
+    r : Client.Res() <- Client.fetch.with(E.cl(e), Client.req("GET", M.spec.url(s)), o => probe.opts(M.spec.timeout(s), o))
     +t1 : Nat <- IO.now()
     told(e, s, judged(s, w, ms.between(t0, t1), ms.between(due, t0), r))
     +next : Nat = next.due(due, U32.to_nat(M.spec.every(s)), t1)
     wait(fuel(), next)
     again(next)
 
-def probe.step(+e: E.Env, +ss: Client.Session, +due: Nat, stop: Bool, m: Maybe<&2, M.Spec>, again: Nat -> IO(Unit)) -> IO(Unit):
+def probe.step(+e: E.Env, +due: Nat, stop: Bool, m: Maybe<&2, M.Spec>, again: Nat -> IO(Unit)) -> IO(Unit):
   match stop m:
     case False{} Some{s}:
-      probe.run(e, ss, s, due, again)
+      probe.run(e, s, due, again)
     case _ _:
-      Client.close(ss)
+      IO.pure(Unit, Unit{})
 
-def probe.loop(fuel: Nat, +e: E.Env, +ss: Client.Session, +name: Bytes(), +id: U32, +due: Nat) -> IO(Unit):
+def probe.loop(fuel: Nat, +e: E.Env, +name: Bytes(), +id: U32, +due: Nat) -> IO(Unit):
   match fuel:
     case 0n:
-      Client.close(ss)
+      IO.pure(Unit, Unit{})
     case 1n+k:
       do IO<Unit>:
         stop : Bool <- IO.signal_seen(15)
         m : Maybe<&2, M.Spec> <- E.peek(Maybe<&2, M.Spec>, e, st => M.spec.for(M.find(M.store.mons(st), name), id), None{})
-        probe.step(e, ss, due, stop, m, nx => probe.loop(k, e, ss, name, id, nx))
+        probe.step(e, due, stop, m, nx => probe.loop(k, e, name, id, nx))
 
-# the loop of one monitor, on a session whose timeouts are its own
+# the loop of one monitor
 def start(+e: E.Env, +s: M.Spec, +id: U32) -> IO(Unit):
-  +o = Client.with.redirects(Client.with.connect(Client.with.timeout(Client.opts(), M.spec.timeout(s)), M.spec.timeout(s)), 0)
-  do IO<Unit>:
-    +ss : Client.Session <- Client.session(o)
-    +now : Nat <- IO.now()
-    IO.spawn(Unit, probe.loop(fuel(), e, ss, M.spec.name(s), id, now))
+  IO.bind(Nat, Unit, IO.now(), +now => IO.spawn(Unit, probe.loop(fuel(), e, M.spec.name(s), id, now)))
