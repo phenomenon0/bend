@@ -1,0 +1,81 @@
+# std/'s gate: the library that also runs on released Bend. Each byte
+# implementation on this repo's runtime (list, the default, and packed),
+# and the list one on released Bend (canon, pinned): the proofs print the
+# clean line, every tests/std test agrees with its #| lines in each lane,
+# and the README's snippets are the examples' own text and run. CSV's
+# mutants run every push; deflate's (about two hours) weekly.
+name: std
+on:
+  push:
+    branches: [claude/next-gen-tier-review-xss592]
+    paths: ["std/**", "tests/std/**", "bend2/**", ".github/workflows/std.yml"]
+  pull_request:
+    paths: ["std/**", "tests/std/**", "bend2/**", ".github/workflows/std.yml"]
+  schedule:
+    - cron: "17 3 * * 0"
+  workflow_dispatch:
+env:
+  BEND_NO_TELEMETRY: "1"
+  # released Bend: the canon main UPSTREAM.md is verified against
+  CANON_REF: 95317d95
+defaults:
+  run:
+    shell: bash
+jobs:
+  std:
+    name: std on ${{ matrix.name }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {name: "ours, list bytes", bend: "bend2/main.ts", packed: ""}
+          - {name: "ours, packed bytes", bend: "bend2/main.ts", packed: "--packed"}
+          - {name: "released Bend", bend: "canon/bend2/main.ts", packed: ""}
+    steps:
+      - uses: actions/checkout@v4
+      - name: released Bend
+        if: matrix.bend == 'canon/bend2/main.ts'
+        run: |
+          git init -q canon
+          git -C canon fetch -q --depth 1 https://github.com/bendlang/bend.git "$CANON_REF" \
+            || git -C canon fetch -q https://github.com/bendlang/bend.git main
+          git -C canon checkout -q FETCH_HEAD
+          git -C canon log --oneline -1
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - name: clang
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq clang
+      # The verdict line, not the exit code (@unsafe exits 0)
+      - name: the laws hold
+        run: |
+          if [ -n "${{ matrix.packed }}" ]; then
+            sed -i 's#^import ./bytes_list.bend as Impl$#import ./bytes_packed.bend as Impl#' std/bytes.bend
+            grep -q '^import ./bytes_packed.bend as Impl$' std/bytes.bend
+          fi
+          bad=0
+          for f in std/csv_proof.bend std/deflate_proof.bend std/inflate_proof.bend; do
+            out=$(bun ${{ matrix.bend }} "$f" 2>&1); echo "$f: $out"
+            [ "$out" = "All terms check." ] || bad=1
+          done
+          git checkout -- std/bytes.bend
+          exit $bad
+      - name: every test in every lane
+        run: python3 tests/std/lanes.py --bend ${{ matrix.bend }} ${{ matrix.packed }}
+      - name: the README is the examples, and they run
+        run: python3 tests/std/readme.py --bend ${{ matrix.bend }} ${{ matrix.packed }}
+      - name: CSV's laws are not vacuous
+        run: python3 tests/std/csv_mutants.py --bend ${{ matrix.bend }} ${{ matrix.packed }}
+  deflate-mutants:
+    name: deflate's laws are not vacuous
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - run: python3 tests/std/deflate_mutants.py
