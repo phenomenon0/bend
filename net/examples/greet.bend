@@ -48,5 +48,5 @@ def config() -> Server.Cfg:
 
 def main() -> IO(Unit):
   do IO<Unit>:
-    xs : List<String> <- IO.args()
+    +xs : List<&2, String> <- Server.argv([])
     Server.serve(~Server.logged(~Server.secured(~app)), Server.args(xs, config()))

@@ -56,22 +56,18 @@ def open(r: Http.Request) -> IO(WsServer.Take):
 def page(r: Http.Request) -> IO(Http.Response):
   Http.reply(Http.text(200, "a WebSocket echo is at /echo\n"))
 
-def num(+xs: List<&2, String>, +name: String, d: U32) -> U32:
-  Maybe.default(&2, U32, U32.read(Server.flag.go(xs, name, "")), d)
-
 def origins(+o: String) -> List<&2, Bytes()>:
   Bool.pick(List<&2, Bytes()>, String.is_empty(o), [], [o])
 
-def wopts(xs: List<String>) -> WsServer.Opts:
-  +ys : List<&2, String> = Server.strs(xs)
-  WsServer.opts.origins(WsServer.opts.keepalive(WsServer.opts.max_msg(WsServer.opts(), num(ys, "--max-msg", 1048576)),
-    num(ys, "--ping-ms", 20000), num(ys, "--pong-ms", 20000)), origins(Server.flag.go(ys, "--origin", "")))
+def wopts(+xs: List<&2, String>) -> WsServer.Opts:
+  WsServer.opts.origins(WsServer.opts.keepalive(WsServer.opts.max_msg(WsServer.opts(),
+    Server.flag.num(xs, "--max-msg", 1048576)), Server.flag.num(xs, "--ping-ms", 20000),
+    Server.flag.num(xs, "--pong-ms", 20000)), origins(Server.flag(xs, "--origin", "")))
 
 def routes(+o: WsServer.Opts) -> List<&1, Server.Route>:
   [Server.get("/", page), WsServer.ws.with(o, "/echo", open)]
 
 def main() -> IO(Unit):
   do IO<Unit>:
-    xs : List<String> <- IO.args()
-    ys : List<String> <- IO.args()
-    WsServer.serve.with(~WsServer.Opts, ~routes, wopts(xs), Server.args(ys, Server.config(9002)))
+    +xs : List<&2, String> <- Server.argv(["--max-msg N", "--ping-ms N", "--pong-ms N", "--origin URL"])
+    WsServer.serve.with(~WsServer.Opts, ~routes, wopts(xs), Server.args(xs, Server.config(9002)))

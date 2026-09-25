@@ -64,10 +64,15 @@ IO(Http.Response)`; `Server.serve.with(~E, ~app, env, cfg)` hands `env`
 (a channel, a configuration: shared state) to every call. `cfg` is
 `Server.config(port)` changed by `Server.set.host/idle/head/body/send/
 max_head/max_body/conns/grace/handler/tls(cert, key)/shared`, or read from the
-command line (`xs` is `IO.args()`) by `Server.args(xs, cfg)` (`--host
---port --idle-ms --head-ms --body-ms --max-head --max-body --max-conns
---grace-ms --handler-ms --tls-cert --tls-key --shared`; `Server.flag(xs, name, d)`
-reads one of your own). Precedence: a flag given wins over `cfg`, and a
+command line by `Server.args(xs, cfg)` (`--host --port --idle-ms --head-ms
+--body-ms --max-head --max-body --max-conns --grace-ms --handler-ms --tls-cert
+--tls-key --shared`). `xs` is `Server.argv(own)`: `IO.args()` asked once and
+checked against the server's flags and the program's own, named as a usage
+line names them (`["--root DIR", "--verbose"]`; a value named `N` must be a
+number); an unknown flag, a value missing or a number that is none ends the
+program with the reason and a usage line (exit 2). It is `Data`, and
+`Server.flag(xs, name, d)`, `flag.num`, `flag.on` and `args` read it as often
+as they like. Precedence: a flag given wins over `cfg`, and a
 `set.*` applied to what `args` answers wins over the flag. The server
 binds `host` (0.0.0.0, every IPv4 interface, by default; a dotted
 address; an IPv6 one, `::1` or `::`, IPV6_V6ONLY off so `::` takes IPv4
@@ -106,7 +111,12 @@ unless set), `~Server.recovered(~app)` (a handler answering
 `Result<Bytes(), Response>`, a failure a plain 500); they nest
 (`~Server.logged(~Server.secured(~app))`), and each has a `.around` form
 over a handler's IO (`Server.logged.around(r, io)`) for handlers with an
-environment.
+environment. `Server.wrap(~mw, routes)` puts an `.around` form (or several
+nested) around every route of a table: plain routes, `Server.static`, and a
+Sock route's answer (a `Stream.get` pour as its status and fields, a
+WebSocket accept as a 101), so one middleware covers a whole
+`serve.routes` / `WsServer.serve.with` app (`wrap_pats`: it changes no
+route's methods or pattern).
 
 **Stream.** `Stream.serve(~app, ~ups, cfg)` and `Stream.serve.with(~E,
 ~app, ~ups, env, cfg)` serve `app` as Server does, and beside it a table
@@ -165,11 +175,16 @@ of its own, no redirect followed, a body at most 256 MiB. With
 `Stream.pour` it relays a body end to end (`net/examples/relay_stream.bend`;
 `Stream.abort(k)` cuts the response short when the upstream fails).
 
+`Client.fetch.with(s, req, o => Client.with.timeout(o, 500))` is one request
+on the session's connections with options of its own, made from the
+session's (its `ca` stays the session's): one pooled session serves requests
+with different deadlines, body caps and redirect budgets.
+
 Results: an error is always reusable (`&2`), and so is a value that is
 `Data`: `Client.Res()` is `Result<&2, &2, NetError, Response>`. Only a
 value that holds a handle is affine: `Ws.connect` answers `Result<&2,
-&1, Ws.Err, Ws.Conn>`. A command line is what `IO.args()` answers,
-`List<String>`, and every flag reader takes it as it is.
+&1, Ws.Err, Ws.Conn>`. A command line from `Server.argv` is
+`List<&2, String>`, `Data`, read by reference.
 
 **WebSockets.** `Ws.connect(url, Ws.opts())` is a client's connection;
 `WsServer.ws(pat, h)` is a route (beside `Server.get` and the rest, served by
@@ -189,13 +204,20 @@ that is not 13, or none (RFC 6455 4.4) -- is a 426 naming 13, and the
 connection goes on; one that asked with any method but GET, or a key
 that is not a key, a 400 (4.2.1, 4.2.2).
 A `WsServer.Hub` is a room: `hub.new`, `join`, `leave`, `publish`, `inbox`,
-`relay`.
+`relay`; `WsServer.accept("", c => WsServer.broadcast(hub, c))` is a client
+that only listens to it (a live feed), leaving when it closes.
 
 **Json.** `Json.respond(status, j)`, `Json.body(req, budget)`,
 `Json.of(resp, budget)` (`Result<J.Why, J.Json>`), `Json.obj/kv/arr/
-str/yes/no/null`, numbers by `Json.num` (a `U32`), `Json.i64` (an `I64`)
-and `Json.f64` (an `F64`; NaN and infinities are null), `Json.get`,
-`Json.get.str`, `Json.refused(why)`.
+str/flag/yes/no/null`, numbers by `Json.num` (a `U32`), `Json.nat`,
+`Json.i64`, `Json.f64` (NaN and infinities are null) and `Json.dec(n,
+places)`, `Json.refused(why)`. Fields: `Json.get(j, key)` (a `Maybe`), and
+typed, `Json.get.str/u32/nat/i64/f64/bool/arr/obj(j, path)`, each a
+`Json.Got(A)` (`Result<&2, &2, Bytes(), A>`) whose failure names the path and
+the reason ("age must be a number", "name is required"); a path is keys and
+array indexes joined by `.`. `Json.or(A, j, path, d, get)` defaults a missing
+field only, `Json.fails(A, r, whys)` keeps every reason, and
+`Json.errors(status, whys)` answers them as `{"errors": [...]}`.
 
 ## The defaults
 
@@ -304,7 +326,13 @@ passes its export. `net/LAWS.bend`:
   and what is not an address; `ip6_round_trip`), IP-literal URLs
   (`literal_vectors`, RFC 3986 3.2.2 and RFC 2732's examples, zone IDs
   refused; `literal_round_trip`), the Host field of a request to one
-  (`host_vectors`) and its origin, the pool's key (`origin_vectors`).
+  (`host_vectors`) and its origin, the pool's key (`origin_vectors`); a
+  wrapped table's patterns (`wrap_pats`, `wrap_vectors`); the command line
+  (`argv_vectors`: an unknown flag, a value missing, a number that is none,
+  a stray word refused, the rest passed; `flag_vectors`, `flag_num_vectors`,
+  `flag_on_vectors`); JSON's typed fields (`json_*_vectors`: each type, a
+  path through objects and arrays, a default only for a missing field,
+  every reason kept, `Json.dec`).
 
 `bend net/ws_proof.bend` is the WebSocket gate (`net/ws_laws.bend`): the
 client's laws, and the server's -- `srv_hs_valid` (every request that
@@ -319,10 +347,11 @@ connection takes are the spec's reassembly of the input, for every cut
 of it into reads), `srv_close_once` and `srv_close_after` (at most one
 close written, none after this end's own), and vectors.
 
-`python3 net/mutants.py`: seventy-nine broken servers, streams, stream
+`python3 net/mutants.py`: ninety-three broken servers, streams, stream
 heads (a bare LF, a folded line, two lengths that disagree, a head judged
 wrong), response writers, handler deadlines, WebSocket routes, clients,
-URLs and IPv6 texts, each refused; `python3 net/ws_mutants.py`: the
+URLs and IPv6 texts, wrapped tables, command lines and JSON getters, each
+refused; `python3 net/ws_mutants.py`: the
 WebSocket ones. Not proven: the IO loops (they call the functions the laws
 are about, and stop a read at every stream route's head: checked by
 `check.py`), the deadlines and limits (the handler's race is the
@@ -345,13 +374,18 @@ runtime's IO.within, bend2/effs/within.c).
     net/examples/export.bend       exports of any size: CSV, NDJSON, bytes, a declared length
     net/examples/events.bend       server-sent events with keepalives, and the page that listens
     net/examples/relay_stream.bend a body fetched upstream passed on as it comes, end to end
+    net/examples/signup.bend       a JSON body checked field by field, every problem in one 400
 
-`guide/NETWORKING.md` (`bend guide networking`) walks through them.
+`guide/NETWORKING.md` (`bend guide networking`) is the tour, and
+`guide/net/` (`bend guide net/serving`, `net/streams`, `net/client`,
+`net/json`, `net/websockets`, `net/limits`) walks through them.
 
 `python3 net/check.py` builds every example and checks, from outside: framing,
 pipelining, HEAD, keep-alive, HTTP/1.0, 400/408/413/414/431, the idle,
 head and body timeouts, the connection limit, 100-continue, SIGTERM,
-404/405, JSON and files, the middleware, the handler's time (a handler
+404/405, JSON and files, the middleware (`Server.wrap` over files and a
+WebSocket route too), the command line refused, typed JSON fields, the
+handler's time (a handler
 that sleeps forever: a 503 that closes, nothing after it, the server
 still answering others), `--host` and its banner, a TLS
 certificate that does not load; and the client against Python peers: pooling,
@@ -385,7 +419,10 @@ second where the engine's literal `/health` answers 58k; with the
 response written as a literal the loop matches the engine, so the
 difference is the checked writer (`respond_framed`'s).
 
-Not yet: Happy Eyeballs (a name's addresses are tried in turn, never
+Not yet: a WebSocket handler that parks on its socket and a channel at
+once (a room's members and `broadcast` wait in 50 ms slices; it needs an
+effect that waits on either and withdraws the other wait, where
+`IO.within` lets the loser run on and would drop a message), Happy Eyeballs (a name's addresses are tried in turn, never
 raced), IPv6 zone IDs, a streamed client body's head before its body
 (Client.stream tells the status at the end, so a relay decides its own
 head first), and past 256 MiB; a streamed response on a stream route (an

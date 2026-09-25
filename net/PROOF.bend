@@ -139,6 +139,54 @@ def Laws.host_vectors():
 def Laws.origin_vectors():
   {==}
 
+# Middleware over a table, the command line, JSON's typed fields: by
+# computation
+
+def Laws.wrap_vectors():
+  {==}
+
+def Laws.wrap_pats():
+  {==}
+
+def Laws.argv_vectors():
+  {==}
+
+def Laws.flag_vectors():
+  {==}
+
+def Laws.flag_num_vectors():
+  {==}
+
+def Laws.flag_on_vectors():
+  {==}
+
+def Laws.json_str_vectors():
+  {==}
+
+def Laws.json_u32_vectors():
+  {==}
+
+def Laws.json_nat_vectors():
+  {==}
+
+def Laws.json_i64_vectors():
+  {==}
+
+def Laws.json_bool_vectors():
+  {==}
+
+def Laws.json_arr_vectors():
+  {==}
+
+def Laws.json_obj_vectors():
+  {==}
+
+def Laws.json_fails_vectors():
+  {==}
+
+def Laws.json_num_text_vectors():
+  {==}
+
 # The pool
 # ========
 

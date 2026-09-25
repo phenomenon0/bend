@@ -43,7 +43,8 @@ usage:
                     (--export-unchecked: parse only, for the kernel's refusals)
   bend <page.html> -o <dir>     bundle a page that imports .bend files
   bend base [--types|<name>]    print Base, its types, or a name and subnames
-  bend guide                    print the Bend guide
+  bend guide [name]             print the Bend guide, or an extra: effects,
+                    shaders, networking (and net/serving, net/client ...)
   bend update                   install the latest bend (curl | sh, shown first)
   bend version                  print the version
 
@@ -111,10 +112,13 @@ async function cli(): Promise<void> {
   await check();
 }
 
-// cli_guide prints guide/<NAME>.md: the guide, or a named extra.
+// cli_guide prints guide/<NAME>.md: the guide, or a named extra; a
+// name with a directory, net/serving, is guide/net/SERVING.md.
 function cli_guide(name: string): void {
-  const file = path.join(GUIDE, name.toUpperCase() + ".md");
-  if (!fs.existsSync(file)) {
+  const parts = name.split("/");
+  const last = parts.pop() ?? "";
+  const file = path.join(GUIDE, ...parts.map((p) => p.toLowerCase()), last.toUpperCase() + ".md");
+  if (!/^[a-z]+(\/[a-z]+)*$/i.test(name) || !fs.existsSync(file)) {
     cli_fail("no guide named " + name);
   }
   cli_say(1, fs.readFileSync(file, "utf8"));
