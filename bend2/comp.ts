@@ -3104,7 +3104,9 @@ function emit_intr(fl: File, it: Intr, x: HTerm,
       (fl.book.tlds[k] as Bend.Def).T).ret).ks[0] ?? "w64"])[0];
     sinks.forEach((v) => val_sink(fl, v));
   }
-  const lay = lay_of(fl.book, ty);
+  // the site's type, else the native's own: its word is raw (a Bool's 0/1
+  // labelled a box would be unboxed as a constructor, or boxed as none)
+  const lay = ty === null ? sig_def(fl, k).ret : lay_of(fl.book, ty);
   // a full word is raw, whatever the site knows of its type
   return val_new([out], sig_def(fl, k).ret === X64 ? X64
     : lay.ks.length === 1 ? lay : BOX);
