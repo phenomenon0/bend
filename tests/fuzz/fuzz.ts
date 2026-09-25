@@ -23,7 +23,9 @@ import * as G from "./gen.ts";
 // Types
 // =====
 
-type Lane = "interp" | "js" | "c" | "san";
+// c1: the C binary again on one thread (--threads 1): a parallel let's
+// fork runs inline there, so the schedule differs and the answer must not
+type Lane = "interp" | "js" | "c" | "c1" | "san";
 
 type Req = { id: number; text: string; twin: string | null; dir: string; interp: boolean; emit: boolean };
 
@@ -267,6 +269,7 @@ async function compiled(dir: string, on: (l: Lane) => boolean): Promise<Partial<
     jobs.push(sh(CC, ["-std=c11", "-O3", path.join(dir, "p.c"), "-lpthread", "-lm", "-o", path.join(dir, "p")], 120_000)
       .then(async (b) => {
         outs.c = b.code !== 0 ? "§build " + b.out.slice(0, 400) : ran(await sh(path.join(dir, "p"), [], T_RUN));
+        if (b.code === 0 && on("c1")) outs.c1 = ran(await sh(path.join(dir, "p"), ["--threads", "1"], T_RUN));
       }));
   }
   if (on("san")) {
@@ -326,7 +329,7 @@ async function batch(pool: Pool, ps: G.Prog[], san: boolean): Promise<(Verdict |
       await alone();
       return vs;
     }
-    const outs = await compiled(dir, (l) => l === "js" || l === "c" || (l === "san" && san));
+    const outs = await compiled(dir, (l) => l === "js" || l === "c" || l === "c1" || (l === "san" && san));
     const split = (o: string | undefined): string[] | null => {
       if (o === undefined || /§|runtime error|AddressSanitizer/.test(o)) return null;
       if (!io) {
@@ -338,14 +341,14 @@ async function batch(pool: Pool, ps: G.Prog[], san: boolean): Promise<(Verdict |
       return xs.length === live.length + 1 && xs[live.length] === "end" ? xs.slice(0, -1) : null;
     };
     const parts: Partial<Record<Lane, string[] | null>> = {};
-    for (const l of ["js", "c", "san"] as Lane[]) if (outs[l] !== undefined) parts[l] = split(outs[l]);
+    for (const l of ["js", "c", "c1", "san"] as Lane[]) if (outs[l] !== undefined) parts[l] = split(outs[l]);
     if (Object.values(parts).some((x) => x === null)) {
       await alone();
       return vs;
     }
     live.forEach((i, j) => {
       const o: Partial<Record<Lane, string>> = {};
-      for (const l of ["js", "c", "san"] as Lane[]) if (parts[l]) o[l] = parts[l]![j];
+      for (const l of ["js", "c", "c1", "san"] as Lane[]) if (parts[l]) o[l] = parts[l]![j];
       const v = got[i]!.interp ?? "";
       const u = io ? unshow(v) : null;
       o.interp = !io ? interp_out(v, false) : u === null ? "§stuck " + v.slice(0, 200) : tidy(u);
@@ -370,7 +373,7 @@ function judge(outs: Partial<Record<Lane, string>>): { sig: string; ref: Lane | 
   const bad: string[] = [];
   const how = (s: string): string => /runtime error|AddressSanitizer|LeakSanitizer/.test(s) ? "report"
     : /§signal/.test(s) ? "signal" : /§exit/.test(s) ? "exit" : /^§build/.test(s) ? "build" : "out";
-  for (const l of ["js", "c", "san"] as Lane[]) {
+  for (const l of ["js", "c", "c1", "san"] as Lane[]) {
     const s = outs[l];
     if (s === undefined || l === ref) continue;
     if (l === "js" && /JS strings cannot contain non-scalar/.test(s)) {
@@ -452,6 +455,7 @@ async function reduce(pool: Pool, p: G.Prog, sig: string, log: (s: string) => vo
   const want = new Set<Lane>(["interp", "js"]);
   for (const s of sig.split(" ")) want.add(s.split(":")[0] as Lane);
   want.delete("all" as Lane);
+  if (want.has("c1")) want.add("c");
   const keeps = (v: Verdict): boolean => v.ok && v.sig === sig;
   let size = render(p)[0].length;
   for (let round = 0; ; round++) {

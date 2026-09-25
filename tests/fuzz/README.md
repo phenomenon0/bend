@@ -43,7 +43,8 @@ reject), emit its JS and C and normalize its `main`. The lanes:
   since an IO `main` run by `bend` is the JS runtime, not a second
   opinion. F64 is opaque to the normalizer: those programs compare JS
   against C.
-- js: `bun p.js`. c: `clang -O3`, as `bend -o` builds it.
+- js: `bun p.js`. c: `clang -O3`, as `bend -o` builds it; c1: the same
+  binary on one thread (`--threads 1`), where a parallel let runs inline.
 - san (`--san [K]`): the C again at -O0 with `-fsanitize=address,undefined`
   (every Kth program); a sanitizer report is a difference on its own.
 
