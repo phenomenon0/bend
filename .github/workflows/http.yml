@@ -14,7 +14,7 @@
 name: http engine
 on:
   push:
-    branches: [omen-http, claude/next-gen-tier-review-xss592]
+    branches: [omen, omen-http, claude/next-gen-tier-review-xss592]
     paths: ["demos/io_http_engine/**", "demos/io_proxy/**", "demos/io_resp/**", "demos/io_http2/**",
       "demos/io_sink/**", "demos/io_http_client/**", "wire/**", "net/**", "power/csv*", "power/gzip*",
       "power/deflate*", "power/json*", "bend2/**", "kernel/**", "tests/fuzz/**", ".github/workflows/http.yml"]

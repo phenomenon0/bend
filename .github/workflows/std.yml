@@ -7,7 +7,7 @@
 name: std
 on:
   push:
-    branches: [claude/next-gen-tier-review-xss592]
+    branches: [omen, claude/next-gen-tier-review-xss592]
     paths: ["std/**", "tests/std/**", "bend2/**", ".github/workflows/std.yml"]
   pull_request:
     paths: ["std/**", "tests/std/**", "bend2/**", ".github/workflows/std.yml"]
