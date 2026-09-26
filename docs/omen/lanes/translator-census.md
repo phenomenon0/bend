@@ -118,3 +118,40 @@ Records are the largest single step once methods count (4% to 32%): most
 Python lives in classes. Tier 6 is the other large one, and it is a library
 effort, not a kernel one: each module function is one contract, ranked by use
 (`os`, `os.path`, `codecs`, `sys`, `re`, `warnings` lead).
+
+## Tier 0: cheap syntax (2026-09-26)
+
+Three untrusted rewrites in the pre-pass (`defaulted`), before elaboration. The
+kernel then checks each result as written, so none of them adds a rule the
+kernel grants.
+
+| form | rewrite | why it is exact | kept refused |
+|---|---|---|---|
+| `f"a{s}b"` | `"a" + s + "b"` | `str(s)` is `s` for a `str`; `+` on a `str` demands a `str` on both sides, so a field of another type is a type mismatch, never a silent format | `!r`/`!s`/`!a`, `:spec`, a non-`str` field (`f"{len(s)}"`), a raw piece, a `"`, newline or trailing backslash in a piece |
+| `g(s, end="?")` | `g(s, "-", "?")`: positional, then keywords, then the header's literal defaults, in parameter order | every expression in the fragment is pure, so evaluating in parameter order rather than written order is unobservable | a keyword naming no parameter, or one already given positionally (a `TypeError` in CPython), `**kw`, a keyword to a method or builtin |
+| `SEP = s` | `u_s_e_p = s` (each capital becomes `_` + lower case, after `u`) | the fragment has no nested scope, so the def is the whole scope of the name; reads and writes are renamed together | a def that already uses a mangled name, or two names that mangle alike (renaming would merge two variables) |
+
+`DefD` now records every module def (its parameters, and its defaults only when
+all are literals), so keyword ordering and default filling are one function,
+`kw_args`.
+
+Evidence:
+- `refuse.bend`: `keyword call` (`g(s=s)`) moves to emitted. Seven new cases pin
+  what stays refused: keyword duplicate, keyword unknown, f-string conversion,
+  f-string spec, an f-string field of type Nat, a capital local (emitted), and a
+  capital collision (refused).
+- `emit_sugar.bend` (new) pins all three rewrites in one module.
+- The fuzzer now also writes f-strings of plain fields, keyword calls in shuffled
+  order over a tail of the arguments, and capital locals (127 f-strings, 42
+  keyword calls and 65 modules with capital locals per 300). Seeds 1–3 × 300:
+  264, 276 and 270 emitted, all holding C1+C2, `TFUZZ PASS: 300, FAIL: 0` three
+  times.
+- What-if census (tier-0 forms now counted as supported): the syntactic upper
+  bound goes from 179 to 187 of 2,962 stdlib defs. Tier 0 is small, as the
+  table predicted. Its value is the idioms it unblocks inside bigger tiers.
+
+Next is tier 1: `int` and tuples. Base's `I64` wraps on overflow and CPython's
+`int` does not, so `int` needs checked `add`/`sub`/`mul` that fail-stop past
+64 bits (as a Nat past 2^48 fail-stops today). It also needs floor `//` and `%`
+matching CPython on negatives, a nonzero-divisor guard, and `str(int)` for
+f-strings. Tuples need the kernel's pair type.

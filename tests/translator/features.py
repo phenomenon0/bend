@@ -31,11 +31,13 @@ import sys
 import sysconfig
 from collections import Counter
 
-# What the fragment translates today (translate.bend at the pin). Anything a
+# What the fragment translates today (translate.bend at HEAD, tier 0 included:
+# plain f-strings, keyword calls to module defs, capital locals). Anything a
 # def uses outside this is a missing feature, named by `miss`.
 STR_METHODS = {"startswith", "endswith", "strip", "lstrip", "rstrip", "lower", "upper",
                "split", "splitlines", "replace", "find", "join", "__bool__", "partition"}
 BUILTINS = {"len", "str", "bool"}
+BUILTINS_ALL = set(dir(__builtins__)) if isinstance(__builtins__, dict) is False else set(__builtins__)
 
 # The plan's tiers (translator-census.md, "how to get close"), as feature sets.
 PLAN = [
@@ -68,9 +70,6 @@ def miss(fn):
     params |= {x.arg for x in a.kwonlyargs + a.posonlyargs + [a.vararg, a.kwarg] if x}
     bound = params | {n.id for n in ast.walk(fn) if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Store)}
     bound |= {x.arg for n in ast.walk(fn) if isinstance(n, ast.Lambda) for x in n.args.args}
-    for p in {x.arg for x in a.args}:
-        if p[:1].isupper():
-            m.add("uppercase-name")
     for ann in [x.annotation for x in a.args] + [fn.returns]:
         if ann is not None:
             m |= ann_miss(ann)
@@ -136,8 +135,9 @@ def node_miss(n, params):
         m.add("tuple")
     elif t is ast.Starred:
         m.add("varargs")
-    elif t is ast.JoinedStr:
-        m.add("fstring")
+    elif t is ast.FormattedValue:
+        if n.conversion != -1 or n.format_spec is not None:
+            m.add("fstring")
     elif t is ast.Constant:
         if isinstance(n.value, float) or isinstance(n.value, complex):
             m.add("float")
@@ -167,8 +167,6 @@ def node_miss(n, params):
                 m.add("record" if isinstance(tg.value, ast.Name) and tg.value.id == "self" else "mutation")
             elif isinstance(tg, ast.Subscript):
                 m.add("mutation")
-            elif isinstance(tg, ast.Name) and tg.id[:1].isupper():
-                m.add("uppercase-name")
         if len(n.targets) > 1:
             m.add("chained-assign")
     elif t is ast.Attribute:
@@ -199,7 +197,7 @@ def node_miss(n, params):
 def call_miss(n, params):
     f = n.func
     m = set()
-    if n.keywords:
+    if n.keywords and not (isinstance(f, ast.Name) and f.id[:1].islower() and f.id not in BUILTINS_ALL):
         m.add("kwargs-call")
     if isinstance(f, ast.Name):
         name = f.id
