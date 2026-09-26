@@ -28,7 +28,6 @@ def app(+slow: U32, r: Http.Request) -> IO(Http.Response):
 
 def main() -> IO(Unit):
   do IO<Unit>:
-    a1 : List<String> <- IO.args()
-    xs : List<String> <- IO.args()
-    +slow : U32 = Maybe.default(&2, U32, U32.read(Server.flag(a1, "--slow", "0")), 0)
+    +xs : List<&2, String> <- Server.argv(["--slow N"])
+    +slow : U32 = Server.flag.num(xs, "--slow", 0)
     Server.serve.with(~U32, ~app, slow, Server.set.send(Server.args(xs, Server.config(9001)), 120000))
