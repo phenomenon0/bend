@@ -7,14 +7,16 @@ import os
 import sysconfig
 from pathlib import Path
 
-TOOLS = Path.home() / "Documents/Project/llm-wiki/tools"
-FORBIDDEN = Path.home() / "Documents/Project/bend"
+# The corpus trees; $PY_MINED_ROOT re-roots them (as in tests/translator/judge.py).
+MINED = Path(os.environ.get("PY_MINED_ROOT") or Path.home() / "Documents/Project")
+TOOLS = MINED / "llm-wiki/tools"
+FORBIDDEN = MINED / "bend"
 
 
 def paths(tier):
     if tier == "1":
         return sorted(TOOLS.glob("*.py"))
-    base = Path(sysconfig.get_path("stdlib")) if tier in {"3", "lex"} else Path.home() / "Documents/Project"
+    base = Path(sysconfig.get_path("stdlib")) if tier in {"3", "lex"} else MINED
     found = list(TOOLS.glob("*.py")) if tier == "lex" else []
     for root, dirs, files in os.walk(base, followlinks=False):
         dirs[:] = sorted(d for d in dirs if d not in {".git", ".venv", "venv", "node_modules", "site-packages", "_out", "__pycache__"}
