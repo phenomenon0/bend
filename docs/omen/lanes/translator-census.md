@@ -79,3 +79,42 @@ accepted constant beside them.
 | uppercase local names (`SEP = s` inside a def) | refused by the kernel's `ident`, since a Bend capital is a constructor | rename on emission (`SEP` → `v_SEP`), with the span map keeping the Python name |
 | `None` for an Optional parameter in the census's own stubs | 71 "`is None` on a name that is not Optional" | the census should also try `str \| None` parameters: this is an accuracy fix to the census, not to the translator |
 | `isinstance`, `getattr`, classes, `try`, dicts | most of the census | outside a typed fragment by design |
+
+## What-if census: what would unlock how much (2026-09-26)
+
+`python3 tests/translator/features.py [TREE] [--methods]` reads each distinct def's AST
+once and records **every** feature it uses that the fragment lacks, not only the
+first refusal. A def is unlocked by a feature set F when all its missing features
+are in F. It is static and an upper bound: 179 stdlib defs have no missing feature
+syntactically, while 20 actually translate, so real gains are several times smaller
+than the counts below. It ranks work; the translator certifies it.
+
+Missing features by share of the 2,962 stdlib defs: calls into another module 37%,
+tuples 37%, records (`self.x`, class instances) 32%, string methods without a
+contract 31%, `int` 28%, subscripting 28%, keyword arguments at a call 23%,
+`raise` 22%, `try` 20%, f-strings 20%.
+
+**The plan's first ordering was wrong.** Generic types, then records, then sums
+and exceptions tops out at 20% of top-level defs. The type system is not the
+largest limit. Library surface (other modules' functions, string and list
+methods) and cheap syntax (f-strings, keyword arguments) are. Reordered by
+payoff, cumulative, top-level defs (with methods in brackets):
+
+| tier | adds | top-level | with methods |
+|---|---|---|---|
+| 0 cheap syntax | f-strings, keyword args at calls, uppercase names | 6.5% | 1.5% |
+| 1 int + tuples | signed int, tuples/pairs, loops that return or keep two accumulators | 10.4% | 2.5% |
+| 2 library surface | more str/list methods, `range`/`enumerate`/`zip`/`sorted`, indexing, slicing | 17.7% | 4.2% |
+| 3 records | dataclass/`NamedTuple` records, methods on them | 20.2% | 31.6% |
+| 4 dict/set/while | | 22.3% | 34.0% |
+| 5 sums + exceptions | `isinstance` on closed unions, `raise`/`try` as a result | 31.1% | 45.1% |
+| 6 other-module contracts | `os.path`, `re`, `sys`, `codecs`, … as contracted calls | 47.1% | 54.3% |
+
+What stays out after all of it is dynamic Python by design: reflection
+(`getattr`, `type`), aliasing mutation, `*args`, generators, closures, `with`, I/O.
+In the CPython-host model those defs simply stay in CPython.
+
+Records are the largest single step once methods count (4% to 32%): most
+Python lives in classes. Tier 6 is the other large one, and it is a library
+effort, not a kernel one: each module function is one contract, ranked by use
+(`os`, `os.path`, `codecs`, `sys`, `re`, `warnings` lead).
