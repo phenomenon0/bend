@@ -9,3 +9,4 @@ tests/lint/_out/
 tests/translate/_out/
 __pycache__/
 tests/vm/_out/
+tests/translator/_out/
