@@ -326,7 +326,18 @@ def Chan.send(-A: Type, chan: Chan(A), value: A) -> IO(Bool):
   import "./effs/chan.c"
   import "./effs/chan.js"
 
+# Chan.send that never waits: False, and the value dropped, when the
+# channel is full or closed
+def Chan.offer(-A: Type, chan: Chan(A), value: A) -> IO(Bool):
+  import "./effs/chan.c"
+  import "./effs/chan.js"
+
 def Chan.recv(-A: Type, chan: Chan(A)) -> IO(Maybe<&1, A>):
+  import "./effs/chan.c"
+  import "./effs/chan.js"
+
+# Chan.recv that never waits: None{} when nothing is there now
+def Chan.take(-A: Type, chan: Chan(A)) -> IO(Maybe<&1, A>):
   import "./effs/chan.c"
   import "./effs/chan.js"
 
@@ -597,6 +608,15 @@ def TCP.poll(sock: Socket, max: U32, ms: U32) ->
   IO(Socket & Result<&1, &1, U32 & String, Maybe<&1, String>>):
   import "./effs/tcp_poll.c"
   import "./effs/tcp_poll.js"
+
+# TCP.poll_buf that also ends when chan has something for a receiver (a
+# value, a sender waiting, its close): then True and Done{None{}}, and
+# chan keeps it. Bytes win when both are there. One wait at a time may
+# watch a channel.
+def TCP.poll_buf_or(-A: Type, sock: Socket, max: U32, ms: U32, chan: Chan(A)) ->
+  IO(Socket & Bool & Result<&1, &1, U32 & String, Maybe<&1, Bytes()>>):
+  import "./effs/chan.c"
+  import "./effs/chan.js"
 
 def TCP.poll_bytes(sock: Socket, max: U32, ms: U32) ->
   IO(Socket & Result<&1, &1, U32 & String, Maybe<&1, List<&2, U32>>>):

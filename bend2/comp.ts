@@ -7823,6 +7823,20 @@ static u64 io_wait_time(IoWork* w) {
   return ((IoAct*)w)->time;
 }
 
+// Wakes a parked activation now, as its deadline would: the next pass
+// fires it (a descriptor wait taken out as a deadline's is) and its
+// continuation looks again. A channel's bell rings this way (chan.c).
+static void io_ring(IoAct* a) {
+  a->time = 1;
+#ifdef __linux__
+  if (a->heap != 0) {
+    io_time_up(a->heap - 1);
+  } else {
+    io_time_push(a);
+  }
+#endif
+}
+
 OUTLINE void io_out(FILE* h, const char* data, u64 len) {
   if (fwrite(data, 1, len, h) != len) {
     err_fail("a short write on a standard stream");
@@ -9032,13 +9046,14 @@ function io_wake(w) {
 }
 
 // Park for read/write (out) or until at (performance.now()); an undefined
-// fd or at disables that source.
+// fd or at disables that source. A descriptor's waiter is answered, so a
+// channel's bell can ring it (at = 0: due at the next pass).
 function io_park_on(fd, out, k, more, at) {
   const io = globalThis.BEND_IO;
   const w = { fd, out, k, more, at, n: io.n++ };
   if (fd !== undefined) {
     io.waits.push(w);
-    return;
+    return w;
   }
   let i = io.heap.push(w) - 1;
   for (; i > 0 && io_heap_lt(w, io.heap[i - 1 >> 1]); i = i - 1 >> 1) {
