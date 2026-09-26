@@ -162,6 +162,14 @@ def closed(r: Result<&2, &2, Ws.Err, U32>) -> R():
         IO.print("close error " ++ Ws.err.show(e))
         return None{}
 
+# a connection closed() hands back (it hands back none) is closed, not dropped
+def closed.drop(m: Maybe<&1, Ws.Conn>) -> IO(Unit):
+  match m:
+    case None{}:
+      IO.pure(Unit, Unit{})
+    case Some{c}:
+      IO.bind(Result<&2, &2, Ws.Err, U32>, Unit, Ws.close(c, 1000, ""), r => IO.pure(Unit, Unit{}))
+
 # the echo: every message back as it came, until the server closes or
 # the connection fails
 def echo.sent(g: Ws.Out(Unit), again: Ws.Conn -> R()) -> R():
@@ -238,7 +246,7 @@ def steps(xs: List<&2, String>, c: Ws.Conn) -> IO(Unit):
   match xs:
     case Nil{}:
       IO.bind(Result<&2, &2, Ws.Err, U32>, Unit, Ws.close(c, 1000, ""),
-        r => IO.bind(Maybe<&1, Ws.Conn>, Unit, closed(r), m => IO.pure(Unit, Unit{})))
+        r => IO.bind(Maybe<&1, Ws.Conn>, Unit, closed(r), m => closed.drop(m)))
     case Con{s, t}:
       IO.bind(Maybe<&1, Ws.Conn>, Unit, step(s, c), may => steps.next(may, cc => steps(t, cc)))
 

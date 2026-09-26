@@ -361,12 +361,22 @@ def pools.cons(kp: Kp, r: P.Pool<&1, Socket> & Pools()) -> P.Pool<&1, Socket> & 
   (p, t) = r
   (p, Con{kp, t})
 
+# a second pool for the key (the keys are distinct, so never) stays in the
+# list, to be closed with the rest, rather than dropped with its sockets open
+def pools.keep(+k: Bytes(), pool: P.Pool<&1, Socket>, m: Maybe<&1, P.Pool<&1, Socket>>, rest: Pools()) ->
+  Maybe<&1, P.Pool<&1, Socket>> & Pools():
+  match m:
+    case None{}:
+      (Some{pool}, rest)
+    case Some{old}:
+      (Some{pool}, Con{Kp{k, old}, rest})
+
 def pools.step(eq: Bool, +k: Bytes(), pool: P.Pool<&1, Socket>, r: Maybe<&1, P.Pool<&1, Socket>> & Pools()) ->
   Maybe<&1, P.Pool<&1, Socket>> & Pools():
   match eq:
     case True{}:
       (m, rest) = r
-      (Some{pool}, rest)
+      pools.keep(k, pool, m, rest)
     case False{}:
       (m, rest) = r
       (m, Con{Kp{k, pool}, rest})

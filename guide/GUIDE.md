@@ -364,7 +364,10 @@ answers the command line, less the runtime's own options (a `--` ends them).
 wall clock (ms since the Unix epoch), whose dates `bend2/time.bend` prints
 (`Time.iso`, `Time.http`). A handle (`File`, `Socket`, `Window`) is an affine,
 opaque value, so every effect on one hands it back beside its result, and no
-program can forge or reuse one.
+program can forge or reuse one. Dropping one does not close it: its
+descriptor stays open until the process ends. So the check warns of a handle
+a def binds and never uses (`warning: ... dropped unused`), unless the scope
+ends in `IO.die` or the name starts with `_`: close it, or hand it on.
 
 A Bend program is a set of computations interleaved by one event loop, as in
 Node.js: each runs its pure code (in parallel, on every core) up to its next

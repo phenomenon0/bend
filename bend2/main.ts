@@ -21,6 +21,7 @@ import * as thr from "node:worker_threads";
 import type { BunPlugin } from "bun";
 
 import * as Bend from "./bend.ts";
+import * as Hand from "./hand.ts";
 import * as Comp from "./comp.ts";
 import * as Export from "./export.ts";
 
@@ -698,6 +699,16 @@ function cli_report(book: Bend.Book, n0: number, fd: number): void {
     uses[k]?.forEach((j) => bad.add(j));
   }
   const list = own.filter((k) => bad.has(k));
+  // U19: a handle bound and never used stays open until exit
+  const drops = Hand.hand_drops(book, own);
+  if (drops.length > 0) {
+    const at = (x: Hand.Drop): string => x.s === undefined ? ""
+      : " at line " + x.s.src.slice(0, x.s.beg).split("\n").length;
+    cli_say(fd, "warning: " + drops.length + " handle" + (drops.length === 1
+      ? " is" : "s are") + " dropped unused (open until exit):\n"
+      + drops.map((x) => "- " + x.def + ": " + x.k + " (" + x.ty + ")" + at(x)
+        + "\n").join(""));
+  }
   if (list.length > 0) {
     cli_say(fd, `All terms check, but ${list.length} def${list.length === 1
       ? " relies" : "s rely"} on unsafe or foreign code:\n`

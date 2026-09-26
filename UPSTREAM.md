@@ -47,7 +47,7 @@ repro for each and the branch that fixes it, if any.
 | U16 | a pure main counts Nats in unary: epoch-sized numbers (1.7e9) are unusable | PERF | interp (pure main) | med | none | upstream/interp_nat_epoch.bend, interp_nat_mul.bend |
 | U17 | TCP.listen binds 0.0.0.0 and takes no address: no loopback-only server | LIMITATION | interp js c | med | upstream/05-listen-on | verify.sh U17 (Base's signature) |
 | U18 | TCP.connect takes dotted IPv4 only (no names, no resolver) and has no deadline | LIMITATION | interp js c | med | upstream/06-connect-poll-dns | upstream/connect_name.bend |
-| U19 | a Socket dropped without Socket.close keeps its descriptor until exit: the checker allows the drop, the runtime never closes | LIMITATION | interp js c | med | none (ours leaks too) | upstream/socket_drop.bend |
+| U19 | a Socket dropped without Socket.close keeps its descriptor until exit: the checker allows the drop, the runtime never closes | LIMITATION | interp js c | med | ours: the check warns (bend2/hand.ts); the runtime still leaks | upstream/socket_drop.bend |
 | U20 | a U32 taken apart to its Word and walked to a default arm: the C build fails (CID_WNIL undeclared) | BUG | c | med | ours: WNil among comp.ts's RUNTIME_ADTS | upstream/word_unpack.bend |
 | U21 | the JS lane runs a non-tail recursion on the host stack: 100000 deep overflows where C answers | LIMITATION | interp js | med | none (WONTFIX.txt SOON, #798 #802) | upstream/js_deep_recursion.bend |
 | U22 | a Bool a polymorphic call hands back (Bool.pick(Bool, ..)) fed to Bool.or / Bool.xor: C reads its box as the Bool | BUG | c | high | ours: emit_intr unboxes to the native's layout | upstream/bool_box_native.bend |
@@ -414,8 +414,10 @@ connection refused). A connect to a black hole waits the kernel's ~75 s
 
 ## U19. A dropped `Socket` is never closed
 
-**Class** LIMITATION, med. **Lanes** interp, JS, C. **Fix** none; our
-branch leaks the same.
+**Class** LIMITATION, med. **Lanes** interp, JS, C. **Fix** ours warns:
+`bend2/hand.ts`, a lint over the checked defs, names each handle a def
+binds and never uses (`warning: 2 handles are dropped unused` on the
+repro, `got: s`, `dialed: s`); the runtime leaks the same.
 
 **Where** (canon `95317d95`) a handle is affine, and "dropping one is
 always free" (`guide/GUIDE.md:219`), though Base's own comment calls

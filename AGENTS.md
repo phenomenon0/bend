@@ -11,6 +11,7 @@ lines its run must print, and the gates run on the mini cluster.
     bend2/bend.ts       the language: parser, theory, checker
     bend2/comp.ts       the compiler and the runtimes (C, Metal, CUDA, JS)
     bend2/main.ts       the CLI; imported, the .bend loader for bun and node
+    bend2/hand.ts       a lint over the checked defs: handles bound, never used
     bend2/base.bend     the base library
     bend2/time.bend     dates: Time.iso, Time.http (imported by path)
     bend2/bend.lean     the core, mechanized in Lean
