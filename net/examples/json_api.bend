@@ -64,12 +64,14 @@ def add.of(+text: Bytes(), st: Store) -> Store & Http.Response:
       (Store{(n + 1 : U32), Map.set(&2, Bytes(), ns, id, text)},
         Http.with.header(Json.respond(201, note(id, text)), "location", Bytes.append("/notes/", id)))
 
-def add.text(+db: Chan(Store), m: Maybe<&2, Bytes()>) -> IO(Http.Response):
+# the note's text: a string, or a 422 that says why not ("text is
+# required", "text must be a string")
+def add.text(+db: Chan(Store), m: Json.Got(Bytes())) -> IO(Http.Response):
   match m:
-    case Some{+text}:
+    case Done{+text}:
       locked(db, st => add.of(text, st))
-    case None{}:
-      Http.reply(Json.respond(422, Json.obj([Json.kv("error", Json.str("a note needs a text"))])))
+    case Fail{why}:
+      Http.reply(Json.errors(422, [why]))
 
 def add.body(+db: Chan(Store), r: Result<&2, &2, J.Why, J.Json>) -> IO(Http.Response):
   match r:
@@ -132,7 +134,7 @@ def app(+db: Chan(Store), r: Http.Request) -> IO(Http.Response):
 
 def main() -> IO(Unit):
   do IO<Unit>:
-    xs : List<String> <- IO.args()
+    +xs : List<&2, String> <- Server.argv([])
     +db : Chan(Store) <- Chan.new(Store, 1)
     ok : Bool <- Chan.send(Store, db, Store{1, Map.new(&2, Bytes())})
     Server.serve.with(~Chan(Store), ~app, db, Server.args(xs, Server.config(8080)))

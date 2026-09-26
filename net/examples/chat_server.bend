@@ -64,11 +64,12 @@ def enter(+hub: WsServer.Hub, r: Http.Request) -> IO(WsServer.Take):
 def page(r: Http.Request) -> IO(Http.Response):
   Http.reply(Http.html(200, "<!doctype html><meta charset=utf-8><title>room</title><pre id=log></pre><input id=say autofocus><script>let w=new WebSocket((location.protocol=='https:'?'wss://':'ws://')+location.host+'/room');w.onmessage=e=>log.textContent+=e.data+'\\n';say.onkeydown=e=>{if(e.key=='Enter'){w.send(say.value);say.value=''}}</script>\n"))
 
+# the page and the room, each request logged (the room's as its 101)
 def routes(+hub: WsServer.Hub) -> List<&1, Server.Route>:
-  [Server.get("/", page), WsServer.ws("/room", r => enter(hub, r))]
+  Server.wrap(~Server.logged.around, [Server.get("/", page), WsServer.ws("/room", r => enter(hub, r))])
 
 def main() -> IO(Unit):
   do IO<Unit>:
     +hub : WsServer.Hub <- WsServer.hub.new()
-    xs : List<String> <- IO.args()
+    +xs : List<&2, String> <- Server.argv([])
     WsServer.serve.with(~WsServer.Hub, ~routes, hub, Server.args(xs, Server.config(8765)))

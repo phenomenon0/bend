@@ -2,16 +2,17 @@
 # The laws are not vacuous. Each mutant breaks the server the way a bug
 # in HPACK, the framing, the stream state machine, flow control, the
 # budgets or the request checks would, and PROOF.bend must then fail,
-# naming a law. Each is applied in place, checked and undone; the
-# unmutated proof is checked clean first and last.
+# naming a law. Each runs in a scratch copy of the tree of its own,
+# re-checked from the mutated file on (wire/mutate.py); a clean copy
+# checks clean.
 #
-#   python3 demos/io_http2/mutants.py        (from the repo root)
-import os, re, subprocess, sys
+#   python3 demos/io_http2/mutants.py [-j N] [--shard i/n]   (from the repo root)
+import os, re, sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(HERE))
-BEND = os.path.join(ROOT, 'bend2', 'main.ts')
-PROOF = os.path.join(HERE, 'PROOF.bend')
+sys.path.insert(0, os.path.join(ROOT, 'wire'))
+import mutate as M
 HP, FM, CN, MN = (os.path.join(HERE, f) for f in ('hpack.bend', 'frame.bend', 'conn.bend', 'main.bend'))
 
 # (what, file, before, after, the law it breaks: the checker stops at
@@ -124,37 +125,26 @@ MUTANTS = [
       L.Go{[L.Raw{w}], c}''', 'dead_ends'),
 ]
 
-def check():
-  r = subprocess.run(['bun', BEND, PROOF], capture_output=True, text=True, cwd=ROOT)
-  return (r.stdout + r.stderr).strip()
-
 def main():
-  out = check()
+  jobs, shard = M.args()
+  bases, res = M.run(lambda: M.tree(('demos/io_http2', 'demos/io_http_engine', 'wire', 'power'), prefix='h2_laws_'),
+    'demos/io_http2/PROOF.bend', [(w, os.path.relpath(p, ROOT), b, a) for w, p, b, a, _ in MUTANTS], jobs, shard)
+  out = bases['demos/io_http2/PROOF.bend']
   if out != 'All terms check.':
     print('the unmutated proof does not check:\n' + out[:2000])
     sys.exit(1)
   bad = 0
-  for what, path, before, after, law in MUTANTS:
-    src = open(path).read()
-    if src.count(before) != 1:
-      print('MISSING  %s: the text to mutate is not in %s exactly once' % (what, os.path.basename(path)))
+  for what, _, out in res:
+    if out is None:
+      print('MISSING  %s: the text to mutate is not in its file exactly once' % what)
       bad += 1
       continue
-    open(path, 'w').write(src.replace(before, after))
-    try:
-      out = check()
-    finally:
-      open(path, 'w').write(src)
     killed = out != 'All terms check.'
     m = re.search(r'Location: (\S+)', out)
     at = m.group(1) if m else out.splitlines()[0][:60] if out else ''
     print('%s %-62s %s' % ('killed' if killed else 'LIVED ', what, 'at ' + at if killed else ''))
     bad += not killed
-  out = check()
-  if out != 'All terms check.':
-    print('the proof does not check after the mutants were undone')
-    bad += 1
-  print('%d of %d mutants killed' % (len(MUTANTS) - bad, len(MUTANTS)))
+  print('%d of %d mutants killed' % (len(res) - bad, len(res)))
   sys.exit(1 if bad else 0)
 
 main()

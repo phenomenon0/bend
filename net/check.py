@@ -12,6 +12,7 @@ pipelining, HEAD, keep-alive and close, its refusals (400, 408, 413,
 414, 431), its timeouts (head, body, idle), the connection limit,
 100-continue and SIGTERM; the router's 404 and 405 with Allow, the JSON
 API and the file server; the middleware as templates (greet), the
+handler's time (a handler that sleeps forever: a 503 that closes), the
 listening address and the banner that names it, a TLS certificate that
 does not load named; and the client against Python peers: plain and
 TLS (a self-signed certificate refused, then trusted by --ca), refused
@@ -24,7 +25,11 @@ returns without reading, 100-continue, pipelining after a streamed body
 and before one (a body past max-body and the engine's 1 MiB behind a GET
 in one write), a head cut between its blank line's CR and LF, and the
 heads the RFC refuses (a bare LF, a fold, two lengths that disagree, a
-length past a U32, two Hosts) each a 400 with no byte of its body read.
+length past a U32, two Hosts) each a 400 with no byte of its body read;
+and streamed responses (export, events): chunked, 1 GB byte for byte in
+bounded memory, a declared length exact, short and long, HEAD, HTTP/1.0,
+a client gone mid-body, server-sent events with curl -N, a relay that
+streams a 100 MB upstream body end to end (relay_stream).
 WebSockets on the server: chat_server's room with two ws_chat clients
 (its broadcast), its page beside it, its 426 and 400, the 101's Accept
 and subprotocol, SIGTERM's 1001, and ws_echo from Python's websockets
@@ -35,8 +40,11 @@ the client to http://[::1]:port/ (Host [::1]:port, pooled), to a name
 with both families whichever one listens, over TLS to an IP-literal
 (its IP SAN checked, one without refused, no SNI sent); a WebSocket
 room on ::1 through ws://[::1]:port/ (its Host bracketed).
-Every Bend snippet in guide/NETWORKING.md must be in a file under net/,
-word for word. Prints PASS/FAIL per case and exits 1 on any failure.
+Server.argv's refusals (an unknown flag, a value missing, a number that
+is none), typed JSON fields (signup: every reason in one 400), and
+Server.wrap's log lines and headers over files and a WebSocket route.
+Every Bend snippet in guide/NETWORKING.md and guide/net/*.md must be in
+a file under net/, word for word. Prints PASS/FAIL per case and exits 1 on any failure.
 """
 import gzip, hashlib, os, shutil, signal, socket, ssl, subprocess, sys, tempfile, threading, time
 
@@ -222,7 +230,11 @@ def check_notes(notes):
     r = get(port, "/notes", body=b'{"text":', method="POST")
     ok("json: a body that is not JSON is a 400 saying where", r.startswith(b"HTTP/1.1 400") and b"syntax error" in r, r)
     r = get(port, "/notes", body=b'{"t":1}', method="POST")
-    ok("json: a note with no text is a 422", r.startswith(b"HTTP/1.1 422"), r)
+    ok("json: a note with no text is a 422 that says so", r.startswith(b"HTTP/1.1 422")
+       and r.endswith(b'{"errors":["text is required"]}'), r)
+    r = get(port, "/notes", body=b'{"text":7}', method="POST")
+    ok("json: a text that is a number is no text (Json.get.str)", r.startswith(b"HTTP/1.1 422")
+       and r.endswith(b'{"errors":["text must be a string"]}'), r)
     r = get(port, "/notes", body=b'{"text":"' + b"x" * 70000 + b'"}', method="POST")
     ok("json: a body past its budget is a 400", r.startswith(b"HTTP/1.1 400") and b"budget" in r, r)
     r = get(port, "/notes/1", method="DELETE")
@@ -237,7 +249,7 @@ def check_notes(notes):
 
 def check_greet(greet):
     port = PORT + 6
-    p = start([greet, "--port", str(port)], port)
+    p = start([greet, "--port", str(port), "--handler-ms", "600"], port)
     r = get(port, "/greet?name=Ada")
     ok("greet: a query value, decoded", r.startswith(b"HTTP/1.1 200") and r.endswith(b"Hello, Ada!\n"), r)
     ok("greet: ~Server.logged(~Server.secured(~app)) adds the browser's headers", b"x-frame-options: DENY" in r, r)
@@ -245,10 +257,36 @@ def check_greet(greet):
     ok("greet: a handler that can fail, answering", r.endswith(b"\r\n\r\n5\n"), r)
     r = get(port, "/add/2/x")
     ok("greet: a handler's Fail is a plain 500", r.startswith(b"HTTP/1.1 500"), r)
+    # the handler's time: /stall sleeps forever; past --handler-ms the
+    # server answers 503 that closes, and nothing after it
+    t0 = time.time()
+    r, eof = raw(port, b"GET /stall HTTP/1.1\r\nHost: t\r\n\r\nGET /greet?name=Late HTTP/1.1\r\nHost: t\r\n\r\n",
+                 wait=4, total=4)
+    dt = time.time() - t0
+    ok("handler time: a handler that never answers is a 503 at --handler-ms, closing, and nothing after it",
+       r.startswith(b"HTTP/1.1 503") and b"connection: close" in r.lower() and eof and r.count(b"HTTP/1.1 ") == 1
+       and b"Late" not in r and 0.5 < dt < 2.0, (r, eof, dt))
+    t0 = time.time()
+    r, eof = raw(port, b"GET /greet?name=Ada HTTP/1.1\r\nHost: t\r\n\r\nGET /stall HTTP/1.1\r\nHost: t\r\n\r\n",
+                 wait=4, total=4)
+    dt = time.time() - t0
+    ok("handler time: what was answered before it goes out first, then the 503",
+       r.startswith(b"HTTP/1.1 200") and r.count(b"HTTP/1.1 503") == 1 and r.index(b"Hello, Ada!") < r.index(b"HTTP/1.1 503")
+       and eof and 0.5 < dt < 2.0, (r, eof, dt))
+    held = [socket.create_connection(("127.0.0.1", port)) for _ in range(3)]
+    for h in held:
+        h.sendall(b"GET /stall HTTP/1.1\r\nHost: t\r\n\r\n")
+    time.sleep(0.1)
+    r = get(port, "/greet?name=Bo")
+    ok("handler time: handlers waiting do not hold the server: another request is answered at once",
+       r.startswith(b"HTTP/1.1 200") and r.endswith(b"Hello, Bo!\n"), r)
+    for h in held:
+        h.close()
     stop(p)
     log = p.stderr.read().decode()
     ok("greet: the logged template writes a line per request", "GET /greet 200" in log and "GET /add/2/x 500" in log
        and "handler failed: /add wants two numbers" in log, log)
+    ok("handler time: a handler let go is never logged as answering", "GET /stall" not in log, log)
 
 def check_listen(hello, tmp):
     port = PORT + 7
@@ -264,6 +302,32 @@ def check_listen(hello, tmp):
     err = r.stderr.decode()
     ok("server: a certificate that does not load ends it, saying TLS setup failed and naming the file",
        r.returncode != 0 and "TLS setup failed" in err and "no certificate" in err and missing in err, (r.returncode, err))
+
+def check_args(hello, files):
+    """Server.argv: an unknown flag, a value missing, a number that is none, each refused with a usage line"""
+    for args, why in [(["--prot", "80"], "unknown flag --prot"), (["--port"], "--port needs a value (N)"),
+                      (["--port", "eighty"], "--port wants a number, not eighty"), (["x"], "unexpected argument x")]:
+        r = subprocess.run([hello] + args, capture_output=True, timeout=10)
+        err = r.stderr.decode()
+        ok("args: %s: refused, exit 2, with a usage line" % " ".join(args),
+           r.returncode == 2 and why in err and "usage: [--host A] [--port N]" in err, (r.returncode, err))
+    r = subprocess.run([files, "--port", "1", "--nope"], capture_output=True, timeout=10)
+    err = r.stderr.decode()
+    ok("args: a program's own flags are in its usage line", r.returncode == 2 and "usage: [--root DIR] [--host A]" in err,
+       (r.returncode, err))
+
+def check_signup(signup):
+    """typed JSON fields: every reason at once"""
+    port = PORT + 31
+    p = start([signup, "--port", str(port)], port)
+    r = get(port, "/signup", body=b'{"name":"Ada","age":36,"email":"ada@x.org","tags":["math"]}', method="POST")
+    ok("json: typed fields read, a default for the missing one", r.startswith(b"HTTP/1.1 201")
+       and r.endswith(b'{"name":"Ada","age":36,"email":"ada@x.org","tags":1,"newsletter":false}'), r)
+    r = get(port, "/signup", body=b'{"name":7,"age":-1,"tags":{},"newsletter":null}', method="POST")
+    ok("json: a 400 lists every problem", r.startswith(b"HTTP/1.1 400") and r.endswith(
+       b'{"errors":["name must be a string","age must be a whole number from 0 to 4294967295","email is required",'
+       b'"tags must be an array","newsletter must be true or false"]}'), r)
+    stop(p)
 
 def check_files(files, root):
     port = PORT + 2
@@ -282,7 +346,13 @@ def check_files(files, root):
     ok("files: a symbolic link is not followed", r.startswith(b"HTTP/1.1 404"), r)
     r = get(port, "/x", method="POST")
     ok("files: POST is a 405", r.startswith(b"HTTP/1.1 405"), r)
+    r = get(port, "/sub/b.css")
+    ok("files: Server.wrap secures the static files", b"content-security-policy: default-src 'self'" in r
+       and b"x-content-type-options: nosniff" in r, r)
     stop(p)
+    log = p.stderr.read().decode()
+    # a file's line is written before the file is opened: 200 and no length, a 404 or not
+    ok("files: Server.wrap logs the static files", "GET /sub/b.css 200" in log and "GET /.env " in log, log[-600:])
 
 # The client
 # ==========
@@ -623,6 +693,151 @@ def check_stream(upload_bin, tmp):
     ok("stream: a chunked body past --max-stream is a 413 that closes", r.startswith(b"HTTP/1.1 413") and eof, r)
     stop(p)
 
+# Streamed responses
+# ==================
+
+def pattern_sha(n):
+    """the sha256 of export's /bytes?n=N: a 16 KiB block of a pattern, over and over"""
+    blk = bytes((i * 7 + 3) % 256 for i in range(16384))
+    h, left = hashlib.sha256(), n
+    while left:
+        m = min(left, len(blk)); h.update(blk[:m]); left -= m
+    return h.hexdigest()
+
+def dechunk(b):
+    """a chunked body, read strictly: its bytes, and whether it ended with the last chunk"""
+    out = b""
+    while True:
+        line, _, b = b.partition(b"\r\n")
+        n = int(line, 16)
+        if n == 0:
+            return out, b == b"\r\n"
+        out, b = out + b[:n], b[n:]
+        if not b.startswith(b"\r\n"):
+            return out, False
+        b = b[2:]
+
+def check_pour(export, events, relay, tmp):
+    port = PORT + 12
+    errf = os.path.join(tmp, "export.err")
+    p = subprocess.Popen([export, "--port", str(port)], stdout=subprocess.DEVNULL, stderr=open(errf, "w"))
+    PROCS.append(p)
+    if not up(port):
+        sys.exit("never listened: export")
+    r = get(port, "/export.csv?rows=3")
+    h, _, body = r.partition(b"\r\n\r\n")
+    rows, fin = dechunk(body)
+    ok("pour: a body of unknown length is chunked (Stream.pour), the rows written a block at a time",
+       b"transfer-encoding: chunked" in h and b"content-length" not in h.lower() and fin
+       and rows == b"0,user0,0\n1,user1,2\n2,user2,4\n", r)
+    r, eof = raw(port, b"GET /export.csv?rows=1 HTTP/1.1\r\nHost: t\r\n\r\nGET / HTTP/1.1\r\nHost: t\r\nConnection: close\r\n\r\n")
+    ok("pour: after a chunked body the connection goes on (a pipelined request answered)",
+       r.count(b"HTTP/1.1 200") == 2 and b"\r\n0\r\n\r\nHTTP/1.1 200" in r and eof, r)
+    r = get(port, "/export.ndjson?rows=2")
+    ok("pour: NDJSON, the same way", dechunk(r.partition(b"\r\n\r\n")[2])[0] ==
+       b'{"id":0,"name":"user0","score":0}\n{"id":1,"name":"user1","score":2}\n', r)
+    N = 1000 * 1000 * 1000
+    base = peak_kb(p.pid)
+    with Peak(p.pid) as pk:
+        t0 = time.time()
+        c = subprocess.run("curl -sS --fail 'http://127.0.0.1:%d/bytes?n=%d' | sha256sum" % (port, N), shell=True,
+                           capture_output=True, text=True, timeout=300)
+        dt = time.time() - t0
+    ok("pour: 1 GB chunked, byte for byte (curl's own reading of the chunks), peak RSS %d kB (%d kB before), %.0f MB/s"
+       % (pk.most, base, N / dt / 1e6), c.returncode == 0 and c.stdout.split()[0] == pattern_sha(N) and pk.most < base + 16384,
+       (c.returncode, c.stdout, c.stderr[-200:], base, pk.most))
+    r, eof = raw(port, b"GET /sized?n=25 HTTP/1.1\r\nHost: t\r\n\r\nGET / HTTP/1.1\r\nHost: t\r\nConnection: close\r\n\r\n")
+    ok("pour: a declared length (Stream.pour.len) is a Content-Length, the body exactly it, and the connection goes on",
+       r.startswith(b"HTTP/1.1 200 OK\r\n") and b"content-length: 25\r\n\r\n0123456789012345678901234HTTP/1.1 200" in r
+       and b"transfer-encoding" not in r and eof, r)
+    r, eof = raw(port, b"GET /sized?n=25&give=15 HTTP/1.1\r\nHost: t\r\n\r\nGET / HTTP/1.1\r\nHost: t\r\n\r\n")
+    ok("pour: a producer short of its length: what it wrote, then the connection closes (nothing after it read)",
+       r.endswith(b"content-length: 25\r\n\r\n012345678901234") and eof, r)
+    r, eof = raw(port, b"GET /sized?n=25&give=35 HTTP/1.1\r\nHost: t\r\n\r\nGET / HTTP/1.1\r\nHost: t\r\n\r\n")
+    time.sleep(0.2)
+    ok("pour: a producer past its length: the write past it refused whole (ELarge), never more than declared, then close",
+       r.endswith(b"content-length: 25\r\n\r\n01234567890123456789") and eof
+       and "sized stopped after 20: the body is too large" in open(errf).read(), (r, open(errf).read()))
+    r, eof = raw(port, b"HEAD /bytes?n=100000 HTTP/1.1\r\nHost: t\r\n\r\nHEAD /sized?n=25 HTTP/1.1\r\nHost: t\r\n\r\n"
+                       b"GET /sized?n=3 HTTP/1.1\r\nHost: t\r\nConnection: close\r\n\r\n")
+    ok("pour: HEAD sends the head only (chunked's, and the declared length's), and the connection goes on",
+       r == b"HTTP/1.1 200 OK\r\ncontent-type: application/octet-stream\r\ntransfer-encoding: chunked\r\n\r\n"
+            b"HTTP/1.1 200 OK\r\ncontent-type: text/plain\r\ncontent-length: 25\r\n\r\n"
+            b"HTTP/1.1 200 OK\r\ncontent-type: text/plain\r\ncontent-length: 3\r\nconnection: close\r\n\r\n012" and eof, r)
+    r, eof = raw(port, b"GET /export.csv?rows=2 HTTP/1.0\r\n\r\n")
+    ok("pour: to HTTP/1.0, a body of unknown length runs to the close",
+       r == b"HTTP/1.1 200 OK\r\ncontent-type: text/csv\r\nconnection: close\r\n\r\n0,user0,0\n1,user1,2\n" and eof, r)
+    s = socket.create_connection(("127.0.0.1", port)); s.settimeout(5)
+    s.sendall(b"GET /bytes?n=1000000000 HTTP/1.1\r\nHost: t\r\n\r\n")
+    got = 0
+    while got < 1 << 20:
+        got += len(s.recv(65536))
+    s.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, b"\x01\x00\x00\x00\x00\x00\x00\x00")
+    s.close()
+    t0, said = time.time(), ""
+    while time.time() - t0 < 5 and "bytes stopped after" not in said:
+        time.sleep(0.05)
+        said = open(errf).read()
+    line = [l for l in said.splitlines() if "bytes stopped after" in l]
+    ok("pour: a client gone mid-body is an error to the producer (%s), within %.2f s, and the server goes on"
+       % (line[0].split(": ", 1)[1] if line else "none", time.time() - t0),
+       line and "closed the connection" in line[0] and get(port, "/").startswith(b"HTTP/1.1 200"), said)
+    s = socket.socket(); s.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 4096)
+    s.connect(("127.0.0.1", port))
+    s.sendall(b"GET /bytes?n=1000000000 HTTP/1.1\r\nHost: t\r\n\r\n")
+    t0, said = time.time(), ""
+    while time.time() - t0 < 40 and "stalled" not in said:
+        time.sleep(0.2)
+        said = open(errf).read()
+    dt = time.time() - t0
+    s.close()
+    line = [l for l in said.splitlines() if "bytes stopped after" in l and "stalled" in l]
+    n = int(line[0].split("after ")[1].split(":")[0]) if line else -1
+    ok("pour: a client that stops reading stops the producer (%d bytes written, the socket's buffers), then its send "
+       "stalls past the send time: ETime, after %.1f s" % (n, dt), line and 0 <= n < 64 << 20 and 9 < dt < 35, (said, dt))
+    rport = PORT + 14
+    rerr = os.path.join(tmp, "relay.err")
+    rl = subprocess.Popen([relay, "--port", str(rport), "--upstream", "http://127.0.0.1:%d" % port], stdout=subprocess.DEVNULL,
+                          stderr=open(rerr, "w"))
+    PROCS.append(rl)
+    if not up(rport):
+        sys.exit("never listened: relay_stream")
+    N = 100 * 1000 * 1000
+    base = peak_kb(rl.pid)
+    with Peak(rl.pid) as pk:
+        t0 = time.time()
+        c = subprocess.run("curl -sS --fail 'http://127.0.0.1:%d/relay?path=/bytes%%3Fn%%3D%d' | sha256sum" % (rport, N), shell=True,
+                           capture_output=True, text=True, timeout=300)
+        dt = time.time() - t0
+    ok("pour: a relay streams end to end (Client.stream into Stream.pour): 100 MB byte for byte, the relay's peak RSS %d kB "
+       "(%d kB before), %.0f MB/s" % (pk.most, base, N / dt / 1e6),
+       c.returncode == 0 and c.stdout.split()[0] == pattern_sha(N) and pk.most < base + 16384, (c.returncode, c.stdout, c.stderr[-200:]))
+    r, eof = raw(rport, b"GET /relay?path=/nope HTTP/1.1\r\nHost: t\r\n\r\n")
+    ok("pour: an upstream's 404, after the relay's head went: the body cut short (no last chunk), the connection closed",
+       r.startswith(b"HTTP/1.1 200") and b"\r\n0\r\n\r\n" not in r and eof and "upstream answered 404" in open(rerr).read(), r)
+    stop(rl)
+    stop(p)
+    port = PORT + 13
+    p = start([events, "--port", str(port), "--keepalive-ms", "200", "--handler-ms", "600"], port)
+    t0 = time.time()
+    c = subprocess.run(["curl", "-N", "-sS", "-i", "--max-time", "10", "http://127.0.0.1:%d/ticks?n=3&ms=500" % port],
+                       capture_output=True, text=True)
+    dt = time.time() - t0
+    h, _, b = c.stdout.replace("\r\n", "\n").partition("\n\n")
+    evs = [e for e in b.split("\n\n") if e.startswith("event:")]
+    ok("pour: server-sent events (Stream.events) with curl -N: each event as it comes, keepalives between, the end (%.2f s)" % dt,
+       c.returncode == 0 and "content-type: text/event-stream" in h and "cache-control: no-cache" in h
+       and evs == ["event: tick\nid: %d\ndata: %d" % (i, i) for i in range(3)] and b.count(": keepalive\n\n") >= 2
+       and 0.9 < dt < 3, (c.returncode, c.stdout, c.stderr))
+    ok("handler time: a stream begun runs past --handler-ms (600): only the handler's answer is timed, then the sends",
+       c.returncode == 0 and len(evs) == 3 and dt > 0.9, dt)
+    t0 = time.time()
+    r, eof = raw(port, b"GET /ticks?n=1&delay=5000 HTTP/1.1\r\nHost: t\r\n\r\n", wait=4, total=4)
+    dt = time.time() - t0
+    ok("handler time: a Stream.get handler that has not answered at --handler-ms is a 503 that closes",
+       r.startswith(b"HTTP/1.1 503") and b"connection: close" in r.lower() and eof and 0.5 < dt < 2.0, (r, eof, dt))
+    stop(p)
+
 # WebSockets on the server
 # ========================
 
@@ -643,6 +858,13 @@ def check_ws(room, chat_bin, echo):
     r = raw(port, b"GET /room HTTP/1.1\r\nHost: t\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
             b"Sec-WebSocket-Key: short\r\nSec-WebSocket-Version: 13\r\n\r\n")[0]
     ok("ws: a key that is not sixteen bytes in base64 is a 400", b" 400 " in r.split(b"\r\n", 1)[0], r[:200])
+    r = raw(port, b"GET /room HTTP/1.1\r\nHost: t\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
+            b"Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n")[0]
+    ok("ws: an upgrade with no Sec-WebSocket-Version is a 426 naming 13 (RFC 6455 4.4)",
+       b" 426 " in r.split(b"\r\n", 1)[0] and b"sec-websocket-version: 13" in r.lower(), r[:300])
+    r = raw(port, b"POST /room HTTP/1.1\r\nHost: t\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
+            b"Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\nContent-Length: 0\r\n\r\n")[0]
+    ok("ws: a POST that asks to upgrade is a 400, as a HEAD is (RFC 6455 4.2.1)", b" 400 " in r.split(b"\r\n", 1)[0], r[:200])
     r = raw(port, b"GET /room HTTP/1.1\r\nHost: t\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
             b"Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n"
             b"Sec-WebSocket-Protocol: x, chat\r\nSec-WebSocket-Extensions: permessage-deflate\r\n\r\n", wait=0.5)[0]
@@ -669,6 +891,9 @@ def check_ws(room, chat_bin, echo):
         code = None
     ok("ws: SIGTERM closes the room with 1001, and the server ends", "closed the room: 1001" in c_out and code == 0,
        (c_out, code))
+    log = p.stderr.read().decode()
+    ok("ws: Server.wrap logs the page and the room, its 101 and its refusals", "GET / 200" in log
+       and "GET /room 101" in log and "GET /room 426" in log and "POST /room 400" in log, log[-600:])
     try:
         import asyncio, websockets
         from websockets.asyncio.client import connect
@@ -875,15 +1100,19 @@ def check_v6(hello, fetch_bin, tls_bin, room, chat_bin, tmp):
     ok("v6: the WebSocket client's Host field is [::1]:port", ("\r\nHost: [::1]:%d\r\n" % port).encode() in head, head)
 
 def check_guide():
-    """every Bend snippet in guide/NETWORKING.md is in a file under net/, word for word"""
+    """every Bend snippet in guide/NETWORKING.md and guide/net/*.md is in a file under net/, word for word"""
     srcs = []
     for d, _, fs in os.walk(HERE):
         srcs += [open(os.path.join(d, f)).read() for f in fs if f.endswith(".bend")]
-    guide = open(os.path.join(ROOT, "guide", "NETWORKING.md")).read()
-    snips = [b.split("```", 1)[0] for b in guide.split("```python\n")[1:]]
-    stale = [b for b in snips if not any(b in src for src in srcs)]
-    ok("guide: each of NETWORKING.md's %d snippets is in a file under net/" % len(snips), not stale,
-       stale[0][:200] if stale else "")
+    pages = [os.path.join(ROOT, "guide", "NETWORKING.md")]
+    pages += sorted(os.path.join(ROOT, "guide", "net", f) for f in os.listdir(os.path.join(ROOT, "guide", "net"))
+                    if f.endswith(".md"))
+    for page in pages:
+        guide = open(page).read()
+        snips = [b.split("```", 1)[0] for b in guide.split("```python\n")[1:]]
+        stale = [b for b in snips if not any(b in src for src in srcs)]
+        ok("guide: each of %s's %d snippets is in a file under net/" % (os.path.relpath(page, ROOT), len(snips)),
+           not stale, stale[0][:200] if stale else "")
 
 def main():
     check_guide()
@@ -906,8 +1135,11 @@ def main():
         check_files(files, root)
         check_greet(greet)
         check_listen(hello, tmp)
+        check_args(hello, files)
+        check_signup(bins["signup"])
         check_client(fetch_bin, hello, tmp)
         check_stream(bins["upload"], tmp)
+        check_pour(bins["export"], bins["events"], bins["relay_stream"], tmp)
         check_ws(bins["chat_server"], bins["ws_chat"], bins["ws_echo"])
         check_v6(hello, fetch_bin, bins["tls_server"], bins["chat_server"], bins["ws_chat"], tmp)
     finally:

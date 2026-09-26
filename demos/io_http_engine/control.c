@@ -113,9 +113,12 @@ static void serve(Conn* k) {
 }
 
 // the same body cap as main.bend's body.cap(): a length past it is
-// refused here at the digit that crosses it (main.bend refuses it where
-// the head ends; either way before a byte of the body)
+// refused where the head ends, as main.bend's body.fit refuses it, before
+// a byte of the body; a digit only guards the length from wrapping
+// (main.bend's len.top(): a length whose value before the digit is past
+// 429496728 is refused there)
 #define BODY_CAP 1048576u
+#define LEN_TOP 429496728u
 
 // the head's end: HTTP/1.1 carries one Host and HTTP/1.0 at most one; a
 // Transfer-Encoding with a length, or in HTTP/1.0, is refused; chunked
@@ -124,6 +127,7 @@ static void head_done(Conn* k) {
   if (k->v10 ? k->hosts > 1 : k->hosts != 1) { k->st = BAD; return; }
   if (k->v10 && !k->ka) k->close = 1;
   k->bodn = 0;
+  if (!k->te && k->clen > BODY_CAP) { k->st = BAD; return; }
   if (k->te) {
     if (k->hascl || k->v10) { k->st = BAD; return; }
     k->st = CHK; k->pos = C_SIZE0; k->csz = 0; k->left = BODY_CAP;
@@ -340,7 +344,7 @@ static void step(Conn* k, uint8_t c) {
       else if (t != K_SP && t != K_HT) k->st = BAD;
       break;
     case IN_L:
-      if (t == K_DG) { k->v = k->v * 10 + (c - 48); if (k->v > BODY_CAP) k->st = BAD; }
+      if (t == K_DG) { if (k->v > LEN_TOP) k->st = BAD; else k->v = k->v * 10 + (c - 48); }
       else if (t == K_SP || t == K_HT) k->st = IN_LT;
       else if (t == K_CR) clen_done(k);
       else k->st = BAD;

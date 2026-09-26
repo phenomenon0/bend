@@ -7,7 +7,8 @@
 # Flags: --config (monitors.json), --state (a path prefix: <state>.results.ndjson
 # and <state>.monitors.ndjson; its directory must exist), --web (the dashboard's
 # directory, apps/uptime/web), --webhook (overrides the config's), and every
-# Server.args flag (--port --host ...). The config:
+# Server.args flag (--port --host ...); any other is refused with a usage
+# line. The config:
 #
 #   {"webhook": "http://127.0.0.1:9000/hook",
 #    "monitors": [{"name": "api", "url": "http://127.0.0.1:9001/health",
@@ -20,6 +21,7 @@
 # feed and the dashboard are served (api.bend) until SIGTERM.
 import Base
 import ../../net/server.bend as Server
+import ../../net/client.bend as Client
 import ../../net/json.bend as Json
 import ../../net/ws_server.bend as WsServer
 import ../../power/json_value.bend as J
@@ -60,16 +62,12 @@ def cfg.monitors(xs: List<&2, J.Json>, +i: U32, r: M.Store & List<&2, Bytes()>) 
       (st, errs) = r
       cfg.monitors(t, (i + 1 : U32), cfg.one(i, M.check(x), st, errs))
 
-def cfg.list(m: Maybe<&2, J.Json>) -> M.Store & List<&2, Bytes()>:
-  match m:
-    case Some{v}:
-      match v:
-        case J.Arr{xs}:
-          cfg.monitors(xs, 0, (M.store.new(), []))
-        case _:
-          (M.store.new(), ["monitors must be an array"])
-    case None{}:
-      (M.store.new(), [])
+def cfg.list(r: Json.Got(List<&2, J.Json>)) -> M.Store & List<&2, Bytes()>:
+  match r:
+    case Done{xs}:
+      cfg.monitors(xs, 0, (M.store.new(), []))
+    case Fail{why}:
+      (M.store.new(), [why])
 
 def cfg.done(r: M.Store & List<&2, Bytes()>) -> IO(M.Store):
   (st, errs) = r
@@ -108,18 +106,12 @@ def count(st: M.Store) -> Nat:
 
 def main() -> IO(Unit):
   do IO<Unit>:
-    a1 : List<String> <- IO.args()
-    a2 : List<String> <- IO.args()
-    a3 : List<String> <- IO.args()
-    a4 : List<String> <- IO.args()
-    a5 : List<String> <- IO.args()
-    +cpath : Bytes() = Server.flag(a1, "--config", "monitors.json")
-    +state : Bytes() = Server.flag(a2, "--state", "uptime")
-    +web : Bytes() = Server.flag(a3, "--web", "apps/uptime/web")
-    +hookf : Bytes() = Server.flag(a4, "--webhook", "")
+    +xs : List<&2, String> <- Server.argv(["--config FILE", "--state PREFIX", "--web DIR", "--webhook URL"])
+    +cpath : Bytes() = Server.flag(xs, "--config", "monitors.json")
+    +state : Bytes() = Server.flag(xs, "--state", "uptime")
     ctext : Maybe<&2, Bytes()> <- Files.slurp(cpath)
     +cj : J.Json <- cfg.read(cpath, ctext)
-    st0 : M.Store <- cfg.done(cfg.list(Json.get(cj, "monitors")))
+    st0 : M.Store <- cfg.done(cfg.list(Json.or(List<&2, J.Json>, cj, "monitors", [], Json.get.arr)))
     st1 : M.Store <- Files.replay(1, state ++ ".monitors.ndjson", st0)
     +st2 : M.Store <- Files.replay(0, state ++ ".results.ndjson", st1)
     lf : File <- Files.appending(state ++ ".results.ndjson")
@@ -131,8 +123,9 @@ def main() -> IO(Unit):
     +oc : Chan(File) <- Chan.new(File, 1)
     ok3 : Bool <- Chan.send(File, oc, of)
     +hub : WsServer.Hub <- WsServer.hub.new()
-    +hook : Bytes() = Bool.pick(Bytes(), String.is_empty(hookf), Maybe.default(&2, Bytes(), Json.get.str(cj, "webhook"), ""), hookf)
-    +e : E.Env = E.Env{db, hub, lc, oc, hook, web}
+    +cl : Client.Session <- Client.session(Client.opts())
+    +hook : Bytes() = Server.flag(xs, "--webhook", M.str.of(cj, "webhook"))
+    +e : E.Env = E.Env{db, hub, lc, oc, hook, Server.flag(xs, "--web", "apps/uptime/web"), cl}
     IO.print_err("uptime: " ++ Nat.show(count(st2)) ++ " monitors, state " ++ state ++ ", webhook " ++ hook)
     start.all(e, M.store.mons(st2))
-    WsServer.serve.with(~E.Env, ~Api.routes, e, Server.args(a5, Server.config(8080)))
+    WsServer.serve.with(~E.Env, ~Api.routes, e, Server.args(xs, Server.config(8080)))

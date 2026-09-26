@@ -243,7 +243,7 @@ const OPERATIONS: Record<string, Intr> = Object.setPrototypeOf({
     JS: "cmp_new(BigInt.asIntN(64, $0), BigInt.asIntN(64, $1))",
   },
   i64_neg: {
-    C:  "((u64)(-(int64_t)($0)))",
+    C:  "((u64)0 - (u64)($0))", // -(int64_t)min is UB
     JS: "((-$0) & 0xFFFFFFFFFFFFFFFFn)",
   },
   i64_shr_s: {
@@ -2024,12 +2024,198 @@ function anf(cb: Carb, t: HTerm, ty: HTerm | null = null): HTerm {
 function def_body(cb: Carb, k: Name): TLD | undefined {
   const tld = cb.book.tlds[k];
   if (tld?.$ === "Def" && tld.e !== undefined && tld.h === undefined) {
-    const h = Bend.term_higher(tld.e);
+    const h0 = Bend.term_higher(tld.e);
+    const h = pick_any(tld.e) ? pick_lift(cb, k, h0) : h0;
     const n = tld.n + Math.min(def_raise(cb.book, h, tld.n),
       tele_unbind(cb.book, tld.T).doms.length - tld.n);
     cb.book.tlds[k] = { ...tld, n, h };
   }
   return cb.book.tlds[k];
+}
+
+// Pick
+// ----
+// Bool.pick(A, c, a, b) is a def, so a call evaluates both arms. A site
+// whose arms are not both cheap (a variable, a literal, a constructor or a
+// word op of those) becomes a call to a def of its own that matches on c,
+// as a hand-written helper would: c and the arms' free variables are its
+// parameters, so only the chosen arm runs and the other's variables drop
+// with the match's arm. The checker never sees it: this is the emitters'
+// view of the body alone. The def's body is lowered to levels (its type
+// cells kept as they are), each site is lifted bottom-up, and the result
+// is raised again; a def with no such site keeps its body.
+
+type PickBind = { k: Bend.Name; q: Bend.Quant; A: HTerm | null };
+
+const PICK_WORD = /^(U32|I32|F32|U64|I64|F64|Char|Nat)\./;
+
+function pick_cheap(cb: Carb, t: Bend.LTerm): boolean {
+  const s = Bend.term_strip(t);
+  switch (s.$) {
+    case "Var": case "Lit": return true;
+    case "Ctr": return s.x.every((x) => pick_cheap(cb, x));
+    case "App": {
+      const [g, xs] = pick_spine(s);
+      const it = g.$ === "Ref" ? intr_of(cb, g.k) : undefined;
+      return g.$ === "Ref" && it !== undefined && it.call !== true
+        && PICK_WORD.test(g.k) && xs.every((x) => pick_cheap(cb, x)
+          || "Ref ADT Typ Qua".includes(Bend.term_strip(x).$));
+    }
+    default: return false;
+  }
+}
+
+function pick_lift(cb: Carb, def: Bend.Name, h: HTerm): HTerm {
+  let n = 0;
+  const cell = (T: HTerm): Bend.LTerm => Bend.term_cell(T) as Bend.LTerm;
+  const lift = (as: Bend.LTerm[], R: HTerm | null, d: number,
+    bs: PickBind[]): Bend.LTerm | null => {
+    const [, c, a, b] = as;
+    if (R === null || (pick_cheap(cb, a) && pick_cheap(cb, b))) {
+      return null;
+    }
+    const lv = new Set<number>();
+    const scan = (t: Bend.LTerm): void => {
+      switch (t.$) {
+        case "Var": if (t.i >= 0 && t.i < d) lv.add(t.i); return;
+        case "Sub": return scan(t.f);
+        case "Let": t.v.forEach(scan); return scan(t.f);
+        case "All": scan(t.A); return scan(t.B);
+        case "Lam": return scan(t.f);
+        case "App": scan(t.f); return scan(t.x);
+        case "ADT": case "Ctr": return t.x.forEach(scan);
+        case "Mat": scan(t.h); return scan(t.m);
+        case "Eql": scan(t.a); scan(t.b); return scan(t.T);
+        case "Rwt": scan(t.e); scan(t.p); return scan(t.f);
+        case "Min": scan(t.a); return scan(t.b);
+        case "Typ": return scan(t.g);
+        case "Ann": scan(t.x); return scan(t.T);
+        default: return;
+      }
+    };
+    scan(a);
+    scan(b);
+    const fv = [...lv].sort((x, y) => x - y);
+    if (fv.some((i) => bs[i]?.A == null)) {
+      return null;
+    }
+    const ps = fv.map((i) => bs[i]);
+    const k = def + "$pick" + String(n++);
+    const tel = (j: number): HTerm => j === ps.length ? R
+      : Bend.All(ps[j].q, ps[j].k, 0, ps[j].A as HTerm, () => tel(j + 1));
+    const T = Bend.All(Bend.Lone(), "c", 0, Bend.Ref("Bool"), () => tel(0));
+    const arm = (x: Bend.LTerm, j: number, env: Bend.Env): HTerm =>
+      j === ps.length ? Bend.term_higher(x, env)
+      : Bend.Ann(Bend.Lam(ps[j].k, 0, (v: HTerm) =>
+        arm(x, j + 1, Bend.list_set(env, fv[j], v)), undefined, ps[j].q),
+      tel(j));
+    const m = Bend.Ann(Bend.Mat("False", arm(b, 0, null),
+      Bend.Ann(Bend.Mat("True", arm(a, 0, null), Bend.Ann(Bend.Efq(), T)), T)),
+    T);
+    cb.book.tlds[k] = { $: "Def", n: 1 + ps.length, x: 0, T, v: m, h: m };
+    return Bend.Ann(fv.reduce((f: Bend.LTerm, i, j) => Bend.App(f,
+      Bend.Ann(Bend.Var(ps[j].k, i), cell(ps[j].A as HTerm))),
+    Bend.App(Bend.Ref(k), c)), cell(R));
+  };
+  const low = (t0: HTerm, d: number, bs: PickBind[],
+    ty: HTerm | null): Bend.LTerm => {
+    const t = t0.$ === "Var" && t0.i < 0 ? t0 : Bend.term_force(t0);
+    switch (t.$) {
+      case "Var": return t.i < 0 ? t as Bend.LTerm : Bend.Var(t.k, t.i, t.s);
+      case "Ref": return Bend.Ref(t.k, t.s, t.b);
+      case "Sub": return Bend.Sub(t.i, t.v.$ === "PVar" || t.v.$ === "PCtr"
+        ? t.v : low(t.v, d, bs, null), low(t.f, d, bs, null), t.s);
+      case "Let": {
+        const xs = t.k.map((k, j): HTerm => Bend.Var(k, d + j));
+        const vs = t.v.map((v) => low(v, d, bs, null));
+        const inner = [...bs, ...t.k.map((k, j): PickBind =>
+          ({ k, q: t.q[j] ?? Bend.Lone(), A: ty_ann(t.v[j]) }))];
+        return Bend.Let(t.k, xs.map((_, j) => d + j), vs,
+          low(t.f(xs), d + t.k.length, inner, null), t.s, t.q);
+      }
+      case "Typ": return Bend.Typ(low(t.g, d, bs, null), t.s);
+      case "Qnt": case "Qua": case "Lit": return t as Bend.LTerm;
+      case "Min": return Bend.Min(low(t.a, d, bs, null), low(t.b, d, bs, null),
+        t.s);
+      case "All": return Bend.All(t.q, t.k, d, low(t.A, d, bs, null),
+        low(t.B(Bend.Var(t.k, d)), d + 1, [...bs, { k: t.k, q: t.q, A: null }],
+          null), t.s);
+      case "Lam": {
+        const all = ty && Bend.tele_open(cb.book, ty);
+        const b: PickBind = { k: t.k, q: all?.q ?? t.q ?? Bend.Lone(),
+          A: all?.A ?? null };
+        return Bend.Lam(t.k, d, low(t.f(Bend.Var(t.k, d)), d + 1, [...bs, b],
+          null), t.s, t.q);
+      }
+      case "App": {
+        const [g, xs] = pick_spine(t);
+        if (g.$ === "Ref" && g.k === "Bool.pick" && xs.length === 4) {
+          const ls = xs.map((x) => low(x, d, bs, null));
+          const r = lift(ls, ty ?? ty_ann(xs[2]), d, bs);
+          if (r !== null) {
+            return r;
+          }
+          // kept: the spine again, over the arguments lowered once
+          let at = 0;
+          const re = (u: HTerm): Bend.LTerm => {
+            const v = Bend.term_force(u);
+            return v.$ === "Ann" ? Bend.Ann(re(v.x), low(v.T, d, bs, null), v.s)
+              : v.$ === "App" ? Bend.App(re(v.f), ls[at++], v.s)
+              : low(v, d, bs, null);
+          };
+          return re(t);
+        }
+        return Bend.App(low(t.f, d, bs, null), low(t.x, d, bs, null), t.s);
+      }
+      case "ADT": return Bend.ADT(t.k, t.x.map((x) => low(x, d, bs, null)),
+        t.s, t.r);
+      case "Ctr": return Bend.Ctr(t.k, t.x.map((x) => low(x, d, bs, null)),
+        t.s);
+      case "Mat": return Bend.Mat(t.k, low(t.h, d, bs, null),
+        low(t.m, d, bs, null), t.s);
+      case "Efq": return Bend.Efq(t.s);
+      case "Eql": return Bend.Eql(low(t.a, d, bs, null), low(t.b, d, bs, null),
+        low(t.T, d, bs, null), t.s);
+      case "Rfl": return Bend.Rfl(t.s);
+      case "Rwt": return Bend.Rwt(low(t.e, d, bs, null), low(t.p, d, bs, null),
+        low(t.f, d, bs, null), t.s);
+      case "Hol": return Bend.Hol(t.k, t.s);
+      case "Ann": return Bend.Ann(low(t.x, d, bs, t.T), low(t.T, d, bs, null),
+        t.s);
+    }
+  };
+  const out = low(h, 0, [], null);
+  return n === 0 ? h : Bend.term_higher(out);
+}
+
+// Does an elaborated body call Bool.pick? (its type cells aside)
+function pick_any(t: Bend.LTerm): boolean {
+  switch (t.$) {
+    case "Ref": return t.k === "Bool.pick";
+    case "Sub": return (t.v.$ !== "PVar" && t.v.$ !== "PCtr"
+      && pick_any(t.v as Bend.LTerm)) || pick_any(t.f);
+    case "Let": return t.v.some(pick_any) || pick_any(t.f);
+    case "Lam": return pick_any(t.f);
+    case "App": return pick_any(t.f) || pick_any(t.x);
+    case "Ctr": return t.x.some(pick_any);
+    case "Mat": return pick_any(t.h) || pick_any(t.m);
+    case "Rwt": return pick_any(t.f);
+    case "Ann": return pick_any(t.x);
+    default: return false;
+  }
+}
+
+// A term's head and arguments, through its annotations
+function pick_spine<X>(t: Bend.TermOf<X>): [Bend.TermOf<X>, Bend.TermOf<X>[]] {
+  const xs: Bend.TermOf<X>[] = [];
+  let c = Bend.term_force(t);
+  while (c.$ === "Ann" || c.$ === "App") {
+    if (c.$ === "App") {
+      xs.push(c.x);
+    }
+    c = Bend.term_force(c.$ === "App" ? c.f : c.x);
+  }
+  return [c, xs.reverse()];
 }
 
 // The reachable defs, raised, with bang and call-site counts and each one's
@@ -2232,9 +2418,11 @@ function seg_name(fl: File, stem: string): string {
   return fl.seg.def.split("$")[0] + "$" + stem + fl.segs.length;
 }
 
-// Opens `name`: takes `live` (per `frame`, else in r0..), then `ks` words.
+// Opens `name`: takes `live` (per `frame`, else in r0..; a `boxed` one
+// unboxed), then `ks` words.
 function seg_open(fl: File, name: string, ret: Lay, frame: Seg["frame"],
-  live: [Probe, Bind][], k: string, ks: Kind[], rest: HTerm[]): string[] {
+  live: [Probe, Bind][], k: string, ks: Kind[], rest: HTerm[],
+  boxed: boolean[] = []): string[] {
   const olds = live.flatMap(([, b]) => b.val.ws);
   const news = olds.map((w) => name_local(fl, w.replace(/_\d+$/, "")));
   const ts = ks.map(() => name_local(fl, k));
@@ -2248,9 +2436,10 @@ function seg_open(fl: File, name: string, ret: Lay, frame: Seg["frame"],
     }
   });
   let i = 0;
-  live.forEach(([p, b]) => bind_uses(fl, p,
-    val_new(news.slice(i, i += b.val.ws.length), b.val.lay), rest, b.A,
-    false));
+  live.forEach(([p, b], j) => {
+    const v = val_new(news.slice(i, i += b.val.ws.length), b.val.lay);
+    bind_uses(fl, p, boxed[j] ? val_unbox(fl, v, X64) : v, rest, b.A, false);
+  });
   return ts;
 }
 
@@ -2865,12 +3054,13 @@ function emit_intr(fl: File, it: Intr, x: HTerm,
   ty: HTerm | null): Val {
   const m = term_spine(fl, x);
   const k = (m.t as Of<"Ref">).k;
-  // A full word a polymorphic call handed back boxed is read out of its box.
+  // A value a polymorphic call handed back boxed is read out of its box.
   const lays = sig_def(fl, k).lays;
   const peek = it.peek ?? [];
   const sinks: Val[] = [];
   const args = emit_peek(fl, m.args, peek, sinks).map((v, i) =>
-    lays[i] === X64 && lay_box(v.lay) ? val_to(fl, v, X64) : v);
+    lays[i] !== undefined && !lay_box(lays[i]) && lay_box(v.lay)
+      ? val_to(fl, v, lays[i]) : v);
   const op = eff_name(k);
   // Native aggregate builders publish sealed fields. Teach field extraction and
   // the transitive borrow analysis about those counts on every pass.
@@ -2908,7 +3098,7 @@ function emit_intr(fl: File, it: Intr, x: HTerm,
       (fl.book.tlds[k] as Bend.Def).T).ret).ks[0] ?? "w64"])[0];
     sinks.forEach((v) => val_sink(fl, v));
   }
-  const lay = lay_of(fl.book, ty);
+  const lay = ty === null ? sig_def(fl, k).ret : lay_of(fl.book, ty);
   // a full word is raw, whatever the site knows of its type
   return val_new([out], sig_def(fl, k).ret === X64 ? X64
     : lay.ks.length === 1 ? lay : BOX);
@@ -2950,20 +3140,24 @@ function emit_peek(fl: File, xs: HTerm[], peek: number[], sinks: Val[]): Val[] {
 }
 
 // A closure moves its captures into a node (each one use of its binding,
-// whatever the closure does); its segment takes them, then x.
+// whatever the closure does); its segment takes them, then x. A dropped
+// closure drops its node as Terms: a w64 rides boxed.
 function emit_clo(fl: File, x: HTerm, ty: HTerm | null): Val {
   const u = term_uses(fl, x);
+  const boxed: boolean[] = [];
   const live = [...fl.uses].filter(([p]) => term_use(u, p) > 0)
     .map(([p, b]): [Probe, Bind] => {
       fl.uses.set(p, { ...b, n: b.n - term_use(u, p) + 1 });
-      return [p, { ...b, val: bind_pop(fl, p) }];
+      const v = bind_pop(fl, p);
+      boxed.push(v.lay === X64);
+      return [p, { ...b, val: v.lay === X64 ? val_new([val_box(fl, v)], BOX) : v }];
     });
   const words = live.flatMap(([, b]) => val_own(fl, b.val));
   const name = seg_name(fl, "c");
   const clo = seg_clo(fl, seg_fid(name), words);
   const outer = { seg: fl.seg, uses: fl.uses, spares: fl.spares,
     tab: fl.tab, rest: fl.rest };
-  const [arg] = seg_open(fl, name, BOX, null, live, "x", ["w64"], [x]);
+  const [arg] = seg_open(fl, name, BOX, null, live, "x", ["w64"], [x], boxed);
   emit_body(fl, x, ty, [], [val_new([arg], BOX)], null);
   Object.assign(fl, outer);
   return val_new([clo], BOX);
@@ -3645,8 +3839,8 @@ function compile_reqs(fl: File): void {
 }
 
 // The datatypes whose constructors the runtime or the elaborator lays itself.
-const RUNTIME_ADTS = ["Sigma", "String", "Word.Con", "IO.OP", "Result",
-  "Maybe", "Bool", "Unit", "List", "Char", "Cmp", "Inst", "Match"];
+const RUNTIME_ADTS = ["Sigma", "String", "Word.Con", "Word.Nil", "IO.OP",
+  "Result", "Maybe", "Bool", "Unit", "List", "Char", "Cmp", "Inst", "Match"];
 
 // Names the compiler encodes itself: SYNTH no file may declare; OWNED adds
 // Base's types, which a file without `import Base` may declare but not
@@ -3966,8 +4160,10 @@ function js_match(fl: File, x: HTerm, ty: HTerm | null,
   const ls = emit_nats(adt, x);
   const ws = emit_lits(adt, x);
   const s = emit_alias(fl, args[0], "$t");
-  // A foreign request reaching a match over IO.OP is refused.
-  if (adt.k === "IO.OP") {
+  // A foreign request reaching a match over IO.OP is refused, unless a
+  // default arm takes it.
+  if (adt.k === "IO.OP" && mat_arms(x).arms.length
+    >= Bend.book_adt(fl.book, adt, Bend.Emp()).c.length) {
     block(fl, `if (${s}.$ === "$FFI") {`, () => file_push(fl, `throw ${s};`));
   }
   const tab = emit_tab(fl, ls ?? lits_rows(fl, adt, ws, ret), ret, s);
@@ -7366,8 +7562,11 @@ static u64 io_sys_end(IoWork* w, ssize_t n) {
   return n < 0 ? 0 : (u64)n;
 }
 
-// cont(item) is the next request; parked, word/time/evts hold the fd,
-// deadline and readiness. The leading work allows IoWork* to IoAct* casts.
+// cont(item) is the next request (run by io_exec). Parked, word/time/evts
+// hold fd/deadline/readiness; pack resumes. Leading work permits IoWork*
+// to IoAct* casts. race: IO.within's, whose answer io_race takes.
+// IoAct ::=
+//   | IoAct(work, cont, item, time, evts, next, race)
 typedef struct IoAct {
   IoWork        work;
   Term          cont;
@@ -7376,6 +7575,7 @@ typedef struct IoAct {
   short         evts;
   u32           heap;
   struct IoAct* next;
+  void*         race;
 } IoAct;
 
 typedef struct {
@@ -8160,19 +8360,32 @@ static void show_val(Env e, u32 d, const Term* w, char chain) {
 
 #endif
 
-// The continuation applied to the item is the next request.
-static int io_step(Env e, IoAct* a) {
-  for (;;) {
-    Loc  ap  = task_node(e, FID_CLO_APPLY, TERM_HOLE, 0, 0);
-    e.mem[ap]     = a->cont;
-    e.mem[ap + 1] = a->item;
-    Term req = corpus_eval(e.mem, term_tsk(FID_CLO_APPLY, ap));
+// IO.within's (effs/within.c): an answer handed to whoever waits on it;
+// the activation is its to free.
+static void (*io_race)(Env e, IoAct* a, Term v);
+
+// The continuation applied to the item is the next request (or req, the
+// first, when it is not TERM_HOLE).
+static int io_step(Env e, IoAct* a, Term req) {
+  for (;; req = TERM_HOLE) {
+    if (req == TERM_HOLE) {
+      Loc ap = task_node(e, FID_CLO_APPLY, TERM_HOLE, 0, 0);
+      e.mem[ap]     = a->cont;
+      e.mem[ap + 1] = a->item;
+      req = corpus_eval(e.mem, term_tsk(FID_CLO_APPLY, ap));
+    }
     u32  c   = (u32)term_aux(req);
     Loc  at  = term_peek(e, req);
     if (c == CID_EMIT) {
+      io_live -= 1;
+      if (a->race != NULL) {
+        Term v[1];
+        spare_free(e, cls_fit(1), ctr_take(e, req, 1, v));
+        io_race(e, a, v[0]);
+        return -1;
+      }
       term_drop(e, req);
       free(a);
-      io_live -= 1;
       return -1;
     }
     if (c == CID_HALT) {
@@ -8253,7 +8466,7 @@ OUTLINE int io_loop(Corpus H) {
     if ((n & 63) == 0 && io_busy != 0) {
       io_take(e);
     }
-    int code = io_step(e, io_pop(&io_runs));
+    int code = io_step(e, io_pop(&io_runs), TERM_HOLE);
     if (code >= 0) {
       return code;
     }
@@ -8756,8 +8969,33 @@ function io_push(fun, arg, fresh) {
   io.live += fresh ? 1 : 0;
 }
 
+// A waiter on the clock alone sits in io.heap, a min-heap on its deadline
+// (the earlier park breaks a tie), so a sleeper costs a pass nothing.
+function io_heap_lt(a, b) {
+  return a.at < b.at || a.at === b.at && a.n < b.n;
+}
+
+function io_heap_pop(h) {
+  const top = h[0], w = h.pop();
+  let i = 0;
+  for (let c = 1; c < h.length; c = 2 * i + 1) {
+    c += c + 1 < h.length && io_heap_lt(h[c + 1], h[c]) ? 1 : 0;
+    if (!io_heap_lt(h[c], w)) {
+      break;
+    }
+    h[i] = h[c];
+    i = c;
+  }
+  if (h.length > 0) {
+    h[i] = w;
+  }
+  return top;
+}
+
 function io_wait(io) {
-  const soon = io.waits.reduce((m, w) => Math.min(m, w.at ?? m), Infinity);
+  const h = io.heap;
+  const soon = io.waits.reduce((m, w) => Math.min(m, w.at ?? m),
+    h.length > 0 ? h[0].at : Infinity);
   const ms = soon === Infinity ? -1
     : Math.max(0, Math.ceil(soon - performance.now()));
   const fds = io.waits.filter((w) => w.fd !== undefined);
@@ -8782,6 +9020,9 @@ function io_wait(io) {
     }
     return !ready;
   });
+  while (h.length > 0 && h[0].at <= now) {
+    io_push(io_wake, io_heap_pop(h), false);
+  }
 }
 
 // Resume k with more's value; undefined means re-parked.
@@ -8793,11 +9034,21 @@ function io_wake(w) {
 // Park for read/write (out) or until at (performance.now()); an undefined
 // fd or at disables that source.
 function io_park_on(fd, out, k, more, at) {
-  globalThis.BEND_IO.waits.push({ fd, out, k, more, at });
+  const io = globalThis.BEND_IO;
+  const w = { fd, out, k, more, at, n: io.n++ };
+  if (fd !== undefined) {
+    io.waits.push(w);
+    return;
+  }
+  let i = io.heap.push(w) - 1;
+  for (; i > 0 && io_heap_lt(w, io.heap[i - 1 >> 1]); i = i - 1 >> 1) {
+    io.heap[i] = io.heap[i - 1 >> 1];
+  }
+  io.heap[i] = w;
 }
 
 function io_run(m) {
-  const io = { runs: [], live: 0, waits: [] };
+  const io = { runs: [], live: 0, waits: [], heap: [], n: 0 };
   globalThis.BEND_IO = io;
   try {
     io_push(run_loop(m()), (x) => ({ $: "Emit", value: x }), true);
@@ -8806,7 +9057,7 @@ function io_run(m) {
         if (io.live === 0) {
           return 0;
         }
-        if (io.waits.length === 0) {
+        if (io.waits.length + io.heap.length === 0) {
           io_errs("bend: deadlock: every computation waits on a channel");
           return 1;
         }

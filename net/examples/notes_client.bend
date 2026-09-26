@@ -29,11 +29,11 @@ def shown(+what: Bytes(), r: Client.Res()) -> IO(Unit):
 
 # GET the note, then DELETE it with a request of our own: a method, a
 # field and a deadline of 2 s
-def got(+base: Bytes(), id: Maybe<&2, Bytes()>) -> IO(Unit):
+def got(+base: Bytes(), id: Json.Got(Bytes())) -> IO(Unit):
   match id:
-    case None{}:
-      IO.die(Unit, 1, "notes: the answer has no id")
-    case Some{+i}:
+    case Fail{why}:
+      IO.die(Unit, 1, "notes: the answer's " ++ why)
+    case Done{+i}:
       +url = Bytes.concat([base, "/notes/", i])
       do IO<Unit>:
         g : Client.Res() <- Client.get(url)

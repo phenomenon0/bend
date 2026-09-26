@@ -1,0 +1,660 @@
+# UPSTREAM: what we found that canon's `main` also has
+
+The living list of every bug, pathology and limitation this project hit
+that is also in upstream Bend (`bendlang/bend`, remote `canon`), with a
+repro for each and the branch that fixes it, if any.
+
+- **Verified against** canon `main` at `95317d95` (2026-09-24, "A name is
+  words joined by dots...", #1042, one commit past 2.0.27's `d3790917`),
+  on Linux x86_64 (4 cores), clang 18, bun 1.3.11, on 2026-09-24.
+- **Re-verify** with `upstream/verify.sh <canon-checkout> [item...]`, for
+  example `git worktree add --detach /tmp/canon canon/main` then
+  `upstream/verify.sh /tmp/canon`. It runs every repro in `upstream/` in
+  the lanes that apply and prints `REPRO`, `FIXED` or `SKIP` per item and
+  lane (about three minutes; ports 29601-29613 and 29800). Point it at a fix branch to
+  see the item turn `FIXED`. For a NOT-REPRO or OURS item, `FIXED` on
+  canon is the expected answer.
+- **Lanes.** `interp` is `bend F.bend`: a pure `main` runs in the
+  checker's normalizer, but an IO `main` runs the JS runtime in-process
+  (`Comp.io_run`), so for IO programs interp and JS share one runtime.
+  `js` is `bend F.bend -o F.js; bun F.js`, `c` is `bend F.bend -o F; ./F`.
+- **Upkeep.** When canon moves: fetch, rerun verify.sh, update the commit
+  above and every row whose answer changed; a new find gets the next U
+  number, a repro in `upstream/` and a case in verify.sh.
+- **Classes.** BUG: wrong behaviour, reproduces on canon. PERF: right
+  answer, pathological cost. LIMITATION: by design or missing, worth
+  raising. NOT-REPRO: claimed, not on canon. OURS: only on our branch.
+
+## Summary
+
+| # | title | class | lanes | sev | fix | repro |
+|---|---|---|---|---|---|---|
+| U01 | TCP.recv/send decode and re-encode UTF-8: binary bytes become U+FFFD, lengths change | BUG | interp js c | high | fix/socket-bytes-v2 (= upstream/01-tcp-bytes) | upstream/tcp_bytes.bend + peer.py echo |
+| U02 | TCP.listen's backlog is 16: bursts lose SYNs, 1 s / 3 s stalls | BUG | interp js c | med | fix/listen-backlog-v2 (= upstream/02-listen-backlog) | upstream/listen_backlog.bend + peer.py burst |
+| U03 | the IO loop's select walks every waiter per pass: n arrivals cost O(n^2) | PERF | js c | high | fix/epoll-v2 (= upstream/03-epoll): descriptors; upstream/03b-epoll-timers (local, on it): timers too | upstream/io_fd_waiters.bend, io_waiters.bend, io_timer_waiters.bend |
+| U04 | Nat.min / Nat.max are unary recursions in every lane: stack overflow on big Nats | BUG | js c | med | upstream/04-nat-min-max | upstream/nat_min_max.bend |
+| U05 | File.write UTF-8-encodes bytes >= 0x80 | OURS | - | - | (ours: File.write_buf) | upstream/file_write_text.bend |
+| U06 | Bool.pick (Base's only `if`) evaluates both arms | PERF | js c, interp for IO mains (a pure main is lazy) | med | none | upstream/bool_pick.bend, bool_pick_pure.bend |
+| U07 | JS lane ignores SIGTERM | OURS | - | - | (ours) | upstream/sigterm.bend |
+| U08 | a match over IO.OP with a default arm: JS throws `[object Object]` where C takes the default | BUG | js; interp prints a stuck term | low | none | upstream/io_op_default.bend |
+| U09 | a def used above its definition gets the typo's error | NOT-REPRO | - | - | canon's message differs since d3790917 | upstream/def_order.bend, def_typo.bend |
+| U10 | Nat literal of 100000n in a proof overflows the checker; literals stop at 2^32-1 | LIMITATION | check | med | none | upstream/nat_literal_proof.bend, nat_literal_cap.bend |
+| U11 | a check that relies on @unsafe or foreign code exits 0 | LIMITATION | check | med | none (WONTFIX #776, #805; suggest `--strict`) | upstream/unsafe_exit.bend |
+| U12 | IO.signal_pending clears on read | OURS | - | - | (ours: IO.signal_seen) | none (Base has no signal effect) |
+| U13 | accept() on EMFILE is indistinguishable from a dead listener | NOT-REPRO | - | - | canon hands back `Fail 24` and the listener | upstream/accept_emfile.bend + peer.py hold |
+| U14 | canon's own tests on Linux: two sleep-order tests flake; audio needs ALSA | BUG (tests) | interp js | low | none | verify.sh U14 (canon's tests/io) |
+| U15 | comp.ts and bend.ts sit within 2.2% and 0.6% of their ttok caps | LIMITATION (process) | - | low | none | verify.sh U15 |
+| U16 | a pure main counts Nats in unary: epoch-sized numbers (1.7e9) are unusable | PERF | interp (pure main) | med | none | upstream/interp_nat_epoch.bend, interp_nat_mul.bend |
+| U17 | TCP.listen binds 0.0.0.0 and takes no address: no loopback-only server | LIMITATION | interp js c | med | upstream/05-listen-on | verify.sh U17 (Base's signature) |
+| U18 | TCP.connect takes dotted IPv4 only (no names, no resolver) and has no deadline | LIMITATION | interp js c | med | upstream/06-connect-poll-dns | upstream/connect_name.bend |
+| U19 | a Socket dropped without Socket.close keeps its descriptor until exit: the checker allows the drop, the runtime never closes | LIMITATION | interp js c | med | none (ours leaks too) | upstream/socket_drop.bend |
+| U20 | a U32 taken apart to its Word and walked to a default arm: the C build fails (CID_WNIL undeclared) | BUG | c | med | ours: WNil among comp.ts's RUNTIME_ADTS | upstream/word_unpack.bend |
+| U21 | the JS lane runs a non-tail recursion on the host stack: 100000 deep overflows where C answers | LIMITATION | interp js | med | none (WONTFIX.txt SOON, #798 #802) | upstream/js_deep_recursion.bend |
+| U22 | a Bool a polymorphic call hands back (Bool.pick(Bool, ..)) fed to Bool.or / Bool.xor: C reads its box as the Bool | BUG | c | high | ours: emit_intr unboxes to the native's layout | upstream/bool_box_native.bend |
+| F01 | no wall clock: IO.now is monotonic | LIMITATION | all | med | none | verify.sh F01 |
+| F02 | no rename, fsync, seek, remove or mkdir | LIMITATION | all | med | none | verify.sh F02 |
+| F03 | File.read_at takes a U32 offset and answers a List cell per byte | LIMITATION | all | low | none | verify.sh F03 |
+| F04 | no mutual recursion, even with both laws declared first | LIMITATION | check | low | none | upstream/mutual.bend |
+| F05 | List.map takes List<&1, A> only (length, folds, for_each are generic) | LIMITATION | check | low | none | upstream/list_map_quant.bend |
+| F06 | a destructuring let of a call is refused, with the match rule's message | LIMITATION | check | low | none | upstream/let_computed.bend |
+| F07 | only Base imports by name: a second standard module needs a bend.ts change | LIMITATION | check | low | none | upstream/import_name.bend |
+| F08 | a library cannot use a name Base has (type Event, constructor Emit), nor a def named after its own file | LIMITATION | check | low | none | upstream/base_name.bend, self_prefix.bend |
+| F09 | Base's only bytes are a String, a list: a read by offset walks, so decoders that index (inflate) are quadratic | LIMITATION | all | med | none (ours: the packed Bytes natives) | upstream/string_index.bend |
+| F10 | the JS lane walks a String 10-20x slower than the C lane, and a match that rebuilds SCon{h, t} copies the rest | PERF | js, interp for IO mains | med | none | upstream/js_string_scan.bend |
+| F11 | Base's String.take recurses on the JS stack: 40000 chars overflow it (U21, met in Base's own take) | BUG | js, interp for IO mains | med | none | upstream/js_deep_take.bend |
+
+Verified on canon `95317d95`: every U/F row above reads REPRO except
+U05, U07, U09, U12, U13 (FIXED: not on canon), U06p (a pure main's pick
+is lazy, as it should be) and U14's tls_close and marshal (they pass on
+canon). Against the fix branches: U01 FIXED on
+fix/socket-bytes-v2, U02 on fix/listen-backlog-v2, U04 on
+upstream/04-nat-min-max, U03 (descriptors) on fix/epoll-v2 in both
+lanes, while U03t (timers) stays REPRO there and turns FIXED in every
+lane on upstream/03b-epoll-timers. U19 (dropped sockets) reads REPRO
+on canon and on our branch. U20, U21 and U22, found by the compiler's
+differential fuzzer (`tests/fuzz`) on 2026-09-25, read REPRO on canon
+`95317d95` in the lanes their rows name, and FIXED on this branch but
+for U21.
+
+---
+
+## U01. `TCP.recv` and `TCP.send` corrupt every byte that is not UTF-8
+
+**Class** BUG, high. **Lanes** interp, JS, C. **Fix** `fix/socket-bytes-v2`.
+
+**Where** (canon `95317d95`) `bend2/effs/tcp_recv.c:6` builds the result
+with `io_str`, which decodes UTF-8 (`comp.ts:5607`); `tcp_poll.c:22` the
+same; `tcp_send.c:23` re-encodes with `io_cstr`. The JS twins go through
+`io_text` / `TextDecoder` (`comp.ts:6290`) and `TextEncoder` (6286).
+
+**Repro** `upstream/tcp_bytes.bend` accepts one peer on 29601, reads once
+and echoes; `python3 upstream/peer.py echo 29601` sends `01 80 fe 02`.
+
+**Observed** `01efbfbdefbfbd02` in all three lanes. **Expected**
+`0180fe02`.
+
+Each ill-formed byte becomes U+FFFD, three bytes out for one in, so the
+corruption changes the *length*: an echo of 8 arbitrary bytes under
+`content-length: 8` writes 12, and on a keep-alive connection the peer
+reads the next reply's first bytes as this one's tail. That is response
+splitting by accident, reachable by any peer that sends a byte over
+0x7F. A PNG, a protobuf, a TLS record, a WebSocket frame or a gzip body
+cannot cross a Bend socket.
+
+**Fix** the byte pair files already have (`File.read_bytes`,
+`File.write_bytes`): `TCP.recv_bytes`, `TCP.send_bytes`,
+`TCP.poll_bytes` over `List<&2, U32>`, decoding nowhere. On the branch,
+`upstream/tcp_bytes_fixed.bend` (the same echo over the byte pair)
+answers `0180fe02` in every lane; verify.sh switches to it when Base
+has `TCP.recv_bytes`.
+
+## U02. The listen backlog is 16
+
+**Class** BUG, med. **Lanes** all. **Fix** `fix/listen-backlog-v2`.
+
+**Where** `bend2/effs/tcp_listen.c:17` `listen(fd, 16)`;
+`tcp_listen.js:18` `sys.listen(fd, 16)`.
+
+**Repro** `upstream/listen_backlog.bend` listens on 29602 and accepts
+nothing for 3 s; `peer.py burst 29602 64` opens 64 connections at once
+and counts the handshakes the kernel completed within 1 s.
+
+**Observed** `completed 17 of 65` in every lane (the backlog, plus one).
+**Expected** all 65 (`SOMAXCONN` is 4096 here). On the branch: 65 of 65.
+
+A single-threaded loop that is briefly busy overflows 16 at once; the
+kernel drops the SYNs and the peers wait for the retransmit. Measured on
+the HTTP engine with the loop fixed: connection ramps with walls of
+1.03 s, 3.08 s and 6.13 s (the SYN timers and nothing else), flat at
+21-29 us per connection with `SOMAXCONN`.
+
+**Fix** `SOMAXCONN` (4096; the kernel clamps it), both twins.
+
+## U03. A pass through the IO loop costs what waits, not what fired
+
+**Class** PERF, high. **Lanes** JS, C. **Fix** `fix/epoll-v2` for
+descriptor waiters; `upstream/03b-epoll-timers` (local, one commit on
+it) for timers too.
+
+**Where** C `comp.ts:5738` `io_wait`: every pass sizes a descriptor set
+by the highest live fd, walks the park list to fill it and find the
+soonest deadline, `select`s, and walks the whole list again to
+dispatch. JS `comp.ts:6311`, the same shape.
+
+**Repro** `upstream/io_fd_waiters.bend` times 2000 zero sleeps (a pass
+each) alone, then beside 4000 clients parked in `TCP.recv` (port 29603;
+accepts one client at a time so U02 does not interfere).
+`upstream/io_waiters.bend` does the same beside 20000 parked sleepers.
+`upstream/io_timer_waiters.bend` times 4000 zero sleeps beside 16384
+sleepers and prints `flat` under 1 s, else `slow: N ms`.
+
+**Observed** (C) alone 1 ms, beside 4000 descriptors 1048-1704 ms
+(ratio ~500); beside 20000 timers 1056 ms. JS: 32 ms vs 2067 ms; 40 ms
+vs 1136 ms. **Expected** a ratio near 1.
+
+On `fix/epoll-v2`: descriptors flat in both lanes (1 ms vs 1 ms in C,
+38 ms vs 14 ms in JS), but timers still O(parked) per pass (C 2 ms vs
+695 ms), because it keeps deadlines on the park list.
+
+On `upstream/03b-epoll-timers` (`82fdd0af`, fix/epoll-v2 rebased onto
+`95317d95` plus one commit) the deadlines are a binary min-heap in both
+lanes (`comp.ts:5567` `io_heap_fix`, `:5812` `io_wait`; JS `:6402`
+`io_heap_pop`, `:6419` `io_wait`). 4000 zero sleeps beside n sleepers,
+ms for all 4000, three runs each:
+
+| n | C before | C after | JS before | JS after |
+|---|---|---|---|---|
+| 0 | 2 | 2 | 48-58 | 63-70 |
+| 1k | 34-42 | 2 | 206-264 | 55-98 |
+| 4k | 147-187 | 2 | 416-478 | 55-70 |
+| 16k | 1094-1210 | 4-9 | 1453-1650 | 62-113 |
+
+Per pass at 16k: C 290 us before, about 1 us after; JS 390 us before,
+16-28 us after (what a pass costs with no sleeper at all). io_waiters:
+C 1 ms vs 1 ms, JS 40 ms vs 18 ms. Its test `io/sleep_many_waiters`
+prints `flat` in check, interp, JS and C (the park list: 1.6-1.8 s,
+`slow`). canon's tests/io, run locally before and after in every lane:
+no new failure (only the three ALSA audio builds fail, plus a JS
+sleep-order flake of U14's `fork_join` before). comp.ts is 63,989 of its
+64,000 cap there (U15): the commit sheds its tie-break field by making
+`io_tick` strictly increasing, which keeps equal spans in park order.
+
+Our own branch (`959a64e0`, "epoll and a deadline heap") was flat for
+both in C, and quadratic in JS for both: its JS `io_wait` still
+`select`s over `io.waits`. The timer half is fixed on our branch
+(`comp.ts:9163` `io_heap_pop`, `:9221` `io_park_on`: a waiter on the
+clock alone goes to a heap; one with an fd stays on `io.waits`):
+4000 passes beside 1k / 4k / 16k sleepers, JS, 204-285 / 497-574 /
+1563-1948 ms before, 47-73 / 61-71 / 60-107 ms after. Our JS lane
+stays O(n) per pass in parked descriptors (U03's first half).
+
+Measured earlier with `demos/io_http_engine/ramp.c` (connections opened
+and held): 2.1 ms per connection at 500 live, 4.1 at 1,000, 11.3 at
+2,000, 30.7 at 4,000, and 8,000 did not finish in 150 s (that ramp also
+hit U02). A minimal accept-and-park server: 0.15 / 1.49 / 4.29 / 31.4 s
+to hold 1k / 4k / 8k / 16k on canon against 0.06 / 0.28 / 0.49 / 1.78 s
+with an epoll loop.
+
+**Fix** register each fd with the kernel's poller once (epoll on Linux,
+kqueue on macOS, `EPOLLONESHOT` re-armed in place), as `fix/epoll-v2`
+does in both lanes, and keep deadlines in a min-heap, as
+`upstream/03b-epoll-timers` does. `TCP.poll` waits on both, so each side
+takes the waiter out of the other: C keeps each waiter's heap slot, JS
+marks a fired waiter done and the heap skips it at its deadline.
+
+## U04. `Nat.min` and `Nat.max` are unary recursions in every lane
+
+**Class** BUG, med. **Lanes** JS, C. **Fix** `upstream/04-nat-min-max`.
+
+**Where** `bend2/base.bend:617` and `:626` recurse one successor at a
+time (`1n+Nat.min(ap, bp)`, not a tail call); `comp.ts:182` `OPERATIONS`
+has native `nat_add`, `nat_sub`, `nat_mul`, `nat_is_lt`, but no
+`nat_min`/`nat_max`.
+
+**Repro** `upstream/nat_min_max.bend`: `Nat.min(2^40, 2^40+1)`.
+
+**Observed** JS `RangeError: Maximum call stack size exceeded`, C
+`bend: memory fault (machine stack overflow?)`; JS already overflows at
+`Nat.min(100000n, 100001n)`. **Expected** `"1099511627776
+1099511627777"`, which the branch prints in both lanes.
+
+**Fix** two `OPERATIONS` rows, `($0 < $1 ? $0 : $1)` and the converse.
+
+## U06. `Bool.pick` evaluates both arms
+
+**Class** PERF, med. **Lanes** C, JS, and interp when `main` is IO (the
+in-process JS runtime); a pure main (the checker's normalizer) is lazy.
+**Fix** none.
+
+**Where** `bend2/base.bend:473`: `Bool.pick(-A, c, a, b)` is an ordinary
+def, and it is the only `if` Base offers.
+
+**Repro** `upstream/bool_pick.bend` (IO main): the condition comes from
+`IO.args()`, the arm not taken is a 10^8-step loop clang cannot fold,
+and the same choice written as a `match` on the `Bool` is timed beside
+it. `upstream/bool_pick_pure.bend` (pure main, interp only):
+`Bool.pick(U32, True{}, 1, deep(10000000n))`.
+
+**Observed** pick against match: C 25 ms / 0 ms, JS 20.5 s / 1 ms,
+interp 14.7 s / 1 ms, all `eager`. The pure main prints `1` at once
+(lazy). Scaling the loop scales C's pick linearly (50 / 501 / 990 ms at
+2*10^8, 2*10^9, 4*10^9 steps), the same as calling the arm alone. (A plain
+counting loop is not a test of this: clang folds it into a closed form,
+which made C look lazy in a first try.) **Expected** the pick to cost
+what the match costs.
+
+WONTFIX #775 says compiled lanes are strict ("same value, different
+cost"). Because `Bool.pick` is the library's `if`, the cost is paid on
+every branch (our uptime app: 19.1 s against 3.9 s for the same
+restart), and an arm that cannot finish (JS: a deep recursion) kills
+the program. Strictness also forces a `+` on every variable both arms
+mention.
+
+**Fix** an `if c: ... else: ...` that lowers to a `match`, or make
+`Bool.pick`'s arms templates (`~a`, `~b`) so only the chosen arm is
+built; at least say in GUIDE.md that it is strict on JS.
+
+## U08. A match over `IO.OP` with a default arm throws on the JS lane
+
+**Class** BUG, low. **Lanes** JS (interp prints a stuck term). **Fix** none.
+
+**Where** `comp.ts:3254-3256` (`js_match`): a foreign request reaching
+a match over `IO.OP` is thrown (`throw $t`), before any arm, default or
+not; for a pure main nothing catches it (`io_run`'s catch at
+`comp.ts:6397` covers IO mains only).
+
+**Repro** `upstream/io_op_default.bend`: run `IO.print("hi")` by hand to
+its `IO.OP` (a foreign request) and match `Emit{value}` / `_`.
+
+**Observed** C `70`; JS `[object Object]`, exit 1; interp
+`U32.add(70, got(IO.print("hi", U32, x => Emit{5})))`, exit 0 (a
+foreign def has no body to normalize). **Expected** `70` in every lane.
+
+**Fix** in `js_match`, throw only when the match has no default arm
+(what C does), and give the throw a message.
+
+## U10. Big Nat literals: the checker overflows, the parser caps at 2^32
+
+**Class** LIMITATION, med. **Lanes** check. **Fix** none.
+
+**Where** `bend2/bend.ts:2340` refuses a literal past `4294967295n`,
+though the runtime holds a Nat to 2^48-1 (WONTFIX #779); a literal in a
+proof is compared by unfolding to successors, and `main.ts:821` turns
+the `RangeError` into "the machine stack overflowed (a deep recursion,
+or a literal too large to expand)".
+
+**Repro** `upstream/nat_literal_proof.bend` proves
+`{Nat.add(50000n, 50000n) == 100000n : Nat}` by `{==}`: stack
+overflow (40000n still checks). `upstream/nat_literal_cap.bend`:
+`1099511627776n` is refused; it must be spelt
+`Nat.mul(1048576n, 1048576n)`.
+
+**Fix** compare literals and native Nat arithmetic without unfolding
+(the checker knows `Nat.add` on two literals is a literal), and allow
+literals to 2^48-1.
+
+## U11. A check that relies on `@unsafe` or foreign code exits 0
+
+**Class** LIMITATION, med. **Lanes** check. **Fix** none.
+
+**Where** `bend2/main.ts:690` (`cli_report`) prints the verdict (`:722`)
+and returns; the process exits 0. WONTFIX.txt (#776, #805): "read the note,
+not the exit code".
+
+**Repro** `upstream/unsafe_exit.bend` "proves" `0n == 1n` with an
+`@unsafe` recursion that never ends; `bend unsafe_exit.bend
+--check-only` prints `All terms check, but 1 def relies on unsafe or
+foreign code: - zero_is_one` and exits **0**.
+
+A CI step that gates on the exit code (`bend F --check-only && ...`)
+is fooled: a false theorem passes. **Suggest** an opt-in `--strict`
+(exit 2 when anything relies on a promise), which leaves the WONTFIX
+default alone. verify.sh uses `--strict` if main.ts ever has it.
+
+## U13. `TCP.accept` out of descriptors (NOT-REPRO)
+
+**Where** `bend2/effs/tcp_accept.c:18`: any errno but EAGAIN is
+`io_fail(code)`, with the listener handed back beside it.
+
+**Repro** `upstream/accept_emfile.bend` under `ulimit -n 256`, with
+`peer.py hold 29613 400`. **Observed** `accepted 244, then Fail 24: Too
+many open files` (C: 250) in every lane: EMFILE is its own errno, and the
+listener still works. There is no "dead listener" case: the handle is
+affine, and closing it consumes it.
+
+**Related, upstream, low** canon's own `demos/io_http_server/main.bend:37`
+does `IO.pass(Socket, r)` on every accept, so one EMFILE halts the whole
+server: a peer that opens enough connections stops it. And `TCP.accept`
+has no deadline (`upstream/09-accept-poll` adds `TCP.accept_poll`).
+
+## U14. canon's own tests on Linux
+
+`gates/test.ts` run locally (same probes; network tests moved into our
+port range) on `tests/io`: 111 of 117 pass.
+
+- **Audio (3 tests, both compiled lanes)** `audio_only_close`, `_open`,
+  `_write`: `alsa/asoundlib.h` not found. The JS lane fails too, because
+  the gate builds `-o t.js -o t` in one command and one failure fails
+  both. LIMITATION of the box (needs `libasound2-dev`), low.
+- **Sleep order (2 tests)** `spawn_sleep` and `fork_join` order
+  computations by sleeps 10-20 ms apart. On an idle box, ten runs each:
+  C 10/10; JS 8/10 for both; interp 10/10 and 7/10. Under load they
+  fail more. BUG (test flake), low. The JS `io_wait` (`comp.ts:6328`)
+  dispatches every due waiter in park order, not deadline order, once a
+  pass comes late, which fits; a direct repro of that did not trigger,
+  so the cause is not confirmed. **Fix** space the sleeps 100 ms apart,
+  or order due timers by deadline, which `upstream/03b-epoll-timers`'s
+  heap does: 20 of 20 JS runs in order there for both tests (canon this
+  time: `fork_join` 1 of 10 out of order), too few to call it fixed.
+- `tls_connect_close`, `http_url_parse` and `marshal_char_scalar` pass
+  on canon (NOT-REPRO); the first and last fail on our branch only (see
+  OURS below).
+- `readback_sugars`: passes (a function-valued main is check-only).
+
+## U15. comp.ts and bend.ts sit at their ttok caps (process)
+
+**Class** LIMITATION, low. **Where** `gates/repo.ts:42-43`.
+
+The gate counts with `ttok`, whose default model is `gpt-3.5-turbo`
+(`ttok/cli.py:14`), that is **cl100k_base**. `ttok` downloads that table
+on first use, which this box's proxy refuses, so the counts here are
+js-tiktoken's cl100k_base, the same encoding (o200k gives within 0.2%):
+
+| file | canon cl100k | cap | headroom |
+|---|---|---|---|
+| bend2/comp.ts | 62,602 | 64,000 | 2.2% |
+| bend2/bend.ts | 43,761 | 44,000 | 0.5% |
+| bend2/base.bend | 25,375 | 32,000 | 21% |
+| bend2/main.ts | 9,683 | 10,000 | 3.2% |
+
+So canon's own gate is green under cl100k: the claim that canon's
+files exceed their caps is NOT-REPRO. They exceed them on **our**
+branch (see OURS). But the headroom is thin: `fix/epoll-v2` alone takes
+comp.ts to 63,075 (98.6%), and commit `26659268` had to shed 2.8k
+tokens to get comp.ts under 64k, so nearly any runtime fix in comp.ts
+arrives with a cap raise. **Suggest** move the IO loop into
+`effs/`-style sources, as the channel runtime was, or give the runtime
+its own cap.
+
+## U16. A pure main counts Nats in unary
+
+**Class** PERF, med. **Lanes** interp (pure main). **Fix** none.
+
+`bend F.bend` normalizes a pure main with the checker, where a Nat is
+successors and `Nat.add`/`Nat.mul`/`Nat.div` are Base's recursions
+(`base.bend:545`, `:563`); the compiled lanes run them natively.
+`upstream/interp_nat_epoch.bend`, `Nat.div(Nat.add(1700000000n, 60n),
+60n)` (an epoch time in minutes): JS and C `28333334n` at once; interp
+runs past 20 s at ~125% CPU with RSS growing ~70 MB/s. So epoch-sized
+numbers are unusable in a pure main. `upstream/interp_nat_mul.bend`
+(`Nat.mul(1048576n, 1048576n)`): interp "the machine stack overflowed".
+It is PERF rather than a design limit: the IO-main path (the JS
+runtime) and both compiled lanes already use native Nats, and so could
+the normalizer on closed literals.
+
+## U17. `TCP.listen` binds every interface
+
+**Class** LIMITATION, med. **Fix** `upstream/05-listen-on`
+(`TCP.listen_on(host, port)`, `TCP.listen_shared`).
+
+`base.bend:280` `TCP.listen(port: U32)`; `tcp_listen.c:12` binds
+`0.0.0.0`. A Bend server cannot listen on loopback only, so a local
+admin or debug port is exposed on every interface.
+
+## U18. `TCP.connect` takes dotted IPv4 only, with no deadline
+
+**Class** LIMITATION, med. **Fix** `upstream/06-connect-poll-dns`
+(`DNS.resolve`, `TCP.connect_poll`).
+
+`comp.ts:5456` `io_sys_addr` is `inet_pton(AF_INET, ...)`, and Base has
+no resolver: `upstream/connect_name.bend`, `TCP.connect("localhost",
+29605)`, answers `Fail 22: Invalid argument` in every lane (expected:
+connection refused). A connect to a black hole waits the kernel's ~75 s
+(no timeout argument).
+
+## U19. A dropped `Socket` is never closed
+
+**Class** LIMITATION, med. **Lanes** interp, JS, C. **Fix** none; our
+branch leaks the same.
+
+**Where** (canon `95317d95`) a handle is affine, and "dropping one is
+always free" (`guide/GUIDE.md:219`), though Base's own comment calls
+handles "linear (Type), so none copies or reuses one"
+(`base.bend:92-93`): the checker forbids the copy, not the drop. At run
+time a handle is its fd packed in a word, `io_hand` (`comp.ts:5414`), a
+`TAG_PAK` term that owns no heap (`comp.ts:4017`), so dropping it runs
+nothing; in JS it is a plain number (`effs/tcp_accept.js`). Only
+`Socket.close` (`effs/socket_close.c:5`) closes the fd. No finalizer
+exists to call it, and none could: the runtime does not know which
+words are handles.
+
+**Repro** `upstream/socket_drop.bend` connects to its own listener
+(29800), accepts, and drops both sockets, 400 rounds, then sleeps 2 s.
+The drop needs no erase or annotation: a match arm binds the socket and
+never uses it (`case Done{s}: k(l)`), and `bend --check-only` answers
+"All terms check." with no note.
+
+**Observed** in every lane, `/proc/PID/fd` during the sleep: 803
+sockets open (812 fds in interp and JS, 806 in C), two per round plus
+the listener; under `ulimit -n 256` the rounds stop at `round 122: Fail
+24: Too many open files` (C: 124-125). Our branch (`0c164c43`) gives the
+same counts. **Expected** of a language whose handles are "linear":
+either the drop is refused or it closes; today the first dropped socket
+is a leak for the life of the process. A server that drops a socket on
+one path (an error arm beside a live socket) leaks a descriptor per peer
+that takes it, and at the usual soft limit of 1024 its accepts turn into
+U13's `Fail 24`. `upstream/accept_emfile.bend` (U13) relies on exactly
+this leak to fill the table.
+
+It is a LIMITATION rather than a BUG: canon's rules say the drop is
+free, and the runtime does what they say. The same holds for every
+handle (`File`, `Listener`, `Window`, `Audio`), which share `io_hand`.
+**Suggest** make the opaque handles relevant (used exactly once: the
+checker refuses a handle that reaches the end of its scope, so every
+path must close it or hand it on), or at least warn on a dropped
+handle, and say in GUIDE.md's handle paragraph that a dropped handle
+stays open.
+
+## U20. A word taken apart: the C emitter lays a WNil it never declared
+
+**Class** BUG, med. **Lanes** C (the build). **Fix** ours: `Word.Nil`
+joins `RUNTIME_ADTS` in comp.ts, so its constructor id is always
+declared; `tests/base/word_unpack.bend`.
+
+**Where** (canon `95317d95`) `comp.ts:2934`: the constructor ids the C
+file declares (`fl.cids`, `comp.ts:3037`) are the constructors of the
+datatypes a program reaches, plus `RUNTIME_ADTS`, which holds `Word.Con`
+but not `Word.Nil`. When a `U32{w}` pattern hands its word on whole, the
+emitter lays the WCon chain itself, down to `term_pak(CID_WNIL, 0)`
+(`ctr_build`, `comp.ts:1081`); a program that never names `WNil` (it
+matches `WCon` and ends the word in a default arm) reaches no `Word.Nil`.
+
+**Repro** `upstream/word_unpack.bend` counts a U32's one bits through
+`match n: case 1n+p: match w: case WCon{..}` and `case _:`.
+
+**Observed** interp and JS `"0 32 16"`; C: clang refuses the file, "use
+of undeclared identifier 'CID_WNIL'". **Expected** `"0 32 16"` in every
+lane. Found by the compiler's differential fuzzer (`tests/fuzz`).
+
+## U21. The JS lane recurses on the host's stack
+
+**Class** LIMITATION, med. **Lanes** JS, and interp for an IO main (the
+same runtime). **Fix** none; WONTFIX.txt lists continuation passing for
+non-tail calls on the JS lane as SOON (#798, #802).
+
+**Where** the JS emitter compiles a def's non-tail self call to a host
+call (tail calls loop); C's frames live on the heap, so C answers.
+
+**Repro** `upstream/js_deep_recursion.bend` counts a 100000-element list
+with a def that conses after its recursive call. The fuzzer met it
+through Base's own `Bytes.to_list` (not native) over a string of 84034
+cells.
+
+**Observed** interp and JS `bend: memory fault (machine stack overflow?)`
+(a pure main: `RangeError: Maximum call stack size exceeded`), with the
+32 MiB of stack gates/test.ts gives bun; C `100000`. **Expected**
+`100000` in every lane.
+
+## U22. A boxed Bool reaches a native as its box
+
+**Class** BUG, high (a wrong answer, silently). **Lanes** C. **Fix** ours:
+`emit_intr` reads each argument a polymorphic call handed back boxed out
+of its box into the layout the native takes (it did so for full words
+only), and labels a native's own result with the native's layout where
+the site's type is unknown (a raw 0/1 labelled a box would otherwise be
+unboxed in turn); `tests/base/bool_box_native.bend`.
+
+**Where** (canon `95317d95`) `comp.ts:2261`, `emit_intr` passes its
+arguments as they come (`emit_each(fl, m.args, null)`). `Bool.pick` is a
+def over `-A: Type`, so its result is a box, and a Bool's box is its
+constructor's word; `bool_or` and `bool_xor` (`comp.ts:292`) are C's `|`
+and `^` over 0/1. A site whose arms are both cheap (word compares) is not
+lifted into a match, so the call stays.
+
+**Repro** `upstream/bool_box_native.bend`: `Bool.or(False{},
+Bool.pick(Bool, c, False{}, U32.is_le(x, x)))` and the `xor` twin.
+
+**Observed** interp and JS `"TFTF"`; C `"FFTT"`. **Expected** `"TFTF"`
+in every lane. Found by the compiler's differential fuzzer (`tests/fuzz`).
+
+## F01-F06. From apps/uptime/FRICTION.md, checked on canon
+
+- **F01 no wall clock.** `IO.now` (`base.bend:203`) is `io_tick()` in C
+  (`effs/now.c:5`, monotonic) and `performance.now()` in JS. No epoch
+  time, no dates; apps need a foreign effect. Also `IO.now` answers a
+  `Nat` while `IO.sleep` takes a `U32`. Suggest `IO.wall() -> IO(Nat)`.
+- **F02 no rename, fsync, seek, remove, mkdir.** Base's File surface is
+  open, read, read_bytes, read_at, size, write, write_bytes, close
+  (`base.bend:241-278`): no atomic snapshot, no rotation, no truncate.
+- **F03 File.read_at** (`base.bend:256`) takes a `U32` offset (4 GiB)
+  and answers `List<&2, U32>`, a heap cell per byte.
+- **F04 no mutual recursion.** `upstream/mutual.bend`: `even`/`odd`
+  with both laws declared first is refused ("a filled definition (an
+  unfilled law is a dead claim ...)"); loops become CPS by hand. Base
+  itself has a carve-out (WONTFIX #793); user files do not.
+- **F05 List.map is &1 only** (`base.bend:797`), while `List.length`,
+  `foldl`, `foldr` and `for_each` take any quantity:
+  `upstream/list_map_quant.bend` is refused with `expected : List<&1,
+  U32> / observed : List<&2, U32>`.
+- **F06 destructuring a call.** `upstream/let_computed.bend`:
+  `(a, b) = two(1)` is refused with the match rule's text, "a parameter
+  or field scrutinee (a match cannot scrutinize a computed value: give
+  it its own def)" (`bend.ts:2788`), though the line is a let.
+
+- **F07 no second standard module.** `bend.ts:1095-1099` accepts
+  `import Base` or `import <path>.bend as <Name>` (relative, or a hub
+  `name@version/` path). `upstream/import_name.bend`, `import Time`, is
+  refused ("expected : an import ('import Base', or 'import <path> as
+  <Name>')"). A `bend2/time.bend` beside base.bend could only be
+  imported by a path relative to the user's file, so the standard
+  library is one file under one cap (U15), and growing it (a clock, a
+  date type) needs a bend.ts change for `import <Name>`.
+
+Not upstream: the rest of FRICTION.md is about our `net/` (middleware,
+`Client.fetch` timeouts, `Json.num`, flags, the Hub), and its SIGTERM
+items are U07 and U12 below.
+
+## F08-F11. From porting std/ to canon
+
+`std/` (CSV, JSON, text, dates, gzip) was written to run on canon's
+stock runtime; these are what the port hit. Each reads REPRO on canon
+`95317d95` (F11 in the lanes it names); F09 is Base's shape.
+
+- **F08 Base's names, and a file's own, are taken.** A library that
+  declares `type Event` with a constructor `Emit`, reached only through
+  its alias (`E.Event`), is refused: "a fresh name (duplicate
+  declaration: Event)" (`upstream/base_name.bend`, `base_name_lib.bend`).
+  Every tokenizer's `Event`, every machine's `Emit` step must be renamed
+  before it ports (std/json.bend says `Evt` and `Yield`). A def named
+  after its own file is the file's name without it: `self_prefix_lib.bend`
+  with `at` and `self_prefix_lib.at` is refused as a duplicate of
+  `self_prefix_lib.at` (`upstream/self_prefix.bend`; power/deflate.bend
+  had `at` beside `deflate.at`). A name's parts must also be words since
+  #1042: `utf8.4` is refused ("a name (words joined by dots)").
+- **F09 no indexed bytes.** `File.read_bytes` answers a `List<&2, U32>`
+  and a `String` is a cons list, so `String.get(s, i)` walks `i` cells.
+  `upstream/string_index.bend` sums a 16384-byte string by offset: 134M
+  steps, 0.46 s in the C lane where a walk by match takes well under a
+  millisecond, and four times that for twice the bytes. A scanner that
+  only reads forward can keep a cursor (std/bytes_list.bend's `Buf`), but
+  a decoder that reads back by offset cannot: std/gzip.bend inflates
+  30 KB in 11 CPU seconds on canon (C lane), where this repo's packed
+  bytes do 1 MB in 0.23 s. Array is O(1), but it is linear (`Type`) and
+  power of two, so it cannot be the byte string inside a `Data` state or a
+  `String` value. Suggest a `Bytes` type: a packed block with get, len,
+  slice and push, `Data`, what this repo's `File.read_buf` and
+  `TCP.recv_buf` hand back.
+- **F10 String walks in the JS lane.** A String is a JS string there
+  (`comp.ts:362`): a match takes it apart with `codePointAt` and
+  `slice(1)`, SCon builds with `+`, and `String.length` is
+  `[...s].length`. `upstream/js_string_scan.bend` walks a million
+  characters in 576 ms in JS and 68 ms in C. Worse, a match that gives
+  back what it took apart builds a new string: `String.drop(s, 0n)`
+  (`base.bend:1912`) answers `SCon{h, t}`, which is `h + t` in JS, and the
+  next `slice` of it copies the whole rest. A cursor that re-reads its
+  position through `String.drop` is quadratic in JS and linear in C;
+  std/json_value.bend took 5.3 s of CPU on 100 KB before
+  std/bytes_list.bend stopped rebuilding (its `skip`, `first`), 1.1 s
+  after. What is left is the walk itself: std/csv.bend reads 0.3 MB/s in
+  canon's JS lane and 8 MB/s in its C lane, std/json_value.bend 0.16 MB/s
+  and 3.0 MB/s. `bend F.bend` runs an IO main on the JS runtime, so this
+  is the speed a user gets by default.
+- **F11 deep recursion in the JS lane** (U21's cause, at a smaller
+  depth and in Base itself). `String.take` (`base.bend:1903`)
+  builds `SCon{h, String.take(t, p)}`, a call a char, and the JS lane and
+  the interpreter (for an IO main) run it on the machine stack:
+  `upstream/js_deep_take.bend` takes 40000 chars and dies with "bend:
+  memory fault (machine stack overflow?)"; 20000 pass, and the C lane
+  takes any count. `String.from_list`, `List.append` and every structural
+  map over a list are the same. std/bytes_list.bend counts in
+  accumulators where it can, but its `cut` is `String.take` (the CSV
+  proof states it so), so `Csv.read` of one string with a field past
+  about 30 KB crashes canon's JS lane (a file read in 4 KB chunks does
+  not: a cut is never longer than its chunk).
+
+---
+
+## Not upstream: ours
+
+- **U05 `File.write` and bytes >= 0x80.** Canon's `File.write` takes a
+  `String` of code points and writes their UTF-8
+  (`effs/file_write.c:24`), which is right for text, and
+  `File.write_bytes` writes bytes as they are:
+  `upstream/file_write_text.bend` reads back `194 128 195 169` and
+  `128 233` in every lane, on canon and on ours. The corruption we hit
+  is our `Bytes()` (a String whose characters are bytes) going through
+  `File.write`; `File.write_buf` is our answer.
+- **U07 JS ignores SIGTERM.** Canon has no signal effect at all; the
+  default action ends a JS-lane IO program at once
+  (`upstream/sigterm.bend`: every lane gone 100 ms after TERM, status
+  143). On our branch the first `IO.signal_pending` installs
+  `process.on("SIGTERM")`, which cannot run while `io_run` blocks in
+  `select`, so the program runs on (a 5 s loop ran to its end after a
+  TERM at 1.5 s).
+- **U12 `IO.signal_pending` clears on read.** Ours
+  (`effs/signal_pending.*`); `IO.signal_seen` is our fix.
+- **Our gate is red on caps.** Under cl100k (U15) our comp.ts is 97,390
+  of its 85,100, base.bend 62,905 of 48,928 and bend.ts 43,328 of 43,000
+  (our older bend.ts against our older 43k cap; canon's is 44k).
+- **Two canon tests fail on our branch only.** `io/tls_connect_close`
+  expects "a defined name" for `TLS.connect`, which our branch defines
+  (with another type); `io/marshal_char_scalar` expects the JS lane to
+  refuse the surrogate 55296 as a Char, and ours prints nothing and
+  exits 0 (the packed-string runtime).
+
+## Not reproduced
+
+- **U09 def order vs typo.** Canon tells them apart: a def used above
+  its definition gets "expected : a filled definition (an unfilled law
+  is a dead claim: live code cannot use it)", a misspelt name "expected
+  : a defined name" (`bend.ts:3405`, `:3393`;
+  `upstream/def_order.bend`, `def_typo.bend`). Canon has had this since
+  at least `d3790917`; our branch's older checker still says "a
+  defined name" for both. Residual, low: the message speaks of a law
+  the user never wrote; "defined below its use" would say it.
+- **U13** above.
+- **Withdrawn earlier: a def namespace that shares a name with a live
+  binder (`tls.cert` with `tls` in scope) seemed to make the checker
+  loop.** Not reproduced: a dozen reductions check in seconds, and the
+  shipped engine has the pattern. The likely cause was `bend main.bend`
+  without `--check-only` checking and then running a server.

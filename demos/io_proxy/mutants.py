@@ -12,13 +12,17 @@
 # uses (frame_sim, feed_buf_is_feed, bad_feeds, ...), is replaced by its statements
 # left open: the copy then checks to exactly its count of open holes, and a
 # mutant that the proxy's proof refuses shows an error instead. (The laws
-# hold step checks PROOF.bend whole, the engine's proof included.)
+# hold step checks PROOF.bend whole, the engine's proof included.) Each
+# mutant has a copy of its own, re-checked from core.bend on
+# (wire/mutate.py's seeded check).
 #
-#   python3 demos/io_proxy/mutants.py        (from the repo root)
-import os, re, shutil, subprocess, sys, tempfile
+#   python3 demos/io_proxy/mutants.py [-j N] [--shard i/n]   (from the repo root)
+import os, re, sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(HERE))
+sys.path.insert(0, os.path.join(ROOT, 'wire'))
+import mutate as M
 
 MUTANTS = [
   ('the client\'s bytes passed through, not rebuilt (forward_canonical, no_smuggle)',
@@ -76,11 +80,6 @@ MUTANTS = [
     '''"\\r\\nconnection: close\\r\\n\\r\\n", body'''),
 ]
 
-def check(path):
-  r = subprocess.run(['bun', os.path.join(ROOT, 'bend2', 'main.ts'), path],
-    capture_output=True, text=True, cwd=ROOT)
-  return (r.stdout + r.stderr).strip()
-
 def where(out):
   m = re.search(r'Location: ([\w.]+)', out)
   return m.group(1) if m else out.splitlines()[0] if out else '?'
@@ -116,38 +115,34 @@ def br.lows(s: Bytes()) -> {Spec.lows(s) == Eng.lows(s) : Bytes()}:
   ?TODO
 '''
 
+def tree():
+  top = M.tree(('demos/io_proxy', 'demos/io_http_engine', 'wire', 'power'), prefix='proxy_laws_')
+  proof = os.path.join(top, 'demos/io_proxy/PROOF.bend')
+  open(os.path.join(top, 'demos/io_proxy/open.bend'), 'w').write(OPEN)
+  src = open(proof).read()
+  imp = 'import ../io_http_engine/PROOF.bend as EP\n'
+  if src.count(imp) != 1:
+    print('PROOF.bend does not import the engine proof as EP'); sys.exit(1)
+  open(proof, 'w').write(src.replace(imp, 'import ./open.bend as EP\n'))
+  return top
+
 def main():
+  jobs, shard = M.args()
+  bases, res = M.run(tree, 'demos/io_proxy/PROOF.bend',
+    [(name, 'demos/io_proxy/core.bend', a, b) for name, a, b in MUTANTS], jobs, shard)
+  base = bases['demos/io_proxy/PROOF.bend']
+  if not re.fullmatch(r'Error: \d+ TODOs found\.\nThe code is incomplete, and not a valid proof yet\.', base):
+    print('the copy of PROOF.bend does not check clean: %s' % base)
+    sys.exit(1)
   bad = 0
-  top = tempfile.mkdtemp(prefix='proxy_laws_')
-  try:
-    for d in ('demos/io_proxy', 'demos/io_http_engine', 'wire', 'power'):
-      shutil.copytree(os.path.join(ROOT, d), os.path.join(top, d))
-    proof = os.path.join(top, 'demos/io_proxy/PROOF.bend')
-    core = os.path.join(top, 'demos/io_proxy/core.bend')
-    open(os.path.join(top, 'demos/io_proxy/open.bend'), 'w').write(OPEN)
-    src = open(proof).read()
-    imp = 'import ../io_http_engine/PROOF.bend as EP\n'
-    if src.count(imp) != 1:
-      print('PROOF.bend does not import the engine proof as EP'); sys.exit(1)
-    open(proof, 'w').write(src.replace(imp, 'import ./open.bend as EP\n'))
-    base = check(proof)
-    if not re.fullmatch(r'Error: \d+ TODOs found\.\nThe code is incomplete, and not a valid proof yet\.', base):
-      print('the copy of PROOF.bend does not check clean: %s' % base)
-      sys.exit(1)
-    for name, a, b in MUTANTS:
-      src = open(core).read()
-      if src.count(a) != 1:
-        print('MISSING  %s' % name); bad += 1; continue
-      open(core, 'w').write(src.replace(a, b))
-      out = check(proof)
-      open(core, 'w').write(src)
-      if out == base:
-        print('SURVIVED %s' % name); bad += 1
-      else:
-        print('KILLED   %s -- %s' % (name, where(out)), flush=True)
-  finally:
-    shutil.rmtree(top, ignore_errors=True)
-  print('mutants: %d / %d killed' % (len(MUTANTS) - bad, len(MUTANTS)))
+  for name, _, out in res:
+    if out is None:
+      print('MISSING  %s' % name); bad += 1
+    elif out == base:
+      print('SURVIVED %s' % name); bad += 1
+    else:
+      print('KILLED   %s -- %s' % (name, where(out)))
+  print('mutants: %d / %d killed' % (len(res) - bad, len(res)))
   sys.exit(1 if bad else 0)
 
 main()

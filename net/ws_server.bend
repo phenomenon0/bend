@@ -20,17 +20,21 @@
 # code, reason) if it likes. One it hands back open is closed with 1000.
 #
 # The opening handshake is ws_hs.bend's s.answer (ws_laws.bend's
-# srv_hs_*): a request that did not ask is a 426 (it may ask again on
-# the same connection); one that asked broken (a HEAD, a key that is
-# not sixteen bytes in base64) is a 400, and one with another method the
-# router's 405 (a ws route is a GET one); one that asked well gets the 101
-# with the Accept its key earns and the subprotocol chosen, when the
-# client offered it. No extension is ever agreed: permessage-deflate,
+# srv_hs_*): a request that did not ask -- no Upgrade, or a
+# Sec-WebSocket-Version that is not 13, or none (RFC 6455 4.4) -- is a
+# 426 naming version 13 (it may ask again on the same connection); one
+# that asked broken -- any method but GET (the router hands a ws route
+# every method of a request that asked: RFC 6455 4.2.1 and 4.2.2 make
+# the handshake a GET and a request that does not match it a 400, so a
+# POST is refused as a HEAD is, not with the router's 405), a key that
+# is not sixteen bytes in base64 -- is a 400; one that asked well gets
+# the 101 with the Accept its key earns and the subprotocol chosen, when
+# the client offered it. A request at a ws route that did not ask and is
+# not a GET or HEAD is the router's 405. No extension is ever agreed: permessage-deflate,
 # offered, is declined by not naming it (RFC 7692 5), and a frame with
 # a reserved bit then fails the connection (1002). The engine's reader
 # checks the rest of the request (HTTP/1.1, the Host, Upgrade,
-# Connection, a Sec-WebSocket-Version of 13 if any: another is a 426
-# naming 13).
+# Connection, Sec-WebSocket-Version: 13).
 #
 # Then every frame the client sends must be masked (1002 if not), a
 # message is at most max_msg (1 MiB; 1009 past it, before its bytes are
@@ -414,6 +418,51 @@ def next(g: Ws.Out(Unit), go: Ws.Conn -> IO(Ws.Conn)) -> IO(Ws.Conn):
       go(c)
     case Fail{e}:
       IO.pure(Ws.Conn, c)
+
+# A listener
+# ----------
+#
+# broadcast(hub, c) is a run for accept whose client only listens: the
+# connection joins the room, is sent what the room publishes, and leaves
+# when its client closes or goes (SIGTERM's 1001 answered, too); what
+# the client sends is dropped. It waits for the client in slices of 50
+# ms and relays between them, as a member that talks does: nothing yet
+# parks on a socket and a channel at once, so a message reaches it
+# within a slice.
+
+def listen.relay(+me: Member, c: Ws.Conn, again: Ws.Conn -> IO(Ws.Conn)) -> IO(Ws.Conn):
+  IO.bind(Ws.Out(Unit), Ws.Conn, relay(me, c), g => next(g, again))
+
+def listen.heard(+me: Member, g: Ws.Out(F.Msg), again: Ws.Conn -> IO(Ws.Conn)) -> IO(Ws.Conn):
+  (c, r) = g
+  match r:
+    case Done{m}:
+      match m:
+        case F.Closed{code, reason}:
+          IO.pure(Ws.Conn, c)
+        case _:
+          listen.relay(me, c, again)
+    case Fail{e}:
+      match e:
+        case Ws.ETime{}:
+          listen.relay(me, c, again)
+        case _:
+          IO.pure(Ws.Conn, c)
+
+def listen.go(k: Nat, +me: Member, c: Ws.Conn) -> IO(Ws.Conn):
+  match k:
+    case 0n:
+      IO.pure(Ws.Conn, c)
+    case 1n+j:
+      IO.bind(Ws.Out(F.Msg), Ws.Conn, Ws.recv_for(c, 50), g => listen.heard(me, g, cc => listen.go(j, me, cc)))
+
+# the room's messages sent to c until its client leaves
+def broadcast(+hub: Hub, c: Ws.Conn) -> IO(Ws.Conn):
+  do IO<Ws.Conn>:
+    +me : Member <- join(hub)
+    c2 : Ws.Conn <- listen.go(Ws.big(), me, c)
+    leave(hub, me)
+    return c2
 
 # Serving
 # =======

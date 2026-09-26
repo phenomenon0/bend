@@ -403,6 +403,13 @@ def no_refused(+asked: Bool, +key: Bytes(), +offered: List<&2, Bytes()>, +proto:
     case True{}:
       {==}
 
+def Laws.srv_hs_version(get, key, offered, proto):
+  match get:
+    case True{}:
+      {==}
+    case False{}:
+      {==}
+
 def Laws.srv_hs_refused(get, asked, key, offered, proto, h):
   Equal.trans(Bool, H.s.refused(H.s.answer(get, asked, key, offered, proto)),
     H.s.refused(H.s.answer.at(key, offered, proto, H.s.check.at(asked, False{}))), True{},

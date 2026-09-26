@@ -421,8 +421,9 @@ law srv_close_vector:
     [F.WPong{"a"}, F.WClose{1000}] : List<&2, F.Wr>}
 
 # LAW: the opening handshake (RFC 6455 4.2.2). Every request that asked
-# well -- a GET that asked to upgrade with a key of sixteen bytes in
-# base64 -- is answered with the 101: its status line, Upgrade:
+# well -- a GET that asked to upgrade, Sec-WebSocket-Version: 13 (asked:
+# the engine reads no other as asking, its upgrade_needs_13), with a key
+# of sixteen bytes in base64 -- is answered with the 101: its status line, Upgrade:
 # websocket, Connection: Upgrade, the Accept that is the base64 of the
 # SHA-1 of the key joined to the GUID, the subprotocol line for the one
 # chosen (srv_hs_proto: one the client offered, or none), the blank
@@ -445,7 +446,20 @@ law srv_hs_proto:
   for h: {H.has(offered, proto) == False{} : Bool}
   {H.s.chosen(proto, offered) == "" : Bytes()}
 
-# LAW: every other request is refused, with 400 or 426.
+# LAW: a request that did not ask -- no Upgrade, or a version that is
+# not 13, or none (RFC 6455 4.4) -- is a 426, whatever its method and
+# key: the refusal names version 13 (ws_server's refusal), and the client
+# may ask again.
+law srv_hs_version:
+  for +get: Bool
+  for +key: Bytes()
+  for +offered: List<&2, Bytes()>
+  for +proto: Bytes()
+  {H.s.answer(get, False{}, key, offered, proto) == H.SNo{426} : H.Sv}
+
+# LAW: every other request is refused, with 400 or 426: one that asked
+# with another method than GET (a HEAD, a POST: net/server.bend hands the
+# route every method of a request that asked) or a key not a key, 400.
 law srv_hs_refused:
   for +get: Bool
   for +asked: Bool

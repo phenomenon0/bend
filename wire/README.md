@@ -27,6 +27,9 @@ one-line instance.
     wire/stream.bend    a body as a stream: chunks handed to a consumer
                         as they arrive, under a window; its laws are in
                         world.bend
+    wire/mutate.py      what every mutants script shares: a scratch tree
+                        per mutant, -j and --shard, and the seeded check
+                        (re-checked from the mutated file on)
 
 Its users: `demos/io_http_engine` (HTTP/1.1, WebSocket, SSE, files),
 `demos/io_resp` (RESP, below) and `power/csv.bend` (the reader kit only).

@@ -403,20 +403,26 @@ def req.hd(r: Req) -> Hd:
       hd
 
 # What a message has said about becoming a WebSocket. Plain{} is the
-# answer for every request that never names one of the three headers,
+# answer for every request that never names one of the four headers,
 # and it carries no fields, so the ordinary path allocates nothing for
-# an upgrade that is not happening.
-# vb says a Sec-WebSocket-Version named something other than 13.
+# an upgrade that is not happening. ver is what its
+# Sec-WebSocket-Version fields said: none, 13 (the one version there
+# is), or another (RFC 6455 4.2.1 6: a client sends 13).
+type Ver is Data:
+  VNone{}
+  V13{}
+  VOther{}
+
 type Up is Data:
   Plain{}
-  Asks{key: Bytes(), up: Bool, cu: Bool, vb: Bool}
+  Asks{key: Bytes(), up: Bool, cu: Bool, ver: Ver}
 
 def up.key(u: Up, k: Bytes()) -> Up:
   match u:
     case Plain{}:
-      Asks{k, False{}, False{}, False{}}
-    case Asks{key, up, cu, vb}:
-      Asks{k, up, cu, vb}
+      Asks{k, False{}, False{}, VNone{}}
+    case Asks{key, up, cu, ver}:
+      Asks{k, up, cu, ver}
 
 # an Upgrade or a Connection field adds to what the earlier ones said
 def up.up(u: Up, v: Bool) -> Up:
@@ -424,28 +430,43 @@ def up.up(u: Up, v: Bool) -> Up:
     case Plain{} False{}:
       Plain{}
     case Plain{} True{}:
-      Asks{"", True{}, False{}, False{}}
-    case Asks{key, up, cu, vb} w:
-      Asks{key, up || w, cu, vb}
+      Asks{"", True{}, False{}, VNone{}}
+    case Asks{key, up, cu, ver} w:
+      Asks{key, up || w, cu, ver}
 
 def up.cu(u: Up, v: Bool) -> Up:
   match u v:
     case Plain{} False{}:
       Plain{}
     case Plain{} True{}:
-      Asks{"", False{}, True{}, False{}}
-    case Asks{key, up, cu, vb} w:
-      Asks{key, up, cu || w, vb}
+      Asks{"", False{}, True{}, VNone{}}
+    case Asks{key, up, cu, ver} w:
+      Asks{key, up, cu || w, ver}
 
-# a Sec-WebSocket-Version names 13, the one version there is, or not
+# a Sec-WebSocket-Version names 13 or not: 13 after none or 13 is 13,
+# and anything else, or anything after another, is another
+def ver.add(v: Ver, is13: Bool) -> Ver:
+  match v is13:
+    case VOther{} _:
+      VOther{}
+    case _ True{}:
+      V13{}
+    case _ False{}:
+      VOther{}
+
+def ver.is13(v: Ver) -> Bool:
+  match v:
+    case V13{}:
+      True{}
+    case _:
+      False{}
+
 def up.ver(u: Up, v: Bool) -> Up:
-  match u v:
-    case Plain{} True{}:
-      Plain{}
-    case Plain{} False{}:
-      Asks{"", False{}, False{}, True{}}
-    case Asks{key, up, cu, vb} w:
-      Asks{key, up, cu, vb || Bool.not(w)}
+  match u:
+    case Plain{}:
+      Asks{"", False{}, False{}, ver.add(VNone{}, v)}
+    case Asks{key, up, cu, ver}:
+      Asks{key, up, cu, ver.add(ver, v)}
 
 def has(k: List<&2, U32>) -> Bool:
   match k:
@@ -455,15 +476,15 @@ def has(k: List<&2, U32>) -> Bool:
       True{}
 
 # a message asks to become a WebSocket when it carried Upgrade:
-# websocket, Connection: Upgrade and a key, and named no version but
-# 13; one that named another is answered as one that did not ask, with
-# the 426 that says which version to ask for
+# websocket, Connection: Upgrade and a key, and named version 13 and no
+# other; one that named none or another is answered as one that did not
+# ask, with the 426 that says which version to ask for (RFC 6455 4.4)
 def up.asked(u: Up) -> Bool & Bytes():
   match u:
     case Plain{}:
       (False{}, "")
-    case Asks{+key, up, cu, vb}:
-      (up && cu && Bool.not(bnil(key)) && Bool.not(vb), key)
+    case Asks{+key, up, cu, ver}:
+      (up && cu && Bool.not(bnil(key)) && ver.is13(ver), key)
 
 # The length a message announced: none, or one value every
 # Content-Length field agreed on.

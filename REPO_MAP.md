@@ -10,14 +10,18 @@ this file says the same in more words, and maps the networking stack in full.
       comp.ts           the compiler and the runtimes: C (CPU), Metal, CUDA, JS
       main.ts           the `bend` command
       base.bend         the base library (`bend base` prints it)
+      time.bend         dates in UTC: Time.iso, Time.http (imported by path)
       effs/             the IO effects, a .c and a .js per effect
       bend.lean         the core, mechanized in Lean
     kernel/             a second, independent checker in Rust; it re-checks a
                         proof's exported core (`bend F --export F.core`)
     guide/              GUIDE.md (`bend guide`), and the extras: SHADERS.md,
-                        EFFECTS.md, NETWORKING.md (`bend guide networking`)
+                        EFFECTS.md, NETWORKING.md (`bend guide networking`),
+                        the tour of net/ whose pages are guide/net/*.md
+                        (`bend guide net/serving`)
     power/              libraries in Bend: JSON, gzip and deflate, CSV, hashes,
                         search, numerics; some carry their own laws and proofs
+    std/                the standard library for released Bend and ours (below)
     tests/<ns>/         the tests; each ends in the `#|` lines its run prints
     bench/              the runtime and checker benchmarks; bench/proxy is a
                         framing harness that compares a Bend proxy with nginx
@@ -27,6 +31,35 @@ this file says the same in more words, and maps the networking stack in full.
     gates/              the repo's own checks (tests, perf, the file allow list)
     paper/, media/      the papers and the charts
     docs/omen/          working notes: plans, reviews, house style
+
+## The Standard Library
+
+`std/` is what a program on released Bend (canon's stock runtime) can
+import for CSV, JSON, text, dates and gzip; it runs on this repo's runtime
+too. `std/README.md` is its quick start, with examples that run on both.
+
+    std/bytes.bend                 the one byte interface; its import line picks
+      bytes_list.bend              plain Bend over canon's Base (the default)
+      bytes_packed.bend            this repo's packed Bytes natives
+      bytes_spec.bend              what the scans count, both implementations' laws
+    std/csv.bend                   RFC 4180 reader and writer (csv_spec, csv_laws, csv_proof)
+    std/json.bend, json_value.bend JSON events and trees, closed laws in json_value
+    std/text.bend, time.bend       UTF-8, numbers, splitting; UTC dates
+    std/deflate.bend, gzip.bend    RFC 1951 and 1952 (deflate_laws, inflate_proof,
+                                   deflate_proof; lemmas.bend holds the Base lemmas
+                                   canon lacks)
+    std/reader.bend                the reader kit, a copy of wire/reader.bend
+    std/examples/                  the README's snippets, whole, with their data
+    tests/std/                     the tests; lanes.py runs them in every lane,
+                                   readme.py checks the snippets and runs the
+                                   examples, csv_mutants.py and deflate_mutants.py,
+                                   bench/run.py; each takes --bend (another
+                                   checkout's compiler) and --packed
+
+The laws are stated against the interface, so `bend std/csv_proof.bend` and
+`bend std/deflate_proof.bend` print `All terms check.` with either
+implementation, on canon and here. power/ keeps its own copies over this
+repo's `Bytes()`.
 
 ## Networking
 
@@ -40,7 +73,8 @@ ordinary program.
       url.bend                     URLs: parse, resolve, origin
       addr.bend                    IPv6 text (RFC 4291/5952), IP-literals, connect to a name's addresses
       json.bend                    Json: JSON bodies
-      stream.bend                  Stream: request bodies as streams (uploads), stream routes
+      stream.bend                  Stream: request bodies as streams (uploads), stream routes,
+                                   response bodies written as they are made (exports, events)
       ws.bend                      Ws: the WebSocket client
       ws_net.bend                  a Ws.Err as a NetError
       ws_frame.bend, ws_hs.bend    the WebSocket client's frames and handshake
@@ -88,6 +122,9 @@ or to write a server for another protocol.
     net/examples/relay.bend         fetch JSON upstream, keep some fields, serve them
     net/examples/ws_chat.bend       a WebSocket chat client
     net/examples/upload.bend        uploads of any size to files, in bounded memory
+    net/examples/export.bend        exports of any size (CSV, NDJSON, bytes), written as they are made
+    net/examples/events.bend        server-sent events with keepalives
+    net/examples/relay_stream.bend  a relay that streams an upstream body end to end
 
 Each builds with `bend net/examples/NAME.bend -o NAME`. Its header says how to
 run it.
@@ -118,6 +155,11 @@ shows the laws are not empty.
 | proxy | demos/io_proxy/LAWS.bend | demos/io_proxy/PROOF.bend | python3 demos/io_proxy/mutants.py |
 | HTTP/2 | demos/io_http2/LAWS.bend | demos/io_http2/PROOF.bend | python3 demos/io_http2/mutants.py |
 | RESP | demos/io_resp/LAWS.bend | demos/io_resp/PROOF.bend | |
+
+Every mutants script takes `-j N` (nproc by default) and `--shard i/n` (every
+n-th mutant from the i-th, as CI splits them). Each mutant runs in a scratch
+tree of its own and is re-checked from the file it breaks on: what loads before
+that file is the clean tree's (wire/mutate.py).
 
 Run them from the repo root. With no `bend` installed, `bun bend2/main.ts` is
 the same command. The second kernel re-checks a proof:

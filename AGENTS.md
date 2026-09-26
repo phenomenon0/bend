@@ -12,6 +12,7 @@ lines its run must print, and the gates run on the mini cluster.
     bend2/comp.ts       the compiler and the runtimes (C, Metal, CUDA, JS)
     bend2/main.ts       the CLI; imported, the .bend loader for bun and node
     bend2/base.bend     the base library
+    bend2/time.bend     dates: Time.iso, Time.http (imported by path)
     bend2/bend.lean     the core, mechanized in Lean
     bend2/effs/         IO effect sources per backend; related effects may share
     bend2/pack/         package.json, tsconfig.json, bun.lock
@@ -33,14 +34,21 @@ lines its run must print, and the gates run on the mini cluster.
                         check and a release, on a localhost hub
     gates/_run.ts       the four gates with --gate
     demos/              one dir per demo
+    std/                the standard library that also runs on released Bend:
+                        csv, json, text, time, gzip, their laws and examples,
+                        over one byte interface (bytes.bend's import line
+                        picks bytes_list.bend, the default, or bytes_packed)
     net/                the networking library: HTTP server and client, JSON,
                         a WebSocket client; its laws, mutants and examples
     apps/               one dir per app built on net/ as a user would: the app,
                         its check.py and FRICTION.md (what the library cost it)
     wire/               bend-wire, the loops, readers and pool net/ is built on
     guide/              GUIDE.md, and the extras SHADERS.md, EFFECTS.md and
-                        NETWORKING.md (`bend guide networking`)
+                        NETWORKING.md (`bend guide networking`), the tour
+                        of net/, whose pages are guide/net/ (net/serving)
     REPO_MAP.md         this map in more words, and the networking stack whole
+    UPSTREAM.md         every bug we found that canon's main also has, kept
+                        current; upstream/ holds its repros and verify.sh
     paper/              BendTT.pdf, BendRT.pdf
     media/              the film and the charts
     .github/            ISSUE_TEMPLATE/bug.yml, the bug report form, and

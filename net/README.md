@@ -40,7 +40,8 @@ import ../net/client.bend as Client
     net/ws.bend       Ws: a WebSocket connection, either end: connect, send, recv, close
     net/ws_server.bend WsServer: WebSocket routes, accept/refuse, options, the Hub
     net/ws_net.bend   the WebSocket client's Ws.Err as a NetError
-    net/stream.bend   Stream: request bodies as streams, for uploads
+    net/stream.bend   Stream: request bodies as streams (uploads), and response
+                      bodies written as they are made (exports, event streams)
 
 **Http.** `Request{method, path, query, headers, body, remote, params}`
 (`Http.method(r)`, `Http.header(r, "x-name")`, `Http.param(r, "id")`,
@@ -62,33 +63,60 @@ as (the server's writer, `respond_framed`'s).
 IO(Http.Response)`; `Server.serve.with(~E, ~app, env, cfg)` hands `env`
 (a channel, a configuration: shared state) to every call. `cfg` is
 `Server.config(port)` changed by `Server.set.host/idle/head/body/send/
-max_head/max_body/conns/grace/tls(cert, key)/shared`, or read from the
-command line (`xs` is `IO.args()`) by `Server.args(xs, cfg)` (`--host
---port --idle-ms --head-ms --body-ms --max-head --max-body --max-conns
---grace-ms --tls-cert --tls-key --shared`; `Server.flag(xs, name, d)`
-reads one of your own). Precedence: a flag given wins over `cfg`, and a
+max_head/max_body/conns/grace/handler/tls(cert, key)/shared`, or read from the
+command line by `Server.args(xs, cfg)` (`--host --port --idle-ms --head-ms
+--body-ms --max-head --max-body --max-conns --grace-ms --handler-ms --tls-cert
+--tls-key --shared`). `xs` is `Server.argv(own)`: `IO.args()` asked once and
+checked against the server's flags and the program's own, named as a usage
+line names them (`["--root DIR", "--verbose"]`; a value named `N` must be a
+number); an unknown flag, a value missing or a number that is none ends the
+program with the reason and a usage line (exit 2). It is `Data`, and
+`Server.flag(xs, name, d)`, `flag.num`, `flag.on` and `args` read it as often
+as they like. Precedence: a flag given wins over `cfg`, and a
 `set.*` applied to what `args` answers wins over the flag. The server
 binds `host` (0.0.0.0, every IPv4 interface, by default; a dotted
 address; an IPv6 one, `::1` or `::`, IPV6_V6ONLY off so `::` takes IPv4
 too) and says so on stderr (`http://[::1]:8080`); a request's remote is
 its peer's address, IPv6 in RFC 5952's text; a certificate or key that does not load ends it with `TLS setup
 failed` and the file.
+A handler has `handler` ms (30 s) to answer: past it the server answers
+503 (it could not handle the request in time; 504 would name an upstream
+it reached as a gateway) with `Connection: close`, after the responses
+already waiting, and closes; whatever the handler answers later is
+dropped (`IO.within`, below). Nothing preempts a Bend computation: it
+yields only at an effect. So a handler waiting in one (a sleep, a
+channel, a socket, an upstream) is let go at the deadline and runs on,
+unseen, until it ends; one that computes without an effect holds the
+loop until it answers, and that answer is written. The deadline runs
+from the handler's first effect: what it computes before one is taken
+at once, as a direct call. It covers every route's answer: a `Server.get`
+handler's response, a `Stream.get` handler's `Stream.Reply` (whole or
+pour), a WebSocket handler's accept or refusal. Once a pour has begun,
+or a WebSocket session, the handler's time is over: each send has
+`send` (10 s) for progress, so a stream may run as long as its client
+reads.
 Router: `Server.route(routes, req)` over `[Server.get(pat, h),
 Server.post(...), put, patch, delete, Server.on(methods, pat, h),
 Server.static(prefix, root)]`, patterns of literals, `:name` and a last
 `*`; no match is a 404, a path with other methods a 405 with `Allow`,
 and GET answers HEAD. `Server.serve.routes(~E, ~rs, env, cfg)` serves the
-routes `rs(env)` directly, and then a `Server.Sock` route (a GET one;
-`WsServer.ws` makes them) may take its connection over: it is told
-whether the request asked to switch protocols, and answers a response
-or the head that switches it and what runs on the socket. Middleware is Handler -> Handler as a template:
+routes `rs(env)` directly, and then a `Server.Sock` route (a GET one, and
+every method of a request that asked to switch, so its handshake refuses
+those with a 400; `WsServer.ws` makes them) may take its connection over:
+it is told whether the request asked to switch protocols, and answers a
+response or the head that switches it and what runs on the socket. Middleware is Handler -> Handler as a template:
 `~Server.logged(~app)` (a line per request on stderr),
 `~Server.secured(~app)` (nosniff, DENY, no-referrer, CSP 'self', each
 unless set), `~Server.recovered(~app)` (a handler answering
 `Result<Bytes(), Response>`, a failure a plain 500); they nest
 (`~Server.logged(~Server.secured(~app))`), and each has a `.around` form
 over a handler's IO (`Server.logged.around(r, io)`) for handlers with an
-environment.
+environment. `Server.wrap(~mw, routes)` puts an `.around` form (or several
+nested) around every route of a table: plain routes, `Server.static`, and a
+Sock route's answer (a `Stream.get` pour as its status and fields, a
+WebSocket accept as a 101), so one middleware covers a whole
+`serve.routes` / `WsServer.serve.with` app (`wrap_pats`: it changes no
+route's methods or pattern).
 
 **Stream.** `Stream.serve(~app, ~ups, cfg)` and `Stream.serve.with(~E,
 ~app, ~ups, env, cfg)` serve `app` as Server does, and beside it a table
@@ -111,6 +139,26 @@ reader entered at the body. An `Expect: 100-continue` is answered at the handler
 handler leaves is drained up to 1 MiB, else the answer closes; a body
 that failed is answered by the server (400, 408, 413).
 
+A response body is written as it is made on a route `Stream.get(pat, h)`
+(GET, and HEAD; beside `Server.get` and the rest in `Server.serve.routes`),
+whose `h : Http.Request -> IO(Stream.Reply)` answers `Stream.whole(resp)`,
+`Stream.pour(status, fields, run)` (the length unknown: chunked; to
+HTTP/1.0, to the close) or `Stream.pour.len(status, fields, n, run)` (a
+Content-Length), and `run : Stream.Sink -> IO(Stream.Sink)` is the
+producer. `Stream.write(k, bytes)` answers `Stream.Wrote()`, the Sink
+beside `Done` or a `Stream.Err`: it returns once the bytes are on the
+socket (each send within the server's send time, else `ETime`), so a
+client that stops reading stops the producer; a client gone is
+`EClosed`; a write past a declared length is refused whole (`ELarge`); to
+HEAD (and for 204, 304) the head goes alone and a write is `ENone`; after
+a failure every write answers it and sends nothing. The server writes
+the head before `run`, and the end after it; the connection goes on when
+the body ended as framed (a declared length short or long closes it).
+`Stream.events(~S, ~next, s, every, fields)` is an event stream
+(text/event-stream): `next(s, every)` answers `Stream.event(name, data)`,
+`Stream.idle()` (a keepalive comment goes out) or `Stream.over()`; it
+ends at over, when the client leaves, or at SIGTERM.
+
 **Client.** `Client.get(url)`, `Client.post(url, ctype, body)`,
 `Client.request(Client.Req{method, url, headers, body}, opts)`: each
 `IO(Result<NetError, Response>)` on a session of its own;
@@ -119,12 +167,24 @@ connections between requests. `NetError = Timeout | Refused | Dns | Tls
 | Protocol | TooLarge | Closed | BadUrl | TooManyRedirects | Io`.
 `Client.opts()` changed by `Client.with.connect/timeout/max_body/
 redirects/ca/gzip` (each a `U32` but `ca`, a file, and `gzip`, a `Bool`).
+`Client.stream(~K, ~give, ~fin, url, opts, k)` is a GET whose body goes to
+the consumer `k` as it arrives, never held whole (`give(k, bytes)` answers
+how many it took; the socket is not read while 64 KiB wait untaken): it
+answers the consumer and the status (no field, no body), on a connection
+of its own, no redirect followed, a body at most 256 MiB. With
+`Stream.pour` it relays a body end to end (`net/examples/relay_stream.bend`;
+`Stream.abort(k)` cuts the response short when the upstream fails).
+
+`Client.fetch.with(s, req, o => Client.with.timeout(o, 500))` is one request
+on the session's connections with options of its own, made from the
+session's (its `ca` stays the session's): one pooled session serves requests
+with different deadlines, body caps and redirect budgets.
 
 Results: an error is always reusable (`&2`), and so is a value that is
 `Data`: `Client.Res()` is `Result<&2, &2, NetError, Response>`. Only a
 value that holds a handle is affine: `Ws.connect` answers `Result<&2,
-&1, Ws.Err, Ws.Conn>`. A command line is what `IO.args()` answers,
-`List<String>`, and every flag reader takes it as it is.
+&1, Ws.Err, Ws.Conn>`. A command line from `Server.argv` is
+`List<&2, String>`, `Data`, read by reference.
 
 **WebSockets.** `Ws.connect(url, Ws.opts())` is a client's connection;
 `WsServer.ws(pat, h)` is a route (beside `Server.get` and the rest, served by
@@ -139,14 +199,25 @@ the connection handed back), `Ws.close` (the same, then released).
 `WsServer.choose(r, ours)` picks a subprotocol the client offered;
 `WsServer.ws.with(o, pat, h)` takes `WsServer.opts()` changed by
 `opts.max_msg/keepalive(ping, pong)/timeouts(recv, close, send)/origins`.
+A request that did not ask -- no Upgrade, or a `Sec-WebSocket-Version`
+that is not 13, or none (RFC 6455 4.4) -- is a 426 naming 13, and the
+connection goes on; one that asked with any method but GET, or a key
+that is not a key, a 400 (4.2.1, 4.2.2).
 A `WsServer.Hub` is a room: `hub.new`, `join`, `leave`, `publish`, `inbox`,
-`relay`.
+`relay`; `WsServer.accept("", c => WsServer.broadcast(hub, c))` is a client
+that only listens to it (a live feed), leaving when it closes.
 
 **Json.** `Json.respond(status, j)`, `Json.body(req, budget)`,
 `Json.of(resp, budget)` (`Result<J.Why, J.Json>`), `Json.obj/kv/arr/
-str/yes/no/null`, numbers by `Json.num` (a `U32`), `Json.i64` (an `I64`)
-and `Json.f64` (an `F64`; NaN and infinities are null), `Json.get`,
-`Json.get.str`, `Json.refused(why)`.
+str/flag/yes/no/null`, numbers by `Json.num` (a `U32`), `Json.nat`,
+`Json.i64`, `Json.f64` (NaN and infinities are null) and `Json.dec(n,
+places)`, `Json.refused(why)`. Fields: `Json.get(j, key)` (a `Maybe`), and
+typed, `Json.get.str/u32/nat/i64/f64/bool/arr/obj(j, path)`, each a
+`Json.Got(A)` (`Result<&2, &2, Bytes(), A>`) whose failure names the path and
+the reason ("age must be a number", "name is required"); a path is keys and
+array indexes joined by `.`. `Json.or(A, j, path, d, get)` defaults a missing
+field only, `Json.fails(A, r, whys)` keeps every reason, and
+`Json.errors(status, whys)` answers them as `{"errors": [...]}`.
 
 ## The defaults
 
@@ -162,6 +233,8 @@ and `Json.f64` (an `F64`; NaN and infinities are null), `Json.get`,
 | a streamed body | 1 GiB (`max_stream`; chunked at most 256 MiB) | 413 |
 | a streamed body's read | 10 s (`progress`) | 408, closed |
 | a streamed body left unread | 1 MiB drained | answered, closed |
+| a handler's answer, from its first effect | 30 s (`handler`) | 503, closed; the handler let go |
+| a streamed response's write | each send within 10 s (`send`) | `ETime`, closed |
 | connections | 1024 | the next waits for a slot |
 | SIGTERM | listener closed, idle connections let go within a second | the process ends when the rest end, or after grace (5 s) |
 | client: connect (DNS aside) | 10 s | Timeout |
@@ -216,6 +289,32 @@ passes its export. `net/LAWS.bend`:
   (Stream.next) only once the RFC's framing says the body ended, with
   exactly the bytes after it; else it closes. An undrained body is never
   read as a request.
+- `handler_late`: a handler still waiting when its time is up (IO.within's
+  contract, `within` in LAWS.bend) is answered with the 503 that ends the
+  connection, after the responses waiting and before nothing: whatever it
+  answers, whenever, none of it is written. `handler_in_time`: one that
+  answers in time is written as ever. `late_framed`: the 503 reads back
+  as one final response that closes.
+- `ws_version`: a request whose Sec-WebSocket-Version is none or not 13
+  does not ask to switch (the engine's `upgrade_needs_13`), and a
+  WebSocket route answers it 426. `ws_route_methods`: a WebSocket route
+  takes a request that asked whatever its method (its handshake refuses
+  all but GET: 400), a plain one only as GET's.
+- `pour_chunked`: a response whose body is written as it is made, its
+  length unknown, read by wire/http1's spec, is exactly one final
+  response: the handler's status, its body the writes joined in order
+  (none for 204, 304), closing as the server decided, nothing after; or
+  the 500 when its head fails the check. For every list of writes (each
+  as `Stream.write` cuts them, at most 16 KiB) whose chunks the reader's
+  budget covers (`fits`: 256 MiB for wire's client; curl has none).
+- `pour_length`: the same for a declared length whose writes come to it,
+  to any request (HTTP/1.0 or not, closing or not).
+- `pour_capped`: a declared length is never written past, whatever the
+  writes: a write that would pass it goes out not at all.
+- `pour_quiet`: after a failure no write sends a byte, nor does the end.
+- `pour_bounded`: what goes out for a write is at most the write and 120
+  bytes of framing; the writer keeps no byte of a write between writes,
+  so a connection holds one write, however long the body.
 - `stream_head`: a stream route's head is the engine reader's, and for every
   stream however cut into reads, the reader stands at a head's blank line
   exactly where spec.bend's frame() walk does, and the head the stream takes
@@ -227,12 +326,20 @@ passes its export. `net/LAWS.bend`:
   and what is not an address; `ip6_round_trip`), IP-literal URLs
   (`literal_vectors`, RFC 3986 3.2.2 and RFC 2732's examples, zone IDs
   refused; `literal_round_trip`), the Host field of a request to one
-  (`host_vectors`) and its origin, the pool's key (`origin_vectors`).
+  (`host_vectors`) and its origin, the pool's key (`origin_vectors`); a
+  wrapped table's patterns (`wrap_pats`, `wrap_vectors`); the command line
+  (`argv_vectors`: an unknown flag, a value missing, a number that is none,
+  a stray word refused, the rest passed; `flag_vectors`, `flag_num_vectors`,
+  `flag_on_vectors`); JSON's typed fields (`json_*_vectors`: each type, a
+  path through objects and arrays, a default only for a missing field,
+  every reason kept, `Json.dec`).
 
 `bend net/ws_proof.bend` is the WebSocket gate (`net/ws_laws.bend`): the
 client's laws, and the server's -- `srv_hs_valid` (every request that
-asked well gets RFC 6455 4.2.2's 101, the Accept its key earns),
-`srv_hs_refused` (every other a 400 or 426), `srv_hs_proto` (no
+asked well -- version 13 among it -- gets RFC 6455 4.2.2's 101, the
+Accept its key earns), `srv_hs_version` (one that did not ask, a
+missing or other version too, a 426), `srv_hs_refused` (every other a
+400 or 426), `srv_hs_proto` (no
 subprotocol the client did not offer), `srv_frame_unmasked` (no frame the
 server writes is masked), `srv_unmasked_refused` (an unmasked client
 frame breaks the framing: 1002), `srv_reads` (the acts a handler's
@@ -240,12 +347,15 @@ connection takes are the spec's reassembly of the input, for every cut
 of it into reads), `srv_close_once` and `srv_close_after` (at most one
 close written, none after this end's own), and vectors.
 
-`python3 net/mutants.py`: fifty-five broken servers, streams, stream
+`python3 net/mutants.py`: ninety-three broken servers, streams, stream
 heads (a bare LF, a folded line, two lengths that disagree, a head judged
-wrong), clients, URLs and IPv6 texts, each refused; `python3 net/ws_mutants.py`:
-the WebSocket ones. Not proven: the IO loops (they call the functions the laws
+wrong), response writers, handler deadlines, WebSocket routes, clients,
+URLs and IPv6 texts, wrapped tables, command lines and JSON getters, each
+refused; `python3 net/ws_mutants.py`: the
+WebSocket ones. Not proven: the IO loops (they call the functions the laws
 are about, and stop a read at every stream route's head: checked by
-`check.py`), the deadlines and limits.
+`check.py`), the deadlines and limits (the handler's race is the
+runtime's IO.within, bend2/effs/within.c).
 
 ## The examples
 
@@ -261,13 +371,23 @@ are about, and stop a read at every stream route's head: checked by
     net/examples/upload.bend       uploads to files, a body counted as it comes
     net/examples/chat_server.bend  its room: a WebSocket route, a Hub, broadcast
     net/examples/ws_echo.bend      a WebSocket echo (the one Autobahn runs against)
+    net/examples/export.bend       exports of any size: CSV, NDJSON, bytes, a declared length
+    net/examples/events.bend       server-sent events with keepalives, and the page that listens
+    net/examples/relay_stream.bend a body fetched upstream passed on as it comes, end to end
+    net/examples/signup.bend       a JSON body checked field by field, every problem in one 400
 
-`guide/NETWORKING.md` (`bend guide networking`) walks through them.
+`guide/NETWORKING.md` (`bend guide networking`) is the tour, and
+`guide/net/` (`bend guide net/serving`, `net/streams`, `net/client`,
+`net/json`, `net/websockets`, `net/limits`) walks through them.
 
 `python3 net/check.py` builds every example and checks, from outside: framing,
 pipelining, HEAD, keep-alive, HTTP/1.0, 400/408/413/414/431, the idle,
 head and body timeouts, the connection limit, 100-continue, SIGTERM,
-404/405, JSON and files, the middleware, `--host` and its banner, a TLS
+404/405, JSON and files, the middleware (`Server.wrap` over files and a
+WebSocket route too), the command line refused, typed JSON fields, the
+handler's time (a handler
+that sleeps forever: a 503 that closes, nothing after it, the server
+still answering others), `--host` and its banner, a TLS
 certificate that does not load; and the client against Python peers: pooling,
 refused, DNS, the deadline, redirects (cap, 303, 307, credentials),
 gzip, the body cap, a field with a line end refused, TLS refused
@@ -279,8 +399,13 @@ returns without reading (drained, or closed with no byte of it read as a
 request), 100-continue, pipelining after a streamed body and before one
 (a 2 MB body behind a GET in one write), a head cut between its blank
 line's CR and LF, and the heads refused (a bare LF, a fold, two lengths);
+and streamed responses: chunked, 1 GB byte for byte in about 5 MB of
+memory (about 200 MB/s on one core), a declared length exact, short and
+long, HEAD, HTTP/1.0 to the close, a client gone mid-body (the producer
+told within a send), server-sent events with `curl -N`;
 and WebSockets on the server: the chat room's broadcast between two
-ws_chat clients, its 426, 400 and 101, SIGTERM's 1001; and IPv6, where
+ws_chat clients, its 426 (a missing version too), 400 (a POST that
+asks too) and 101, SIGTERM's 1001; and IPv6, where
 the machine has a loopback for it: the server on ::1 and on :: (its
 banner, the remote, over TLS), the client to http://[::1]:port/ (Host,
 pool), a name with both families, TLS to an IP-literal (IP SAN, no SNI),
@@ -294,7 +419,16 @@ second where the engine's literal `/health` answers 58k; with the
 response written as a literal the loop matches the engine, so the
 difference is the checked writer (`respond_framed`'s).
 
-Not yet: Happy Eyeballs (a name's addresses are tried in turn, never
-raced), IPv6 zone IDs, streaming response bodies, a chunked streamed body past
-256 MiB, a deadline on the handler itself, WebSocket compression
-(permessage-deflate is declined).
+Not yet: a WebSocket handler that parks on its socket and a channel at
+once (a room's members and `broadcast` wait in 50 ms slices; it needs an
+effect that waits on either and withdraws the other wait, where
+`IO.within` lets the loser run on and would drop a message), Happy Eyeballs (a name's addresses are tried in turn, never
+raced), IPv6 zone IDs, a streamed client body's head before its body
+(Client.stream tells the status at the end, so a relay decides its own
+head first), and past 256 MiB; a streamed response on a stream route (an
+upload's answer) or to methods but GET; a chunked streamed body past 256
+MiB, WebSocket compression (permessage-deflate is declined). Not
+possible: preempting a handler that computes without an effect (the
+handler's time lets go only one that waits); a stream route's upload
+handler has no handler time (it holds the socket), only its reads'
+progress.

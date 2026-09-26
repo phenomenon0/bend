@@ -13,17 +13,14 @@ import ../server.bend as Server
 def health(r: Http.Request) -> IO(Http.Response):
   Http.reply(Http.text(200, "ok\n"))
 
-def routes(+root: Bytes()) -> List<Server.Route>:
-  [Server.get("/health", health), Server.static("", root)]
+# each request logged, the browser's headers added
+def mw(+r: Http.Request, io: IO(Http.Response)) -> IO(Http.Response):
+  Server.logged.around(r, Server.secured.around(io))
 
-def app.go(+root: Bytes(), +r: Http.Request) -> IO(Http.Response):
-  Server.logged.around(r, Server.secured.around(Server.route(routes(root), r)))
-
-def app(+root: Bytes(), r: Http.Request) -> IO(Http.Response):
-  app.go(root, r)
+def routes(+root: Bytes()) -> List<&1, Server.Route>:
+  Server.wrap(~mw, [Server.get("/health", health), Server.static("", root)])
 
 def main() -> IO(Unit):
   do IO<Unit>:
-    xs : List<String> <- IO.args()
-    ys : List<String> <- IO.args()
-    Server.serve.with(~Bytes(), ~app, Server.flag(xs, "--root", "www"), Server.args(ys, Server.config(8080)))
+    +xs : List<&2, String> <- Server.argv(["--root DIR"])
+    Server.serve.routes(~Bytes(), ~routes, Server.flag(xs, "--root", "www"), Server.args(xs, Server.config(8080)))

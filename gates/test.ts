@@ -113,6 +113,9 @@ function shard_split(tests: Test[], count: number): Test[][] {
 function shard_pack(shard: Test[], tests: Test[]): Buffer {
   const dir = fs.mkdtempSync("/tmp/bend-shard-");
   lib.bend2_copy(path.join(dir, "bend2"));
+  // tests/std/ imports the library it tests from ../../std/
+  fs.cpSync(path.join(lib.ROOT, "std"), path.join(dir, "std"), { recursive: true,
+    filter: (p) => fs.statSync(p).isDirectory() || p.endsWith(".bend") });
   for (const sub of fs.readdirSync(TESTS)) {
     fs.mkdirSync(path.join(dir, "tests", sub), { recursive: true });
     for (const f of fs.readdirSync(path.join(TESTS, sub))) {

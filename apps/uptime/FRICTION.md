@@ -2,10 +2,17 @@
 
 What it was like to write a real app on `net/` as a user: 1,292 lines of
 Bend in 171 defs, a foreign effect, 3 dashboard files and a check
-script. It works (13 / 13 checks native, 12 / 13 on the JS lane). The
+script. It works (13 / 13 checks native, 12 / 13 on the JS lane; 13 / 13 on both
+since the fixes noted under 1 to 3). The
 list is ranked by what it cost: wrong behaviour first, then hours, then
 annoyance. Each entry: what I tried, what happened, the workaround, and
 what should change.
+
+The net/ items (5, 7, 9, 10, and 8 in part) are fixed in c4904803 and
+the app rewritten on the new API: 1,248 lines of Bend in 165 defs
+before, 1,130 in 154 after (118 fewer; api.bend 182 to 129, model.bend
+483 to 417, main.bend 138 to 131, env.bend 94 to 102 for the shared
+client session). check.py: 13 / 13 native and on the JS lane.
 
 ## 1. `Bool.pick` evaluates both arms, and it is the only `if`
 
@@ -31,6 +38,17 @@ parameter (`apply.kind`, `apply.some`, `hist.cut`, `wait.slice`, ...).
 `Bool.pick` a template (`~a`, `~b`) so only the chosen arm is built, and
 say in GUIDE.md that it is strict until then.
 
+**Fixed** in 5a4e4019 (and 2f49eddb). The compiled lanes (C, JS, and the
+interpreter's IO programs, which run as JS) lift a `Bool.pick` whose arms
+are not both cheap into a def of its own that matches on the condition,
+the helper written above, so only the chosen arm runs and the other's
+values drop with its match arm; the checker's view is unchanged (the `+`
+it asks for stays). A pure `main` in the interpreter was lazy already.
+`tests/base/bool_pick_lazy.bend` and `tests/io/bool_pick_lazy.bend` pick
+past a loop that never ends. The replay, 100,000 lines (11 MB), 4-core
+Linux box under a load of about 12: the `Bool.pick` line above 8.1 and
+8.5 s before, 2.3 and 2.1 s after; the `match` helper 2.2 s either way.
+
 ## 2. The JS lane ignores SIGTERM, for every net/ program
 
 **Tried.** `check.py --js`: `bun bend2/main.ts apps/uptime/main.bend -- ...`,
@@ -55,6 +73,16 @@ beside the sockets), or have `io_wait` yield to the event loop
 (`await`) between polls. `net/check.py` should run its SIGTERM case on
 the JS lane too.
 
+**Fixed** in ce884a5d. `effs/signal_pending.js` now catches the signal in
+C, as the C lane does: bun:ffi's `cc` builds a handler that counts, the
+first time a signal is asked for (`process.on` stays the fallback where
+cc cannot build). Nothing runs on the request path. `bun hello.js` exits
+0 in 0.8 s after SIGTERM with `bend-net: stopping` (was still running 10 s
+later); wrk on it (one connection, eight 8 s runs on a loaded box) gives
+a median of 322 us of server CPU a request before, 295 after, within the
+noise. `tests/io/signal_self.bend` sends the process its own signals
+mid-run. `check.py --js`: 13 / 13, SIGTERM exit 0 in 0.36 s.
+
 ## 3. No wall clock, no dates
 
 **Tried.** Every probe needs a timestamp that survives a restart, for
@@ -75,6 +103,14 @@ promise", so an ordinary app now carries runtime internals (`Term`,
 **Change.** `IO.wall() -> IO(Nat)` (ms since the epoch) in Base, beside
 `IO.now`. Also `Time.iso(ms) -> String` and `Time.parse_iso`. And say in
 GUIDE.md that `IO.now` is monotonic.
+
+**Fixed** in c8a52987. `IO.wall() -> IO(Nat)` (ms since the epoch) is in
+Base beside `IO.now`, which the guide now calls monotonic, and
+`bend2/time.bend` (`import ../../bend2/time.bend as Time`) has
+`Time.iso(secs)`, `Time.iso.ms(ms)`, `Time.http(secs)` (IMF-fixdate) and
+`Time.date` / `Time.day`, on the engine's proven calendar. `clock.c`,
+`clock.js` and `clock.bend` are gone; the app is no longer flagged for
+foreign code (`start.all`). No `Time.parse_iso` yet.
 
 ## 4. The match and let rules turn every branch into a def
 
@@ -132,6 +168,18 @@ files, the undocumented `Server.static.at(root, r)` under
 alone). Or give `serve.routes` an `~around` parameter. Document
 `static.at`, or add `Server.static.with(~mw, prefix, root)`.
 
+**Fixed** in c4904803. `Server.wrap(~mw, routes)` takes a middleware's
+`.around` form (or several nested) and puts it around every route of a
+table: plain routes, `Server.static`, and the Sock routes too (a
+`WsServer.ws` accept logged as its 101, a `Stream.get` pour's head given
+the middleware's fields). `~Server.logged.around` passes as it is.
+`Server.static` is wrapped like any route, so `static.at` is no longer
+needed (it is documented, in guide/net/SERVING.md, for a route of your
+own). `wrap_pats` in net/LAWS.bend: a wrapped table keeps every route's
+methods and pattern. api.bend's routes went from seven hand-wrapped
+lines, two wrapper defs and the `Res`/`recovered` plumbing to one
+`Server.wrap(~mw, [...])` and a two-line `mw`.
+
 ## 6. Persistence: no seek, rename, mkdir or fsync; replay is slow
 
 **Tried.** An append-only NDJSON log, replayed at start. A tail-only
@@ -180,6 +228,16 @@ asserts under 1.2 s).
 `Client.req.timeout(r, ms)` that the exchange honours, beside the
 session's default.
 
+**Fixed** in c4904803. `Client.fetch.with(ss, req, o => ...)`: the
+request's options are made from the session's (connect, timeout,
+max_body, redirects, gzip; `ca` stays the session's, whose pooled
+connections were verified under it). It is `fetch` on the same pool with
+other options, so `pool_clean`, `redirect_cap` and `redirect_creds` hold
+as proven. The app now keeps one session, in its `Env`, and each probe
+passes its monitor's timeout (`probe.opts`); `start` went from a session
+per monitor (6 lines, and a `Client.close` on each way out of the loop)
+to 2 lines. The 1.5 s target is still cut at 500 ms as `timeout`.
+
 ## 8. A WebSocket handler cannot wait on its socket and a channel at once
 
 **Tried.** Push each probe to every dashboard the moment it lands.
@@ -198,6 +256,20 @@ chat_server (35 lines).
 **Change.** `WsServer.broadcast(hub)`: a route that only pushes the
 hub's messages and returns on close. Underneath, a
 `Ws.recv_or(c, chan, ms)` that parks on both. Make the inbox a queue.
+
+**Half fixed** in c4904803. `WsServer.broadcast(hub, c)` is the listener:
+`WsServer.accept("", c => WsServer.broadcast(E.hub(e), c))` joins the
+room, relays what is published, and leaves when the client closes, so
+the 35 copied lines (`heard`, `talk`, `member`) are gone. It still waits
+in slices of 50 ms: `Ws.recv_or` is not cheap. `IO.within` (effs/within.c)
+races one act against a deadline and lets the loser run on, its answer
+dropped; racing a `Chan.recv` that way would take a message and drop
+it. What it takes: an effect that parks one computation on a socket's
+readability (TLS's buffered bytes counted) and a channel's value at once,
+and on either wake withdraws the other wait (the channel's waiter queue
+and the fd's park both need a removal), in C and in JS; then
+`Ws.recv_or` splits the frame reader into "wait" and "read". The inbox
+is still a list.
 
 ## 9. JSON ergonomics
 
@@ -223,6 +295,21 @@ and write numbers that are not `U32`.
 with messages like "interval_ms must be a number". Also a small
 `Check` applicative that collects every failure.
 
+**Fixed** in c4904803. `Json.get.str/u32/nat/i64/f64/bool/arr/obj(j, path)`
+answer `Json.Got(A)` (`Result<&2, &2, Bytes(), A>`): the value, or
+"name is required", "timeout_ms must be a number", "expect must be a
+whole number from 0 to 4294967295". `get.str` no longer takes a number.
+A path is keys and array indexes joined by `.` (`"monitors.0.name"`).
+`Json.or(U32, j, "interval_ms", 60000, Json.get.u32)` defaults a missing
+field only; `Json.fails` keeps every reason (the `Check`, as a fold);
+`Json.errors(400, whys)` is the `{"errors": [...]}` response; `Json.nat`
+and `Json.dec(n, places)` write numbers. Vectors for each in
+net/LAWS.bend, and seven mutants of the getters, all refused. model.bend
+lost `field.str`, `field.num`, `field.num.read`, `errs.one`, `flag.of`,
+`nat` and the hand-formatted `percent` (483 to 417 lines); api.bend lost
+`strs` and `errors`; reading a `Nat` back is `Json.get.nat(j, "t")`.
+net/examples/signup.bend shows a 400 with every reason.
+
 ## 10. Flags: the list is consumed by each read
 
 **Tried.** `--config`, `--state`, `--web` and `--webhook`, plus
@@ -237,6 +324,17 @@ serves on 8080.
 **Change.** Take `List<&2, String>` (the list is `Data`; the library's
 own `strs` converts it), or add `Flags.of(xs) -> Flags` (Data) with
 `Flags.str/u32/bool` and a check that refuses flags it never read.
+
+**Fixed** in c4904803. `Server.argv(own)` asks `IO.args()` once and
+answers `List<&2, String>`, which `Server.flag`, `flag.num`, `flag.on` and
+`Server.args` read by reference. `own` declares the program's flags as a
+usage line does (`["--config FILE", "--state PREFIX", "--web DIR",
+"--webhook URL"]`; a value named `N` must be a number). An unknown flag,
+a flag without its value, a number that is not one or a stray word ends
+the program, exit 2, with the reason and the usage line:
+`./uptime --prot 80` says `unknown flag --prot` and `usage: [--config
+FILE] ... [--port N] ...`. `argv_vectors` and four mutants in net/. main
+went from five `IO.args()` to one line.
 
 ## 11. Quantities: `&1` and `&2` lists, `+` everywhere
 
@@ -334,8 +432,15 @@ and a paragraph in NETWORKING.md: "background work beside the server".
 - That `Client.fetch` has no per-request options (7).
 - That a `WsServer.serve.with` app cannot take the whole-app middleware
   shown in the same guide (5).
-- `Bool.pick` is strict (1), `IO.now` is monotonic (3), `List.map` is
+- `Bool.pick` is strict (1, now fixed), `IO.now` is monotonic (3, now said), `List.map` is
   `&1` only (11).
+
+Since c4904803 the networking guide is a tour (`bend guide networking`)
+and pages under guide/net/. They cover `IO.spawn` beside the server and
+SIGTERM for your own loops, a `Chan(File)` shared as a lock, that
+`recovered` catches only a `Fail` (no exceptions), that `secured`'s CSP
+refuses inline scripts (14), `Server.static.at`, `Client.fetch.with` and
+`Server.wrap` over WebSocket routes.
 - Where a file's own IO effects may live, and that an app with foreign
   code is flagged in every check: `All terms check, but 2 defs rely on
   unsafe or foreign code: start.all, main`. `start.all` only calls

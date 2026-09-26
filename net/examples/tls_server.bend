@@ -27,5 +27,5 @@ def app(r: Http.Request) -> IO(Http.Response):
 
 def main() -> IO(Unit):
   do IO<Unit>:
-    xs : List<String> <- IO.args()
+    +xs : List<&2, String> <- Server.argv([])
     Server.serve(~app, Server.args(xs, Server.set.tls(Server.config(8443), "cert.pem", "key.pem")))

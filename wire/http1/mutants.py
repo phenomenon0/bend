@@ -7,14 +7,17 @@
 # copy of wire/ whose http1/LAWS.bend keeps only resp_sim: every vector,
 # the classes' laws and the kit's laws are removed with their proofs,
 # and so is the block walk's proof, so a kill is resp_sim's and no other
-# law's. The copy is checked clean first.
+# law's. The copy is checked clean first; each mutant has a copy of it
+# of its own, re-checked from resp.bend on (wire/mutate.py).
 #
-#   python3 wire/http1/mutants.py        (from the repo root)
-import os, re, shutil, subprocess, sys, tempfile
+#   python3 wire/http1/mutants.py [-j N] [--shard i/n]   (from the repo root)
+import os, re, shutil, sys, tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 WIRE = os.path.dirname(HERE)
 ROOT = os.path.dirname(WIRE)
+sys.path.insert(0, WIRE)
+import mutate as M
 KEEP = {'resp_sim'}
 
 # (what, before, after), each applied to resp.bend once
@@ -138,11 +141,6 @@ def frame('''),
     '''      P{Fin{r, rest}, out}'''),
 ]
 
-def check(path):
-  r = subprocess.run(['bun', os.path.join(ROOT, 'bend2', 'main.ts'), path],
-    capture_output=True, text=True, cwd=ROOT)
-  return (r.stdout + r.stderr).strip()
-
 def where(out):
   m = re.search(r'Location: ([\w.]+)', out)
   return m.group(1) if m else out.splitlines()[0] if out else '?'
@@ -167,33 +165,29 @@ def strip(d):
   return len(gone)
 
 def main():
+  jobs, shard = M.args()
   bad = 0
   top = tempfile.mkdtemp(prefix='resp_sim_')
-  d = os.path.join(top, 'wire', 'http1')
   try:
     shutil.copytree(WIRE, os.path.join(top, 'wire'))
-    n = strip(d)
-    proof = os.path.join(d, 'PROOF.bend')
-    out = check(proof)
-    if out != 'All terms check.':
-      print('the resp_sim copy (%d laws removed) does not check clean: %s' % (n, out))
-      sys.exit(1)
-    print('resp_sim alone: %d other laws removed, the rest checks clean' % n)
-    path = os.path.join(d, 'resp.bend')
-    src = open(path).read()
-    for name, a, b in MUTANTS:
-      if src.count(a) != 1:
-        print('MISSING  %s' % name); bad += 1; continue
-      open(path, 'w').write(src.replace(a, b))
-      out = check(proof)
-      open(path, 'w').write(src)
-      if out == 'All terms check.':
-        print('SURVIVED %s' % name); bad += 1
-      else:
-        print('KILLED   %s -- %s' % (name, where(out)))
+    n = strip(os.path.join(top, 'wire', 'http1'))
+    bases, res = M.run(lambda: M.tree(['wire'], src=top, prefix='resp_sim_'), 'wire/http1/PROOF.bend',
+      [(name, 'wire/http1/resp.bend', a, b) for name, a, b in MUTANTS], jobs, shard)
+    base = bases['wire/http1/PROOF.bend']
   finally:
     shutil.rmtree(top, ignore_errors=True)
-  print('mutants: %d / %d killed' % (len(MUTANTS) - bad, len(MUTANTS)))
+  if base != 'All terms check.':
+    print('the resp_sim copy (%d laws removed) does not check clean: %s' % (n, base))
+    sys.exit(1)
+  print('resp_sim alone: %d other laws removed, the rest checks clean' % n)
+  for name, _, out in res:
+    if out is None:
+      print('MISSING  %s' % name); bad += 1
+    elif out == 'All terms check.':
+      print('SURVIVED %s' % name); bad += 1
+    else:
+      print('KILLED   %s -- %s' % (name, where(out)))
+  print('mutants: %d / %d killed' % (len(res) - bad, len(res)))
   sys.exit(1 if bad else 0)
 
 main()

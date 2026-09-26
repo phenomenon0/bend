@@ -4887,11 +4887,11 @@ def rq.rt(+meth: Bytes(), +target: Bytes(), +x: Eng.Hx, +body: Bytes()) ->
 
 def H1(+meth: Bytes(), +target: Bytes(), +x: Eng.Hx) -> Spec.Head:
   Spec.Head{Spec.method(Bytes.from_list(Bytes.to_list(meth))), Bytes.to_list(target), None{}, False{}, 1n, Nil{}, False{},
-    False{}, False{}, Eng.Fx{False{}, False{}, False{}}, x}
+    False{}, Eng.VNone{}, Eng.Fx{False{}, False{}, False{}}, x}
 
 def H2(+meth: Bytes(), +target: Bytes(), +x: Eng.Hx, +n: U32) -> Spec.Head:
   Spec.Head{Spec.method(Bytes.from_list(Bytes.to_list(meth))), Bytes.to_list(target), Some{n}, False{}, 1n, Nil{}, False{},
-    False{}, False{}, Eng.Fx{False{}, False{}, False{}}, x}
+    False{}, Eng.VNone{}, Eng.Fx{False{}, False{}, False{}}, x}
 
 def W.done(+meth: Bytes(), +target: Bytes(), +x: Eng.Hx, +body: Bytes(), o: List<&2, Eng.Req>) -> Spec.W:
   Spec.W{Spec.MReq{Nil{}}, Con{RQ(meth, target, x, body), o}, Nil{}}

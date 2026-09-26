@@ -1019,7 +1019,8 @@ int main(int argc, char** argv) {
     // what follows an upgrade in the same write is frames, not requests;
     // Connection is a list, as a browser sends it
     static const char up2[] = "GET /ws HTTP/1.1\r\nHost: x\r\nUpgrade: websocket\r\n"
-      "Connection: keep-alive, Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n";
+      "Connection: keep-alive, Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n"
+      "Sec-WebSocket-Version: 13\r\n\r\n";
     memcpy(r, up2, sizeof(up2) - 1);
     k = (int)sizeof(up2) - 1 + ws_frame(r + sizeof(up2) - 1, 1, "abc", 3, 1);
     fd = wire_open();
@@ -1030,7 +1031,8 @@ int main(int argc, char** argv) {
     wire_close(fd);
 
     n = one(TEXT("GET /ws HTTP/1.1\r\nHost: x\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
-      "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\nGET /health HTTP/1.1\r\nHost: x\r\n\r\n"), b, sizeof(b), 0);
+      "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n"
+      "GET /health HTTP/1.1\r\nHost: x\r\n\r\n"), b, sizeof(b), 0);
     check("nothing after a 101 is answered as HTTP", has(b, n, "101") && !has(b, n, "200 OK"), b, n);
 
     n = one(TEXT("HEAD /events HTTP/1.1\r\nHost: x\r\n\r\n"), b, sizeof(b), 0);
@@ -1044,6 +1046,11 @@ int main(int argc, char** argv) {
     n = one(TEXT("GET /ws HTTP/1.1\r\nHost: x\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
       "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 99\r\n\r\n"), b, sizeof(b), 0);
     check("a version other than 13 is 426 naming 13",
+      has(b, n, "426 Upgrade Required") && has(b, n, "sec-websocket-version: 13"), b, n);
+
+    n = one(TEXT("GET /ws HTTP/1.1\r\nHost: x\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
+      "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n"), b, sizeof(b), 0);
+    check("no version is 426 naming 13 (RFC 6455 4.4)",
       has(b, n, "426 Upgrade Required") && has(b, n, "sec-websocket-version: 13"), b, n);
 
     // whitespace at either end of a value is no part of it (RFC 9110
