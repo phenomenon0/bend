@@ -191,10 +191,11 @@ def err.show(e: Err) -> String:
 # keeps the connection alive: ping, the quiet ms after which it pings (0
 # for never); pong, the ms it then waits for any byte; send, a send's
 # deadline; seen, when the client last sent anything; pinged, whether a
-# ping is out and unanswered.
+# ping is out and unanswered; bell, a channel whose values end a wait
+# for the client early (ring_on).
 type End is Data:
   Client{}
-  Server{ping: U32, pong: U32, send: U32, seen: Nat, pinged: Bool}
+  Server{ping: U32, pong: U32, send: U32, seen: Nat, pinged: Bool, bell: Maybe<&2, Chan(F.Msg)>}
 
 # rd: the frame reader; q: frames read and not yet handed over; a: the
 # assembler; o: the options; proto: the subprotocol agreed ("" for
@@ -252,15 +253,15 @@ def end.seen(e: End, +now: Nat) -> End:
   match e:
     case Client{}:
       Client{}
-    case Server{ping, pong, send, seen, pinged}:
-      Server{ping, pong, send, now, False{}}
+    case Server{ping, pong, send, seen, pinged, bell}:
+      Server{ping, pong, send, now, False{}, bell}
 
 def end.pinged(e: End) -> End:
   match e:
     case Client{}:
       Client{}
-    case Server{ping, pong, send, seen, pinged}:
-      Server{ping, pong, send, seen, True{}}
+    case Server{ping, pong, send, seen, pinged, bell}:
+      Server{ping, pong, send, seen, True{}, bell}
 
 def st.peer.of(s: St) -> U32:
   match s:
@@ -305,7 +306,7 @@ def send.by(sock: Socket, +st: St, op: U32, fin: Bool, +body: Bytes(), e: End) -
     case Client{}:
       IO.bind(Result<&1, &1, U32 & String, U32>, Out(Unit), IO.random_u32(),
         g => send.keyed(sock, st, op, fin, body, g))
-    case Server{ping, pong, send, seen, pinged}:
+    case Server{ping, pong, send, seen, pinged, bell}:
       IO.bind(Socket & Result<&1, &1, U32 & String, Unit>, Out(Unit),
         TCP.send_buf_poll(sock, F.s.frame(op, fin, body), send), x => sent(st, x))
 
@@ -388,7 +389,7 @@ def role(+cap: U32, e: End) -> F.Role:
   match e:
     case Client{}:
       F.Cli{cap}
-    case Server{ping, pong, send, seen, pinged}:
+    case Server{ping, pong, send, seen, pinged, bell}:
       F.Serv{cap}
 
 def st.feed(s: St, bs: Bytes()) -> St:
@@ -460,7 +461,7 @@ def bye.wait(s: Socket, +ms: U32, e: End) -> IO(Socket):
   match e:
     case Client{}:
       drain(64n, s, ms)
-    case Server{ping, pong, send, seen, pinged}:
+    case Server{ping, pong, send, seen, pinged, bell}:
       IO.pure(Socket, s)
 
 def bye.out(+code: U32, reason: Bytes(), s: Socket, +st: St) -> R(F.Msg):
@@ -574,9 +575,26 @@ def srv.got(+st: St, +now: Nat, g: Socket & Result<&1, &1, U32 & String, Maybe<&
         case Some{+bs}:
           got.bytes(s, st.end.set(st, end.seen(st.end(st), now)), bs, String.is_empty(bs), again)
 
-def srv.poll(sock: Socket, +st: St, +now: Nat, +ms: U32, again: Socket -> St -> R(F.Msg)) -> R(F.Msg):
-  IO.bind(Socket & Result<&1, &1, U32 & String, Maybe<&1, Bytes()>>, Out(F.Msg),
-    TCP.poll_buf(sock, 65536, ms), g => srv.got(st, now, g, again))
+# a wait the bell ended: as a timeout, the connection as it was
+def srv.rang(+st: St, +now: Nat, g: Socket & Bool & Result<&1, &1, U32 & String, Maybe<&1, Bytes()>>,
+  again: Socket -> St -> R(F.Msg)) -> R(F.Msg):
+  (s, rr) = g
+  (rang, r) = rr
+  match rang:
+    case True{}:
+      IO.pure(Out(F.Msg), (Conn{s, st}, Fail{ETime{}}))
+    case False{}:
+      srv.got(st, now, (s, r), again)
+
+def srv.poll(sock: Socket, +st: St, +now: Nat, +ms: U32, bell: Maybe<&2, Chan(F.Msg)>, again: Socket -> St -> R(F.Msg)) ->
+  R(F.Msg):
+  match bell:
+    case None{}:
+      IO.bind(Socket & Result<&1, &1, U32 & String, Maybe<&1, Bytes()>>, Out(F.Msg),
+        TCP.poll_buf(sock, 65536, ms), g => srv.got(st, now, g, again))
+    case Some{b}:
+      IO.bind(Socket & Bool & Result<&1, &1, U32 & String, Maybe<&1, Bytes()>>, Out(F.Msg),
+        TCP.poll_buf_or(F.Msg, sock, 65536, ms, b), g => srv.rang(st, now, g, again))
 
 def srv.pinged(g: Out(Unit), again: Socket -> St -> R(F.Msg)) -> R(F.Msg):
   (c, r) = g
@@ -606,19 +624,19 @@ def slice() -> U32:
 # a poll, until the first of recv's deadline, the next second, and the
 # keepalive's next moment
 def srv.keep(sock: Socket, +st: St, +until: Nat, +now: Nat, +next: Nat, dead: Bool, due: Bool,
-  again: Socket -> St -> R(F.Msg)) -> R(F.Msg):
+  bell: Maybe<&2, Chan(F.Msg)>, again: Socket -> St -> R(F.Msg)) -> R(F.Msg):
   match dead due:
     case True{} _:
       fail(sock, st, 1011, EPing{})
     case False{} True{}:
       IO.bind(Out(Unit), Out(F.Msg), send.frame(sock, st, 9, True{}, ""), g => srv.pinged(g, again))
     case False{} False{}:
-      srv.poll(sock, st, now, U32.min(U32.min(left(until, now), slice()), left(next, now)), again)
+      srv.poll(sock, st, now, U32.min(U32.min(left(until, now), slice()), left(next, now)), bell, again)
 
 # on SIGTERM, once: a close with 1001 (going away) goes out, and the
 # wait goes on for the client's answer
 def srv.at(sock: Socket, +st: St, +until: Nat, +now: Nat, +ping: U32, +pong: U32, +seen: Nat, +pinged: Bool,
-  stop: Bool, again: Socket -> St -> R(F.Msg)) -> R(F.Msg):
+  bell: Maybe<&2, Chan(F.Msg)>, stop: Bool, again: Socket -> St -> R(F.Msg)) -> R(F.Msg):
   match stop:
     case True{}:
       IO.bind(Out(Unit), Out(F.Msg), send.frame(sock, st.mark(st, True{}, 0), 8, True{}, F.close.body(1001, "going away")),
@@ -628,16 +646,16 @@ def srv.at(sock: Socket, +st: St, +until: Nat, +now: Nat, +ping: U32, +pong: U32
       +due = Nat.add(seen, U32.to_nat(ping))
       +dead = Nat.add(due, U32.to_nat(pong))
       srv.keep(sock, st, until, now, Bool.pick(Nat, on, Bool.pick(Nat, pinged, dead, due), until),
-        on && pinged && Nat.is_le(dead, now), on && Bool.not(pinged) && Nat.is_le(due, now), again)
+        on && pinged && Nat.is_le(dead, now), on && Bool.not(pinged) && Nat.is_le(due, now), bell, again)
 
 def wait.by(sock: Socket, +st: St, +until: Nat, +now: Nat, e: End, again: Socket -> St -> R(F.Msg)) -> R(F.Msg):
   match e:
     case Client{}:
       IO.bind(Socket & Result<&1, &1, U32 & String, Maybe<&1, Bytes()>>, Out(F.Msg),
         TCP.poll_buf(sock, 65536, left(until, now)), g => got(st, g, again))
-    case Server{+ping, +pong, send, +seen, +pinged}:
+    case Server{+ping, +pong, send, +seen, +pinged, +bell}:
       IO.bind(Bool, Out(F.Msg), IO.signal_seen(15),
-        stop => srv.at(sock, st, until, now, ping, pong, seen, pinged, stop && Bool.not(st.sent(st)), again))
+        stop => srv.at(sock, st, until, now, ping, pong, seen, pinged, bell, stop && Bool.not(st.sent(st)), again))
 
 # nothing queued: the framing broke (1002), or one read, waiting at
 # most the time left
@@ -834,7 +852,23 @@ def st.new(+o: Opts, proto: Bytes(), rest: Bytes()) -> St:
 # close_ms the waits), the subprotocol agreed, the keepalive (ping,
 # pong), a send's deadline, and now.
 def served(s: Socket, rest: Bytes(), +o: Opts, proto: Bytes(), +ping: U32, +pong: U32, +send: U32, +now: Nat) -> Conn:
-  Conn{s, st.feed(St{Ws.new(), Nil{}, F.Idle{}, o, proto, False{}, 0, 0, Server{ping, pong, send, now, False{}}}, rest)}
+  Conn{s, st.feed(St{Ws.new(), Nil{}, F.Idle{}, o, proto, False{}, 0, 0, Server{ping, pong, send, now, False{}, None{}}}, rest)}
+
+def end.bell(e: End, +b: Chan(F.Msg)) -> End:
+  match e:
+    case Client{}:
+      Client{}
+    case Server{ping, pong, send, seen, pinged, bell}:
+      Server{ping, pong, send, seen, pinged, Some{b}}
+
+# A server's connection whose waits for the client also end, as a
+# timeout (ETime, the connection as it was), as soon as bell has a
+# value, which the wait leaves there: a WsServer member's inbox. A
+# client's connection is unchanged.
+def ring_on(c: Conn, +bell: Chan(F.Msg)) -> Conn:
+  match c:
+    case Conn{sock, +st}:
+      Conn{sock, st.end.set(st, end.bell(st.end(st), bell))}
 
 def open.fail(s: Socket, e: Err) -> RC():
   IO.bind(Unit, Result<&2, &1, Err, Conn>, Socket.close(s), u => IO.pure(Result<&2, &1, Err, Conn>, Fail{e}))

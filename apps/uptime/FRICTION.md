@@ -271,6 +271,17 @@ and the fd's park both need a removal), in C and in JS; then
 `Ws.recv_or` splits the frame reader into "wait" and "read". The inbox
 is still a list.
 
+**Fixed** (omen, after 5398b4e), by a different cut than the one asked
+for: nothing is withdrawn because nothing is taken. `TCP.poll_buf_or(sock,
+max, ms, chan)` parks on the socket alone; the channel holds the parked
+wait as its bell, and a send, `Chan.offer` or close that leaves it ready
+moves the wait's deadline to now, so it wakes and looks again. The
+value stays in the channel. The inbox is now a queue (`Chan.offer`, and
+`Chan.take` to drain it), `Ws.ring_on(c, box)` makes a connection's
+waits ring on it, and `broadcast` uses it. With 50 members on one thread
+(`bench/net/room.py`), a message reaches the last member in 2 ms at p50
+(49 ms before) and a quiet room costs 0.1% of a core (1.5-1.8% before).
+
 ## 9. JSON ergonomics
 
 **Tried.** Read typed fields from a config, a request and a log line,

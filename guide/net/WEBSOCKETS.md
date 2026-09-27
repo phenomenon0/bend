@@ -97,24 +97,24 @@ offered (`""` for none), and the answer never names one it did not offer.
 
 A `Hub` is a room: `WsServer.join(hub)` makes a member with an inbox,
 `WsServer.publish(hub, msg)` puts a message in every member's inbox, and
-`WsServer.relay(me, c)` sends a member what came for it. A connection waits for
-its client in slices (`Ws.recv_for(c, 50)`) and relays between them, so the
-room reaches it within 50 ms:
+`WsServer.relay(me, c)` sends a member what came for it. A connection whose
+waits ring on its member's inbox (`Ws.ring_on`) stops waiting for its client
+the moment a message lands (`Ws.recv_for` answers `ETime`, the connection as it
+was) and relays it:
 
 ```python
-def talk(k: Nat, +hub: WsServer.Hub, +me: WsServer.Member, c: Ws.Conn) -> IO(Ws.Conn):
-  match k:
-    case 0n:
-      IO.pure(Ws.Conn, c)
-    case 1n+j:
-      IO.bind(Ws.Out(F.Msg), Ws.Conn, Ws.recv_for(c, 50), g => heard(hub, me, g, cc => talk(j, hub, me, cc)))
+    c2 : Ws.Conn <- talk(Ws.big(), hub, me, Ws.ring_on(c, WsServer.member.box(me)))
 ```
+
+The wait is `TCP.poll_buf_or`: a socket and a channel at once, taking nothing
+from the channel, so no message is lost to it. On one thread a message reaches
+the last of 50 members in about 2 ms (`bench/net/room.py`), and a quiet room
+costs no CPU.
 
 A client that only listens (a dashboard's live feed) needs none of that:
 `WsServer.accept("", c => WsServer.broadcast(hub, c))` joins it to the room,
-sends it what the room publishes, and leaves when it closes or goes. Nothing
-yet parks on a socket and a channel at once, so `broadcast` waits in the same
-50 ms slices.
+sends it what the room publishes, and leaves when it closes or goes; its waits
+ring on its inbox too.
 
 ## The Handshake and After
 

@@ -205,7 +205,10 @@ connection goes on; one that asked with any method but GET, or a key
 that is not a key, a 400 (4.2.1, 4.2.2).
 A `WsServer.Hub` is a room: `hub.new`, `join`, `leave`, `publish`, `inbox`,
 `relay`; `WsServer.accept("", c => WsServer.broadcast(hub, c))` is a client
-that only listens to it (a live feed), leaving when it closes.
+that only listens to it (a live feed), leaving when it closes. A member's
+waits for its client end the moment a message lands when they ring on its
+inbox, `Ws.ring_on(c, WsServer.member.box(me))` (`TCP.poll_buf_or` waits
+on the socket and the inbox at once, and takes nothing from the inbox).
 
 **Json.** `Json.respond(status, j)`, `Json.body(req, budget)`,
 `Json.of(resp, budget)` (`Result<J.Why, J.Json>`), `Json.obj/kv/arr/
@@ -419,10 +422,7 @@ second where the engine's literal `/health` answers 58k; with the
 response written as a literal the loop matches the engine, so the
 difference is the checked writer (`respond_framed`'s).
 
-Not yet: a WebSocket handler that parks on its socket and a channel at
-once (a room's members and `broadcast` wait in 50 ms slices; it needs an
-effect that waits on either and withdraws the other wait, where
-`IO.within` lets the loser run on and would drop a message), Happy Eyeballs (a name's addresses are tried in turn, never
+Not yet: Happy Eyeballs (a name's addresses are tried in turn, never
 raced), IPv6 zone IDs, a streamed client body's head before its body
 (Client.stream tells the status at the end, so a relay decides its own
 head first), and past 256 MiB; a streamed response on a stream route (an

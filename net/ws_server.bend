@@ -55,7 +55,8 @@
 #
 # A Hub is a room: members join, anyone publishes a message to all of
 # them, and each member takes what came for it (inbox) when it likes --
-# between recv_for slices, as examples/chat_server.bend does.
+# when its waits for its client ring on its inbox (Ws.ring_on), the
+# moment it lands, as examples/chat_server.bend does.
 import Base
 import ./http.bend as Http
 import ./server.bend as Server
@@ -242,16 +243,17 @@ def ws(pat: Bytes(), h: Http.Request -> IO(Take)) -> Server.Route:
 # The hub
 # =======
 #
-# A room of members, each with an inbox. The room and each inbox are a
-# channel of one used as a lock: taken, changed, put back. publish takes
-# the room, then each inbox in turn; a member takes only its own inbox,
-# so no two locks are ever waited on in the other order. An inbox holds
-# at most box.cap() messages: past it the newest are dropped for that
-# member (a client that does not read cannot make the server hold its
-# room's traffic without end).
+# A room of members, each with an inbox. The room is a channel of one
+# used as a lock: taken, changed, put back. An inbox is a channel of
+# box.cap() messages that publish offers to (Chan.offer: past the cap the
+# newest are dropped for that member, so a client that does not read
+# cannot make the server hold its room's traffic without end) and the
+# member takes from without waiting (Chan.take). A connection whose
+# waits ring on its inbox (Ws.ring_on) is woken by a message the moment
+# it lands.
 
 type Member is Data:
-  Member{id: U32, box: Chan(List<&2, F.Msg>)}
+  Member{id: U32, box: Chan(F.Msg)}
 
 type Room is Data:
   Room{next: U32, members: List<&2, Member>}
@@ -259,8 +261,8 @@ type Room is Data:
 type Hub is Data:
   Hub{room: Chan(Room)}
 
-def box.cap() -> Nat:
-  1024n
+def box.cap() -> U32:
+  1024
 
 def hub.made(+room: Chan(Room), ok: Bool) -> IO(Hub):
   IO.pure(Hub, Hub{room})
@@ -276,7 +278,7 @@ def hub.room(h: Hub) -> Chan(Room):
     case Hub{room}:
       room
 
-def joined.put(+room: Chan(Room), +box: Chan(List<&2, F.Msg>), m: Maybe<&1, Room>) -> IO(Member):
+def joined.put(+room: Chan(Room), +box: Chan(F.Msg), m: Maybe<&1, Room>) -> IO(Member):
   match m:
     case Some{rm}:
       match rm:
@@ -290,8 +292,7 @@ def joined.put(+room: Chan(Room), +box: Chan(List<&2, F.Msg>), m: Maybe<&1, Room
 # a new member of the room, with an empty inbox
 def join(+h: Hub) -> IO(Member):
   do IO<Member>:
-    +box : Chan(List<&2, F.Msg>) <- Chan.new(List<&2, F.Msg>, 1)
-    ok : Bool <- Chan.send(List<&2, F.Msg>, box, [])
+    +box : Chan(F.Msg) <- Chan.new(F.Msg, box.cap())
     m : Maybe<&1, Room> <- Chan.recv(Room, hub.room(h))
     joined.put(hub.room(h), box, m)
 
@@ -300,7 +301,7 @@ def member.id(m: Member) -> U32:
     case Member{id, box}:
       id
 
-def member.box(m: Member) -> Chan(List<&2, F.Msg>):
+def member.box(m: Member) -> Chan(F.Msg):
   match m:
     case Member{id, box}:
       box
@@ -328,22 +329,15 @@ def left.put(+room: Chan(Room), +id: U32, m: Maybe<&1, Room>) -> IO(Unit):
     case None{}:
       IO.pure(Unit, Unit{})
 
-# the member leaves the room
+# the member leaves the room, and its inbox is closed
 def leave(+h: Hub, +me: Member) -> IO(Unit):
-  IO.bind(Maybe<&1, Room>, Unit, Chan.recv(Room, hub.room(h)), m => left.put(hub.room(h), member.id(me), m))
-
-def box.put(+box: Chan(List<&2, F.Msg>), +x: F.Msg, m: Maybe<&1, List<&2, F.Msg>>) -> IO(Unit):
-  match m:
-    case Some{+xs}:
-      IO.bind(Bool, Unit,
-        Chan.send(List<&2, F.Msg>, box,
-          Bool.pick(List<&2, F.Msg>, Nat.is_lt(List.length(&2, F.Msg, xs), box.cap()), List.append(&2, F.Msg, xs, [x]), xs)),
-        ok => IO.pure(Unit, Unit{}))
-    case None{}:
-      IO.pure(Unit, Unit{})
+  do IO<Unit>:
+    m : Maybe<&1, Room> <- Chan.recv(Room, hub.room(h))
+    left.put(hub.room(h), member.id(me), m)
+    Chan.close(F.Msg, member.box(me))
 
 def box.add(+x: F.Msg, +m: Member) -> IO(Unit):
-  IO.bind(Maybe<&1, List<&2, F.Msg>>, Unit, Chan.recv(List<&2, F.Msg>, member.box(m)), got => box.put(member.box(m), x, got))
+  IO.bind(Bool, Unit, Chan.offer(F.Msg, member.box(m), x), ok => IO.pure(Unit, Unit{}))
 
 def each(ms: List<&2, Member>, +x: F.Msg) -> IO(Unit):
   match ms:
@@ -368,17 +362,23 @@ def published(+room: Chan(Room), +x: F.Msg, m: Maybe<&1, Room>) -> IO(Unit):
 def publish(+h: Hub, +x: F.Msg) -> IO(Unit):
   IO.bind(Maybe<&1, Room>, Unit, Chan.recv(Room, hub.room(h)), m => published(hub.room(h), x, m))
 
-def taken.box(+box: Chan(List<&2, F.Msg>), m: Maybe<&1, List<&2, F.Msg>>) -> IO(List<&2, F.Msg>):
+def inbox.got(m: Maybe<&1, F.Msg>, rest: Unit -> IO(List<&2, F.Msg>)) -> IO(List<&2, F.Msg>):
   match m:
-    case Some{xs}:
-      IO.bind(Bool, List<&2, F.Msg>, Chan.send(List<&2, F.Msg>, box, []), ok => IO.pure(List<&2, F.Msg>, xs))
     case None{}:
       IO.pure(List<&2, F.Msg>, [])
+    case Some{x}:
+      IO.bind(List<&2, F.Msg>, List<&2, F.Msg>, rest(Unit{}), xs => IO.pure(List<&2, F.Msg>, Con{x, xs}))
+
+def inbox.go(k: Nat, +box: Chan(F.Msg)) -> IO(List<&2, F.Msg>):
+  match k:
+    case 0n:
+      IO.pure(List<&2, F.Msg>, [])
+    case 1n+j:
+      IO.bind(Maybe<&1, F.Msg>, List<&2, F.Msg>, Chan.take(F.Msg, box), m => inbox.got(m, u => inbox.go(j, box)))
 
 # what came for the member since it last looked, oldest first
 def inbox(+me: Member) -> IO(List<&2, F.Msg>):
-  IO.bind(Maybe<&1, List<&2, F.Msg>>, List<&2, F.Msg>, Chan.recv(List<&2, F.Msg>, member.box(me)),
-    m => taken.box(member.box(me), m))
+  inbox.go(U32.to_nat(box.cap()), member.box(me))
 
 # each message sent to the connection, in order; the first send that
 # fails stops it
@@ -425,10 +425,8 @@ def next(g: Ws.Out(Unit), go: Ws.Conn -> IO(Ws.Conn)) -> IO(Ws.Conn):
 # broadcast(hub, c) is a run for accept whose client only listens: the
 # connection joins the room, is sent what the room publishes, and leaves
 # when its client closes or goes (SIGTERM's 1001 answered, too); what
-# the client sends is dropped. It waits for the client in slices of 50
-# ms and relays between them, as a member that talks does: nothing yet
-# parks on a socket and a channel at once, so a message reaches it
-# within a slice.
+# the client sends is dropped. Its waits for the client ring on its
+# inbox (Ws.ring_on), so a message is relayed the moment it lands.
 
 def listen.relay(+me: Member, c: Ws.Conn, again: Ws.Conn -> IO(Ws.Conn)) -> IO(Ws.Conn):
   IO.bind(Ws.Out(Unit), Ws.Conn, relay(me, c), g => next(g, again))
@@ -449,18 +447,22 @@ def listen.heard(+me: Member, g: Ws.Out(F.Msg), again: Ws.Conn -> IO(Ws.Conn)) -
         case _:
           IO.pure(Ws.Conn, c)
 
+# a wait for the client, which the inbox's bell ends early
+def wait() -> U32:
+  60000
+
 def listen.go(k: Nat, +me: Member, c: Ws.Conn) -> IO(Ws.Conn):
   match k:
     case 0n:
       IO.pure(Ws.Conn, c)
     case 1n+j:
-      IO.bind(Ws.Out(F.Msg), Ws.Conn, Ws.recv_for(c, 50), g => listen.heard(me, g, cc => listen.go(j, me, cc)))
+      IO.bind(Ws.Out(F.Msg), Ws.Conn, Ws.recv_for(c, wait()), g => listen.heard(me, g, cc => listen.go(j, me, cc)))
 
 # the room's messages sent to c until its client leaves
 def broadcast(+hub: Hub, c: Ws.Conn) -> IO(Ws.Conn):
   do IO<Ws.Conn>:
     +me : Member <- join(hub)
-    c2 : Ws.Conn <- listen.go(Ws.big(), me, c)
+    c2 : Ws.Conn <- listen.go(Ws.big(), me, Ws.ring_on(c, member.box(me)))
     leave(hub, me)
     return c2
 

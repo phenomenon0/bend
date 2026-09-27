@@ -111,12 +111,6 @@ checked response writer that `respond_framed` is about (`net/README.md`).
 
 ## Not Built Yet
 
-- A WebSocket handler that parks on its socket and a channel at once. A room's
-  members (and `WsServer.broadcast`) wait in slices of 50 ms. It needs an
-  effect that waits for either a socket's bytes or a channel's value and, when
-  one comes, withdraws the other wait, so no value is taken and dropped:
-  `IO.within` races one act against a deadline and lets the loser run on,
-  which would lose a message.
 - A streamed client response's head before its body: `Client.stream` tells the
   status once the body is through.
 - A streamed response on a stream route (an upload's answer) or to a method

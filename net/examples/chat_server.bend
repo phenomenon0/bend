@@ -6,8 +6,9 @@
 #   ./chat ws://127.0.0.1:8765/room ada "hello"        # examples/ws_chat.bend
 #
 # The room is a WsServer.Hub: each connection joins it, publishes what
-# its client says, and between waits of 50 ms for the client takes what
-# came for it from the others and sends it on. A client that offers the
+# its client says, and sends on what came for it from the others. Its
+# waits for its client ring on its inbox (Ws.ring_on), so what another
+# member says goes out the moment it lands. A client that offers the
 # subprotocol "chat" gets it.
 import Base
 import ../http.bend as Http
@@ -48,13 +49,13 @@ def talk(k: Nat, +hub: WsServer.Hub, +me: WsServer.Member, c: Ws.Conn) -> IO(Ws.
     case 0n:
       IO.pure(Ws.Conn, c)
     case 1n+j:
-      IO.bind(Ws.Out(F.Msg), Ws.Conn, Ws.recv_for(c, 50), g => heard(hub, me, g, cc => talk(j, hub, me, cc)))
+      IO.bind(Ws.Out(F.Msg), Ws.Conn, Ws.recv_for(c, 60000), g => heard(hub, me, g, cc => talk(j, hub, me, cc)))
 
 # a client in the room: joined, talked with, and gone
 def member(+hub: WsServer.Hub, c: Ws.Conn) -> IO(Ws.Conn):
   do IO<Ws.Conn>:
     +me : WsServer.Member <- WsServer.join(hub)
-    c2 : Ws.Conn <- talk(Ws.big(), hub, me, c)
+    c2 : Ws.Conn <- talk(Ws.big(), hub, me, Ws.ring_on(c, WsServer.member.box(me)))
     WsServer.leave(hub, me)
     return c2
 
