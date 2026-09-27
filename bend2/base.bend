@@ -5797,6 +5797,32 @@ def Array.get.at(-T: Data, i: U32, an: Array<T> & U32) -> Array<T> & T:
 def Array.get(-T: Data, a: Array<T>, +i: U32) -> Array<T> & T:
   Array.get.at(T, i, Array.size(T, a))
 
+# Array.get4: slots i..i+3, each wrapped as by Array.get (natively one
+# range check for the four, so C can widen the loads).
+def Array.get4.d(-T: Data, x0: T, x1: T, x2: T, r: Array<T> & T) ->
+  Array<T> & (T & (T & (T & T))):
+  (a, x3) = r
+  (a, (x0, (x1, (x2, x3))))
+
+def Array.get4.c(-T: Data, +i: U32, x0: T, x1: T, r: Array<T> & T) ->
+  Array<T> & (T & (T & (T & T))):
+  (a, x2) = r
+  Array.get4.d(T, x0, x1, x2, Array.get(T, a, U32.add(i, 3)))
+
+def Array.get4.b(-T: Data, +i: U32, x0: T, r: Array<T> & T) ->
+  Array<T> & (T & (T & (T & T))):
+  (a, x1) = r
+  Array.get4.c(T, i, x0, x1, Array.get(T, a, U32.add(i, 2)))
+
+def Array.get4.a(-T: Data, +i: U32, r: Array<T> & T) ->
+  Array<T> & (T & (T & (T & T))):
+  (a, x0) = r
+  Array.get4.b(T, i, x0, Array.get(T, a, U32.add(i, 1)))
+
+def Array.get4(-T: Data, a: Array<T>, +i: U32) ->
+  Array<T> & (T & (T & (T & T))):
+  Array.get4.a(T, i, Array.get(T, a, i))
+
 def Array.to_list.go(~T: Type, a: Array<T>, acc: List<T>) -> List<T>:
   match a:
     case ALeaf{x}:

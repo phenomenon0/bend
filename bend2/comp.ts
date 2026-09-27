@@ -437,7 +437,7 @@ const OPERATIONS: Record<string, Intr> = Object.setPrototypeOf({
   ...Object.fromEntries(Object.entries({
     new: "array_new($0, $1)", set: "($0[$1 % $0.length] = $2, $0)",
     get: "{$: \"Tuple\", fst: $0, snd: $0[$1 % $0.length]}",
-    swap: "array_rmw($0, $1, () => $2)",
+    swap: "array_rmw($0, $1, () => $2)", get4: "array_get4($0, $1)",
     size: "{$: \"Tuple\", fst: $0, snd: $0.length}",
   }).map(([k, JS]) => ["array_" + k, { call: true, JS }])),
   array_clone: {
@@ -2764,6 +2764,28 @@ function arr_op(fl: File, k: string, el: Lay, args: Val[]): Val {
   if (k === "array_size") {
     return val_new([a, `(1ull << (blk_cls(${a}) - ${lgs}))`], arr_lay(W32));
   }
+  // One range check for the four slots, so the in-range branch reads them
+  // at adjacent offsets clang can widen; else each wraps alone.
+  if (k === "array_get4") {
+    const l = emit_hold(fl, [`blk_loc(e.mem, ${a})`], "at")[0];
+    const i = emit_alias(fl, val_word(args[1]), "i", "w32");
+    const m = emit_hold(fl, [`(u32)((1ull << (blk_cls(${a}) - ${lgs})) - 1)`],
+      "at", ["w32"])[0];
+    const j = emit_hold(fl, [`${i} & ${m}`], "at", ["w32"])[0];
+    const xs = [0, 1, 2, 3].map(() => emit_dst(fl, el, "x"));
+    const read = (at: (k: number) => string) => xs.forEach((x, k) =>
+      x.ws.forEach((w, n) => file_push(fl, `${w} = ${el.ks[n] === "box"
+        ? `blk_keep(e, ${l} + ${at(k)} + ${n})`
+        : `blk_read(e.mem, ${Number(arr)}, ${l}, ${at(k)} + ${n})`};`)));
+    block(fl, `if (${m} - ${j} >= 3) {`, () =>
+      read((k) => `((${j} + ${k}) << ${lgs})`));
+    block(fl, "else {", () => read((k) => `blk_at(${a}, ${i} + ${k}, ${lgs})`));
+    const lay = [el, el, el, el, BOX].reduce((r, l) => lay_pack([["Tuple", [l, r]]]));
+    if (lay.ks.length > WIDE) {
+      die("an Array.get4 of elements too wide");
+    }
+    return val_new([a, ...xs.flatMap((x) => x.ws)], lay);
+  }
   const [l, at] = emit_hold(fl, [`blk_loc(e.mem, ${a})`,
     `blk_at(${a}, ${val_word(args[1])}, ${lgs})`], "at");
   const old = arr_cells(fl, l, at, el,
@@ -3071,7 +3093,7 @@ function emit_intr(fl: File, it: Intr, x: HTerm,
   }
   // An intrinsic that installs count cells (blk_new, blk_keep; clone's C
   // too) heats its element type.
-  if ("array_get array_new array_clone".includes(op)
+  if ("array_get array_get4 array_new array_clone".includes(op)
     && lay_el(fl.book, m.all[0]).ks.includes("box")
     && !(op === "array_new" && facts_packed(fl, m.all[2]))) {
     facts_hot(fl, m.all[0], true);
@@ -8693,6 +8715,12 @@ function array_rmw(a, i, f) {
   const old = a[at];
   a[at] = f(old);
   return {$: "Tuple", fst: a, snd: old};
+}
+
+function array_get4(a, i) {
+  const x = (k) => a[(i + k) % a.length];
+  return {$: "Tuple", fst: a, snd: {$: "Tuple", fst: x(0), snd: {$: "Tuple",
+    fst: x(1), snd: {$: "Tuple", fst: x(2), snd: x(3)}}}};
 }
 
 // Run

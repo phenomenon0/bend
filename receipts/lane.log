@@ -77,3 +77,7 @@ Files are in `~/Documents/Project/bend-work-c3`:
 
 Before/after bench logs and battery output are also in `receipts/`, which is untracked.
 === lane exited rc=0 at 2026-09-27T04:40:11Z ===
+=== lane c2b2 started 2026-09-27T04:25:17Z (writer: claude-opus-5-5) ===
+⚠ claude.ai connectors are disabled because ANTHROPIC_API_KEY or another auth source is set and takes precedence over your claude.ai login · Unset it to load your organization's connectors
+81 ok so far, no failures. I'll wait for the job's exit notification.
+=== lane exited rc=0 at 2026-09-27T05:39:22Z ===
