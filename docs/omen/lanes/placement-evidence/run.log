@@ -1,0 +1,38 @@
+== machine ==
+AMD Ryzen 7 7700X 8-Core Processor
+NVIDIA GeForce RTX 3090, 580.119.02, 370.00 W
+nvcc 13.1, clang version 21.1.7 (Fedora 21.1.7-1.fc43), load 10.77 9.68 7.83
+== build: one source, the CPU binary and its GPU program; the C twin ==
+  /tmp/bend-placement/main       200208 bytes
+  /tmp/bend-placement/main.gpu    48968 bytes
+== the table: every run printed the twin's four lines, or this stops ==
+    cols unit runs   wall_s  window idle_c idle_g    cpu_J    gpu_J     J/run   ±J/run   nJ/MAC
+    1024  off  200    0.011    4.02   83.6  45.4     23.5   -108.4    -0.424   0.508  -25.272
+    1024   on  200    0.100   29.13   83.1  19.5    110.2   2132.7    11.215   0.318  668.466
+   16384  off   40    0.073    4.03   79.3  19.5     99.5      9.5     2.725   0.291   10.151
+   16384   on   40    0.116    9.04   78.2  20.3     38.7    591.7    15.760   0.582   58.711
+  131072  off    6    0.452    4.03   67.0  21.8    148.9     -8.4    23.409   2.029   10.901
+  131072   on    6    0.198    6.03   70.6  21.4     10.9    394.4    67.554   5.760   31.457
+ 1048576  off    1    3.455    5.05   68.1  19.5    189.4     10.3   199.658  12.509   11.622
+ 1048576   on    1    0.856    9.04   69.8  20.4      2.4    299.6   301.990  38.781   17.578
+ 4194304  off    1   13.704   17.19   68.9  19.2    610.9     29.4   640.315  98.555    9.318
+ 4194304   on    1    2.925    8.04   70.1  20.8     29.9    612.2   642.161  36.164    9.345
+ 8388608  off    1   27.957   29.36   70.5  21.0   1223.4    -13.0  1210.387 197.468    8.807
+ 8388608   on    1    5.676   11.05   67.6  21.3     79.9    970.0  1049.881  75.196    7.639
+16777216  off    1   54.615   55.71   63.9  23.3   2755.8   -134.6  2621.213 709.012    9.536
+16777216   on    1   11.189   17.09   88.0  21.3     21.8   1829.4  1851.191 244.575    6.735
+== identity: C twin = CPU pool = GPU, per size ==
+    1024  twin = off = on  340750020 4294967295 0 0
+   16384  twin = off = on  2008321637 4294967295 0 0
+  131072  twin = off = on  2975651827 4294967295 0 0
+ 1048576  twin = off = on  1291939912 4294967295 0 0
+ 4194304  twin = off = on  856031264 3355443199 1073741824 0
+ 8388608  twin = off = on  65632 3355443199 1073741824 0
+16777216  twin = off = on  1342242816 3355443199 1073741824 0
+== the policy: route each size to the unit with the lower predicted J/run ==
+route m=4096 (67,108,864 MACs): predicted J/run  CPU 0.206  GPU 13.295  -> CPU (16 threads)
+    cols unit runs   wall_s  window idle_c idle_g    cpu_J    gpu_J     J/run   ±J/run   nJ/MAC
+    4096  off  100    0.023    5.04   69.2  18.6    118.1     23.6     1.417   0.292   21.115
+route m=12582912 (206,158,430,208 MACs): predicted J/run  CPU 1902.063  GPU 1462.928  -> GPU (RTX 3090)
+    cols unit runs   wall_s  window idle_c idle_g    cpu_J    gpu_J     J/run   ±J/run   nJ/MAC
+12582912   on    1    8.462   13.06   81.4  22.1     50.0   1421.5  1471.494  30.245    7.138

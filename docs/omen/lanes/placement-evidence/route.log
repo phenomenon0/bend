@@ -1,0 +1,2 @@
+route m=4096 (67,108,864 MACs): predicted J/run  CPU 0.206  GPU 13.295  -> CPU (16 threads)
+route m=12582912 (206,158,430,208 MACs): predicted J/run  CPU 1902.063  GPU 1462.928  -> GPU (RTX 3090)
