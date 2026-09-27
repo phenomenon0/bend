@@ -26,6 +26,11 @@ import ./lint.bend as Lint
 # TInt is a natural number (Bend `Nat`): in this fragment only `len` and a
 # decimal literal make one; a comparison, a slice bound and `group` read one.
 # TMatch is a successful re match with its subject (Python keeps `m.string`).
+# TTup/TUnit are a Python tuple as a cons chain of its item types, spelled
+# Tup<A, Tup<B, Unit>>: `tuple[A, B]`. The chain keeps the arity in the type,
+# so `tuple[A, tuple[B, C]]` and `tuple[A, B, C]` differ, as in Python. `Tup`
+# is a Data type the prelude declares: Bend's own `A & B` is not Data, and a
+# tuple is read as often as a str is.
 # TBad is no type: its spelling equals nothing.
 type Ty is Data:
   TBool{}
@@ -34,6 +39,8 @@ type Ty is Data:
   TList{of: Ty}
   TMaybe{of: Ty}
   TMatch{}
+  TTup{head: Ty, rest: Ty}
+  TUnit{}
   TBad{}
 
 type Eff is Data:
@@ -48,6 +55,8 @@ type Eff is Data:
 # of helper defs. IMaybe matches the Optional name `on` and rebinds it, narrowed
 # to its payload, inside `some`. IFold's value is the final accumulator. IList
 # is a list display; IMap is `[body for item in over]`, a helper call too.
+# IPair is one cell of a tuple (its item and the rest, which is a pair or the
+# Unit literal); IProj takes a pair's item (`first`) or its rest.
 type Ir is Data:
   IVar{name: String, ty: Ty, loc: S.Json}
   ILit{text: String, ty: Ty, loc: S.Json}
@@ -64,6 +73,8 @@ type Ir is Data:
   IStop{val: Ir, loc: S.Json}
   IList{items: Ir, ty: Ty, loc: S.Json}
   IMap{item: String, over: Ir, body: Ir, ty: Ty, loc: S.Json}
+  IPair{fst: Ir, snd: Ir, ty: Ty, loc: S.Json}
+  IProj{first: Bool, of: Ir, ty: Ty, loc: S.Json}
 
 type Param is Data:
   Param{name: String, ty: Ty, loc: S.Json}
@@ -199,6 +210,13 @@ def ty(t: Ty) -> String:
       S.choose(String, String.is_empty(o), u => "None", u => "Maybe<&2, " ++ o ++ ">")
     case TMatch{}:
       "Py.Match"
+    case TTup{head, rest}:
+      +h = ty(head)
+      +r = ty(rest)
+      ok = Bool.not(String.is_empty(h)) && (String.eq(r, "Unit") || String.starts_with(r, "Tup<"))
+      S.choose(String, ok, u => "Tup<" ++ h ++ ", " ++ r ++ ">", u => "")
+    case TUnit{}:
+      "Unit"
     case TBad{}:
       ""
 
@@ -231,6 +249,10 @@ def typ(e: Ir) -> Ty:
     case IList{items, t, loc}:
       t
     case IMap{item, over, body, t, loc}:
+      t
+    case IPair{a, b, t, loc}:
+      t
+    case IProj{first, of, t, loc}:
       t
     case ILet{name, val, body, loc}:
       typ(body)
@@ -289,6 +311,14 @@ def elem(t: Ty) -> Ty:
     case _:
       TBad{}
 
+# A tuple type's first item, or the tuple of its other items.
+def half(t: Ty, first: Bool) -> Ty:
+  match t:
+    case TTup{head, rest}:
+      S.choose(Ty, first, u => head, u => rest)
+    case _:
+      TBad{}
+
 # The innermost binding wins; TBad when unbound.
 def type_in(env: List<&2, Param>, +id: String) -> Ty:
   match env:
@@ -331,6 +361,10 @@ def own_loc(e: Ir) -> S.Json:
     case IList{items, t, loc}:
       loc
     case IMap{item, over, body, t, loc}:
+      loc
+    case IPair{a, b, t, loc}:
+      loc
+    case IProj{first, of, t, loc}:
       loc
     case _:
       S.JNull{}
@@ -398,6 +432,10 @@ def reads(e: Ir, +x: String) -> Nat:
       reads(items, x)
     case IMap{item, over, body, t, loc}:
       Nat.add(reads(over, x), S.choose(Nat, String.eq(item, x), u => 0n, u => some1(reads(body, x))))
+    case IPair{a, b, t, loc}:
+      Nat.add(reads(a, x), reads(b, x))
+    case IProj{first, of, t, loc}:
+      reads(of, x)
     case _:
       0n
 
@@ -488,6 +526,8 @@ def lit_text(text: String, t: Ty) -> String:
       text ++ "n"
     case TMaybe{of}:
       "None{}"
+    case TUnit{}:
+      "Unit{}"
     case _:
       "?literal"
 
@@ -500,6 +540,10 @@ def argl(cs: List<&2, Param>) -> String:
 
 def seed(+s: String, stop: Bool) -> String:
   S.choose(String, stop, u => "Continue{" ++ s ++ "}", u => s)
+
+# `Tup.fst(A, R, ` or `Tup.snd(A, R, `: a projection up to its operand.
+def proj(first: Bool, +t: Ty) -> String:
+  "Tup." ++ S.choose(String, first, u => "fst", u => "snd") ++ "(" ++ ty(half(t, True{})) ++ ", " ++ ty(half(t, False{})) ++ ", "
 
 # A refused node renders as a hole, which C1 rejects; `emit` never reaches it.
 def show(e: Ir, +f: String, +env: List<&2, Param>) -> String:
@@ -533,6 +577,10 @@ def show(e: Ir, +f: String, +env: List<&2, Param>) -> String:
       "[" ++ show(items, f, env) ++ "]"
     case IMap{item, over, body, t, +loc}:
       hname(f, "comp", loc) ++ "(" ++ show(over, f, env) ++ argl(caps(env, IArg{body, IEnd{}}, [item])) ++ ")"
+    case IPair{a, b, t, loc}:
+      "Tup{" ++ show(a, f, env) ++ ", " ++ show(b, f, env) ++ "}"
+    case IProj{first, +of, t, loc}:
+      proj(first, typ(of)) ++ show(of, f, env) ++ ")"
     case _:
       "?refused"
 
@@ -911,6 +959,11 @@ def comp_form(+j: S.Json, +env: List<&2, Param>) -> Bool:
   String.eq(Lint.tag_of(j), "ListComp") && Nat.is_eq(Lint.size(gs), 1n) && String.eq(Lint.tag_of(t), "Name") &&
     Bool.not(has_name(env, N.string(Lint.field(t, "id")))) && Lint.is_empty(Lint.field(g, "ifs")) && zero(Lint.field(g, "is_async"))
 
+# t[i]: a decimal natural index, no slice; `x.split(sep, 1)[1]` is its own form.
+def index_form(+j: S.Json) -> Bool:
+  +sl = Lint.field(j, "slice")
+  String.eq(Lint.tag_of(j), "Subscript") && String.eq(Lint.tag_of(sl), "Constant") && natural(raw_of(sl)) && Bool.not(split_form(j))
+
 def is_len(+j: S.Json, +env: List<&2, Param>) -> Bool:
   +f = Lint.field(j, "func")
   String.eq(Lint.tag_of(j), "Call") && String.eq(Lint.tag_of(f), "Name") && String.eq(N.string(Lint.field(f, "id")), "len") &&
@@ -950,7 +1003,9 @@ def subs(+j: S.Json, +env: List<&2, Param>, +cs: List<&2, Contract>, +ss: List<&
               S.choose(S.Json, String.eq(narrow(j), ""), u => Lint.items(Lint.field(j, "values")), u => tail_of(Lint.items(Lint.field(j, "values")))), u =>
               S.choose(S.Json, String.eq(tag, "IfExp"), u => S.JItem{Lint.field(j, "test"), two(Lint.field(j, "body"), Lint.field(j, "orelse"))}, u =>
                 S.choose(S.Json, split_form(j), u =>
-                  two(Lint.field(Lint.field(c, "func"), "value"), Lint.first(Lint.items(Lint.field(c, "args")))), u => S.JEnd{}))))))))))))
+                  two(Lint.field(Lint.field(c, "func"), "value"), Lint.first(Lint.items(Lint.field(c, "args")))), u =>
+                  S.choose(S.Json, String.eq(tag, "Tuple"), u => Lint.items(Lint.field(j, "elts")), u =>
+                    S.choose(S.Json, index_form(j), u => S.JItem{c, S.JEnd{}}, u => S.JEnd{}))))))))))))))
 
 # The environment the subexpressions see: X narrowed under `X is None or E`.
 def scope(+j: S.Json, +env: List<&2, Param>) -> List<&2, Param>:
@@ -1009,6 +1064,32 @@ def list_of(+kids: Ir, +ret: Ty, +loc: S.Json) -> Result<&2, &2, S.Error, Ir>:
   S.choose(Result<&2, &2, S.Error, Ir>, Bool.not(String.is_empty(ty(elem(t)))) && all_ty(kids, ty(elem(t))), u => Done{IList{kids, t, loc}}, u =>
     refuse(&2, Ir, loc, "list of mixed element types, or [] outside a list return type"))
 
+# A tuple display: a pair per item, ending in the Unit literal.
+def tuple_of(kids: Ir, +loc: S.Json) -> Ir:
+  match kids:
+    case IArg{+h, t}:
+      +r = tuple_of(t, loc)
+      IPair{h, r, TTup{typ(h), typ(r)}, loc}
+    case _:
+      ILit{"Unit", TUnit{}, loc}
+
+# Item n of a tuple: n rests, then the first.
+def nth(n: Nat, +e: Ir, +loc: S.Json) -> Ir:
+  match n:
+    case 0n:
+      IProj{True{}, e, half(typ(e), True{}), loc}
+    case 1n+p:
+      nth(p, IProj{False{}, e, half(typ(e), False{}), loc}, loc)
+
+def item_at(m: Maybe<&2, Nat>, +e: Ir, +loc: S.Json) -> Result<&2, &2, S.Error, Ir>:
+  match m:
+    case Some{n}:
+      +r = nth(n, e, loc)
+      S.choose(Result<&2, &2, S.Error, Ir>, String.is_empty(ty_of(r)), u =>
+        refuse(&2, Ir, loc, "subscript: only a tuple, at an index within its length (" ++ ty_of(e) ++ ")"), u => Done{r})
+    case None{}:
+      refuse(&2, Ir, loc, "subscript: index too large")
+
 # x[i:-k] = drop_end(drop(x, i), k).
 def cut(+j: S.Json, +kids: Ir, +cs: List<&2, Contract>, +loc: S.Json) -> Result<&2, &2, S.Error, Ir>:
   +sl = Lint.field(j, "slice")
@@ -1063,6 +1144,8 @@ def build(+j: S.Json, +kids: Ir, +env: List<&2, Param>, +cs: List<&2, Contract>,
   S.choose(Result<&2, &2, S.Error, Ir>, re_form(j, env, cs), u => grant(cs, b, IArg{a, IArg{ILit{"s", TStr{}, Lint.field(Lint.first(tail_of(tail_of(Lint.items(Lint.field(j, "args"))))), "_loc")}, IEnd{}}}, "re.search", loc), u =>
   S.choose(Result<&2, &2, S.Error, Ir>, slice_form(j), u => cut(j, kids, cs, loc), u =>
   S.choose(Result<&2, &2, S.Error, Ir>, String.eq(tag, "List"), u => list_of(kids, ret, loc), u =>
+  S.choose(Result<&2, &2, S.Error, Ir>, String.eq(tag, "Tuple"), u => Done{tuple_of(kids, loc)}, u =>
+  S.choose(Result<&2, &2, S.Error, Ir>, index_form(j), u => item_at(Nat.read(raw_of(Lint.field(j, "slice"))), a, loc), u =>
   S.choose(Result<&2, &2, S.Error, Ir>, is_method(j), u => grant(cs, a, tl(kids), N.string(Lint.field(Lint.field(j, "func"), "attr")), loc), u =>
     S.choose(Result<&2, &2, S.Error, Ir>, is_user(j, env, ss), u => called(ss, N.string(Lint.field(Lint.field(j, "func"), "id")), kids, loc), u =>
     S.choose(Result<&2, &2, S.Error, Ir>, is_len(j, env), u => grant(cs, a, IEnd{}, "__len__", loc), u =>
@@ -1087,7 +1170,7 @@ def build(+j: S.Json, +kids: Ir, +env: List<&2, Param>, +cs: List<&2, Contract>,
                       S.choose(Result<&2, &2, S.Error, Ir>, String.eq(op, "LtE"), u => grant(cs, a, tl(kids), "__le__", loc), u =>
                         S.choose(Result<&2, &2, S.Error, Ir>, String.eq(op, "In"), u => grant(cs, b, IArg{a, IEnd{}}, "__contains__", loc), u =>
                           S.choose(Result<&2, &2, S.Error, Ir>, String.eq(op, "NotIn"), u => negate(grant(cs, b, IArg{a, IEnd{}}, "__contains__", loc), cs, loc), u =>
-                            refuse(&2, Ir, loc, "outside the fragment: " ++ tag ++ S.choose(String, String.eq(op, ""), u => "", u => " " ++ op))))))))))))))))))))))
+                            refuse(&2, Ir, loc, "outside the fragment: " ++ tag ++ S.choose(String, String.eq(op, ""), u => "", u => " " ++ op))))))))))))))))))))))))
 
 def listy(+e: Ir, what: String) -> Result<&2, &2, S.Error, Unit>:
   S.choose(Result<&2, &2, S.Error, Unit>, String.is_empty(ty(elem(typ(e)))), u =>
@@ -1288,6 +1371,70 @@ def aug_assign(+h: S.Json) -> S.Json:
   +sum : S.Json = S.JObj{S.JField{"tag", S.JStr{"BinOp"}, S.JField{"left", load, S.JField{"op", Lint.field(h, "op"), S.JField{"right", Lint.field(h, "value"), S.JField{"_loc", loc, S.JEnd{}}}}}}}
   S.JObj{S.JField{"tag", S.JStr{"Assign"}, S.JField{"targets", S.JArr{S.JItem{tgt, S.JEnd{}}}, S.JField{"value", sum, S.JField{"_loc", loc, S.JEnd{}}}}}}
 
+# ---- tuple targets: rewritten to the one-name forms, then elaborated ----
+
+def set_field(+fs: S.Json, +key: String, +v: S.Json) -> S.Json:
+  match fs:
+    case S.JField{+k, +old, +rest}:
+      S.choose(S.Json, String.eq(k, key), u => S.JField{k, v, rest}, u => S.JField{k, old, set_field(rest, key, v)})
+    case _:
+      fs
+
+def fields(+j: S.Json) -> S.Json:
+  match j:
+    case S.JObj{+fs}:
+      fs
+    case _:
+      S.JEnd{}
+
+def jname(id: String, ctx: String, +loc: S.Json) -> S.Json:
+  S.JObj{S.JField{"tag", S.JStr{"Name"}, S.JField{"id", S.JStr{id}, S.JField{"ctx", S.JObj{S.JField{"tag", S.JStr{ctx}, S.JEnd{}}}, S.JField{"_loc", loc, S.JEnd{}}}}}}
+
+def jassign(tgt: S.Json, val: S.Json, +loc: S.Json) -> S.Json:
+  S.JObj{S.JField{"tag", S.JStr{"Assign"}, S.JField{"targets", S.JArr{S.JItem{tgt, S.JEnd{}}}, S.JField{"value", val, S.JField{"_loc", loc, S.JEnd{}}}}}}
+
+def jindex(v: S.Json, i: Nat, +loc: S.Json) -> S.Json:
+  +k : S.Json = S.JObj{S.JField{"tag", S.JStr{"Constant"}, S.JField{"_raw", S.JStr{Nat.show(i)}, S.JField{"_loc", loc, S.JEnd{}}}}}
+  S.JObj{S.JField{"tag", S.JStr{"Subscript"}, S.JField{"value", v, S.JField{"slice", k, S.JField{"_loc", loc, S.JEnd{}}}}}}
+
+# `x = tmp[i]` for the i-th target x, each at the target's own span.
+def unpacks(ts: S.Json, +tmp: String, +i: Nat) -> S.Json:
+  match ts:
+    case S.JItem{+e, rest}:
+      +loc = Lint.field(e, "_loc")
+      S.JItem{jassign(e, jindex(jname(tmp, "Load", loc), i, loc), loc), unpacks(rest, tmp, 1n+i)}
+    case _:
+      S.JEnd{}
+
+def names_or_tuples(ts: S.Json) -> Bool:
+  match ts:
+    case S.JItem{+e, rest}:
+      +tag = Lint.tag_of(e)
+      (String.eq(tag, "Name") || String.eq(tag, "Tuple") || String.eq(tag, "List")) && names_or_tuples(rest)
+    case _:
+      True{}
+
+# A tuple target: a Tuple or List of names and tuple targets, no star.
+def tuple_target(+t: S.Json) -> Bool:
+  +tag = Lint.tag_of(t)
+  (String.eq(tag, "Tuple") || String.eq(tag, "List")) && Bool.not(Lint.is_empty(Lint.field(t, "elts"))) &&
+    names_or_tuples(Lint.items(Lint.field(t, "elts")))
+
+# How many items a tuple type holds.
+def arity(t: Ty) -> Nat:
+  match t:
+    case TTup{head, rest}:
+      1n+arity(rest)
+    case _:
+      0n
+
+# `for a, b in xs:` is `for it in xs:` whose body begins `a, b = it`.
+def for_item(+h: S.Json, +it: String) -> S.Json:
+  +tgt = Lint.field(h, "target")
+  +tl = Lint.field(tgt, "_loc")
+  +body : S.Json = S.JItem{jassign(tgt, jname(it, "Load", tl), tl), Lint.items(Lint.field(h, "body"))}
+  S.JObj{set_field(set_field(fields(h), "target", jname(it, "Store", tl)), "body", S.JArr{body})}
+
 # Statements. `acc` is "" in a function body, where every path must end in one
 # `return e` (falling off the end, an implicit None, is refused) and the
 # statements after an `if` are its else-continuation -- unless an arm falls
@@ -1321,7 +1468,24 @@ def block(fuel: Nat, xs: S.Json, first: Bool, +near: S.Json, +env: List<&2, Para
       +r = "ret_" ++ Nat.show(Lint.line(loc)) ++ "_" ++ Nat.show(Lint.col(loc))
       +rt = {TMaybe{ret} : Ty}
       +j = one_name(List.append(&2, String, Lint.binds(Lint.field(h, "body")), Lint.binds(Lint.field(h, "orelse"))), "")
+      +ts = Lint.items(Lint.field(h, "targets"))
+      +tt = Lint.first(ts)
+      +elts = Lint.items(Lint.field(tt, "elts"))
+      +tmp = "tup_" ++ String.replace(String.replace(Lint.span(Lint.field(tt, "_loc")), ":", "_"), "-", "_")
+      +it = "it_" ++ Nat.show(Lint.line(loc)) ++ "_" ++ Nat.show(Lint.col(loc))
       S.choose(Result<&2, &2, S.Error, Ir>, first && docstring(h), u => block(left, t, False{}, near, env, cs, ret, acc, ss), u =>
+      S.choose(Result<&2, &2, S.Error, Ir>, String.eq(tag, "For") && tuple_target(Lint.field(h, "target")) &&
+          Bool.not(has_name(env, it) || under(S.JItem{h, t}, "Name", it)), u =>
+        block(left, S.JItem{for_item(h, it), t}, False{}, near, env, cs, ret, acc, ss), u =>
+      S.choose(Result<&2, &2, S.Error, Ir>, String.eq(tag, "Assign") && Nat.is_eq(Lint.size(ts), 1n) && tuple_target(tt), u =>
+        S.choose(Result<&2, &2, S.Error, Ir>, has_name(env, tmp) || under(S.JItem{h, t}, "Name", tmp), u =>
+          refuse(&2, Ir, loc, "unpack: the name " ++ tmp ++ " is taken"), u =>
+          do Result<&2, &2, S.Error, Ir>:
+            +e : Ir <- expr(weight(val), val, env, cs, ret, ss)
+            ok : Unit <- S.choose(Result<&2, &2, S.Error, Unit>, String.starts_with(ty_of(e), "Tup<") && Nat.is_eq(arity(typ(e)), Lint.size(elts)), u =>
+              Done{Unit{}}, u => refuse(&2, Unit, loc, "unpack: a tuple of exactly " ++ Nat.show(Lint.size(elts)) ++ " items, not (" ++ ty_of(e) ++ ")"))
+            k : Ir <- block(left, chain(unpacks(elts, tmp, 0n), t), False{}, loc, Param{tmp, typ(e), loc} <> env, cs, ret, acc, ss)
+            Done{ILet{tmp, e, k, loc}}), u =>
       S.choose(Result<&2, &2, S.Error, Ir>, String.eq(tag, "AugAssign") && String.eq(Lint.tag_of(Lint.field(h, "target")), "Name") &&
           String.eq(ty(type_in(env, N.string(Lint.field(Lint.field(h, "target"), "id")))), "String"), u =>
         block(left, S.JItem{aug_assign(h), t}, False{}, near, env, cs, ret, acc, ss), u =>
@@ -1393,13 +1557,27 @@ def block(fuel: Nat, xs: S.Json, first: Bool, +near: S.Json, +env: List<&2, Para
                       k : Ir <- block(left, t, False{}, loc, env, cs, ret, acc, ss)
                       Done{ILet{a, IFold{x, over, a, IVar{a, type_in(env, a), loc}, step, type_in(env, a), loc}, k, loc}}))), u =>
                 S.choose(Result<&2, &2, S.Error, Ir>, String.eq(tag, "Break") && loop && last, u => Done{IStop{IVar{acc, type_in(env, acc), loc}, loc}}, u =>
-                  refuse(&2, Ir, loc, "outside the fragment: statement " ++ tag)))))))))))
+                  refuse(&2, Ir, loc, "outside the fragment: statement " ++ tag)))))))))))))
     case 1n+p _:
       S.choose(Result<&2, &2, S.Error, Ir>, String.eq(acc, ""), u =>
         refuse(&2, Ir, near, "no return: falling off the end is outside the fragment"), u =>
         Done{IVar{acc, type_in(env, acc), near}})
 
-# str, bool, list[T], T | None. `int` is refused: a Python int is unbounded and
+def is_chain(j: S.Json) -> Bool:
+  match j:
+    case S.JItem{h, t}:
+      True{}
+    case S.JEnd{}:
+      True{}
+    case _:
+      False{}
+
+# The items of a subscript: `x[a, b]` holds a Tuple, `x[a]` the one item.
+def subscripts(+sl: S.Json) -> S.Json:
+  S.choose(S.Json, String.eq(Lint.tag_of(sl), "Tuple"), u => Lint.items(Lint.field(sl, "elts")), u => S.JItem{sl, S.JEnd{}})
+
+# str, bool, list[T], tuple[A, B] (one or more items, no `...`), T | None. An
+# item chain is a tuple's items. `int` is refused: a Python int is unbounded and
 # signed, and no contract here reads one from a parameter.
 def ann(fuel: Nat, +j: S.Json, +near: S.Json) -> Result<&2, &2, S.Error, Ty>:
   match fuel:
@@ -1411,6 +1589,15 @@ def ann(fuel: Nat, +j: S.Json, +near: S.Json) -> Result<&2, &2, S.Error, Ty>:
       +id = N.string(Lint.field(j, "id"))
       +v = Lint.field(j, "value")
       +loc = S.choose(S.Json, Lint.is_null(j), u => near, u => Lint.field(j, "_loc"))
+      +vid = N.string(Lint.field(v, "id"))
+      S.choose(Result<&2, &2, S.Error, Ty>, is_chain(j), u =>
+        S.choose(Result<&2, &2, S.Error, Ty>, Lint.is_empty(S.JArr{j}), u => Done{TUnit{}}, u =>
+          do Result<&2, &2, S.Error, Ty>:
+            h : Ty <- ann(left, Lint.first(j), near)
+            r : Ty <- ann(left, tail_of(j), near)
+            Done{TTup{h, r}}), u =>
+      S.choose(Result<&2, &2, S.Error, Ty>, String.eq(tag, "Subscript") && String.eq(Lint.tag_of(v), "Name") && String.eq(vid, "tuple") &&
+          Bool.not(Lint.is_empty(S.JArr{subscripts(Lint.field(j, "slice"))})), u => ann(left, subscripts(Lint.field(j, "slice")), loc), u =>
       S.choose(Result<&2, &2, S.Error, Ty>, String.eq(tag, "Name") && String.eq(id, "str"), u => Done{TStr{}}, u =>
         S.choose(Result<&2, &2, S.Error, Ty>, String.eq(tag, "Name") && String.eq(id, "bool"), u => Done{TBool{}}, u =>
           S.choose(Result<&2, &2, S.Error, Ty>, String.eq(tag, "Subscript") && String.eq(Lint.tag_of(v), "Name") && String.eq(N.string(Lint.field(v, "id")), "list"), u =>
@@ -1421,7 +1608,7 @@ def ann(fuel: Nat, +j: S.Json, +near: S.Json) -> Result<&2, &2, S.Error, Ty>:
               do Result<&2, &2, S.Error, Ty>:
                 of : Ty <- ann(left, Lint.field(j, "left"), loc)
                 Done{TMaybe{of}}, u =>
-              refuse(&2, Ty, loc, "annotation outside the fragment (str, bool, list[T], T | None)")))))
+              refuse(&2, Ty, loc, "annotation outside the fragment (str, bool, list[T], tuple[A, B], T | None)")))))))
 
 # Types from the signature's parameters `gs`, names and spans from the source's
 # `fs`: the two must name the same parameters in the same order.
@@ -1761,6 +1948,8 @@ def lit_ok(+text: String, t: Ty) -> Bool:
       String.eq(text, "True") || String.eq(text, "False")
     case TMaybe{of}:
       String.eq(text, "None") && Bool.not(String.is_empty(ty(of)))
+    case TUnit{}:
+      String.eq(text, "Unit")
     case _:
       False{}
 
@@ -1829,6 +2018,13 @@ def why(e: Ir, +pos: Pos, +env: List<&2, Param>, +facts: List<&2, Ir>, +cs: List
       S.choose(String, ok, u => both(why(over, PArg{}, env, facts, cs, ss),
         why(body, PArg{}, Param{item, elem(typ(over)), loc} <> env, items_of(facts, over, item, loc), cs, ss)), u =>
         "comprehension over a non-list, or of another type" ++ Lint.at(loc))
+    case IPair{+a, +b, +t, +loc}:
+      ok = spanned(loc) && Bool.not(String.is_empty(ty(t))) && String.eq(ty_of(a), ty(half(t, True{}))) && String.eq(ty_of(b), ty(half(t, False{})))
+      S.choose(String, ok, u => both(why(a, PArg{}, env, facts, cs, ss), why(b, PArg{}, env, facts, cs, ss)), u =>
+        "tuple of items not of its type" ++ Lint.at(loc))
+    case IProj{first, +of, +t, +loc}:
+      ok = spanned(loc) && Bool.not(String.is_empty(ty_of(of))) && Bool.not(String.is_empty(ty(t))) && String.eq(ty(half(typ(of), first)), ty(t))
+      S.choose(String, ok, u => why(of, PArg{}, env, facts, cs, ss), u => "tuple item of a non-tuple, or of another type" ++ Lint.at(loc))
 
 # The type every tail path returns; "" if any path does not end in IReturn.
 def returned(e: Ir) -> String:
@@ -1873,6 +2069,10 @@ def helpers(e: Ir, +f: String) -> List<&2, String>:
       helpers(items, f)
     case IMap{item, over, body, t, loc}:
       hname(f, "comp", loc) <> List.append(&2, String, helpers(over, f), helpers(body, f))
+    case IPair{a, b, t, loc}:
+      List.append(&2, String, helpers(a, f), helpers(b, f))
+    case IProj{first, of, t, loc}:
+      helpers(of, f)
     case _:
       []
 
@@ -1992,6 +2192,10 @@ def kind(e: Ir) -> String:
       "List"
     case IMap{item, over, body, t, loc}:
       "Map " ++ item
+    case IPair{a, b, t, loc}:
+      "Tuple"
+    case IProj{first, of, t, loc}:
+      S.choose(String, first, u => "Item", u => "Rest")
     case _:
       "?"
 
@@ -2045,6 +2249,12 @@ def xrows(e: Ir, +f: String, +env: List<&2, Param>, +dl: Nat, +col: Nat) -> List
     case IMap{+item, +over, +body, +t, +loc}:
       row(IMap{item, over, body, t, loc}, String.length(show(IMap{item, over, body, t, loc}, f, env)), dl, col) <>
         xrows(over, f, env, dl, Nat.add(col, 1n+String.length(hname(f, "comp", loc))))
+    case IPair{+a, +b, +t, +loc}:
+      row(IPair{a, b, t, loc}, String.length(show(IPair{a, b, t, loc}, f, env)), dl, col) <>
+        List.append(&2, Row, xrows(a, f, env, dl, Nat.add(col, 4n)), xrows(b, f, env, dl, Nat.add(col, Nat.add(6n, String.length(show(a, f, env))))))
+    case IProj{+first, +of, +t, +loc}:
+      row(IProj{first, of, t, loc}, String.length(show(IProj{first, of, t, loc}, f, env)), dl, col) <>
+        xrows(of, f, env, dl, Nat.add(col, String.length(proj(first, typ(of)))))
     case IEnd{}:
       []
     case +other:
@@ -2178,6 +2388,10 @@ def defs(e: Ir, +f: String, +env: List<&2, Param>, +wrap: Bool) -> List<&2, Def>
         "    case Nil{}:\n      []\n    case Con{" ++ mark(reads(body, item)) ++ item ++ ", _rest}:\n"
       List.append(&2, Def, defs(over, f, env, False{}), List.append(&2, Def, defs(body, f, inside, False{}),
         [atop(head, [], blk(body, f, inside, 5n, 6n, "", " <> " ++ name ++ "(_rest" ++ argl(cs) ++ ")", False{}))]))
+    case IPair{a, b, t, loc}:
+      List.append(&2, Def, defs(a, f, env, False{}), defs(b, f, env, False{}))
+    case IProj{first, of, t, loc}:
+      defs(of, f, env, False{})
     case _:
       []
 
@@ -2227,11 +2441,18 @@ def maps(ds: List<&2, Def>, +at: Nat) -> String:
     case Def{text, rows} <> rest:
       row_text(rows, at) ++ maps(rest, Nat.add(at, 1n+nl(text)))
 
+# A Python tuple: a cons chain of these, ending in Unit.
+def tup_src() -> String:
+  "type Tup<-A: Data, -B: Data> is Data:\n  Tup{fst: A, snd: B}\n\n" ++
+    "def Tup.fst(-A: Data, -B: Data, p: Tup<A, B>) -> A:\n  match p:\n    case Tup{a, b}:\n      a\n\n" ++
+    "def Tup.snd(-A: Data, -B: Data, p: Tup<A, B>) -> B:\n  match p:\n    case Tup{a, b}:\n      b\n\n"
+
 # What the defs need that Base lacks: the Step type and each used contract's `src`.
 def prelude(cs: List<&2, Contract>, +text: String) -> String:
   match cs:
     case Nil{}:
-      S.choose(String, String.contains(text, "Stop{"), u => "type Step<-A: Data> is Data:\n  Continue{acc: A}\n  Stop{acc: A}\n\n", u => "")
+      S.choose(String, String.contains(text, "Stop{"), u => "type Step<-A: Data> is Data:\n  Continue{acc: A}\n  Stop{acc: A}\n\n", u => "") ++
+        S.choose(String, String.contains(text, "Tup"), u => tup_src(), u => "")
     case Contract{r, method, as, ret, bend, pure, total, pre, src} <> rest:
       S.choose(String, String.contains(text, bend ++ "("), u => src, u => "") ++ prelude(rest, text)
 
@@ -2443,20 +2664,6 @@ def jdrop(i: Nat, js: S.Json) -> S.Json:
     case 1n+p S.JItem{h, t}:
       jdrop(p, t)
     case _ _:
-      S.JEnd{}
-
-def set_field(+fs: S.Json, +key: String, +v: S.Json) -> S.Json:
-  match fs:
-    case S.JField{+k, +old, +rest}:
-      S.choose(S.Json, String.eq(k, key), u => S.JField{k, v, rest}, u => S.JField{k, old, set_field(rest, key, v)})
-    case _:
-      fs
-
-def fields(+j: S.Json) -> S.Json:
-  match j:
-    case S.JObj{+fs}:
-      fs
-    case _:
       S.JEnd{}
 
 # An item list (not a JArr, which Lint.is_empty takes) with nothing in it.

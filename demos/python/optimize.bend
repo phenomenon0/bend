@@ -172,6 +172,10 @@ def opt(e: Tr.Ir) -> Tr.Ir:
       Tr.IList{opt(items), t, loc}
     case Tr.IMap{item, over, body, t, loc}:
       Tr.IMap{item, opt(over), opt(body), t, loc}
+    case Tr.IPair{a, b, t, loc}:
+      Tr.IPair{opt(a), opt(b), t, loc}
+    case Tr.IProj{first, of, t, loc}:
+      Tr.IProj{first, opt(of), t, loc}
 
 # The log: a line per site the pattern matches, in the order `opt` visits them.
 def steps(e: Tr.Ir) -> String:
@@ -203,6 +207,10 @@ def steps(e: Tr.Ir) -> String:
       steps(items)
     case Tr.IMap{item, over, body, t, loc}:
       steps(over) ++ steps(body)
+    case Tr.IPair{a, b, t, loc}:
+      steps(a) ++ steps(b)
+    case Tr.IProj{first, of, t, loc}:
+      steps(of)
     case _:
       ""
 

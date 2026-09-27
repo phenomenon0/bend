@@ -34,7 +34,8 @@ ENV = dict(os.environ, BEND_NO_TELEMETRY="1")
 # Modules
 # =======
 
-TYPES = ["str", "bool", "list[str]", "str | None"]
+TYPES = ["str", "bool", "list[str]", "str | None", "tuple[str, bool]"]
+TUP = "tuple[str, bool]"
 LITS = ["", "a", "x", " ", "-", ".", "ab", "a b", "--", "x.y", "Ab", " a ", ":", "#"]
 
 
@@ -58,12 +59,17 @@ class Gen:
 
     def expr(self, env, t, d=0):
         own = self.names(env, t)
+        tups = self.names(env, TUP)
         if d > 2 or self.p(25):
+            if tups and t in ("str", "bool") and self.p(25):
+                # an item of a tuple; now and then one past its end (refused)
+                return f"{self.pick(tups)}[{({'str': 0, 'bool': 1}[t] if self.p(95) else 2)}]"
             if own and self.p(70):
                 return self.pick(own)
             return {"str": self.lit, "bool": lambda: self.pick(["True", "False"]),
                     "list[str]": lambda: f"[{self.lit()}]",
-                    "str | None": lambda: "None"}[t]()
+                    "str | None": lambda: "None",
+                    TUP: lambda: f"({self.lit()}, {self.pick(['True', 'False'])})"}[t]()
         calls = [dn for dn, ps, rt in self.defs if rt == t]
         if calls and self.p(12):
             dn = self.pick(calls)
@@ -110,6 +116,8 @@ class Gen:
                 lambda: f"[{s()}, {s()}]",
                 lambda: f"[x.strip() for x in {self.expr(env, 'list[str]', d + 1)}]",
             ])()
+        if t == TUP:
+            return f"({self.expr(env, 'str', d + 1)}, {self.expr(env, 'bool', d + 1)})"
         return self.expr(env, "str", d + 1) if self.p(60) else "None"  # str | None
 
     def fstr(self, env):
@@ -141,7 +149,36 @@ class Gen:
         pad = "    " * ind
         out = []
         for _ in range(self.r.randint(0, 2)):
-            k = self.r.randint(0, 9)
+            k = self.r.randint(0, 11)
+            if k == 10:
+                # unpack a tuple into two names; now and then a wrong arity (refused)
+                a = self.pick([m for m in ("t", "u", "w") if env.get(m) in (None, "str")] or ["s9"])
+                b = self.pick([m for m in ("ok", "no") if env.get(m) in (None, "bool")] or ["b9"])
+                if self.p(94):
+                    out.append(f"{pad}{a}, {b} = {self.expr(env, TUP)}")
+                    env[a], env[b] = "str", "bool"
+                else:
+                    out.append(f"{pad}{a}, {b}, c9 = {self.expr(env, TUP)}")
+                continue
+            if k == 11:
+                strs = self.names(env, "str")
+                if len(strs) >= 2 and self.p(50):
+                    # a swap: CPython builds the tuple before it binds either name
+                    a, b = self.r.sample(strs, 2)
+                    out.append(f"{pad}{a}, {b} = {b}, {a}")
+                elif depth < 2 and not in_loop:
+                    # a fold over a list of tuples, unpacked in the target
+                    acc = self.pick(["acc", "best"])
+                    if env.get(acc) not in (None, "str"):
+                        continue
+                    out.append(f"{pad}{acc} = {self.expr(env, 'str')}")
+                    env[acc] = "str"
+                    inner = dict(env)
+                    inner["k"], inner["q"] = "str", "bool"
+                    items = ", ".join(self.expr(env, TUP) for _ in range(self.r.randint(1, 3)))
+                    out.append(f"{pad}for k, q in [{items}]:")
+                    out.append(f"{pad}    {acc} = {self.expr(inner, 'str')}")
+                continue
             if k <= 3:
                 t = self.pick(["str", "str", "bool", "list[str]"])
                 n = self.pick(["t", "u", "v", "w", "T", "Uv"])
@@ -220,17 +257,14 @@ class Gen:
         for i in range(self.r.randint(1, 3)):
             name = f"f{i}"
             ps = [self.pick(TYPES) for _ in range(self.r.randint(1, 3))]
-            ret = self.pick(["str", "str", "bool", "str | None", "list[str]"])
+            ret = self.pick(["str", "str", "bool", "str | None", "list[str]", TUP])
             params = [f"p{j}" for j in range(len(ps))]
             env = {**self.konsts, **dict(zip(params, ps))}
             nd = 0
             if self.p(35):
                 nd = sum(1 for _ in range(self.r.randint(1, len(ps))))
-                while nd and ps[len(ps) - nd] == "list[str]":
-                    nd -= 1  # a list default is not a literal
-                nd = min(nd, len([t for t in ps[len(ps) - nd:] if t != "list[str]"])) if nd else 0
-                if any(t == "list[str]" for t in ps[len(ps) - nd:]):
-                    nd = 0
+                if any(t in ("list[str]", TUP) for t in ps[len(ps) - nd:]):
+                    nd = 0  # a list or tuple default is not a literal
             self.ndef[name] = nd
             lit = {"str": lambda: repr(self.pick(LITS)), "bool": lambda: self.pick(["True", "False"]), "str | None": lambda: "None"}
             heads = [f"{p}: {t}" + (f" = {lit[t]()}" if j >= len(ps) - nd else "") for j, (p, t) in enumerate(zip(params, ps))]
@@ -249,6 +283,8 @@ def value(rng, t):
         return [value(rng, "str") for _ in range(rng.randint(0, 3))]
     if t == "str | None" and rng.random() < 0.3:
         return None
+    if t == TUP:
+        return (value(rng, "str"), value(rng, "bool"))
     pool = [ALPHABET, "ab.-: xX", WS + "a."]
     src = rng.choice(pool)
     return "".join(rng.choice(src) for _ in range(rng.randint(0, 8)))
@@ -276,6 +312,8 @@ def bend_val(v, t):
         return "[" + ", ".join(bend_str(x) for x in v) + "]"
     if t == "str | None":
         return "None{}" if v is None else "Some{" + bend_str(v) + "}"
+    if t == TUP:
+        return "T.Tup{" + bend_str(v[0]) + ", T.Tup{" + bend_val(v[1], "bool") + ", Unit{}}}"
     return bend_str(v)
 
 
@@ -287,6 +325,9 @@ def enc(v, t):
         return "".join("".join(f"{ord(c)} " for c in x) + ";" for x in v) + "|"
     if t == "str | None":
         return "N|" if v is None else "S " + "".join(f"{ord(c)} " for c in v) + "|"
+    if t == TUP:
+        assert type(v) is tuple and len(v) == 2, v
+        return "T " + "".join(f"{ord(c)} " for c in v[0]) + "|" + enc(v[1], "bool")
     return "".join(f"{ord(c)} " for c in v) + "|"
 
 
@@ -332,14 +373,23 @@ def e_list(xs: List<&2, String>) -> String:
       item(h) ++ e_list(t)
 
 """
-ENC = {"str": "e_str", "bool": "e_bool", "str | None": "e_maybe", "list[str]": "e_list"}
+# Only a module that spells a tuple type declares T.Tup.
+E_TUP = """def e_tup(p: T.Tup<String, T.Tup<Bool, Unit>>) -> String:
+  match p:
+    case T.Tup{s, r}:
+      match r:
+        case T.Tup{b, u}:
+          "T " ++ codes(s) ++ e_bool(b)
+
+"""
+ENC = {"str": "e_str", "bool": "e_bool", "str | None": "e_maybe", "list[str]": "e_list", TUP: "e_tup"}
 PTYPE = {"str": "str", "bool": "bool", "list[str]": "list[str]", "str | None": "str | None"}
 
 
 def harness(calls, defs):
     sig = {n: ps for n, ps, _ in defs}
     parts = [calls[k:k + 12] for k in range(0, len(calls), 12)]
-    out = [HARNESS]
+    out = [HARNESS + (E_TUP if any(TUP in (r, *ps) for _, ps, r in defs) else "")]
     for k, part in enumerate(parts):
         body = " ++\n  ".join(
             f"{ENC[ret]}(T.{n}({', '.join(bend_val(a, t) for a, t in zip(args, sig[n]))}))"

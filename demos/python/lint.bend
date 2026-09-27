@@ -207,7 +207,7 @@ def scan(j: S.Json, +parent: String, +near: S.Json, +env: Env) -> List<&2, Fact>
     case _:
       []
 
-# Annotations state assumption A1: str, bool, int, list[T], T | None.
+# Annotations state assumption A1: str, bool, int, list[T], tuple[T, ...], T | None.
 def ann_ok(j: S.Json, +names: List<&2, String>, +tags: List<&2, String>) -> Bool:
   match j:
     case S.JObj{+fs}:
@@ -221,7 +221,7 @@ def ann_ok(j: S.Json, +names: List<&2, String>, +tags: List<&2, String>) -> Bool
       True{}
 
 def typed(+j: S.Json) -> Bool:
-  Bool.not(is_null(j)) && ann_ok(j, ["str", "bool", "int", "list"], ["Subscript", "BinOp", "BitOr", "Load"])
+  Bool.not(is_null(j)) && ann_ok(j, ["str", "bool", "int", "list", "tuple"], ["Subscript", "BinOp", "BitOr", "Load", "Tuple"])
 
 def all_typed(xs: S.Json) -> Bool:
   match xs:

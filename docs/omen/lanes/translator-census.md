@@ -155,3 +155,51 @@ Next is tier 1: `int` and tuples. Base's `I64` wraps on overflow and CPython's
 64 bits (as a Nat past 2^48 fail-stops today). It also needs floor `//` and `%`
 matching CPython on negatives, a nonzero-divisor guard, and `str(int)` for
 f-strings. Tuples need the kernel's pair type.
+
+## Tier 1b: tuples (2026-09-26)
+
+`tuple[A, B]` is `Tup<A, Tup<B, Unit>>`: a cons chain of the item types, closed
+by `Unit`. `Tup` is a two-field Data type the emitted prelude declares, along
+with `Tup.fst`/`Tup.snd`, only when the module uses it.
+
+Why not Bend's own pair `A & B`: it is a `Type` (a Sigma), not `Data`, so a
+binding of it cannot be marked `+` and read twice. A tuple is read as often as
+a `str` is (`s, ok = p` and then `p[0]`), so it has to be duplicable.
+
+Why a chain closed by `Unit` rather than a right-nested pair: the arity has to
+live in the type. `tuple[A, tuple[B, C]]` and `tuple[A, B, C]` are different
+Python types, and `a, b, c = x` raises on the first one. With a plain nested
+pair the two spell the same type, and the kernel would grant an unpack that
+CPython refuses.
+
+| form | IR | kernel rule | kept refused |
+|---|---|---|---|
+| `(a, b)`, `return a, b` | `IPair{a, IPair{b, Unit}}` | the type is a well-formed chain; each item has its component type | `()` in an annotation (`tuple[()]`), `tuple[A, ...]`, bare `tuple` |
+| `t[i]`, i a decimal literal | i × `IProj{rest}`, then `IProj{first}` | the operand's type is a chain; the result is the chosen component | an index past the end, a subscript on anything but a tuple (list/str indexing needs the IndexError story) |
+| `a, b = e` (nested targets too) | `tup_L_C_L_C = e`, then `a = tup[0]`, `b = tup[1]` (a rewrite; each line is checked as written) | the ordinary let/projection rules | arity ≠ the tuple's, a list or str on the right (length unknown), `*rest`, a temp name the def already uses |
+| `for a, b in xs:` | `for it_L_C in xs:` whose step begins `a, b = it_L_C` | the ordinary fold rule | the same as the unpack |
+
+The temporary is the point. `a, b = b, a` builds the tuple from the old values
+before binding either name. Binding straight from the display would read the
+new `a`.
+
+Not in this step: `==`/`<` on tuples (no contract), a tuple's truth value, and
+`len(t)`. A loop with two accumulators (`multi-accumulator`) is also out. The
+census shows it unlocks 0 defs on its own, so it waits until the tiers it
+co-occurs with are in.
+
+Evidence:
+- Hand test against CPython: swap, unpack, a `for k, v` fold and `t[1]`
+  through a user call give byte-equal output.
+- `refuse.bend`: `tuple target` moves to emitted. Two new pins are emitted:
+  `tuple` and `for tuple target`. Eleven new pins stay refused: unpack arity,
+  list, str, star, and a taken temp name; tuple index out of range, equality
+  and truthiness; a `for` target with the wrong arity; `tuple[str, ...]` and
+  `tuple[()]`.
+- `emit_tuple.bend` (new) pins the module shape and span map.
+- The fuzzer now has `tuple[str, bool]` as a parameter and return type. It
+  also writes displays, `t[0]`/`t[1]` (and now and then an out-of-range
+  `t[2]`), unpacks (and now and then a wrong arity), swaps, and `for k, q in
+  [...]` folds. Per 200 modules: 189 tuple signatures, 36 unpacks, 27 tuple
+  folds.
+- What-if census: the syntactic upper bound goes from 187 to 212 of 2,962.

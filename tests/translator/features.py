@@ -27,6 +27,7 @@ import argparse
 import ast
 import json
 import os
+import re
 import sys
 import sysconfig
 from collections import Counter
@@ -87,8 +88,8 @@ def ann_miss(t):
         out.add("int")
     if "float" in s or "complex" in s:
         out.add("float")
-    if "tuple" in s.lower():
-        out.add("tuple")
+    if "Tuple" in s or "tuple[()]" in s or re.search(r"tuple\[[^]]*\.\.\.", s) or re.search(r"\btuple\b(?!\[)", s):
+        out.add("tuple")  # tuple[A, B] is in; bare, variadic and empty tuples are not
     if "dict" in s.lower() or "Mapping" in s:
         out.add("dict")
     if "set" in s.lower():
@@ -132,7 +133,7 @@ def node_miss(n, params):
     elif t is ast.GeneratorExp:
         m.add("generator")
     elif t is ast.Tuple:
-        m.add("tuple")
+        pass  # a display, a target, `for a, b in`: in (a Starred item is varargs)
     elif t is ast.Starred:
         m.add("varargs")
     elif t is ast.FormattedValue:
@@ -161,9 +162,7 @@ def node_miss(n, params):
         m.add("slice" if isinstance(n.slice, ast.Slice) else "subscript")
     elif t is ast.Assign:
         for tg in n.targets:
-            if isinstance(tg, (ast.Tuple, ast.List)):
-                m.add("tuple")
-            elif isinstance(tg, ast.Attribute):
+            if isinstance(tg, ast.Attribute):
                 m.add("record" if isinstance(tg.value, ast.Name) and tg.value.id == "self" else "mutation")
             elif isinstance(tg, ast.Subscript):
                 m.add("mutation")
@@ -175,8 +174,6 @@ def node_miss(n, params):
     elif t is ast.Call:
         m |= call_miss(n, params)
     elif t is ast.For:
-        if isinstance(n.target, (ast.Tuple, ast.List)):
-            m.add("tuple")
         if n.orelse:
             m.add("for-else")
         if any(isinstance(x, ast.Return) for x in ast.walk(n)):
