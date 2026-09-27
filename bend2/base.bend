@@ -4448,22 +4448,6 @@ def Regex.parse.open(t: String, +n: Nat, +stack: Regex.parse.Stack()) -> Regex.p
     case SNil{}:
       Regex.parse.open.cap(SNil{}, n, stack)
 
-def Regex.parse.close(+t: String, n: Nat, stack: Regex.parse.Stack()) -> Regex.parse.State():
-  match stack:
-    case fr <> Nil{}:
-      Fail{RErr{1n+String.length(t), "unbalanced parenthesis"}}
-    case fr <> rest:
-      Regex.parse.push.q(t, n, rest, Regex.parse.fin(fr), 1n)
-    case Nil{}:
-      Fail{RErr{1n+String.length(t), "unbalanced parenthesis"}}
-
-def Regex.parse.bar(t: String, n: Nat, stack: Regex.parse.Stack()) -> Regex.parse.State():
-  match stack:
-    case Frame{cap, alts, cat, q} <> rest:
-      Done{(t, (n, Frame{cap, Regex.parse.cat(cat) <> alts, [], 0n} <> rest))}
-    case Nil{}:
-      Fail{RErr{String.length(t), "unbalanced parenthesis"}}
-
 def Regex.parse.rep.if(k: Nat, st: Regex.parse.State(), bad: Bool) -> Regex.parse.State():
   match bad:
     case True{}:
@@ -4482,14 +4466,6 @@ def Regex.parse.rep(+t: String, n: Nat, stack: Regex.parse.Stack(), lo: Nat, +hi
       Fail{RErr{1n+String.length(t), "multiple repeat"}}
     case _:
       Fail{RErr{1n+String.length(t), "nothing to repeat"}}
-
-# `?` after a fresh repeat makes it lazy, else it is the {0,1} repeat
-def Regex.parse.opt(t: String, n: Nat, stack: Regex.parse.Stack()) -> Regex.parse.State():
-  match stack:
-    case Frame{cap, alts, RRep{r, lo, hi, g} <> cat, 2n} <> rest:
-      Done{(t, (n, Frame{cap, alts, RRep{r, lo, hi, False{}} <> cat, 0n} <> rest))}
-    case other:
-      Regex.parse.rep(t, n, other, 0n, Some{1n})
 
 def Regex.parse.Bounds() -> Data:
   Result<&2, &2, Regex.Error, Sigma<&2, &2, Sigma<&2, &2, Nat, _ => Maybe<&2, Nat>>, _ => String>>
@@ -4740,15 +4716,30 @@ def Regex.parse.char(kind: Nat, +x: U32, t: String, n: Nat, stack: Regex.parse.S
     case 1n:
       Regex.parse.open(t, n, stack)
     case 2n:
-      Regex.parse.close(t, n, stack)
+      match stack:
+        case fr <> Nil{}:
+          Fail{RErr{1n+String.length(t), "unbalanced parenthesis"}}
+        case fr <> rest:
+          Regex.parse.push.q(t, n, rest, Regex.parse.fin(fr), 1n)
+        case Nil{}:
+          Fail{RErr{1n+String.length(t), "unbalanced parenthesis"}}
     case 3n:
-      Regex.parse.bar(t, n, stack)
+      match stack:
+        case Frame{cap, alts, cat, q} <> rest:
+          Done{(t, (n, Frame{cap, Regex.parse.cat(cat) <> alts, [], 0n} <> rest))}
+        case Nil{}:
+          Fail{RErr{String.length(t), "unbalanced parenthesis"}}
     case 4n:
       Regex.parse.rep(t, n, stack, 0n, None{})
     case 5n:
       Regex.parse.rep(t, n, stack, 1n, None{})
+    # `?` after a fresh repeat makes it lazy, else it is the {0,1} repeat
     case 6n:
-      Regex.parse.opt(t, n, stack)
+      match stack:
+        case Frame{cap, alts, RRep{r, lo, hi, g} <> cat, 2n} <> rest:
+          Done{(t, (n, Frame{cap, alts, RRep{r, lo, hi, False{}} <> cat, 0n} <> rest))}
+        case other:
+          Regex.parse.rep(t, n, other, 0n, Some{1n})
     case 7n:
       Regex.parse.braces(n, stack, Regex.parse.bounds(t))
     case 8n:
@@ -4771,24 +4762,18 @@ def Regex.parse.step(st: Regex.parse.State()) -> Regex.parse.State():
     case Done{(SCon{Chr{+x}, t}, (n, stack))}:
       Regex.parse.char(Regex.parse.index(x, [40, 41, 124, 42, 43, 63, 123, 91, 46, 94, 36, 92], 1n), x, t, n, stack)
 
-def Regex.parse.end.go(n: Nat, stack: Regex.parse.Stack()) -> Regex.parse.Tree():
-  match stack:
-    case fr <> Nil{}:
-      Done{(Regex.parse.fin(fr), n)}
-    case _:
-      Fail{RErr{0n, "missing )"}}
-
-def Regex.parse.end(st: Regex.parse.State()) -> Regex.parse.Tree():
-  match st:
-    case Fail{e}:
-      Fail{e}
-    case Done{(s, (n, stack))}:
-      Regex.parse.end.go(n, stack)
-
 def Regex.parse.go(fuel: Nat, st: Regex.parse.State()) -> Regex.parse.Tree():
   match fuel:
     case 0n:
-      Regex.parse.end(st)
+      match st:
+        case Fail{e}:
+          Fail{e}
+        case Done{(s, (n, stack))}:
+          match stack:
+            case fr <> Nil{}:
+              Done{(Regex.parse.fin(fr), n)}
+            case _:
+              Fail{RErr{0n, "missing )"}}
     case 1n+f:
       Regex.parse.go(f, Regex.parse.step(st))
 
