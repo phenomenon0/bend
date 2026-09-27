@@ -1,0 +1,611 @@
+Foundations verification receipts, 2026-09-27
+Candidate: 5a5da0c2
+Full suite results below; strings has one timeout and repo gate has seven baseline failures.
+
+=== f64-after.txt ===
+ok   convert                [interpret]
+ok   convert                [js]
+ok   convert                [c]
+ok   kit                    [interpret]
+ok   kit                    [js]
+ok   kit                    [c]
+ok   match_literal          [interpret]
+ok   match_literal          [js]
+ok   match_literal          [c]
+ok   mc_pi                  [interpret]
+ok   mc_pi                  [js]
+ok   mc_pi                  [c]
+ok   mc_pi                  [gpu]
+ok   read_roundtrip         [interpret]
+ok   read_roundtrip         [js]
+ok   read_roundtrip         [c]
+ok   show_decimals          [interpret]
+ok   show_decimals          [js]
+ok   show_decimals          [c]
+ok   show_specials          [interpret]
+ok   show_specials          [js]
+ok   show_specials          [c]
+
+PASS: 22, FAIL: 0
+
+=== tensor-check-after.txt ===
+ok   gemv         [check]
+ok   gemv         [interpret]
+ok   gemv         [js]
+ok   gemv         [c]
+ok   gemv         [c-1thread]
+ok   views        [check]
+ok   views        [interpret]
+ok   views        [js]
+ok   views        [c]
+ok   views        [c-1thread]
+
+Tensor PASS: 10, FAIL: 0
+
+=== arrays-final.txt ===
+PASS array_borrow_generic check
+PASS array_borrow_generic interpret
+PASS array_borrow_generic js-build
+PASS array_borrow_generic js
+PASS array_borrow_generic c-build
+PASS array_borrow_generic c-1
+PASS array_borrow_generic c-16
+PASS array_borrow_generic_sum check
+PASS array_borrow_generic_sum interpret
+PASS array_borrow_generic_sum js-build
+PASS array_borrow_generic_sum js
+PASS array_borrow_generic_sum c-build
+PASS array_borrow_generic_sum c-1
+PASS array_borrow_generic_sum c-16
+PASS array_clone_boxed check
+PASS array_clone_boxed interpret
+PASS array_clone_boxed js-build
+PASS array_clone_boxed js
+PASS array_clone_boxed c-build
+PASS array_clone_boxed c-1
+PASS array_clone_boxed c-16
+PASS array_clone_boxed emit-c
+PASS array_clone_boxed asan-build
+PASS array_clone_boxed asan
+PASS array_copy_bulk check
+PASS array_copy_bulk interpret
+PASS array_copy_bulk js-build
+PASS array_copy_bulk js
+PASS array_copy_bulk c-build
+PASS array_copy_bulk c-1
+PASS array_copy_bulk c-16
+PASS array_copy_bulk emit-c
+PASS array_copy_bulk asan-build
+PASS array_copy_bulk asan
+PASS array_copy_pair check
+PASS array_copy_pair interpret
+PASS array_copy_pair js-build
+PASS array_copy_pair js
+PASS array_copy_pair c-build
+PASS array_copy_pair c-1
+PASS array_copy_pair c-16
+PASS array_half_loop check
+PASS array_half_loop interpret
+PASS array_half_loop js-build
+PASS array_half_loop js
+PASS array_half_loop c-build
+PASS array_half_loop c-1
+PASS array_half_loop c-16
+PASS array_heap_element check
+PASS array_heap_element interpret
+PASS array_heap_element js-build
+PASS array_heap_element js
+PASS array_heap_element c-build
+PASS array_heap_element c-1
+PASS array_heap_element c-16
+PASS array_keep_cow check
+PASS array_keep_cow interpret
+PASS array_keep_cow js-build
+PASS array_keep_cow js
+PASS array_keep_cow c-build
+PASS array_keep_cow c-1
+PASS array_keep_cow c-16
+PASS array_nested check
+PASS array_nested interpret
+PASS array_nested js-build
+PASS array_nested js
+PASS array_nested c-build
+PASS array_nested c-1
+PASS array_nested c-16
+PASS array_node_loop check
+PASS array_node_loop interpret
+PASS array_node_loop js-build
+PASS array_node_loop js
+PASS array_node_loop c-build
+PASS array_node_loop c-1
+PASS array_node_loop c-16
+EXCLUDED array_open_element baseline open-type/obsolete-syntax fixture; see initial run
+PASS array_atomic_fadd check
+PASS array_atomic_fadd interpret
+PASS array_atomic_fadd js-build
+PASS array_atomic_fadd js
+PASS array_atomic_fadd c-build
+PASS array_atomic_fadd c-1
+PASS array_atomic_fadd c-16
+EXCLUDED array_bounds_000 baseline open-type/obsolete-syntax fixture; see initial run
+EXCLUDED array_bounds_001 baseline open-type/obsolete-syntax fixture; see initial run
+PASS array_boxed_get check
+PASS array_boxed_get interpret
+PASS array_boxed_get js-build
+PASS array_boxed_get js
+PASS array_boxed_get c-build
+PASS array_boxed_get c-1
+PASS array_boxed_get c-16
+PASS array_fill_fold check
+PASS array_fill_fold interpret
+PASS array_fill_fold js-build
+PASS array_fill_fold js
+PASS array_fill_fold c-build
+PASS array_fill_fold c-1
+PASS array_fill_fold c-16
+PASS array_fork check
+PASS array_fork interpret
+PASS array_fork js-build
+PASS array_fork js
+PASS array_fork c-build
+PASS array_fork c-1
+PASS array_fork c-16
+PASS array_fork_unshare check
+PASS array_fork_unshare interpret
+PASS array_fork_unshare js-build
+PASS array_fork_unshare js
+PASS array_fork_unshare c-build
+PASS array_fork_unshare c-1
+PASS array_fork_unshare c-16
+PASS array_fork_unshare emit-c
+PASS array_fork_unshare asan-build
+PASS array_fork_unshare asan
+PASS array_get4_wrap check
+PASS array_get4_wrap interpret
+PASS array_get4_wrap js-build
+PASS array_get4_wrap js
+PASS array_get4_wrap c-build
+PASS array_get4_wrap c-1
+PASS array_get4_wrap c-16
+PASS array_map_loop check
+PASS array_map_loop interpret
+PASS array_map_loop js-build
+PASS array_map_loop js
+PASS array_map_loop c-build
+PASS array_map_loop c-1
+PASS array_map_loop c-16
+PASS array_poly_elem check
+PASS array_poly_elem interpret
+PASS array_poly_elem js-build
+PASS array_poly_elem js
+PASS array_poly_elem c-build
+PASS array_poly_elem c-1
+PASS array_poly_elem c-16
+PASS array_size check
+PASS array_size interpret
+PASS array_size js-build
+PASS array_size js
+PASS array_size c-build
+PASS array_size c-1
+PASS array_size c-16
+EXCLUDED array_slab baseline open-type/obsolete-syntax fixture; see initial run
+PASS array_split_join check
+PASS array_split_join interpret
+PASS array_split_join js-build
+PASS array_split_join js
+PASS array_split_join c-build
+PASS array_split_join c-1
+PASS array_split_join c-16
+PASS array_split_join emit-c
+PASS array_split_join asan-build
+PASS array_split_join asan
+EXCLUDED array_struct_swap baseline open-type/obsolete-syntax fixture; see initial run
+PASS array_wrap_index check
+PASS array_wrap_index interpret
+PASS array_wrap_index js-build
+PASS array_wrap_index js
+PASS array_wrap_index c-build
+PASS array_wrap_index c-1
+PASS array_wrap_index c-16
+Array PASS=159 FAIL=0
+
+=== strings-after.txt ===
+ok   adt            [check]
+ok   adt            [interpret]
+ok   adt            [js]
+ok   adt            [c]
+ok   ascii          [check]
+ok   ascii          [interpret]
+ok   ascii          [js]
+ok   ascii          [c]
+ok   bench_words    [check]
+ok   bench_words    [interpret]
+ok   bench_words    [js]
+ok   bench_words    [c]
+ok   compare        [check]
+ok   compare        [interpret]
+ok   compare        [js]
+ok   compare        [c]
+ok   concat         [check]
+ok   concat         [interpret]
+ok   concat         [js]
+ok   concat         [c]
+ok   deep           [check]
+ok   deep           [interpret]
+ok   deep           [js]
+ok   deep           [c]
+ok   gaps           [check]
+ok   gaps           [interpret]
+ok   gaps           [js]
+ok   gaps           [c]
+ok   gpu            [check]
+ok   gpu            [interpret]
+ok   gpu            [js]
+ok   gpu            [c]
+ok   gpu            [gpu]
+ok   hash           [check]
+ok   hash           [interpret]
+ok   hash           [js]
+ok   hash           [c]
+ok   indices        [check]
+ok   indices        [interpret]
+ok   indices        [js]
+ok   indices        [c]
+ok   io_fold        [check]
+ok   io_fold        [interpret]
+ok   io_fold        [js]
+ok   io_fold        [c]
+ok   io_sock_utf8   [check]
+ok   io_sock_utf8   [interpret]
+ok   io_sock_utf8   [js]
+FAIL io_sock_utf8   [c] status=124
+263802747
+ok   io_stream      [check]
+ok   io_stream      [interpret]
+ok   io_stream      [js]
+ok   io_stream      [c]
+ok   io_utf8        [check]
+ok   io_utf8        [interpret]
+ok   io_utf8        [js]
+ok   io_utf8        [c]
+ok   laws           [check]
+ok   laws           [interpret]
+ok   laws           [js]
+ok   laws           [c]
+ok   map_keys       [check]
+ok   map_keys       [interpret]
+ok   map_keys       [js]
+ok   map_keys       [c]
+ok   numeric_text   [check]
+ok   numeric_text   [interpret]
+ok   numeric_text   [js]
+ok   numeric_text   [c]
+ok   padding        [check]
+ok   padding        [interpret]
+ok   padding        [js]
+ok   padding        [c]
+ok   raw_chars      [check]
+ok   raw_chars      [interpret]
+ok   raw_chars      [js]
+ok   raw_chars      [c]
+ok   raw_strings    [check]
+ok   raw_strings    [interpret]
+ok   raw_strings    [js: expected rejection]
+ok   raw_strings    [c]
+ok   replace        [check]
+ok   replace        [interpret]
+ok   replace        [js]
+ok   replace        [c]
+ok   search         [check]
+ok   search         [interpret]
+ok   search         [js]
+ok   search         [c]
+ok   sharing        [check]
+ok   sharing        [interpret]
+ok   sharing        [js]
+ok   sharing        [c]
+ok   split          [check]
+ok   split          [interpret]
+ok   split          [js]
+ok   split          [c]
+ok   unicode        [check]
+ok   unicode        [interpret]
+ok   unicode        [js]
+ok   unicode        [c]
+ok   gaps           [oracle]
+
+Strings PASS: 101, FAIL: 1
+
+=== token-caps-after.txt ===
+ok   bend2/base.bend                63739 <= 64000
+ok   bend2/bend.ts                  43780 <= 44000
+ok   bend2/comp.ts                  99151 <= 99200
+ok   bend2/main.ts                   9744 <= 10000
+ok   tests/f64/convert.bend           250 <= 16000
+ok   tests/f64/kit.bend               496 <= 16000
+ok   tests/f64/match_literal.bend     253 <= 16000
+ok   tests/f64/mc_pi.bend             478 <= 16000
+ok   tests/f64/read_roundtrip.bend     239 <= 16000
+ok   tests/f64/show_decimals.bend     246 <= 16000
+ok   tests/f64/show_specials.bend     244 <= 16000
+ok   tests/strings/adt.bend           385 <= 16000
+ok   tests/strings/ascii.bend         246 <= 16000
+ok   tests/strings/bench_words.bend     484 <= 1200
+ok   tests/strings/compare.bend       281 <= 16000
+ok   tests/strings/concat.bend        545 <= 16000
+ok   tests/strings/deep.bend          370 <= 16000
+ok   tests/strings/gaps.bend         2320 <= 16000
+ok   tests/strings/gpu.bend           726 <= 16000
+ok   tests/strings/hash.bend          188 <= 16000
+ok   tests/strings/indices.bend       537 <= 16000
+ok   tests/strings/io_fold.bend       211 <= 16000
+ok   tests/strings/io_sock_utf8.bend    1021 <= 16000
+ok   tests/strings/io_stream.bend    1318 <= 16000
+ok   tests/strings/io_utf8.bend       282 <= 16000
+ok   tests/strings/laws.bend          492 <= 16000
+ok   tests/strings/map_keys.bend     1214 <= 16000
+ok   tests/strings/numeric_text.bend     413 <= 16000
+ok   tests/strings/padding.bend       439 <= 16000
+ok   tests/strings/raw_chars.bend     210 <= 16000
+ok   tests/strings/raw_strings.bend     521 <= 16000
+ok   tests/strings/replace.bend       320 <= 16000
+ok   tests/strings/search.bend        538 <= 16000
+ok   tests/strings/sharing.bend       444 <= 16000
+ok   tests/strings/split.bend         630 <= 16000
+ok   tests/strings/unicode.bend       468 <= 16000
+
+=== repo-staged-code.txt ===
+FAIL bend2/effs/tls_listen.c: 6726 > 4000 ttok
+FAIL demos/io_http_engine/PROOF.bend: 200564 > 64000 ttok
+FAIL demos/io_http_engine/README.md: 19215 > 4000 ttok
+FAIL demos/io_http_engine/check.c: 21361 > 4000 ttok
+FAIL demos/io_http_engine/control.c: 5886 > 4000 ttok
+FAIL power/deflate_proof.bend: 85426 > 64000 ttok
+FAIL upstream/verify.sh: 4370 > 4000 ttok
+PASS: 93 / 100
+
+=== strengthened witness mutations (ASan+UBSan, -O1) ===
+{"variant": "candidate-v2", "failed": false, "status": 0, "stderr": ""}
+{"variant": "short-copy-v2", "failed": true, "status": 0, "stderr": ""}
+{"variant": "skip-retain-v2", "failed": true, "status": 0, "stderr": ""}
+Both mutants exited zero with incorrect stdout. Candidate matched all expected bytes.
+Initial literal-only boxed witness did NOT kill the missing-retain mutation.
+
+=== power-after.txt ===
+ok   wrong #| fixture detected as failing
+ok   assign               [oracle]
+ok   assign               [check]
+ok   assign               [interpret]
+ok   assign               [js]
+ok   assign               [c]
+ok   assign               [c-1thread]
+ok   bitset               [oracle]
+ok   bitset               [check]
+ok   bitset               [interpret]
+ok   bitset               [js]
+ok   bitset               [c]
+ok   bitset               [c-1thread]
+ok   blake3               [oracle]
+ok   blake3               [check]
+ok   blake3               [interpret]
+ok   blake3               [js]
+ok   blake3               [c]
+ok   blake3               [c-1thread]
+ok   bm25                 [oracle]
+ok   bm25                 [check]
+ok   bm25                 [interpret]
+ok   bm25                 [js]
+ok   bm25                 [c]
+ok   bm25                 [c-1thread]
+ok   budget               [oracle]
+ok   budget               [check]
+ok   budget               [interpret]
+ok   budget               [js]
+ok   budget               [c]
+ok   budget               [c-1thread]
+ok   bytes                [oracle]
+ok   bytes                [check]
+ok   bytes                [interpret]
+ok   bytes                [js]
+ok   bytes                [c]
+ok   bytes                [c-1thread]
+ok   cdc                  [oracle]
+ok   cdc                  [check]
+ok   cdc                  [interpret]
+ok   cdc                  [js]
+ok   cdc                  [c]
+ok   cdc                  [c-1thread]
+ok   consequence          [oracle]
+ok   consequence          [check]
+ok   consequence          [interpret]
+ok   consequence          [js]
+ok   consequence          [c]
+ok   consequence          [c-1thread]
+ok   csv                  [oracle]
+ok   csv                  [check]
+ok   csv                  [interpret]
+ok   csv                  [js]
+ok   csv                  [c]
+ok   csv                  [c-1thread]
+ok   csv_proof            [check]
+ok   csv_proof            [interpret]
+ok   csv_proof            [js]
+ok   csv_proof            [c]
+ok   csv_proof            [c-1thread]
+ok   deflate              [oracle]
+ok   deflate              [check]
+ok   deflate              [interpret]
+ok   deflate              [js]
+ok   deflate              [c]
+ok   deflate              [c-1thread]
+ok   deflate_proof        [check]
+ok   deflate_proof        [interpret]
+ok   deflate_proof        [js]
+ok   deflate_proof        [c]
+ok   deflate_proof        [c-1thread]
+ok   delta                [oracle]
+ok   delta                [check]
+ok   delta                [interpret]
+ok   delta                [js]
+ok   delta                [c]
+ok   delta                [c-1thread]
+ok   drift                [oracle]
+ok   drift                [check]
+ok   drift                [interpret]
+ok   drift                [js]
+ok   drift                [c]
+ok   drift                [c-1thread]
+ok   exact                [oracle]
+ok   exact                [check]
+ok   exact                [interpret]
+ok   exact                [js]
+ok   exact                [c]
+ok   exact                [c-1thread]
+ok   fft                  [oracle]
+ok   fft                  [check]
+ok   fft                  [interpret]
+ok   fft                  [js]
+ok   fft                  [c]
+ok   fft                  [c-1thread]
+ok   grammar              [oracle]
+ok   grammar              [check]
+ok   grammar              [interpret]
+ok   grammar              [js]
+ok   grammar              [c]
+ok   grammar              [c-1thread]
+ok   heap                 [oracle]
+ok   heap                 [check]
+ok   heap                 [interpret]
+ok   heap                 [js]
+ok   heap                 [c]
+ok   heap                 [c-1thread]
+ok   json                 [oracle]
+ok   json                 [check]
+ok   json                 [interpret]
+ok   json                 [js]
+ok   json                 [c]
+ok   json                 [c-1thread]
+ok   json_value           [oracle]
+ok   json_value           [check]
+ok   json_value           [interpret]
+ok   json_value           [js]
+ok   json_value           [c]
+ok   json_value           [c-1thread]
+ok   knn                  [oracle]
+ok   knn                  [check]
+ok   knn                  [interpret]
+ok   knn                  [js]
+ok   knn                  [c]
+ok   knn                  [c-1thread]
+ok   postings             [oracle]
+ok   postings             [check]
+ok   postings             [interpret]
+ok   postings             [js]
+ok   postings             [c]
+ok   postings             [c-1thread]
+ok   proof                [oracle]
+ok   proof                [check]
+ok   proof                [interpret]
+ok   proof                [js]
+ok   proof                [c]
+ok   proof                [c-1thread]
+ok   radix                [oracle]
+ok   radix                [check]
+ok   radix                [interpret]
+ok   radix                [js]
+ok   radix                [c]
+ok   radix                [c-1thread]
+ok   rng                  [oracle]
+ok   rng                  [check]
+ok   rng                  [interpret]
+ok   rng                  [js]
+ok   rng                  [c]
+ok   rng                  [c-1thread]
+ok   scan                 [oracle]
+ok   scan                 [check]
+ok   scan                 [interpret]
+ok   scan                 [js]
+ok   scan                 [c]
+ok   scan                 [c-1thread]
+ok   select               [oracle]
+ok   select               [check]
+ok   select               [interpret]
+ok   select               [js]
+ok   select               [c]
+ok   select               [c-1thread]
+ok   sketch               [oracle]
+ok   sketch               [check]
+ok   sketch               [interpret]
+ok   sketch               [js]
+ok   sketch               [c]
+ok   sketch               [c-1thread]
+ok   text                 [oracle]
+ok   text                 [check]
+ok   text                 [interpret]
+ok   text                 [js]
+ok   text                 [c]
+ok   text                 [c-1thread]
+ok   topk                 [oracle]
+ok   topk                 [check]
+ok   topk                 [interpret]
+ok   topk                 [js]
+ok   topk                 [c]
+ok   topk                 [c-1thread]
+ok   utf8                 [oracle]
+ok   utf8                 [check]
+ok   utf8                 [interpret]
+ok   utf8                 [js]
+ok   utf8                 [c]
+ok   utf8                 [c-1thread]
+ok   vec                  [oracle]
+ok   vec                  [check]
+ok   vec                  [interpret]
+ok   vec                  [js]
+ok   vec                  [c]
+ok   vec                  [c-1thread]
+
+Power PASS: 190, FAIL: 0
+
+=== caps-before.txt ===
+FAIL bend2/effs/tls_listen.c: 6726 > 4000 ttok
+FAIL demos/io_http_engine/PROOF.bend: 200564 > 64000 ttok
+FAIL demos/io_http_engine/README.md: 19215 > 4000 ttok
+FAIL demos/io_http_engine/check.c: 21361 > 4000 ttok
+FAIL demos/io_http_engine/control.c: 5886 > 4000 ttok
+FAIL power/deflate_proof.bend: 85426 > 64000 ttok
+FAIL upstream/verify.sh: 4370 > 4000 ttok
+PASS: 93 / 100
+
+=== repo-staged-docs.txt ===
+FAIL bend2/effs/tls_listen.c: 6726 > 4000 ttok
+FAIL demos/io_http_engine/PROOF.bend: 200564 > 64000 ttok
+FAIL demos/io_http_engine/README.md: 19215 > 4000 ttok
+FAIL demos/io_http_engine/check.c: 21361 > 4000 ttok
+FAIL demos/io_http_engine/control.c: 5886 > 4000 ttok
+FAIL power/deflate_proof.bend: 85426 > 64000 ttok
+FAIL upstream/verify.sh: 4370 > 4000 ttok
+PASS: 93 / 100
+
+=== clone-before.asm (blk_copy excerpt) ===
+  400e40:	31 c0                	xor    %eax,%eax
+  400e42:	49 b9 00 00 00 00 00 	movabs $0x400000000000000,%r9
+  400e49:	00 00 04
+  400e4c:	4c 8b 1c c1          	mov    (%rcx,%rax,8),%r11
+  400e50:	4d 89 1c c6          	mov    %r11,(%r14,%rax,8)
+  400e54:	48 ff c0             	inc    %rax
+  400e57:	48 39 c3             	cmp    %rax,%rbx
+  400e5a:	75 f0                	jne    400e4c <blk_copy+0x101>
+  400e5c:	48 b8 00 00 00 00 00 	movabs $0x1f0000000000,%rax
+
+=== clone-cut16.asm (blk_copy excerpt) ===
+  400dd5:	4d 39 e7             	cmp    %r12,%r15
+  400dd8:	74 1f                	je     400df9 <blk_copy+0xae>
+  400dda:	83 f9 03             	cmp    $0x3,%ecx
+  400ddd:	76 1a                	jbe    400df9 <blk_copy+0xae>
+  400ddf:	4a 8d 04 f7          	lea    (%rdi,%r14,8),%rax
+  400de3:	4a 8d 34 df          	lea    (%rdi,%r11,8),%rsi
+  400de7:	ba 08 00 00 00       	mov    $0x8,%edx
+  400dec:	48 d3 e2             	shl    %cl,%rdx
+  400def:	48 89 c7             	mov    %rax,%rdi
+  400df2:	e8 c9 f6 ff ff       	call   4004c0 <memcpy@plt>
+  400df7:	eb 7e                	jmp    400e77 <blk_copy+0x12c>
