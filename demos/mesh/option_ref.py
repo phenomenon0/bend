@@ -65,9 +65,10 @@ def log_(y):
     """y in (0, 1]"""
     e = 0.0
     for _ in range(80):
-        if y < 1.0:
-            y = y * 2.0
-            e = e - 1.0
+        if y >= 1.0:
+            break
+        y = y * 2.0
+        e = e - 1.0
     if y > SQRT2:
         y = y * 0.5
         e = e + 1.0

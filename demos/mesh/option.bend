@@ -75,14 +75,18 @@ def exp(+x: F64) -> F64:
   +p = exp.poly(13n, r, 12, inv_fact(13))
   scale(U32.to_nat(F64.to_u32(F64.abs(k))), Bool.pick(F64, F64.is_gt(k, 0.0d), 2.0d, 0.5d), p)
 
-# y into [1, 2) by doublings (80 is past the polar method's 2^-63), e the count
-def norm(k: Nat, +y: F64, +e: F64) -> F64 & F64:
-  match k:
-    case 0n:
+# y into [1, 2) by doublings, e the count: at most 80 (past the polar
+# method's 2^-63), and none once y is 1 or more (lt: y < 1), since a
+# doubling after that changes nothing
+def norm(k: Nat, lt: Bool, +y: F64, +e: F64) -> F64 & F64:
+  match k lt:
+    case 0n _:
       (y, e)
-    case 1n++q:
-      +lt = F64.is_lt(y, 1.0d)
-      norm(q, Bool.pick(F64, lt, F64.mul(y, 2.0d), y), Bool.pick(F64, lt, F64.sub(e, 1.0d), e))
+    case _ False{}:
+      (y, e)
+    case 1n++q True{}:
+      +y2 = F64.mul(y, 2.0d)
+      norm(q, F64.is_lt(y2, 1.0d), y2, F64.sub(e, 1.0d))
 
 # q = q t2 + 1/(2k+1), for k from 11 down to 0
 def log.poly(k: Nat, +t2: F64, +j: F64, +q: F64) -> F64:
@@ -103,7 +107,7 @@ def log.at(ye: F64 & F64) -> F64:
 
 # log y, for y in (0, 1]
 def log(+y: F64) -> F64:
-  log.at(norm(80n, y, 0.0d))
+  log.at(norm(80n, F64.is_lt(y, 1.0d), y, 0.0d))
 
 # -- one path -----------------------------------------------------------------------
 

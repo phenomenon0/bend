@@ -57,8 +57,7 @@ static double exp_(double x) {
 
 static double log_(double y) {
   double e = 0.0;
-  for (int i = 0; i < 80; i++)
-    if (y < 1.0) y = y * 2.0, e = e - 1.0;
+  for (int i = 0; i < 80 && y < 1.0; i++) y = y * 2.0, e = e - 1.0;
   if (y > SQRT2) y = y * 0.5, e = e + 1.0;
   double t = (y - 1.0) / (y + 1.0), t2 = t * t, q = 1.0 / 25.0;
   for (int k = 11; k >= 0; k--) q = q * t2 + 1.0 / (double)(2 * k + 1);
