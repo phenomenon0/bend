@@ -60,7 +60,9 @@ SIGKILLs a random worker every 1-3 s and restarts it 1-4 s later. A failed
 post now costs the worker a strike (250 ms backoff), not its life: it
 retires after 40 failures in a row.
 
-2e7 paths. Every row prints the twin's bits, `eabd3861 0a0c5497 ...`:
+2e7 paths, before the Bool.pick change below (Bend is 10.6x faster
+now; `spot.sh` runs 2e8 by default so the kills land mid-job). Every row
+prints the twin's bits, `eabd3861 0a0c5497 ...`:
 
 | run | time | notes |
 |---|---:|---|
@@ -77,24 +79,32 @@ JS lane (2e4 paths).
 (8.0213522) has rms z 0.97. At 4e8 paths it is 8.021388 +- 0.00066
 (z +0.05). exp is within 1 ulp of libm; log within 2.
 
-**Speed, 4e6 paths, one core** (four cores scale about 4x for all three):
+**Speed, 4e6 paths, one core** (four cores scale about 4x for all):
 
-| | paths/s | vs Bend |
+| | time | vs Bend |
 |---|---:|---:|
-| Bend (C lane) | 0.28 M | 1x |
-| C twin: same bits | 4.3 M | 15x |
-| C with libm and a double sum | 10.3 M | 37x |
-| Bend (JS lane) | ~0.0007 M | 1/400x |
+| Bend (C lane, clang) | 1.63 s | 1x |
+| C twin, same bits, clang -O3 | 1.54 s | 1.06x |
+| C twin, same bits, gcc -O3 | 0.76 s | 2.1x |
+| C with libm and a double sum | 0.40 s | 4.0x |
+| Bend (JS lane) | ~5900 s | 1/3600x |
+
+Bend was 17.4 s here (15x the twin) until `Bool.pick` over a word
+compiled to a C select: the generic call boxed each F64 arm on the heap,
+and the `log` normalization alone picks 160 times a path (callgrind: 724M
+instructions for 2e4 paths, 58% of them freeing the boxes; now 30.3M,
+against the twin's 30.0M). Against the same compiler Bend now matches
+hand-written reproducible C; the 2.1x left is gcc's code for this loop.
 
 ## The fair verdict
 
 - **The bit-identity is real but it is not Bend's.** The C twin has it too.
   What buys it is the design: pure leaves, integer sums, and hand-built
-  exp/log. That costs 2.4x in C, mostly in exp/log.
-- **Bend's C lane is 15x the twin today.** Spot machines run 60-90% below
-  on-demand prices. At a 90% discount, Bend on spot still costs 1.5x the
-  twin on demand; at 70%, 4.6x. The twin on spot costs 0.1-0.3x. For this
-  job the mesh protocol is worth using now; Bend's runtime is the bill.
+  exp/log. That costs about 2-4x in C, mostly in exp/log.
+- **Bend's runtime is no longer the bill.** It was 15x the twin; it is
+  now 1.06x the twin on the same compiler and 2.1x the best one. Spot
+  machines run 60-90% below on-demand prices, so Bend on spot costs
+  0.2-0.6x the best reproducible C on demand.
 - **Plain C drifts, but harmlessly for price.** The libm/double version
   changes in the 14th digit with the thread count. That is irrelevant to a
   price with se 0.0066. It matters for byte-level audits, result caches,

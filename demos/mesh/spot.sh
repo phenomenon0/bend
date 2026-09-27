@@ -19,7 +19,7 @@
 set -uo pipefail
 cd "$(dirname "$0")/../.."
 export BEND_NO_TELEMETRY=1
-N=${1:-20000000}
+N=${1:-200000000}
 work=$(mktemp -d /tmp/bend-spot.XXXXXX)
 pids=()
 chaos=

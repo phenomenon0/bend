@@ -67,6 +67,7 @@ allow(/^bench\/proxy\/[a-z0-9_]+\.py$/, 20000);
 allow("bench/proxy/README.md", 4000);
 allow("bench/net/netperf.py", 8000);
 allow("bench/net/README.md", 1500);
+allow("bench/net/room.py", 1500);
 allow(/^bench\/net\/_pin_\/[a-z0-9_]+\.txt$/, 1000);
 allow(/^bench\/proxy\/corpus\/[0-9a-z_]+\.raw$/, 30000, true);
 allow(/^bench\/proxy\/corpus\/[0-9a-z_]+\.h2json$/, 4000, true);

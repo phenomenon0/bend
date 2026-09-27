@@ -3339,6 +3339,28 @@ function emit_unfold(fl: File, s: HTerm): HTerm | null {
   return walk(fs) === null ? null : bind(0, []);
 }
 
+// Bool.pick(A, c, a, b) over an A that is one raw word (a U32, an F64, a
+// Nat): a C select. The generic def would take a and b boxed (an F64 is
+// x64_box'd for the call and unboxed after); the arms are converted to A's
+// word instead and both evaluated, as the call evaluates them (pick_lift
+// has turned the costly ones into a match). An A that holds a box keeps
+// the call, which drops the arm it does not choose.
+function emit_pick(fl: File, A: HTerm, xs: HTerm[]): Val | null {
+  const lay = lay_of(fl.book, A);
+  const cl = sig_def(fl, "Bool.pick").lays[0];
+  const yes = cl?.arms?.findIndex((a) => a.k === "True") ?? -1;
+  if (lay.arms !== null || lay.ks.length !== 1 || lay.ks[0] === "box"
+    || yes < 0) {
+    return null;
+  }
+  const [c, a, b] = emit_each(fl, xs, [cl, lay, lay]);
+  const cw = val_word(val_to(fl, c, cl));
+  const aw = val_word(val_to(fl, a, lay));
+  const bw = val_word(val_to(fl, b, lay));
+  return val_new([emit_alias(fl, `(${cw} == ${yes} ? ${aw} : ${bw})`, "p",
+    lay.ks[0])], lay);
+}
+
 function emit_expr(fl: File, tm: HTerm, ty0: HTerm | null,
   at: Lay | null): Val {
   const [x, ty] = ty_peel(tm, ty0);
@@ -3358,6 +3380,12 @@ function emit_expr(fl: File, tm: HTerm, ty0: HTerm | null,
         return emit_expr(fl, got, ty, at);
       }
       const m = term_spine(fl, x);
+      if (m.t.$ === "Ref" && m.t.k === "Bool.pick" && m.args.length === 3) {
+        const v = emit_pick(fl, m.all[0], m.args);
+        if (v !== null) {
+          return v;
+        }
+      }
       if (flat_call(fl, x)) {
         const dst = emit_dst(fl, sig_def(fl, m.call!.k).ret);
         emit_fuse(fl, m.call!, dst);
