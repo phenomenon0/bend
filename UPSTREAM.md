@@ -4,9 +4,9 @@ The living list of every bug, pathology and limitation this project hit
 that is also in upstream Bend (`bendlang/bend`, remote `canon`), with a
 repro for each and the branch that fixes it, if any.
 
-- **Verified against** canon `main` at `95317d95` (2026-09-24, "A name is
-  words joined by dots...", #1042, one commit past 2.0.27's `d3790917`),
-  on Linux x86_64 (4 cores), clang 18, bun 1.3.11, on 2026-09-24.
+- **Verified against** canon `main` at `574b6d39` (2026-09-26, "The flake
+  names 2.0.29", Bend 2.0.29), on Linux x86_64 (4 cores), clang 18, bun
+  1.3.11, on 2026-09-27. First written against `95317d95` (2026-09-24).
 - **Re-verify** with `upstream/verify.sh <canon-checkout> [item...]`, for
   example `git worktree add --detach /tmp/canon canon/main` then
   `upstream/verify.sh /tmp/canon`. It runs every repro in `upstream/` in
@@ -30,13 +30,13 @@ repro for each and the branch that fixes it, if any.
 | # | title | class | lanes | sev | fix | repro |
 |---|---|---|---|---|---|---|
 | U01 | TCP.recv/send decode and re-encode UTF-8: binary bytes become U+FFFD, lengths change | BUG | interp js c | high | fix/socket-bytes-v2 (= upstream/01-tcp-bytes) | upstream/tcp_bytes.bend + peer.py echo |
-| U02 | TCP.listen's backlog is 16: bursts lose SYNs, 1 s / 3 s stalls | BUG | interp js c | med | fix/listen-backlog-v2 (= upstream/02-listen-backlog) | upstream/listen_backlog.bend + peer.py burst |
+| U02 | TCP.listen's backlog is 16: bursts lose SYNs, 1 s / 3 s stalls | BUG | interp js c | med | **fixed on canon 2.0.29** (2ccb0685, #977: backlog 512); ours asks 4096 | upstream/listen_backlog.bend + peer.py burst |
 | U03 | the IO loop's select walks every waiter per pass: n arrivals cost O(n^2) | PERF | js c | high | fix/epoll-v2 (= upstream/03-epoll): descriptors; upstream/03b-epoll-timers (local, on it): timers too | upstream/io_fd_waiters.bend, io_waiters.bend, io_timer_waiters.bend |
-| U04 | Nat.min / Nat.max are unary recursions in every lane: stack overflow on big Nats | BUG | js c | med | upstream/04-nat-min-max | upstream/nat_min_max.bend |
+| U04 | Nat.min / Nat.max are unary recursions in every lane: stack overflow on big Nats | BUG | js c | med | **fixed on canon 2.0.29** (0608588c, #1061: tail cycles loop); upstream/04-nat-min-max also | upstream/nat_min_max.bend |
 | U05 | File.write UTF-8-encodes bytes >= 0x80 | OURS | - | - | (ours: File.write_buf) | upstream/file_write_text.bend |
 | U06 | Bool.pick (Base's only `if`) evaluates both arms | PERF | js c, interp for IO mains (a pure main is lazy) | med | none | upstream/bool_pick.bend, bool_pick_pure.bend |
 | U07 | JS lane ignores SIGTERM | OURS | - | - | (ours) | upstream/sigterm.bend |
-| U08 | a match over IO.OP with a default arm: JS throws `[object Object]` where C takes the default | BUG | js; interp prints a stuck term | low | none | upstream/io_op_default.bend |
+| U08 | a match over IO.OP with a default arm: JS throws `[object Object]` where C takes the default | BUG | js; interp prints a stuck term (C fixed on canon 2.0.29) | low | none | upstream/io_op_default.bend |
 | U09 | a def used above its definition gets the typo's error | NOT-REPRO | - | - | canon's message differs since d3790917 | upstream/def_order.bend, def_typo.bend |
 | U10 | Nat literal of 100000n in a proof overflows the checker; literals stop at 2^32-1 | LIMITATION | check | med | none | upstream/nat_literal_proof.bend, nat_literal_cap.bend |
 | U11 | a check that relies on @unsafe or foreign code exits 0 | LIMITATION | check | med | none (WONTFIX #776, #805; suggest `--strict`) | upstream/unsafe_exit.bend |
@@ -48,9 +48,9 @@ repro for each and the branch that fixes it, if any.
 | U17 | TCP.listen binds 0.0.0.0 and takes no address: no loopback-only server | LIMITATION | interp js c | med | upstream/05-listen-on | verify.sh U17 (Base's signature) |
 | U18 | TCP.connect takes dotted IPv4 only (no names, no resolver) and has no deadline | LIMITATION | interp js c | med | upstream/06-connect-poll-dns | upstream/connect_name.bend |
 | U19 | a Socket dropped without Socket.close keeps its descriptor until exit: the checker allows the drop, the runtime never closes | LIMITATION | interp js c | med | none (ours leaks too) | upstream/socket_drop.bend |
-| U20 | a U32 taken apart to its Word and walked to a default arm: the C build fails (CID_WNIL undeclared) | BUG | c | med | ours: WNil among comp.ts's RUNTIME_ADTS | upstream/word_unpack.bend |
-| U21 | the JS lane runs a non-tail recursion on the host stack: 100000 deep overflows where C answers | LIMITATION | interp js | med | none (WONTFIX.txt SOON, #798 #802) | upstream/js_deep_recursion.bend |
-| U22 | a Bool a polymorphic call hands back (Bool.pick(Bool, ..)) fed to Bool.or / Bool.xor: C reads its box as the Bool | BUG | c | high | ours: emit_intr unboxes to the native's layout | upstream/bool_box_native.bend |
+| U20 | a U32 taken apart to its Word and walked to a default arm: the C build fails (CID_WNIL undeclared) | BUG | c (interp, js answer on 2.0.29) | med | ours: WNil among comp.ts's RUNTIME_ADTS | upstream/word_unpack.bend |
+| U21 | the JS lane runs a non-tail recursion on the host stack: 100000 deep overflows where C answers | LIMITATION | interp js | med | none (WONTFIX.txt SOON, #798 #802); 2.0.29's tail-cycle loop (#1061) does not reach non-tail recursion | upstream/js_deep_recursion.bend |
+| U22 | a Bool a polymorphic call hands back (Bool.pick(Bool, ..)) fed to Bool.or / Bool.xor: C reads its box as the Bool | BUG | c | high | **fixed on canon 2.0.29** (ab71b1b1, #1038); ours: emit_intr unboxes to the native's layout | upstream/bool_box_native.bend |
 | F01 | no wall clock: IO.now is monotonic | LIMITATION | all | med | none | verify.sh F01 |
 | F02 | no rename, fsync, seek, remove or mkdir | LIMITATION | all | med | none | verify.sh F02 |
 | F03 | File.read_at takes a U32 offset and answers a List cell per byte | LIMITATION | all | low | none | verify.sh F03 |
@@ -63,19 +63,23 @@ repro for each and the branch that fixes it, if any.
 | F10 | the JS lane walks a String 10-20x slower than the C lane, and a match that rebuilds SCon{h, t} copies the rest | PERF | js, interp for IO mains | med | none | upstream/js_string_scan.bend |
 | F11 | Base's String.take recurses on the JS stack: 40000 chars overflow it (U21, met in Base's own take) | BUG | js, interp for IO mains | med | none | upstream/js_deep_take.bend |
 
-Verified on canon `95317d95`: every U/F row above reads REPRO except
-U05, U07, U09, U12, U13 (FIXED: not on canon), U06p (a pure main's pick
-is lazy, as it should be) and U14's tls_close and marshal (they pass on
-canon). Against the fix branches: U01 FIXED on
-fix/socket-bytes-v2, U02 on fix/listen-backlog-v2, U04 on
-upstream/04-nat-min-max, U03 (descriptors) on fix/epoll-v2 in both
-lanes, while U03t (timers) stays REPRO there and turns FIXED in every
-lane on upstream/03b-epoll-timers. U19 (dropped sockets) reads REPRO
-on canon and on our branch. U20, U21 and U22, found by the compiler's
-differential fuzzer (`tests/fuzz`) on 2026-09-25, read REPRO on canon
-`95317d95` in the lanes their rows name, and FIXED on this branch but
-for U21.
+Verified on canon `574b6d39` (2.0.29): canon fixed **U02** (backlog 512),
+**U04** (Nat.min/max, through its tail-cycle loop) and **U22** (the boxed
+Bool, #1038), and U08 and U21 now answer in the C lane; U20 answers in
+interp and JS but still fails its C build. Still REPRO on 2.0.29: U01,
+U03 and U03t (C ratio 424 and 449), U06, U08 (interp, JS), U10, U11, U14
+spawn_sleep (10 of 10 JS runs out of order), U16, U17, U18, U19, U20 (C),
+U21 (interp, JS), and F01-F11 (F11 answers in C). U14's fork_join now runs
+in order. U15: comp.ts is 62,584 of 64,000 (cl100k). NOT-REPRO / OURS as
+before: U05, U07, U09, U12, U13.
 
+First verified on canon `95317d95`: every U/F row read REPRO except U05,
+U07, U09, U12, U13, U06p and U14's tls_close and marshal. Against the fix
+branches: U01 FIXED on fix/socket-bytes-v2, U02 on fix/listen-backlog-v2,
+U04 on upstream/04-nat-min-max, U03 (descriptors) on fix/epoll-v2 in both
+lanes, while U03t (timers) stays REPRO there and turns FIXED in every lane
+on upstream/03b-epoll-timers. U20-U22 were found by the compiler's
+differential fuzzer (`tests/fuzz`) on 2026-09-25.
 ---
 
 ## U01. `TCP.recv` and `TCP.send` corrupt every byte that is not UTF-8
