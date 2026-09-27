@@ -1,0 +1,6 @@
+load 9.81 13.50 9.18
+bench          C     Cra     Cff |     b1T   bRA1T  bRA16T | RA checksum vs strict twin
+gemv       0.155   0.023   0.016 |   0.161   0.157   0.161 | same (1993981018)
+split      0.154   0.022   0.016 |   0.157   0.157   0.157 | same (1993981018)
+blocked    0.044   0.059   0.021 |   0.106   0.104   0.112 | differs: 2852855167 vs 1297551341
+harmonic strict 1098282364 bits .007663145 s | RA 1099286076 bits .002894248 s

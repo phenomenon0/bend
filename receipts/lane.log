@@ -32,3 +32,48 @@ I added the `-march` opt-in and checked it. Setting `BEND_MARCH=native` makes th
 
 The untracked `receipts/` folder was already there and I didn't touch it.
 === lane exited rc=0 at 2026-09-27T04:39:02Z ===
+=== lane c3 started 2026-09-27T04:24:07Z (writer: claude-opus-5-5) ===
+⚠ claude.ai connectors are disabled because ANTHROPIC_API_KEY or another auth source is set and takes precedence over your claude.ai login · Unset it to load your organization's connectors
+=== c3 done 2026-09-27T04:39:51Z: main.ts BEND_REASSOC opt-in; default identical modulo build-id; battery 19/161/150/56 green; report docs/omen/lanes/c3.md ===
+I added `BEND_REASSOC=1`, which lets clang reorder float additions for the whole program. It's 10 lines in `bend2/main.ts`, nothing else touched. The flag works, but it doesn't speed up the gemv and split rows, and gains nothing on blocked. Nothing is committed yet.
+
+**What the flag does.** `cli_build` (`bend2/main.ts:367`) adds `-fassociative-math -fno-signed-zeros -fno-trapping-math` to the cc line. Clang won't reorder float sums unless the two extra flags are set too. The rest of `-ffast-math` is left out on purpose. In particular, finite-only math could let clang delete the bench's inf/NaN check, and flush-to-zero would change denormals for the whole process. The emitted `#pragma clang fp contract(off)` still wins over the command line, so there's no fused multiply-add. The flag only reaches the host C, not GPU programs.
+
+**Default is unchanged:**
+- The gemv, split and blocked binaries built before and after the change are identical. The only differing bytes are the build-id, which hashes the random temp path; two builds of the same tree already differ in exactly those 20 bytes.
+- `bench.sh` is green with checksums matching the twin, and every row is within 3% (gemv 0.159→0.156, split 0.158→0.154, blocked 0.105→0.103).
+- Test suites all pass: f64 19/0, codex 161/0, power 150/0, repo gate 56/56. `main.ts` is at 7335 of its 10000 token cap.
+- **Not run:** the mini-cluster gate (`gates/test.ts`), since no minis were available here.
+
+**With the flag.** The load average was high (9.8) during this run, so compare within rows rather than absolute times:
+
+| bench | C strict | C with the flags | C fast-math | Bend strict | Bend with flag | checksum |
+|---|---|---|---|---|---|---|
+| gemv | 0.155 | 0.023 | 0.016 | 0.161 | 0.157 | same |
+| split | 0.154 | 0.022 | 0.016 | 0.157 | 0.157 | same |
+| blocked | 0.044 | 0.059 | 0.021 | 0.106 | 0.104 | differs |
+
+- **gemv/split don't move, and their checksum stays identical**, which shows clang found nothing to reorder. Its vectorizer report shows why: the dot loop in the emitted C calls a step that can fail and return early, and its loads go through `blk_ptr` (atomic pointers). The vectorizer gives up on that loop shape before float reordering ever comes into play.
+- **blocked does reorder:** the checksum changes, with 1 and 16 threads agreeing on the new value, but it gets no faster.
+- So the 6.7x the C twin gets from these same flags depends on fixing the emitted loop shape (C2b's area), not on this flag.
+
+**Worked example** (`receipts/c3_harmonic.bend`, summing 1/i for i up to 10⁷ in F32):
+- Strict gives **15.4037**, the same bits in C (1 and 16 threads) and JS. The sum stalls because once 1/i drops below half an ulp of the running total, each addition rounds away.
+- With the flag it gives **16.7218**, 2.6x faster. The true value is 16.6953.
+- Bend with the flag matches plain C with the same flags bit for bit, so the flag means exactly clang's rules and nothing more.
+
+**Still to do (in the report):**
+- Per-fragment marking: needs new syntax in `bend.ts`, which would lower to a scoped `#pragma clang fp reassociate(on)`.
+- An FMA opt-in: needs editing the pragma in `comp.ts`.
+- `-march=native` is C1's lane; the fast-math column shows that row depends on it as much as on reordering.
+
+The report also has the upstream-PR sketch.
+
+Files are in `~/Documents/Project/bend-work-c3`:
+- `docs/omen/lanes/c3.md`
+- `receipts/c3_bench.sh`
+- `receipts/c3_bench.txt`
+- `receipts/c3_harmonic.bend`
+
+Before/after bench logs and battery output are also in `receipts/`, which is untracked.
+=== lane exited rc=0 at 2026-09-27T04:40:11Z ===

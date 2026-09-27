@@ -397,7 +397,13 @@ function cc_find(gpu: boolean): string {
 // a framework (#import: a window, audio) builds as Objective-C; on Linux it
 // links the X11 and ALSA libraries it includes. BEND_MARCH=native (or any
 // cpu clang takes) adds -march for this host's vector units: opt in, as the
-// binary then runs only where that cpu does.
+// binary then runs only where that cpu does. BEND_REASSOC=1 declares,
+// for the whole program, that float arithmetic may be regrouped: clang's
+// reassociation permission and the two it needs, so a float result may
+// round differently per build, lane and thread count. The emitted
+// contract(off) still holds (no fused multiply-add); nothing else of
+// -ffast-math is given (no finite-only, no reciprocals, no flush to zero).
+// It reaches the host C, not a GPU program.
 function cli_build(bin: string, file: string): void {
   const c     = fs.readFileSync(file, "utf8");
   const mac   = process.platform === "darwin";
@@ -412,9 +418,11 @@ function cli_build(bin: string, file: string): void {
     .concat(c.includes("#include <openssl/") ? ["-lssl", "-lcrypto"] : []);
   const march = process.env.BEND_MARCH ? ["-march=" + process.env.BEND_MARCH]
     : [];
+  const fp    = process.env.BEND_REASSOC
+    ? ["-fassociative-math", "-fno-signed-zeros", "-fno-trapping-math"] : [];
   // -ffp-contract=off: an F64 add of an F64 mul must round twice, as the JS
   // lane does; clang fuses them into one FMA by default (GCC does not in -std=c11)
-  const cpu = [...objc, "-std=c11", "-O3", "-ffp-contract=off", ...march, file, "-lpthread", "-lm",
+  const cpu = [...objc, "-std=c11", "-O3", "-ffp-contract=off", ...march, ...fp, file, "-lpthread", "-lm",
     ...libs, "-o", path.resolve(bin)];
   const gpu = mac ? ["-DBEND_METAL=1", ...cpu]
     : ["-DBEND_CUDA=1", "-I" + cuda + "/include", "-L" + cuda + "/lib64",
