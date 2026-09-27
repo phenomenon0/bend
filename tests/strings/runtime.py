@@ -117,7 +117,8 @@ with tempfile.TemporaryDirectory(prefix="bend-strings-runtime-") as temp:
                   "(a32_load(a32_at(H, H_ERROR_CODE)) != 0)")
     c = c.replace("INLINE Loc heap_alloc(Env e, Cls cls)", "INLINE Loc heap_alloc_impl(Env e, Cls cls)")
     c = c.replace("INLINE void heap_free(Env e, Cls cls, Loc loc)", TRACK + "\nINLINE void heap_free_impl(Env e, Cls cls, Loc loc)")
-    c = c.replace("// Spare\n// =====", FREE + "\n// Spare\n// =====")
+    assert c.count("INLINE void spare_free(Env e, Cls cls, Loc loc) {") == 1, "heap_free hook moved"
+    c = c.replace("INLINE void spare_free(Env e, Cls cls, Loc loc) {", FREE + "\nINLINE void spare_free(Env e, Cls cls, Loc loc) {")
     c = c.replace("Loc l = heap_alloc(e, buf_wcls(c));", "track_payload_words += 1ull << buf_wcls(c);\n  Loc l = heap_alloc(e, buf_wcls(c));")
     c = c.replace("INLINE u32 str_at_peek(Env e, StrParts p, u32 i) {",
                   "INLINE u32 str_at_peek(Env e, StrParts p, u32 i) { track_str_reads++;")
@@ -151,10 +152,11 @@ with tempfile.TemporaryDirectory(prefix="bend-strings-runtime-") as temp:
     run([os.environ.get("CC", "clang"), "-std=c11", *flags, str(cfile), "-lpthread", "-lm", "-o", str(binary)])
     run([str(binary)], env={**os.environ, "ASAN_OPTIONS": "detect_leaks=0"})
     faults = 0
-    fault_ops = dict.fromkeys(["repeat", "prepend", "append", "copy", "transform",
-                              "split", "from-list", "join"], 4)
-    fault_ops.update(slice=2, find=2, count=1, replace=5, split_on=9, partition=8,
-                     splitlines=12, pad=4, decode=8)
+    # Each op's allocation count, so every one of them is failed once; slice
+    # is a view and allocates nothing.
+    fault_ops = dict(repeat=4, prepend=2, append=2, copy=4, transform=2, split=7,
+                     **{"from-list": 6}, join=6, slice=0, find=1, count=1, replace=5,
+                     split_on=9, partition=8, splitlines=12, pad=2, decode=8)
     for op, allocations in fault_ops.items():
         for offset in range(allocations):
             run([str(binary), "fault-" + op, str(offset)], capture_output=True,

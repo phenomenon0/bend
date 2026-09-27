@@ -152,7 +152,7 @@ def instrument(c):
         "INLINE void heap_free(Env e, Cls cls, Loc loc)",
         TRACK + "\nINLINE void heap_free_impl(Env e, Cls cls, Loc loc)",
     )
-    sub("// Spare\n// =====", FREE + "\n// Spare\n// =====")
+    sub("INLINE void spare_free(Env e, Cls cls, Loc loc) {", FREE + "\nINLINE void spare_free(Env e, Cls cls, Loc loc) {")
     sub(
         "  Loc P = err_seen(e.mem) ? 0 : heap_alloc(e, cls);",
         "  Loc P = err_seen(e.mem) ? 0 : heap_alloc(e, cls); track_re_calls++; track_re_live++;",
@@ -193,7 +193,7 @@ def main():
             c = cfile.read_text()
             uses = len(re.findall(r"\bre_exec_take\(e,", c))
             assert (uses > 0) == (name == "native"), (name, uses)
-            assert bool(re.search(r"\bre_exec\(re_\d", jsfile.read_text())) == (name == "native"), name
+            assert bool(re.search(r"\bre_exec\(_?re_\d", jsfile.read_text())) == (name == "native"), name
             cfile.write_text(instrument(c))
             b = sh([cc, *flags, str(cfile), "-lpthread", "-lm", "-o", str(binary)])
             assert b.returncode == 0, b.stderr[-4000:]
