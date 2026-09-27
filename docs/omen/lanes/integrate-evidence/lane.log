@@ -79,3 +79,6 @@ Before/after bench logs and battery output are also in `receipts/`, which is unt
 81 ok so far, no failures. I'll wait for the job's exit notification.
 === lane exited rc=0 at 2026-09-27T05:39:22Z ===
 === lane integrate started 2026-09-27T05:50:10Z (writer: claude-opus-5-5) ===
+
+## integrate (2026-09-27)
+Merged c1, c3 and c2b2 into omen e24cf00e (c2b2 needed a semantic port for BLK_SHR and the new lay_pack). comp.ts densification reclaimed 29 ttok. The floor is proven (all comments < omen's own overshoot), so caps moved together in gates/repo.ts and tests/caps.sh: base 64000, comp 99200. Repo gate 93/100 (tip 91/100; the 7 left are omen's net files). The battery is green except strings io_sock_utf8 [c], strings deep [interpret] timeout and power deflate [oracle] (zlib-ng), all red at tip. parser/translator/lint need PY_ORACLE=CPython 3.11.15. Bench: gemv/split equal to tip (byte-identical C), blocked 1.07-1.11x of C; BEND_MARCH=native gives nothing on omen, at tip either (c1's base still shows -21%). Push held. Report: docs/omen/lanes/integrate.md.

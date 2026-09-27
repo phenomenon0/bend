@@ -1,0 +1,61 @@
+== tip e24cf00e (run 1) load 6.47 7.35 8.83
+load 6.47 7.35 8.83  cc clang version 21.1.7 (Fedora 21.1.7-1.fc43)
+bench           C  bend-1T bend-16T    1T/C  1T/16T
+gemv        0.153    0.158    0.158   1.03x   1.00x
+split       0.153    0.157    0.156   1.03x   1.01x
+blocked     0.041    0.104    0.103   2.54x   1.00x
+== integrate (run 1) load 6.24 7.27 8.79
+load 6.24 7.27 8.79  cc clang version 21.1.7 (Fedora 21.1.7-1.fc43)
+bench           C  bend-1T bend-16T    1T/C  1T/16T
+gemv        0.153    0.158    0.158   1.04x   1.00x
+split       0.153    0.157    0.161   1.02x   0.97x
+blocked     0.042    0.047    0.046   1.11x   1.03x
+== tip e24cf00e (run 2) load 6.45 7.28 8.78
+load 6.45 7.28 8.78  cc clang version 21.1.7 (Fedora 21.1.7-1.fc43)
+bench           C  bend-1T bend-16T    1T/C  1T/16T
+gemv        0.156    0.160    0.162   1.03x   0.99x
+split       0.155    0.159    0.159   1.03x   1.00x
+blocked     0.045    0.107    0.108   2.41x   0.99x
+== integrate (run 2) load 6.62 7.29 8.76
+load 6.62 7.29 8.76  cc clang version 21.1.7 (Fedora 21.1.7-1.fc43)
+bench           C  bend-1T bend-16T    1T/C  1T/16T
+gemv        0.158    0.164    0.167   1.04x   0.99x
+split       0.157    0.165    0.159   1.05x   1.04x
+blocked     0.044    0.047    0.045   1.07x   1.04x
+== integrate BEND_MARCH=native load 7.43 7.44 8.80
+load 7.43 7.44 8.80  cc clang version 21.1.7 (Fedora 21.1.7-1.fc43)
+bench           C  bend-1T bend-16T    1T/C  1T/16T
+gemv        0.156    0.165    0.164   1.05x   1.00x
+split       0.156    0.159    0.159   1.02x   1.00x
+blocked     0.045    0.048    0.045   1.06x   1.08x
+BENCHDONE
+== tip e24cf00e BEND_MARCH=native
+load 9.13 7.85 8.90  cc clang version 21.1.7 (Fedora 21.1.7-1.fc43)
+bench           C  bend-1T bend-16T    1T/C  1T/16T
+gemv        0.157    0.165    0.165   1.05x   1.00x
+split       0.159    0.161    0.160   1.01x   1.01x
+blocked     0.042    0.107    0.109   2.56x   0.98x
+== tip e24cf00e default
+load 9.32 7.96 8.92  cc clang version 21.1.7 (Fedora 21.1.7-1.fc43)
+bench           C  bend-1T bend-16T    1T/C  1T/16T
+gemv        0.155    0.162    0.165   1.05x   0.99x
+split       0.158    0.161    0.159   1.02x   1.02x
+blocked     0.043    0.114    0.132   2.64x   0.87x
+== integrate BEND_MARCH=native (run 2)
+load 9.04 7.94 8.90  cc clang version 21.1.7 (Fedora 21.1.7-1.fc43)
+bench           C  bend-1T bend-16T    1T/C  1T/16T
+gemv        0.158    0.161    0.163   1.02x   0.99x
+split       0.159    0.159    0.158   1.01x   1.01x
+blocked     0.042    0.045    0.046   1.06x   0.98x
+== c1 3ffe8120 default
+load 9.56 8.18 8.96  cc clang version 21.1.7 (Fedora 21.1.7-1.fc43)
+bench           C  bend-1T bend-16T    1T/C  1T/16T
+gemv        0.157    0.161    0.161   1.03x   1.00x
+split       0.158    0.160    0.159   1.02x   1.01x
+blocked     0.043    0.118    0.141   2.77x   0.84x
+== c1 3ffe8120 BEND_MARCH=native
+load 9.96 8.31 8.99  cc clang version 21.1.7 (Fedora 21.1.7-1.fc43)
+bench           C  bend-1T bend-16T    1T/C  1T/16T
+gemv        0.158    0.163    0.167   1.03x   0.98x
+split       0.158    0.159    0.160   1.01x   0.99x
+blocked     0.043    0.093    0.109   2.14x   0.85x
