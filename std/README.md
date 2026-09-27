@@ -14,7 +14,7 @@ import what you need by path:
 | `json_value.bend` | JSON as a tree: `parse` under depth and byte budgets, `get`, `at`, `path`, `to_nat`, `to_f32`, `show` (canonical text) |
 | `json.bend` | JSON as a stream of events, for documents too big to hold as a tree; `skip`, `raw` |
 | `text.bend` | UTF-8 `decode`/`encode`/`valid`, `nat`/`u32`/`f32` from text, `pad_start`, `pad_end`, `split_on`, `replace`, `hash` |
-| `time.bend` | UTC dates: `iso`, `iso.ms`, `http` (IMF-fixdate), `date`, `day`, `from`, `weekday`, `iso.read` |
+| `time.bend` | UTC dates, closed form: `iso`, `iso.ms`, `http` (IMF-fixdate), `date`, `day`, `from`, `weekday`, `iso.read` |
 | `gzip.bend`, `deflate.bend` | RFC 1952 and 1951, both ways, with an output cap against bombs |
 | `bytes.bend` | the byte interface everything above is written against, plus `read_file` and `write_file` |
 | `reader.bend` | the reader kit: a byte machine fed any split of its input, and the laws every such reader gets |
@@ -167,11 +167,13 @@ switch names. Each prints exactly `All terms check.`:
                                   # stored and fixed-code streams read back (minutes, not seconds)
     bend std/reader.bend          # the reader kit's laws (feed_split, bad_feeds, reads_is, drain_reads)
     bend std/json_value.bend      # closed laws: round trip, canonical text, RFC 8259 refusals, limits
-    bend std/time.bend            # calendar vectors: leap days, 2100, the last U32 second, iso.read
+    bend std/time.bend            # calendar vectors: 1970, 2000's leap day, 2038, 2100, 9999, iso.read
     bend std/text.bend            # UTF-8 round trip, encode's bytes, U+FFFD, split and replace
     bend std/bytes_packed.bend    # (ours only) Base's scans count what bytes_spec.bend says
     python3 tests/std/csv_mutants.py [--packed] [--bend canon/bend2/main.ts]       # 11 of 11 killed
     python3 tests/std/deflate_mutants.py [--packed] [--bend canon/bend2/main.ts]   # 25 of 25 killed
+    python3 tests/std/time_check.py [--lanes c,js,interp]   # every day 1970..9999 against Python's datetime
+    python3 tests/std/time_mutants.py                        # 23 of 23 killed
 
 The scans' specification is `bytes_spec.bend`; each implementation proves
 its scans count what it says (`find_byte.is`, `find_any.is`), and that

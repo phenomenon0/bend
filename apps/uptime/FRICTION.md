@@ -108,9 +108,10 @@ GUIDE.md that `IO.now` is monotonic.
 Base beside `IO.now`, which the guide now calls monotonic, and
 `bend2/time.bend` (`import ../../bend2/time.bend as Time`) has
 `Time.iso(secs)`, `Time.iso.ms(ms)`, `Time.http(secs)` (IMF-fixdate) and
-`Time.date` / `Time.day`, on the engine's proven calendar. `clock.c`,
+`Time.date` / `Time.day` (since on std/time.bend's closed-form calendar,
+checked against Python's datetime on every day to 9999). `clock.c`,
 `clock.js` and `clock.bend` are gone; the app is no longer flagged for
-foreign code (`start.all`). No `Time.parse_iso` yet.
+foreign code (`start.all`). `Time.parse_iso` is std/time.bend's `Time.iso.read`.
 
 ## 4. The match and let rules turn every branch into a def
 
