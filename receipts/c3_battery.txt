@@ -1,0 +1,9 @@
+ok   show_specials          [c]
+
+PASS: 19, FAIL: 0
+PASS precision_f32_digits
+
+161 PASS, 0 FAIL; 0 suite errors
+ok   vec                  [c-1thread]
+
+Power PASS: 150, FAIL: 0

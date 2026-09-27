@@ -1,0 +1,5 @@
+load 4.81 5.33 4.23  cc clang version 21.1.7 (Fedora 21.1.7-1.fc43)
+bench           C  bend-1T bend-16T    1T/C  1T/16T
+gemv        0.152    0.159    0.162   1.04x   0.98x
+split       0.157    0.158    0.156   1.01x   1.01x
+blocked     0.041    0.105    0.104   2.57x   1.01x
