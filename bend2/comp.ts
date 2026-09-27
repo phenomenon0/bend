@@ -5272,6 +5272,13 @@ INLINE Term blk_keep(Env e, Loc at) {
 }
 
 INLINE void blk_fill(Env e, Loc dst, Loc src, u64 n, bool keep) {
+#if !DEVICE
+  // Fresh blocks cannot overlap; keep leaf-sized copies inline.
+  if (!keep && n >= 16) {
+    memcpy(e.mem + dst, e.mem + src, n * sizeof(Term));
+    return;
+  }
+#endif
   for (u64 j = 0; j < n; j += 1) {
     e.mem[dst + j] = keep ? blk_keep(e, src + j) : e.mem[src + j];
   }
