@@ -5,8 +5,8 @@
 # stops mattering. This one keeps four accumulators, lane c into s[c mod 4],
 # and adds them as (s0+s1)+(s2+s3) at the end of the row. The order is fixed
 # and the twin's `blocked` row does the identical thing, so the two still
-# agree bit for bit -- but the chain is now four deep in parallel, and C is
-# free to widen it while Bend's emitted C is not (see the lane report).
+# agree bit for bit -- but the chain is now four deep in parallel, and both
+# sides widen it: Bend's through Array.get4 (docs/omen/lanes/c2b2.md).
 #
 # The three view offsets are written out here rather than passed as `View`s:
 # the probe is about the reduction's shape, and the addresses it reads are the
