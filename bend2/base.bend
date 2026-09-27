@@ -4448,13 +4448,6 @@ def Regex.parse.open(t: String, +n: Nat, +stack: Regex.parse.Stack()) -> Regex.p
     case SNil{}:
       Regex.parse.open.cap(SNil{}, n, stack)
 
-def Regex.parse.bar(t: String, n: Nat, stack: Regex.parse.Stack()) -> Regex.parse.State():
-  match stack:
-    case Frame{cap, alts, cat, q} <> rest:
-      Done{(t, (n, Frame{cap, Regex.parse.cat(cat) <> alts, [], 0n} <> rest))}
-    case Nil{}:
-      Fail{RErr{String.length(t), "unbalanced parenthesis"}}
-
 def Regex.parse.rep.if(k: Nat, st: Regex.parse.State(), bad: Bool) -> Regex.parse.State():
   match bad:
     case True{}:
@@ -4739,7 +4732,11 @@ def Regex.parse.char(kind: Nat, +x: U32, t: String, n: Nat, stack: Regex.parse.S
         case Nil{}:
           Fail{RErr{1n+String.length(t), "unbalanced parenthesis"}}
     case 3n:
-      Regex.parse.bar(t, n, stack)
+      match stack:
+        case Frame{cap, alts, cat, q} <> rest:
+          Done{(t, (n, Frame{cap, Regex.parse.cat(cat) <> alts, [], 0n} <> rest))}
+        case Nil{}:
+          Fail{RErr{String.length(t), "unbalanced parenthesis"}}
     case 4n:
       Regex.parse.rep(t, n, stack, 0n, None{})
     case 5n:
