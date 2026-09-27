@@ -1,0 +1,34 @@
+=== lane c1 started 2026-09-27T04:24:03Z (writer: claude-opus-5-5) ===
+⚠ claude.ai connectors are disabled because ANTHROPIC_API_KEY or another auth source is set and takes precedence over your claude.ai login · Unset it to load your organization's connectors
+I added the `-march` opt-in and checked it. Setting `BEND_MARCH=native` makes the blocked bench about 25% faster, gemv and split don't move, and results stay byte-identical. With the variable unset, the compiler gets exactly the same arguments as before. Nothing is committed yet.
+
+**Spelling:** it's an environment variable, `BEND_MARCH=native bend prog.bend -o prog`, because `main.ts` already takes its build settings that way (`CC`, `CUDA_HOME`, `BEND_NO_TELEMETRY`). Any value clang accepts works (e.g. `x86-64-v3`); unset or empty means no flag. The change is only in `cli_build` in `bend2/main.ts` (+6/−2). `comp.ts` and `bend.ts` are untouched, so it won't conflict with C2b. No cap moved: `main.ts` is at 7257 / 10000.
+
+**1. Default unchanged:**
+- I logged what clang receives for the three bench builds using HEAD's `main.ts` and the new one; after removing the temp paths the two logs are identical.
+- The binaries themselves can't be compared byte for byte: two builds from the same `main.ts` already differ by one byte, because the random temp folder name ends up in the binary. So the argument check is the proof here.
+- Default bench rows are within ±3% of a run I took before the edit.
+
+**2. Flag on (Ryzen 7700X, clang 21, two interleaved runs, times in seconds):**
+
+| bench | default 1T / 16T | native 1T / 16T | change |
+|---|---|---|---|
+| gemv | 0.156 / 0.156 | 0.156 / 0.156 | none |
+| split | 0.155 / 0.155 | 0.154 / 0.155 | none |
+| blocked | 0.106 / 0.104 | 0.082 / 0.078 | about 25% less time |
+
+- The checksum and its three probes match across C / 1T / 16T in both modes.
+- **Side finding:** `twin.c` built with `-march=native` gives a *different* blocked checksum (`716034538` instead of `1297551341`), because clang fuses multiply-adds into FMA. Adding `-ffp-contract=off` restores it. The emitted Bend C already carries `#pragma clang fp contract(off)`, so Bend's output stays fixed. That's why `contract(off)` has to stay.
+
+**3. Test battery (local only; the mini-cluster gates weren't run):**
+- `bun gates/repo.ts`: 56 / 56.
+- `bash tests/caps.sh`: all within caps.
+- `bash tests/run.sh`: 19 / 19 with the flag off, 19 / 19 with it on.
+- `bash tests/run.sh --strings`: 102 / 102 with the flag off, 102 / 102 with it on.
+
+**4. Report:** `docs/omen/lanes/c1.md` has the spelling, the bench table, the byte-identity receipts and the portability note:
+- A `native` binary can crash with an illegal-instruction error (SIGILL) on another x86 machine, so the flag stays opt-in.
+- Apple silicon uses `-mcpu`, and some Apple clang versions reject `-march=native`; I only tested Linux x86-64.
+
+The untracked `receipts/` folder was already there and I didn't touch it.
+=== lane exited rc=0 at 2026-09-27T04:39:02Z ===
