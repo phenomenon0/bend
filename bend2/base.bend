@@ -4762,21 +4762,18 @@ def Regex.parse.step(st: Regex.parse.State()) -> Regex.parse.State():
     case Done{(SCon{Chr{+x}, t}, (n, stack))}:
       Regex.parse.char(Regex.parse.index(x, [40, 41, 124, 42, 43, 63, 123, 91, 46, 94, 36, 92], 1n), x, t, n, stack)
 
-def Regex.parse.end(st: Regex.parse.State()) -> Regex.parse.Tree():
-  match st:
-    case Fail{e}:
-      Fail{e}
-    case Done{(s, (n, stack))}:
-      match stack:
-        case fr <> Nil{}:
-          Done{(Regex.parse.fin(fr), n)}
-        case _:
-          Fail{RErr{0n, "missing )"}}
-
 def Regex.parse.go(fuel: Nat, st: Regex.parse.State()) -> Regex.parse.Tree():
   match fuel:
     case 0n:
-      Regex.parse.end(st)
+      match st:
+        case Fail{e}:
+          Fail{e}
+        case Done{(s, (n, stack))}:
+          match stack:
+            case fr <> Nil{}:
+              Done{(Regex.parse.fin(fr), n)}
+            case _:
+              Fail{RErr{0n, "missing )"}}
     case 1n+f:
       Regex.parse.go(f, Regex.parse.step(st))
 
