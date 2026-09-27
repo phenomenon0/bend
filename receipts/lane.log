@@ -1,0 +1,35 @@
+=== lane c2b started 2026-09-27T04:09:44Z ===
+⚠ claude.ai connectors are disabled because ANTHROPIC_API_KEY or another auth source is set and takes precedence over your claude.ai login · Unset it to load your organization's connectors
+=== lane exited rc=143 at 2026-09-27T04:19:39Z ===
+=== lane c2b RELAUNCH under claude-opus-5-5 2026-09-27T04:19:45Z ===
+⚠ claude.ai connectors are disabled because ANTHROPIC_API_KEY or another auth source is set and takes precedence over your claude.ai login · Unset it to load your organization's connectors
+I didn't change `bend2/comp.ts`: the loads can't be widened by a small emission change that keeps results identical. The brief blames `blk_ptr`'s `may_alias` cast, and that turned out to be wrong. The real blocker is the index mask in `blk_at`, and that mask is how Bend makes array indexes wrap around, which is defined behaviour (GUIDE.md:185, base.bend:4563). So under acceptance item 4 this reports the gap that remains and ships no code change.
+
+**Baseline** (tip, clang 21.1.7): gemv 1.03x, split 1.04x, blocked **2.60x** (C 0.042s vs Bend 1T 0.110s).
+
+**What I tried**, each as a one-line edit to the generated C for the blocked bench, median of three single-thread runs:
+
+| change | keeps results? | time |
+|---|---|---|
+| unchanged | yes | 0.10s |
+| drop `may_alias` | yes | 0.10s, same machine code |
+| drop `may_alias` + `restrict` + `assume_aligned` on `blk_ptr` | yes | 0.10s |
+| check the index, wrap only when out of range (select) | yes | 0.17s, worse |
+| same check, wrapping in a cold function | yes | 0.11s |
+| **remove the mask** | **no** | **0.04s**, matches C |
+
+With the mask removed, clang's "cannot identify array bounds" remark drops from 256 to 0. In the assembly, the per-element `and` + `movss` + `unpcklps` becomes `movups`. That also closes the whole blocked gap, so nothing else is in it. The output was the same for every variant, but only because this bench never indexes out of range. That doesn't make removing the mask safe.
+
+**Why it happens:** the four loads in one step are combined by clang's SLP vectorizer, which packs straight-line code. It can use one wide load only if it can prove `(p+k) & m` equals `(p & m) + k`, which is false wherever an index wraps. Checking each element separately never proves the group of four is adjacent; it needs one check covering all four. The four reads are generated in separate functions and only meet after clang inlines them, so no change inside `blk_at` or `blk_ptr` can state that check. The possible fixes are all bigger than this lane's scope:
+- a comp.ts pass that spots adjacent reads on one array and emits one guarded wide read;
+- a base-library bulk read (4-wide get, or a dot over a view) that does the range check once;
+- a non-wrapping get in the language, which lives in `bend.ts` and is off limits.
+
+This also corrects tensor-view.md §4: the earlier "mask is innocent" test used a single index under the other vectorizer (the loop vectorizer), a different question.
+
+**Checks:** with no code change, I ran none of the code test suites. The repo gate passes 56/56 with the new report included.
+
+**Files:** the report is `docs/omen/lanes/c2b.md` (mechanism, both assembly excerpts, residuals). It's not committed, and neither is the `receipts/` directory that was already there. I also updated the vectorization memory note, which had recorded the mask as innocent.
+
+Want me to commit the report, or start on the adjacent-reads pass in comp.ts as its own lane?
+=== lane exited rc=0 at 2026-09-27T04:24:36Z ===
