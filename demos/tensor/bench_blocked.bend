@@ -33,37 +33,34 @@ def scale(x: F32) -> F32:
 type S4 is Type:
   S4{xs: Array<F32>, s0: F32, s1: F32, s2: F32, s3: F32}
 
-def ln.mul(+a: F32, +s: F32, r: Array<F32> & F32) -> Array<F32> & F32:
-  (xs, b) = r
-  (xs, F32.add(s, F32.mul(a, b)))
+type Q4 is Type:
+  Q4{a0: F32, a1: F32, a2: F32, a3: F32}
 
-def ln.pair(+q: U32, +s: F32, r: Array<F32> & F32) -> Array<F32> & F32:
-  (xs, a) = r
-  ln.mul(a, s, Array.get(F32, xs, q))
+def q4.fin(+s0: F32, +s1: F32, +s2: F32, +s3: F32, a: Q4,
+  r: Array<F32> & (F32 & (F32 & (F32 & F32)))) -> S4:
+  match a:
+    case Q4{a0, a1, a2, a3}:
+      (xs, q) = r
+      (b0, t) = q
+      (b1, u) = t
+      (b2, b3) = u
+      S4{xs, F32.add(s0, F32.mul(a0, b0)), F32.add(s1, F32.mul(a1, b1)),
+        F32.add(s2, F32.mul(a2, b2)), F32.add(s3, F32.mul(a3, b3))}
 
-def lane(+p: U32, +q: U32, +s: F32, xs: Array<F32>) -> Array<F32> & F32:
-  ln.pair(q, s, Array.get(F32, xs, p))
+def q4.a(+q: U32, +s0: F32, +s1: F32, +s2: F32, +s3: F32,
+  r: Array<F32> & (F32 & (F32 & (F32 & F32)))) -> S4:
+  (xs, w) = r
+  (a0, t) = w
+  (a1, u) = t
+  (a2, a3) = u
+  q4.fin(s0, s1, s2, s3, Q4{a0, a1, a2, a3}, Array.get4(F32, xs, q))
 
-def st3(+s0: F32, +s1: F32, +s2: F32, r: Array<F32> & F32) -> S4:
-  (xs, s3) = r
-  S4{xs, s0, s1, s2, s3}
-
-def st2(+p: U32, +q: U32, +s0: F32, +s1: F32, +s3: F32, r: Array<F32> & F32) -> S4:
-  (xs, s2) = r
-  st3(s0, s1, s2, lane(U32.add(p, 3), U32.add(q, 3), s3, xs))
-
-def st1(+p: U32, +q: U32, +s0: F32, +s2: F32, +s3: F32, r: Array<F32> & F32) -> S4:
-  (xs, s1) = r
-  st2(p, q, s0, s1, s3, lane(U32.add(p, 2), U32.add(q, 2), s2, xs))
-
-def st0(+p: U32, +q: U32, +s1: F32, +s2: F32, +s3: F32, r: Array<F32> & F32) -> S4:
-  (xs, s0) = r
-  st1(p, q, s0, s2, s3, lane(U32.add(p, 1), U32.add(q, 1), s1, xs))
-
+# Each step reads a[p..p+3] and x[q..q+3] with one Array.get4 apiece: its
+# single range check is what lets the four lanes' loads widen.
 def dot4.step(+p: U32, +q: U32, st: S4) -> S4:
   match st:
     case S4{xs, s0, s1, s2, s3}:
-      st0(p, q, s1, s2, s3, lane(p, q, s0, xs))
+      q4.a(q, s0, s1, s2, s3, Array.get4(F32, xs, p))
 
 def dot4.go(fuel: Nat, +p: U32, +q: U32, st: S4) -> S4:
   match fuel:
