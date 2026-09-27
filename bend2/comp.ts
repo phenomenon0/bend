@@ -2737,13 +2737,15 @@ function arr_lay(el: Lay): Lay {
   return lay_pack([["Tuple", [BOX, el]]]);
 }
 
+function arr_words(l: string, at: string, el: Lay, box: string): string[] {
+  const { arr } = lay_arr(el);
+  return el.ks.map((k, j) => k === "box" ? box.replaceAll("$", `${l} + ${at} + ${j}`)
+    : `blk_read(e.mem, ${Number(arr)}, ${l}, ${at} + ${j})`);
+}
+
 function arr_cells(fl: File, l: string, at: string, el: Lay,
   box: string): Val {
-  const { arr } = lay_arr(el);
-  return val_new(emit_hold(fl, el.ks.map((k, j) => k === "box"
-    ? box.replaceAll("$", `${l} + ${at} + ${j}`)
-    : `blk_read(e.mem, ${Number(arr)}, ${l}, ${at} + ${j})`), "c",
-  el.ks), el);
+  return val_new(emit_hold(fl, arr_words(l, at, el, box), "c", el.ks), el);
 }
 
 function arr_new(fl: File, d: string, v: Val, el: Lay): string {
@@ -2764,21 +2766,16 @@ function arr_op(fl: File, k: string, el: Lay, args: Val[]): Val {
   if (k === "array_size") {
     return val_new([a, `(1ull << (blk_cls(${a}) - ${lgs}))`], arr_lay(W32));
   }
-  // One range check for the four slots, so the in-range branch reads them
-  // at adjacent offsets clang can widen; else each wraps alone.
+  // One range check for the four: in range, adjacent reads clang can widen
   if (k === "array_get4") {
-    const l = emit_hold(fl, [`blk_loc(e.mem, ${a})`], "at")[0];
     const i = emit_alias(fl, val_word(args[1]), "i", "w32");
-    const m = emit_hold(fl, [`(u32)((1ull << (blk_cls(${a}) - ${lgs})) - 1)`],
-      "at", ["w32"])[0];
+    const [l, m] = emit_hold(fl, [`blk_loc(e.mem, ${a})`,
+      `(u32)((1ull << (blk_cls(${a}) - ${lgs})) - 1)`], "at", ["w64", "w32"]);
     const j = emit_hold(fl, [`${i} & ${m}`], "at", ["w32"])[0];
     const xs = [0, 1, 2, 3].map(() => emit_dst(fl, el, "x"));
-    const read = (at: (k: number) => string) => xs.forEach((x, k) =>
-      x.ws.forEach((w, n) => file_push(fl, `${w} = ${el.ks[n] === "box"
-        ? `blk_keep(e, ${l} + ${at(k)} + ${n})`
-        : `blk_read(e.mem, ${Number(arr)}, ${l}, ${at(k)} + ${n})`};`)));
-    block(fl, `if (${m} - ${j} >= 3) {`, () =>
-      read((k) => `((${j} + ${k}) << ${lgs})`));
+    const read = (at: (k: number) => string) => xs.forEach((x, k) => arr_words(l,
+      at(k), el, "blk_keep(e, $)").forEach((c, n) => file_push(fl, `${x.ws[n]} = ${c};`)));
+    block(fl, `if (${m} - ${j} >= 3) {`, () => read((k) => `((${j} + ${k}) << ${lgs})`));
     block(fl, "else {", () => read((k) => `blk_at(${a}, ${i} + ${k}, ${lgs})`));
     const lay = [el, el, el, el, BOX].reduce((r, l) => lay_pack([["Tuple", [l, r]]]));
     if (lay.ks.length > WIDE) {
