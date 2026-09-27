@@ -346,7 +346,9 @@ function cc_find(gpu: boolean): string {
 // CUDA at $CUDA_HOME, else at /usr/local/cuda, its libraries in lib64 or, as
 // nix lays them, lib; else the ! runs on the cores). On macOS a program with
 // a framework (#import: a window, audio) builds as Objective-C; on Linux it
-// links the X11 and ALSA libraries it includes.
+// links the X11 and ALSA libraries it includes. BEND_MARCH=native (or any
+// cpu clang takes) adds -march for this host's vector units: opt in, as the
+// binary then runs only where that cpu does.
 function cli_build(bin: string, file: string): void {
   const c     = fs.readFileSync(file, "utf8");
   const mac   = process.platform === "darwin";
@@ -358,7 +360,9 @@ function cli_build(bin: string, file: string): void {
     ? ["-x", "objective-c", "-fobjc-arc", "-fmodules"] : [];
   const libs  = [["X11", "X11"], ["alsa", "asound"]].flatMap(([h, l]) =>
     !mac && c.includes("#include <" + h + "/") ? ["-l" + l] : []);
-  const cpu = [...objc, "-std=c11", "-O3", file, "-lpthread", "-lm",
+  const march = process.env.BEND_MARCH ? ["-march=" + process.env.BEND_MARCH]
+    : [];
+  const cpu = [...objc, "-std=c11", "-O3", ...march, file, "-lpthread", "-lm",
     ...libs, "-o", path.resolve(bin)];
   const gpu = mac ? ["-DBEND_METAL=1", ...cpu]
     : ["-DBEND_CUDA=1", "-I" + cuda + "/include", "-L" + cuda + "/lib64",
