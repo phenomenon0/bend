@@ -4467,14 +4467,6 @@ def Regex.parse.rep(+t: String, n: Nat, stack: Regex.parse.Stack(), lo: Nat, +hi
     case _:
       Fail{RErr{1n+String.length(t), "nothing to repeat"}}
 
-# `?` after a fresh repeat makes it lazy, else it is the {0,1} repeat
-def Regex.parse.opt(t: String, n: Nat, stack: Regex.parse.Stack()) -> Regex.parse.State():
-  match stack:
-    case Frame{cap, alts, RRep{r, lo, hi, g} <> cat, 2n} <> rest:
-      Done{(t, (n, Frame{cap, alts, RRep{r, lo, hi, False{}} <> cat, 0n} <> rest))}
-    case other:
-      Regex.parse.rep(t, n, other, 0n, Some{1n})
-
 def Regex.parse.Bounds() -> Data:
   Result<&2, &2, Regex.Error, Sigma<&2, &2, Sigma<&2, &2, Nat, _ => Maybe<&2, Nat>>, _ => String>>
 
@@ -4741,8 +4733,13 @@ def Regex.parse.char(kind: Nat, +x: U32, t: String, n: Nat, stack: Regex.parse.S
       Regex.parse.rep(t, n, stack, 0n, None{})
     case 5n:
       Regex.parse.rep(t, n, stack, 1n, None{})
+    # `?` after a fresh repeat makes it lazy, else it is the {0,1} repeat
     case 6n:
-      Regex.parse.opt(t, n, stack)
+      match stack:
+        case Frame{cap, alts, RRep{r, lo, hi, g} <> cat, 2n} <> rest:
+          Done{(t, (n, Frame{cap, alts, RRep{r, lo, hi, False{}} <> cat, 0n} <> rest))}
+        case other:
+          Regex.parse.rep(t, n, other, 0n, Some{1n})
     case 7n:
       Regex.parse.braces(n, stack, Regex.parse.bounds(t))
     case 8n:
