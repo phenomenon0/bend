@@ -203,3 +203,6 @@ Evidence:
   [...]` folds. Per 200 modules: 189 tuple signatures, 36 unpacks, 27 tuple
   folds.
 - What-if census: the syntactic upper bound goes from 187 to 212 of 2,962.
+- Found on the way: `Nat.read` never finishes on the interpreter lane (its bound
+  is the unary 2^48, built out in full), so `t[i]` hung there while JS and C
+  passed. An index is now read by a three-digit fold (`dec`).

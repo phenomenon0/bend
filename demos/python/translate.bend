@@ -1073,6 +1073,15 @@ def tuple_of(kids: Ir, +loc: S.Json) -> Ir:
     case _:
       ILit{"Unit", TUnit{}, loc}
 
+# A decimal literal's value, digits already checked. Not Nat.read: its bound
+# is the unary 2^48, which the interpreter lane builds out in full.
+def dec(s: String, acc: Nat) -> Nat:
+  match s:
+    case SNil{}:
+      acc
+    case SCon{h, t}:
+      dec(t, Nat.add(Nat.mul(acc, 10n), U32.to_nat(U32.sub(Char.to_u32(h), 48))))
+
 # Item n of a tuple: n rests, then the first.
 def nth(n: Nat, +e: Ir, +loc: S.Json) -> Ir:
   match n:
@@ -1145,7 +1154,8 @@ def build(+j: S.Json, +kids: Ir, +env: List<&2, Param>, +cs: List<&2, Contract>,
   S.choose(Result<&2, &2, S.Error, Ir>, slice_form(j), u => cut(j, kids, cs, loc), u =>
   S.choose(Result<&2, &2, S.Error, Ir>, String.eq(tag, "List"), u => list_of(kids, ret, loc), u =>
   S.choose(Result<&2, &2, S.Error, Ir>, String.eq(tag, "Tuple"), u => Done{tuple_of(kids, loc)}, u =>
-  S.choose(Result<&2, &2, S.Error, Ir>, index_form(j), u => item_at(Nat.read(raw_of(Lint.field(j, "slice"))), a, loc), u =>
+  S.choose(Result<&2, &2, S.Error, Ir>, index_form(j), u => item_at(S.choose(Maybe<&2, Nat>, Nat.is_lt(String.length(raw_of(Lint.field(j, "slice"))), 4n),
+      u => Some{dec(raw_of(Lint.field(j, "slice")), 0n)}, u => None{}), a, loc), u =>
   S.choose(Result<&2, &2, S.Error, Ir>, is_method(j), u => grant(cs, a, tl(kids), N.string(Lint.field(Lint.field(j, "func"), "attr")), loc), u =>
     S.choose(Result<&2, &2, S.Error, Ir>, is_user(j, env, ss), u => called(ss, N.string(Lint.field(Lint.field(j, "func"), "id")), kids, loc), u =>
     S.choose(Result<&2, &2, S.Error, Ir>, is_len(j, env), u => grant(cs, a, IEnd{}, "__len__", loc), u =>
