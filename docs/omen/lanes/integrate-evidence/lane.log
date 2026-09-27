@@ -1,5 +1,4 @@
 === lane c1 started 2026-09-27T04:24:03Z (writer: claude-opus-5-5) ===
-⚠ claude.ai connectors are disabled because ANTHROPIC_API_KEY or another auth source is set and takes precedence over your claude.ai login · Unset it to load your organization's connectors
 I added the `-march` opt-in and checked it. Setting `BEND_MARCH=native` makes the blocked bench about 25% faster, gemv and split don't move, and results stay byte-identical. With the variable unset, the compiler gets exactly the same arguments as before. Nothing is committed yet.
 
 **Spelling:** it's an environment variable, `BEND_MARCH=native bend prog.bend -o prog`, because `main.ts` already takes its build settings that way (`CC`, `CUDA_HOME`, `BEND_NO_TELEMETRY`). Any value clang accepts works (e.g. `x86-64-v3`); unset or empty means no flag. The change is only in `cli_build` in `bend2/main.ts` (+6/−2). `comp.ts` and `bend.ts` are untouched, so it won't conflict with C2b. No cap moved: `main.ts` is at 7257 / 10000.
@@ -33,7 +32,6 @@ I added the `-march` opt-in and checked it. Setting `BEND_MARCH=native` makes th
 The untracked `receipts/` folder was already there and I didn't touch it.
 === lane exited rc=0 at 2026-09-27T04:39:02Z ===
 === lane c3 started 2026-09-27T04:24:07Z (writer: claude-opus-5-5) ===
-⚠ claude.ai connectors are disabled because ANTHROPIC_API_KEY or another auth source is set and takes precedence over your claude.ai login · Unset it to load your organization's connectors
 === c3 done 2026-09-27T04:39:51Z: main.ts BEND_REASSOC opt-in; default identical modulo build-id; battery 19/161/150/56 green; report docs/omen/lanes/c3.md ===
 I added `BEND_REASSOC=1`, which lets clang reorder float additions for the whole program. It's 10 lines in `bend2/main.ts`, nothing else touched. The flag works, but it doesn't speed up the gemv and split rows, and gains nothing on blocked. Nothing is committed yet.
 
@@ -78,6 +76,6 @@ Files are in `~/Documents/Project/bend-work-c3`:
 Before/after bench logs and battery output are also in `receipts/`, which is untracked.
 === lane exited rc=0 at 2026-09-27T04:40:11Z ===
 === lane c2b2 started 2026-09-27T04:25:17Z (writer: claude-opus-5-5) ===
-⚠ claude.ai connectors are disabled because ANTHROPIC_API_KEY or another auth source is set and takes precedence over your claude.ai login · Unset it to load your organization's connectors
 81 ok so far, no failures. I'll wait for the job's exit notification.
 === lane exited rc=0 at 2026-09-27T05:39:22Z ===
+=== lane integrate started 2026-09-27T05:50:10Z (writer: claude-opus-5-5) ===

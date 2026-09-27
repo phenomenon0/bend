@@ -5,7 +5,7 @@
 # Under the flag the checksum is ALLOWED to leave the strict twin's; the row
 # records whether it did, and still requires 1T == 16T and no inf/NaN.
 set -u
-cd "$(dirname "$0")/.."
+cd "$(dirname "$0")/../../../.."
 export BEND_NO_TELEMETRY=1
 here=demos/tensor
 work=$(mktemp -d); trap 'rm -rf "$work"' EXIT
@@ -33,8 +33,8 @@ for name in gemv split blocked; do
     "$(med "$work/r_$name" --gpu off --threads 1)" \
     "$(med "$work/r_$name" --gpu off --threads 16)" "$same"
 done
-bun bend2/main.ts receipts/c3_harmonic.bend -o "$work/hs" > /dev/null
-BEND_REASSOC=1 bun bend2/main.ts receipts/c3_harmonic.bend -o "$work/hr" > /dev/null
+bun bend2/main.ts docs/omen/lanes/c3-evidence/c3_harmonic.bend -o "$work/hs" > /dev/null
+BEND_REASSOC=1 bun bend2/main.ts docs/omen/lanes/c3-evidence/c3_harmonic.bend -o "$work/hr" > /dev/null
 printf 'harmonic strict %s bits %s s | RA %s bits %s s\n' \
   "$("$work/hs" --gpu off --threads 1)" "$(med "$work/hs" --gpu off --threads 1)" \
   "$("$work/hr" --gpu off --threads 1)" "$(med "$work/hr" --gpu off --threads 1)"
