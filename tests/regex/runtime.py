@@ -154,10 +154,10 @@ def instrument(c):
     )
     sub("// Spare\n// =====", FREE + "\n// Spare\n// =====")
     sub(
-        "  Loc P = heap_alloc(e, cls);",
-        "  Loc P = heap_alloc(e, cls); track_re_calls++; track_re_live++;",
+        "  Loc P = err_seen(e.mem) ? 0 : heap_alloc(e, cls);",
+        "  Loc P = err_seen(e.mem) ? 0 : heap_alloc(e, cls); track_re_calls++; track_re_live++;",
     )
-    sub("    heap_free(e, cls, P);", "    heap_free(e, cls, P); track_re_live--;")
+    sub("  str_scratch_free(e, cls, P);", "  str_scratch_free(e, cls, P); track_re_live--;")
     return c
 
 
