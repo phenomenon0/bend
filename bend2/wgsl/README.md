@@ -5,8 +5,11 @@ kernel with no heap: scalar defs, folds, flat tail loops, fork trees under a
 bang (`guide/SHADERS.md`'s shape), cubes and maps. This is the backbone, not an
 inference engine: it holds no model, matrix or attention kernels.
 
-**Status: a fork-only package.** It does not build against `bendlang/bend`
-`main` as is; `INTEGRATION.md` lists what it needs. The upstream policy
+**Status.** On the fork's `main` it builds against the fork's `comp.ts`. On the
+`wgsl-flat-emitter-canon` branch it builds against clean `bendlang/bend` `main`
+(5e70819) through `bend2/wgsl/canon-compat.ts`, and its four tests run on the
+GPU (`tests/wgsl/run.mjs`, Deno WebGPU); see `INTEGRATION.md` (INTEGRATION-2).
+`F64` programs are out of scope there. The upstream policy
 (`WONTFIX.txt`: Metal and CUDA only) is why this lives on a fork.
 
 ## Files
@@ -19,6 +22,8 @@ inference engine: it holds no model, matrix or attention kernels.
 | `bend2/x32a.ts` | integer IEEE binary32 add, subtract, multiply (subnormal-exact) |
 | `bend2/x32w.ts` | integer `exp sin cos pow softplus div sqrt`; **generated**, never edit |
 | `bend2/x32/` | generator for `x32w.ts`: `node bend2/x32/build.mjs` (sources, `x32.h` tables) |
+| `bend2/wgsl/canon-compat.ts` | canon branch only: the shim `wgsl.ts` reads the compiler through |
+| `tests/wgsl/run.mjs` | emits and runs the four tests on the GPU (`deno run --unstable-webgpu -A`) |
 | `tests/wgsl/` | four programs with their expected output (`#|` lines; `cubes.expected`) |
 
 ## What it takes in

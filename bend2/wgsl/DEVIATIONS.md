@@ -18,3 +18,8 @@
    effect sources under `bend2/effs/` are.
 8. **No per-file license header.** Canon source files carry none; `LICENSE`
    (Apache-2.0) covers the repo, so none was added here either.
+9. **A source-transform shim instead of `comp.ts` edits** (canon branch). The
+   shim loads a hashed copy of `comp.ts` with the needed names exported, so
+   `comp.ts` stays at its cap; the cost is that `-o x.wgsl` works from source
+   only, not from a compiled binary. Exporting the names in `comp.ts` would be
+   cleaner but is Taelin's cap to move.

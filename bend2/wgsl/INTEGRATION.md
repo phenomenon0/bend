@@ -1,5 +1,9 @@
 # Integration with canon's `comp.ts` / `main.ts`
 
+> **Status on `wgsl-flat-emitter-canon`: builds and passes against canon `main`
+> (5e70819). See INTEGRATION-2 at the end. §1-§4 below are the analysis that
+> led to it, kept as written for the fork tree.**
+
 Honest result first: **this does not compile against `bendlang/bend` `main`
 (5e70819, 2026-10-09) unchanged.** An earlier estimate that the emitter "touches
 `comp.ts` very little" holds for *edits*, not for *surface*: it reads about 36
@@ -81,3 +85,48 @@ Re-export or re-implement the §1 names, add `Bytes`/`F64` or drop those
 features from the emitter, wire `-o x.wgsl`, and either add the files to
 `gates/repo.ts` or keep them on a fork. None of this is done here; this
 branch ships the emitter as it works on its source compiler.
+
+# INTEGRATION-2: the canon branch (`wgsl-flat-emitter-canon`)
+
+Base: `bendlang/bend` `main` 5e70819. `comp.ts` is **not edited** (it sits 95
+ttok under its 64k cap).
+
+**Shim.** `bend2/wgsl/canon-compat.ts` is what `wgsl.ts` imports as `C`. It
+loads a copy of `comp.ts`'s text with one `export` line and two small functions
+appended (`file_open`, `file_srcs`, because `FL` is a module `let`), written to
+the temp dir by content hash, and importing this repo's `bend.ts`. The old API
+took the file/book as arguments; canon keeps it in module state `FL`, so the
+shim's wrappers drop that argument. `emit_nats` is rebuilt from the Nat loop in
+canon's `mat_rows`; `carb_book` raises each live def through `fun_of` so `.n`
+and `.h` are what the old `def_body` gave. `term_spine`/`call_kind` map canon's
+`Spine` to the old `{k,args,all,bang}` call.
+
+**Bytes: implemented.** In pure Bend in `base.bend` (a `Bytes` is a `String`
+of Chars < 256): `Bytes`, `Bytes.byte`, `Bytes.get`, `Bytes.push`,
+`Bytes.word_le`. The host run gives the fork's values. The emitter still reads
+`Bytes.get`/`Bytes.word_le` **by name** as buffer reads (the shim's `intr_of`
+answers `{JS:""}` for them so canon's checker/emit paths treat them as
+operations).
+
+**F64: out of scope.** canon's `base.bend` has no `F64`. The emitter's F64
+chain recognition (`F64.to_f32 (F64.exp (F32.to_f64 x))` and siblings -> the x32
+integer forms) is therefore unreachable in canon: such a program cannot be
+written. The x32 generator and `x32w.ts` ship unchanged and are exercised by
+`gpu_selftest` (1008/1008 exact on the 3090). Adding `F64` to canon is a
+language decision, not an adapter job.
+
+**Other edits.** `main.ts`: `-o x.wgsl` calls `wgsl_book` (a few lines).
+`wgsl.ts`: `import ... C from "./wgsl/canon-compat.ts"`, plus a
+`return T();` after a spin loop (Deno/naga rejects a function whose loop has no
+break and no trailing return; the fork tree only saw Chrome/tint).
+
+**Limits.** `-o x.wgsl` needs the source tree (`bun bend2/main.ts`); the shim
+reads `comp.ts` text at runtime, so it will not work from a compiled binary.
+`gates/repo.ts` fails 19 of 54 on files not in its allow list (the new ones);
+no cap failed. Adding allow lines is Taelin's call, so none were added.
+
+**Receipts** (canon 5e70819 + this branch, RTX 3090 via Deno WebGPU):
+`deno run --unstable-webgpu -A tests/wgsl/run.mjs` ->
+`spin_collatz 61317`, `spec_tree 512271840`, `bytes_hash 913564336`, cubes 1345
+words bit-equal to `cubes.expected`. Host (`bun bend2/main.ts`) prints the same.
+A browser run of `webgpu.js` was not done.
