@@ -2036,6 +2036,38 @@ def String.get(s: String, n: Nat) -> Maybe<&2, Char>:
     case SCon{h, t} 1n+p:
       String.get(t, p)
 
+# Bytes
+# -----
+
+# A String below 256 in every Char. The WGSL lane reads Bytes.get and
+# Bytes.word_le as reads of a buffer; here they are the String's own.
+def Bytes() -> Data:
+  String
+
+# the byte of a Char; past the end, 256, which no byte is
+def Bytes.byte(m: Maybe<&2, Char>) -> U32:
+  match m:
+    case None{}:
+      256
+    case Some{Chr{c}}:
+      c
+
+def Bytes.get(b: Bytes(), i: Nat) -> U32:
+  Bytes.byte(String.get(b, i))
+
+# b with the byte x on its end
+def Bytes.push(b: Bytes(), x: U32) -> Bytes():
+  String.append(b, SCon{Chr{x}, SNil{}})
+
+# the low eight bits of the cell at i, 0 past the end
+def Bytes.word_le.at(+b: Bytes(), i: Nat) -> U32:
+  U32.and(Bytes.get(b, i), 255)
+
+# the four bytes from i as one U32, little end first, a byte past the end 0
+def Bytes.word_le(+b: Bytes(), +i: Nat) -> U32:
+  U32.or(U32.or(Bytes.word_le.at(b, i), U32.shln(Bytes.word_le.at(b, 1n+i), 8n)),
+    U32.or(U32.shln(Bytes.word_le.at(b, 2n+i), 16n), U32.shln(Bytes.word_le.at(b, 3n+i), 24n)))
+
 def String.to_list(s: String) -> List<&2, Char>:
   match s:
     case SNil{}:

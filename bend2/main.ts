@@ -35,7 +35,7 @@ const VERSION = "2.0.36";
 // the commands, one row each: [usage, what it does]; bend guide stays last
 const USAGE = [
   ["bend <file.bend> [args]", "check the file, then run main with args"],
-  ["bend <file.bend> -o <out>", "build a binary, or C, JS, .mjs or BendTT by extension"],
+  ["bend <file.bend> -o <out>", "build a binary, or C, JS, .mjs, WGSL or BendTT by extension"],
   ["bend <file.bend> --check-only", "check the file and its imports; run nothing"],
   ["bend <file.bend> --verdict", "check it, then recheck it with the proven kernel"],
   ["bend <file.bend> --publish [<name>@<version>]", "publish the file and its imports; a name needs login"],
@@ -317,7 +317,7 @@ async function cli_file(args: string[]): Promise<void> {
       if (ins.has(at) || (fs.existsSync(at) && fs.statSync(at).isDirectory())) {
         cli_fail("-o " + out + " is a file the program reads, or a directory");
       }
-      cli_emit(book, out);
+      await cli_emit(book, out);
     }
   } catch (e) {
     cli_say(2, book_err(e) + "\n");
@@ -360,8 +360,10 @@ function path_real(p: string): string {
   return fs.existsSync(p) ? fs.realpathSync(p) : path.resolve(p);
 }
 
-function cli_emit(book: Bend.Book, out: string): void {
-  if (out.endsWith(".mjs")) {
+async function cli_emit(book: Bend.Book, out: string): Promise<void> {
+  if (out.endsWith(".wgsl")) {
+    fs.writeFileSync(out, (await import("./wgsl.ts")).wgsl_book(book));
+  } else if (out.endsWith(".mjs")) {
     fs.writeFileSync(out, Comp.js_lib(book, true));
   } else if (/\.c?js$/.test(out)) {
     fs.writeFileSync(out, Comp.js_book(book));
