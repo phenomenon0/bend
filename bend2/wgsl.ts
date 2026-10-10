@@ -523,6 +523,7 @@ function def_emit(fl: File, it: Inst, def: Def, mode: Mode): void {
       } finally {
         SPIN = null;
       }
+      C.file_push(fl, `return ${ret}();`); // naga wants a return after a loop with no break
     });
   } else {
     // a fold: acc = the 0 arm, then the 1 + p arm per p, its self call = acc
